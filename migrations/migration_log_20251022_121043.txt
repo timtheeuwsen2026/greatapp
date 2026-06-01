@@ -1,0 +1,23 @@
+NOTICE:  Welcome to Neon!, session_id: fb484261-f45c-40be-95b5-f06ed719adda
+BEGIN
+psql:migrations/001_venue_services_migration.sql:18: NOTICE:  table "venues_services_backup_20250122" does not exist, skipping
+DROP TABLE
+SELECT 27
+psql:migrations/001_venue_services_migration.sql:27: NOTICE:  Backup created: 27 rows backed up
+DO
+psql:migrations/001_venue_services_migration.sql:41: NOTICE:  display_prefs column already exists, skipping
+DO
+UPDATE 0
+psql:migrations/001_venue_services_migration.sql:55: NOTICE:  Initialized display_prefs for 0 venues
+DO
+psql:migrations/001_venue_services_migration.sql:100: NOTICE:  No legacy services table found - data structure is correct
+DO
+psql:migrations/001_venue_services_migration.sql:136: NOTICE:  === Migration Summary ===
+psql:migrations/001_venue_services_migration.sql:136: NOTICE:  Total venues: 27
+psql:migrations/001_venue_services_migration.sql:136: NOTICE:  Venues with services: 1
+psql:migrations/001_venue_services_migration.sql:136: NOTICE:  Invalid service entries: 0
+DO
+COMMIT
+psql:migrations/001_venue_services_migration.sql:140: ERROR:  syntax error at or near "RAISE"
+LINE 1: RAISE NOTICE 'Migration completed successfully at %', NOW();
+        ^

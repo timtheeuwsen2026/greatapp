@@ -1,0 +1,583 @@
+import { sql, relations } from "drizzle-orm";
+import {
+  index,
+  jsonb,
+  pgTable,
+  timestamp,
+  varchar,
+  text,
+  integer,
+  decimal,
+  boolean,
+  pgEnum,
+  date,
+} from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+
+// Session storage table for Replit Auth
+export const sessions = pgTable(
+  "sessions",
+  {
+    sid: varchar("sid").primaryKey(),
+    sess: jsonb("sess").notNull(),
+    expire: timestamp("expire").notNull(),
+  },
+  (table) => [index("IDX_session_expire").on(table.expire)],
+);
+
+// User storage table for Replit Auth
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: varchar("email").unique(),
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  profileImageUrl: varchar("profile_image_url"),
+  stripeCustomerId: varchar("stripe_customer_id"),
+  stripeSubscriptionId: varchar("stripe_subscription_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Participant profiles table - rich profiles for social interaction and networking
+export const participantProfiles = pgTable("participant_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  // Core Identity
+  avatarUrl: varchar("avatar_url"),
+  displayName: varchar("display_name").notNull(),
+  bio: text("bio").notNull(),
+  location: varchar("location").notNull(),
+  // Experience & Interests
+  interests: text("interests").array().default(sql`'{}'::text[]`),
+  experienceLevel: varchar("experience_level").default("Beginner"),
+  travelStyle: text("travel_style").array().default(sql`'{}'::text[]`),
+  fitnessLevel: varchar("fitness_level"),
+  // Skills & Co-Creation
+  occupation: varchar("occupation").notNull(),
+  skills: text("skills").array().default(sql`'{}'::text[]`),
+  willingToTakeRoles: boolean("willing_to_take_roles").default(false),
+  rolePreferences: text("role_preferences").array().default(sql`'{}'::text[]`),
+  // Community & Networking
+  languages: text("languages").array().default(sql`'{}'::text[]`),
+  professionalInterests: text("professional_interests").array().default(sql`'{}'::text[]`),
+  profileVisibility: varchar("profile_visibility").default("Public"),
+  contactMethod: varchar("contact_method").default("In-App Messaging"),
+  // Event-Readiness Fields
+  dietaryPreferences: text("dietary_preferences").array().default(sql`'{}'::text[]`),
+  emergencyContact: varchar("emergency_contact"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Creator profiles table - professional profiles for experience creators
+export const creatorProfiles = pgTable("creator_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  // Core Identity
+  avatarUrl: varchar("avatar_url"),
+  displayName: varchar("display_name").notNull(),
+  bio: text("bio").notNull(),
+  location: varchar("location").notNull(),
+  expertiseTags: text("expertise_tags").array().default(sql`'{}'::text[]`),
+  // Professional & Social Proof
+  occupation: varchar("occupation").notNull(),
+  experienceLevel: varchar("experience_level").default("Intermediate"),
+  galleryImages: text("gallery_images").array().default(sql`'{}'::text[]`),
+  // Contact & Visibility
+  preferredContact: varchar("preferred_contact").default("In-App Messaging"),
+  profileVisibility: varchar("profile_visibility").default("Public"),
+  stripeAccountId: varchar("stripe_account_id"),
+  approved: boolean("approved").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Categories enum
+export const categoryEnum = pgEnum("category", [
+  "sports_wellness",
+  "retreats", 
+  "community_social",
+  "adventure_trips",
+  "workations",
+  "festivals_events"
+]);
+
+// Experience status enum
+export const experienceStatusEnum = pgEnum("experience_status", [
+  "draft",
+  "pending_approval", 
+  "approved",
+  "rejected",
+  "cancelled"
+]);
+
+// Experiences table
+export const experiences = pgTable("experiences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description").notNull(),
+  shortDescription: varchar("short_description", { length: 500 }),
+  category: categoryEnum("category").notNull(),
+  coverImageUrl: varchar("cover_image_url"),
+  location: varchar("location").notNull(),
+  venue: varchar("venue"),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  maxParticipants: integer("max_participants").notNull(),
+  currentParticipants: integer("current_participants").default(0),
+  status: experienceStatusEnum("status").default("draft"),
+  creatorId: varchar("creator_id").references(() => users.id).notNull(),
+  stripeConnectAccountId: varchar("stripe_connect_account_id"),
+  itinerary: jsonb("itinerary"),
+  roles: jsonb("roles"),
+  tasks: jsonb("tasks"),
+  termsAndConditions: text("terms_and_conditions"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Bookings table
+export const bookings = pgTable("bookings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  status: varchar("status").default("pending"), // pending, confirmed, cancelled
+  bookingDate: timestamp("booking_date").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Experience gallery
+export const experienceGallery = pgTable("experience_gallery", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+  imageUrl: varchar("image_url").notNull(),
+  caption: varchar("caption"),
+  order: integer("order").default(0),
+});
+
+// Experience reviews
+export const reviews = pgTable("reviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  rating: integer("rating").notNull(), // 1-5
+  comment: text("comment"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Service type enum
+export const serviceTypeEnum = pgEnum("service_type", [
+  "chef",
+  "guide", 
+  "trainer",
+  "photographer",
+  "musician",
+  "transport",
+  "equipment",
+  "other"
+]);
+
+// Venues table
+export const venues = pgTable("venues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 255 }).notNull(),
+  coverImageUrl: varchar("cover_image_url"),
+  galleryImages: text("gallery_images").array().default(sql`'{}'::text[]`),
+  description: text("description").notNull(),
+  location: varchar("location").notNull(),
+  capacity: integer("capacity").notNull(),
+  availabilityType: varchar("availability_type").default("always"), // always, by_date_range
+  priceModel: varchar("price_model").default("per_day"), // per_day, per_event
+  price: decimal("price", { precision: 10, scale: 2 }),
+  venueType: text("venue_type").array().default(sql`'{}'::text[]`), // retreat_center, studio, villa, outdoor, coworking
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  contactEmail: varchar("contact_email"),
+  socialLinks: jsonb("social_links").default({}),
+  approved: boolean("approved").default(false),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Service providers table (renamed from services)
+export const serviceProviders = pgTable("service_providers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 255 }).notNull(),
+  profileImageUrl: varchar("profile_image_url"),
+  description: text("description").notNull(),
+  location: varchar("location").notNull(),
+  serviceCategory: varchar("service_category").notNull(), // main category
+  serviceType: text("service_types").array().default(sql`'{}'::text[]`), // specific specialties
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  priceModel: varchar("price_model").default("per_day"), // per_day, per_session, per_event
+  price: decimal("price", { precision: 10, scale: 2 }),
+  availabilityType: varchar("availability_type").default("always"), // always, by_date_range
+  contactEmail: varchar("contact_email"),
+  phoneNumber: varchar("phone_number"),
+  socialLinks: jsonb("social_links").default({}),
+  galleryImages: text("gallery_images").array().default(sql`'{}'::text[]`),
+  approved: boolean("approved").default(false),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Experience venues junction table
+export const experienceVenues = pgTable("experience_venues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+  venueId: varchar("venue_id").references(() => venues.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Experience services junction table
+export const experienceServices = pgTable("experience_services", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+  serviceId: varchar("service_id").references(() => serviceProviders.id).notNull(),
+  roleDescription: text("role_description"), // Optional role/usage description
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Relations
+export const usersRelations = relations(users, ({ many }) => ({
+  createdExperiences: many(experiences),
+  bookings: many(bookings),
+  reviews: many(reviews),
+}));
+
+export const experiencesRelations = relations(experiences, ({ one, many }) => ({
+  creator: one(users, {
+    fields: [experiences.creatorId],
+    references: [users.id],
+  }),
+  bookings: many(bookings),
+  gallery: many(experienceGallery),
+  reviews: many(reviews),
+  experienceVenues: many(experienceVenues),
+  experienceServices: many(experienceServices),
+}));
+
+export const bookingsRelations = relations(bookings, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [bookings.experienceId],
+    references: [experiences.id],
+  }),
+  user: one(users, {
+    fields: [bookings.userId],
+    references: [users.id],
+  }),
+}));
+
+export const experienceGalleryRelations = relations(experienceGallery, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [experienceGallery.experienceId],
+    references: [experiences.id],
+  }),
+}));
+
+export const reviewsRelations = relations(reviews, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [reviews.experienceId],
+    references: [experiences.id],
+  }),
+  user: one(users, {
+    fields: [reviews.userId],
+    references: [users.id],
+  }),
+}));
+
+// Venue relations
+export const venuesRelations = relations(venues, ({ one, many }) => ({
+  creator: one(users, {
+    fields: [venues.createdBy],
+    references: [users.id],
+  }),
+  experienceVenues: many(experienceVenues),
+}));
+
+// Service provider relations
+export const serviceProvidersRelations = relations(serviceProviders, ({ one, many }) => ({
+  creator: one(users, {
+    fields: [serviceProviders.createdBy],
+    references: [users.id],
+  }),
+  experienceServices: many(experienceServices),
+}));
+
+// Experience venues relations
+export const experienceVenuesRelations = relations(experienceVenues, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [experienceVenues.experienceId],
+    references: [experiences.id],
+  }),
+  venue: one(venues, {
+    fields: [experienceVenues.venueId],
+    references: [venues.id],
+  }),
+}));
+
+// Experience services relations
+export const experienceServicesRelations = relations(experienceServices, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [experienceServices.experienceId],
+    references: [experiences.id],
+  }),
+  serviceProvider: one(serviceProviders, {
+    fields: [experienceServices.serviceId],
+    references: [serviceProviders.id],
+  }),
+}));
+
+// Participant interaction tables
+export const participantConnections = pgTable("participant_connections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  connectedUserId: varchar("connected_user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "cascade" }).notNull(),
+  status: varchar("status", { enum: ["pending", "accepted", "declined"] }).default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const experienceMessages = pgTable("experience_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  message: text("message").notNull(),
+  messageType: varchar("message_type", { enum: ["text", "image", "announcement"] }).default("text"),
+  isPrivate: boolean("is_private").default(false),
+  recipientId: varchar("recipient_id").references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+
+
+export const experienceAnnouncements = pgTable("experience_announcements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "cascade" }).notNull(),
+  creatorId: varchar("creator_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  priority: varchar("priority", { enum: ["low", "medium", "high", "urgent"] }).default("medium"),
+  isImportant: boolean("is_important").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const participantReactions = pgTable("participant_reactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id").references(() => experienceMessages.id, { onDelete: "cascade" }).notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  reactionType: varchar("reaction_type", { enum: ["like", "love", "laugh", "wow", "sad", "angry"] }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Relations for participant interaction features
+export const participantConnectionsRelations = relations(participantConnections, ({ one }) => ({
+  user: one(users, { fields: [participantConnections.userId], references: [users.id] }),
+  connectedUser: one(users, { fields: [participantConnections.connectedUserId], references: [users.id] }),
+  experience: one(experiences, { fields: [participantConnections.experienceId], references: [experiences.id] }),
+}));
+
+export const experienceMessagesRelations = relations(experienceMessages, ({ one, many }) => ({
+  experience: one(experiences, { fields: [experienceMessages.experienceId], references: [experiences.id] }),
+  user: one(users, { fields: [experienceMessages.userId], references: [users.id] }),
+  recipient: one(users, { fields: [experienceMessages.recipientId], references: [users.id] }),
+  reactions: many(participantReactions),
+}));
+
+export const participantProfilesRelations = relations(participantProfiles, ({ one }) => ({
+  user: one(users, { fields: [participantProfiles.userId], references: [users.id] }),
+}));
+
+export const experienceAnnouncementsRelations = relations(experienceAnnouncements, ({ one }) => ({
+  experience: one(experiences, { fields: [experienceAnnouncements.experienceId], references: [experiences.id] }),
+  creator: one(users, { fields: [experienceAnnouncements.creatorId], references: [users.id] }),
+}));
+
+export const participantReactionsRelations = relations(participantReactions, ({ one }) => ({
+  message: one(experienceMessages, { fields: [participantReactions.messageId], references: [experienceMessages.id] }),
+  user: one(users, { fields: [participantReactions.userId], references: [users.id] }),
+}));
+
+// Insert schemas
+export const insertExperienceSchema = createInsertSchema(experiences).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  currentParticipants: true,
+});
+
+export const insertBookingSchema = createInsertSchema(bookings).omit({
+  id: true,
+  createdAt: true,
+  bookingDate: true,
+});
+
+export const insertReviewSchema = createInsertSchema(reviews).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertVenueSchema = createInsertSchema(venues).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertServiceProviderSchema = createInsertSchema(serviceProviders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertExperienceVenueSchema = createInsertSchema(experienceVenues).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertExperienceServiceSchema = createInsertSchema(experienceServices).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertParticipantConnectionSchema = createInsertSchema(participantConnections).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertExperienceMessageSchema = createInsertSchema(experienceMessages).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertParticipantProfileSchema = createInsertSchema(participantProfiles).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertExperienceAnnouncementSchema = createInsertSchema(experienceAnnouncements).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertParticipantReactionSchema = createInsertSchema(participantReactions).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Types
+export type UpsertUser = typeof users.$inferInsert;
+export type User = typeof users.$inferSelect;
+
+// Creator profiles table
+export const creatorProfiles = pgTable("creator_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  businessName: varchar("business_name"),
+  displayName: varchar("display_name"), // For public display
+  bio: text("bio"),
+  avatarUrl: varchar("avatar_url"),
+  expertise: text("expertise").array(),
+  yearsExperience: integer("years_experience"),
+  specializations: text("specializations").array(),
+  certifications: text("certifications").array(),
+  socialMediaLinks: jsonb("social_media_links").$type<{
+    website?: string;
+    instagram?: string;
+    linkedin?: string;
+    youtube?: string;
+  }>(),
+  portfolioImages: text("portfolio_images").array(),
+  languages: text("languages").array(),
+  baseLocation: varchar("base_location"),
+  travelWillingness: varchar("travel_willingness", { 
+    enum: ["local", "regional", "national", "international"] 
+  }),
+  priceRange: varchar("price_range", {
+    enum: ["budget", "mid_range", "premium", "luxury"]
+  }),
+  responseTime: varchar("response_time", {
+    enum: ["within_hour", "within_day", "within_week"]
+  }),
+  cancellationPolicy: text("cancellation_policy"),
+  preferredContact: varchar("preferred_contact", {
+    enum: ["in_app", "email", "whatsapp"]
+  }).default("in_app"),
+  profileVisibility: varchar("profile_visibility", {
+    enum: ["public", "private"]
+  }).default("public"),
+  stripeAccountId: varchar("stripe_account_id"), // For Stripe Connect payouts
+  isVerified: boolean("is_verified").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type CreatorProfile = typeof creatorProfiles.$inferSelect;
+export type InsertCreatorProfile = typeof creatorProfiles.$inferInsert;
+
+// Creator earnings and analytics
+export const creatorEarnings = pgTable("creator_earnings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  creatorId: varchar("creator_id").notNull().references(() => users.id),
+  experienceId: varchar("experience_id").notNull().references(() => experiences.id),
+  bookingId: varchar("booking_id").notNull().references(() => bookings.id),
+  grossAmount: integer("gross_amount").notNull(), // in cents
+  platformFee: integer("platform_fee").notNull(), // in cents
+  netAmount: integer("net_amount").notNull(), // in cents
+  payoutStatus: varchar("payout_status", {
+    enum: ["pending", "processing", "completed", "failed"]
+  }).default("pending"),
+  payoutDate: timestamp("payout_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type CreatorEarning = typeof creatorEarnings.$inferSelect;
+export type InsertCreatorEarning = typeof creatorEarnings.$inferInsert;
+
+// Creator analytics
+export const creatorAnalytics = pgTable("creator_analytics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  creatorId: varchar("creator_id").notNull().references(() => users.id),
+  experienceId: varchar("experience_id").references(() => experiences.id),
+  date: date("date").notNull(),
+  views: integer("views").default(0),
+  bookings: integer("bookings").default(0),
+  revenue: integer("revenue").default(0), // in cents
+  cancellations: integer("cancellations").default(0),
+  avgRating: decimal("avg_rating", { precision: 3, scale: 2 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type CreatorAnalytic = typeof creatorAnalytics.$inferSelect;
+export type InsertCreatorAnalytic = typeof creatorAnalytics.$inferInsert;
+export type Experience = typeof experiences.$inferSelect;
+export type InsertExperience = z.infer<typeof insertExperienceSchema>;
+export type Booking = typeof bookings.$inferSelect;
+export type InsertBooking = z.infer<typeof insertBookingSchema>;
+export type Review = typeof reviews.$inferSelect;
+export type InsertReview = z.infer<typeof insertReviewSchema>;
+export type ExperienceGallery = typeof experienceGallery.$inferSelect;
+export type Venue = typeof venues.$inferSelect;
+export type InsertVenue = z.infer<typeof insertVenueSchema>;
+export type ServiceProvider = typeof serviceProviders.$inferSelect;
+export type InsertServiceProvider = z.infer<typeof insertServiceProviderSchema>;
+export type ExperienceVenue = typeof experienceVenues.$inferSelect;
+export type InsertExperienceVenue = z.infer<typeof insertExperienceVenueSchema>;
+export type ExperienceService = typeof experienceServices.$inferSelect;
+export type InsertExperienceService = z.infer<typeof insertExperienceServiceSchema>;
+export type ParticipantConnection = typeof participantConnections.$inferSelect;
+export type InsertParticipantConnection = z.infer<typeof insertParticipantConnectionSchema>;
+export type ExperienceMessage = typeof experienceMessages.$inferSelect;
+export type InsertExperienceMessage = z.infer<typeof insertExperienceMessageSchema>;
+export type ParticipantProfile = typeof participantProfiles.$inferSelect;
+export type InsertParticipantProfile = z.infer<typeof insertParticipantProfileSchema>;
+export type ExperienceAnnouncement = typeof experienceAnnouncements.$inferSelect;
+export type InsertExperienceAnnouncement = z.infer<typeof insertExperienceAnnouncementSchema>;
+export type ParticipantReaction = typeof participantReactions.$inferSelect;
+export type InsertParticipantReaction = z.infer<typeof insertParticipantReactionSchema>;

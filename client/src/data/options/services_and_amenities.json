@@ -1,0 +1,105 @@
+{
+  "services": [
+    {
+      "category": "Fitness & Wellness",
+      "items": [
+        { "id": "yoga_instructor", "name": "Yoga Instructor", "description": "Certified yoga instructor for sessions" },
+        { "id": "meditation_guide", "name": "Meditation Guide", "description": "Guided meditation and mindfulness" },
+        { "id": "personal_trainer", "name": "Personal Trainer", "description": "One-on-one fitness coaching" },
+        { "id": "massage_therapist", "name": "Massage Therapist", "description": "Professional massage services" },
+        { "id": "nutrition_coach", "name": "Nutrition Coach", "description": "Dietary guidance and meal planning" }
+      ]
+    },
+    {
+      "category": "Adventure & Outdoor",
+      "items": [
+        { "id": "hiking_guide", "name": "Hiking Guide", "description": "Experienced trail guide and safety" },
+        { "id": "climbing_instructor", "name": "Climbing Instructor", "description": "Rock climbing and safety instruction" },
+        { "id": "surf_instructor", "name": "Surf Instructor", "description": "Surfing lessons and water safety" },
+        { "id": "dive_instructor", "name": "Dive Instructor", "description": "Scuba diving instruction and certification" },
+        { "id": "kayak_guide", "name": "Kayak Guide", "description": "Kayaking instruction and tours" }
+      ]
+    },
+    {
+      "category": "Cultural & Learning",
+      "items": [
+        { "id": "language_tutor", "name": "Language Tutor", "description": "Local language instruction" },
+        { "id": "cultural_guide", "name": "Cultural Guide", "description": "Local culture and history expert" },
+        { "id": "cooking_instructor", "name": "Cooking Instructor", "description": "Local cuisine cooking classes" },
+        { "id": "art_instructor", "name": "Art Instructor", "description": "Creative arts and crafts guidance" },
+        { "id": "music_instructor", "name": "Music Instructor", "description": "Musical instrument or vocal instruction" }
+      ]
+    },
+    {
+      "category": "Support & Logistics",
+      "items": [
+        { "id": "photographer", "name": "Photographer", "description": "Professional photography services" },
+        { "id": "videographer", "name": "Videographer", "description": "Video production and editing" },
+        { "id": "chef", "name": "Chef/Cook", "description": "Professional culinary services" },
+        { "id": "private_chef", "name": "Private Chef", "description": "Exclusive personal chef services" },
+        { "id": "catering", "name": "Catering", "description": "Full catering and meal services" },
+        { "id": "driver", "name": "Driver/Guide", "description": "Transportation and local guiding" },
+        { "id": "airport_transfer", "name": "Airport Transfer", "description": "Airport pickup and drop-off services" },
+        { "id": "childcare_provider", "name": "Childcare Provider", "description": "Professional childcare services" },
+        { "id": "equipment_rental", "name": "Equipment Rental", "description": "Activity and sports equipment rental" },
+        { "id": "event_setup_support", "name": "Event Setup Support", "description": "Event planning and setup assistance" }
+      ]
+    }
+  ],
+  "amenities": [
+    {
+      "category": "Connectivity & Technology",
+      "items": [
+        { "id": "wifi", "name": "Wi-Fi", "description": "High-speed internet access" },
+        { "id": "projector", "name": "Projector/Screen", "description": "Presentation equipment" },
+        { "id": "sound_system", "name": "Sound System", "description": "Audio equipment and speakers" },
+        { "id": "charging_stations", "name": "Charging Stations", "description": "Device charging areas" }
+      ]
+    },
+    {
+      "category": "Wellness & Recreation",
+      "items": [
+        { "id": "pool", "name": "Pool", "description": "Swimming and water activities" },
+        { "id": "spa", "name": "Spa", "description": "Spa and hot tub facilities" },
+        { "id": "sauna", "name": "Sauna", "description": "Steam and heat therapy" },
+        { "id": "gym", "name": "Fitness Area", "description": "Exercise equipment and facilities" },
+        { "id": "yoga_studio", "name": "Yoga Studio", "description": "Dedicated space for movement practices" },
+        { "id": "yoga_deck", "name": "Yoga Deck", "description": "Outdoor yoga and meditation deck" },
+        { "id": "meditation_room", "name": "Meditation Room", "description": "Quiet space for meditation and reflection" }
+      ]
+    },
+    {
+      "category": "Outdoor & Activity",
+      "items": [
+        { "id": "fire_pit", "name": "Fire Pit/Bonfire Area", "description": "Outdoor gathering and warmth" },
+        { "id": "bbq_grill", "name": "BBQ/Grill", "description": "Outdoor cooking facilities" },
+        { "id": "garden", "name": "Garden/Terrace", "description": "Outdoor space and nature" },
+        { "id": "outdoor_area", "name": "Outdoor Area", "description": "General outdoor recreation space" },
+        { "id": "sports_court", "name": "Sports Court", "description": "Basketball, tennis, or multi-sport" },
+        { "id": "hiking_trails", "name": "Hiking Trails", "description": "Walking and nature paths" },
+        { "id": "nature_trails", "name": "Nature Trails", "description": "Scenic walking paths through nature" }
+      ]
+    },
+    {
+      "category": "Kitchen & Dining",
+      "items": [
+        { "id": "full_kitchen", "name": "Full Kitchen", "description": "Complete cooking facilities" },
+        { "id": "dining_area", "name": "Dining Area", "description": "Shared meal space" },
+        { "id": "coffee_station", "name": "Coffee Station", "description": "Coffee and tea facilities" },
+        { "id": "outdoor_dining", "name": "Outdoor Dining", "description": "Al fresco eating area" }
+      ]
+    },
+    {
+      "category": "Comfort & Convenience",
+      "items": [
+        { "id": "air_conditioning", "name": "Air Conditioning", "description": "Climate control" },
+        { "id": "heating", "name": "Heating", "description": "Warmth and comfort" },
+        { "id": "parking", "name": "Parking", "description": "Vehicle parking space" },
+        { "id": "laundry", "name": "Laundry", "description": "Washing and drying facilities" },
+        { "id": "library", "name": "Library/Reading Area", "description": "Quiet space with books" },
+        { "id": "workspace", "name": "Workspace", "description": "Desk and work area with good lighting" },
+        { "id": "child_friendly", "name": "Child-friendly Facilities", "description": "Safe spaces and amenities for children" }
+      ]
+    }
+  ]
+}

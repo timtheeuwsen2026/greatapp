@@ -1,0 +1,1290 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(20, 14.3%, 4.1%);
+  --muted: hsl(60, 4.8%, 95.9%);
+  --muted-foreground: hsl(25, 5.3%, 44.7%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(20, 14.3%, 4.1%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(20, 14.3%, 4.1%);
+  --border: hsl(20, 5.9%, 90%);
+  --input: hsl(20, 5.9%, 90%);
+  --primary: hsl(247, 84%, 55%);
+  --primary-foreground: hsl(211, 100%, 99%);
+  --secondary: hsl(280, 100%, 48%);
+  --secondary-foreground: hsl(211, 100%, 99%);
+  --accent: hsl(189, 94%, 30%);
+  --accent-foreground: hsl(211, 100%, 99%);
+  --destructive: hsl(0, 84%, 45%);
+  --destructive-foreground: hsl(60, 9.1%, 97.8%);
+  --ring: hsl(247, 84%, 55%);
+  --radius: 0.5rem;
+  --success: 142 71% 30%;
+  --warning: 38 92% 30%;
+  --info: 189 94% 30%;
+  --orange: hsl(25, 95%, 53%);
+  --green: hsl(142, 71%, 45%);
+  --pink: hsl(330, 81%, 60%);
+  
+  /* Derived tint tokens for common lightness variations */
+  --primary-99: hsl(247, 84%, 99%);
+  --primary-98: hsl(247, 84%, 98%);
+  --primary-97: hsl(247, 84%, 97%);
+  --primary-96: hsl(247, 84%, 96%);
+  --primary-95: hsl(247, 84%, 95%);
+  --primary-93: hsl(247, 84%, 93%);
+  --primary-92: hsl(247, 84%, 92%);
+  --primary-90: hsl(247, 84%, 90%);
+  --primary-88: hsl(247, 84%, 88%);
+  --primary-85: hsl(247, 84%, 85%);
+  --primary-77: hsl(247, 84%, 77%);
+  --primary-72: hsl(247, 84%, 72%);
+  --primary-55: hsl(247, 84%, 55%);
+  --primary-45: hsl(247, 84%, 45%);
+  --primary-35: hsl(247, 84%, 35%);
+  --primary-25: hsl(247, 84%, 25%);
+  
+  --secondary-98: hsl(280, 100%, 98%);
+  --secondary-97: hsl(280, 100%, 97%);
+  --secondary-95: hsl(280, 100%, 95%);
+  --secondary-90: hsl(280, 100%, 90%);
+  --secondary-80: hsl(280, 100%, 80%);
+  --secondary-75: hsl(280, 100%, 75%);
+}
+
+.dark {
+  --background: hsl(240, 10%, 3.9%);
+  --foreground: hsl(0, 0%, 98%);
+  --muted: hsl(240, 3.7%, 15.9%);
+  --muted-foreground: hsl(240, 5%, 64.9%);
+  --popover: hsl(240, 10%, 3.9%);
+  --popover-foreground: hsl(0, 0%, 98%);
+  --card: hsl(240, 10%, 3.9%);
+  --card-foreground: hsl(0, 0%, 98%);
+  --border: hsl(240, 3.7%, 15.9%);
+  --input: hsl(240, 3.7%, 15.9%);
+  --primary: hsl(247, 84%, 55%);
+  --primary-foreground: hsl(211, 100%, 99%);
+  --secondary: hsl(280, 100%, 48%);
+  --secondary-foreground: hsl(211, 100%, 99%);
+  --accent: hsl(189, 94%, 30%);
+  --accent-foreground: hsl(211, 100%, 99%);
+  --destructive: hsl(0, 84%, 45%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(247, 84%, 55%);
+  --radius: 0.5rem;
+  --success: 142 71% 30%;
+  --warning: 38 92% 30%;
+  --info: 189 94% 30%;
+  
+  /* Derived tint tokens for common lightness variations */
+  --primary-99: hsl(247, 84%, 99%);
+  --primary-98: hsl(247, 84%, 98%);
+  --primary-97: hsl(247, 84%, 97%);
+  --primary-96: hsl(247, 84%, 96%);
+  --primary-95: hsl(247, 84%, 95%);
+  --primary-93: hsl(247, 84%, 93%);
+  --primary-92: hsl(247, 84%, 92%);
+  --primary-90: hsl(247, 84%, 90%);
+  --primary-88: hsl(247, 84%, 88%);
+  --primary-85: hsl(247, 84%, 85%);
+  --primary-77: hsl(247, 84%, 77%);
+  --primary-72: hsl(247, 84%, 72%);
+  --primary-55: hsl(247, 84%, 55%);
+  --primary-45: hsl(247, 84%, 45%);
+  --primary-35: hsl(247, 84%, 35%);
+  --primary-25: hsl(247, 84%, 25%);
+  
+  --secondary-98: hsl(280, 100%, 98%);
+  --secondary-97: hsl(280, 100%, 97%);
+  --secondary-95: hsl(280, 100%, 95%);
+  --secondary-90: hsl(280, 100%, 90%);
+  --secondary-80: hsl(280, 100%, 80%);
+  --secondary-75: hsl(280, 100%, 75%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/* Line clamp utilities */
+.line-clamp-1 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.line-clamp-3 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* Custom gradient backgrounds for blue-purple theme */
+.gradient-primary {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+}
+
+.gradient-hero {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 50%, hsl(var(--info)) 100%);
+}
+
+/* Hero video overlay with blue-purple gradient */
+.hero-overlay {
+  background: linear-gradient(135deg, hsla(0, 0%, 0%, 0.4) 0%, hsl(var(--primary) / 0.3) 50%, hsl(var(--secondary) / 0.3) 100%);
+}
+
+/* Custom animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.float-animation {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Category card hover effects */
+.category-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.category-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 25px 50px -12px hsl(var(--primary) / 0.25);
+}
+
+/* Experience card effects */
+.experience-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.experience-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px -12px hsl(var(--secondary) / 0.15);
+}
+
+/* Button gradient hover effects with blue-purple theme */
+.btn-gradient {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  transition: all 0.3s ease;
+  color: hsl(211, 100%, 99%);
+  border: none;
+}
+
+.btn-gradient:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 93%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 93%, white) 100%);
+  box-shadow: 0 10px 25px -5px hsl(var(--secondary) / 0.4);
+  color: hsl(211, 100%, 99%);
+}
+
+/* Search bar styling with glass effect */
+.search-glass {
+  backdrop-filter: blur(16px);
+  background: hsla(0, 0%, 100%, 0.95);
+  border: 1px solid hsla(0, 0%, 100%, 0.2);
+  box-shadow: 0 8px 32px hsl(var(--secondary) / 0.1);
+}
+
+/* Avatar stack styling for social features */
+.avatar-stack .avatar:not(:first-child) {
+  margin-left: -8px;
+}
+
+.avatar-stack .avatar {
+  border: 2px solid hsl(var(--background));
+  z-index: 1;
+}
+
+.avatar-stack .avatar:hover {
+  z-index: 10;
+  transform: scale(1.1);
+  transition: all 0.2s ease;
+}
+
+/* Participant social features */
+.participant-preview {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 2%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 2%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+}
+
+/* Custom scrollbar with blue-purple theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 93%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 93%, white) 100%);
+}
+
+/* Blue-purple themed social elements */
+.social-proof {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 3%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 3%, white) 100%);
+  border-left: 4px solid hsl(var(--primary));
+}
+
+/* Enhanced category colors to match blue-purple theme */
+.category-sports { 
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-77) 100%); 
+}
+
+.category-retreats { 
+  background: linear-gradient(135deg, var(--secondary) 0%, var(--secondary-80) 100%); 
+}
+
+.category-community { 
+  background: linear-gradient(135deg, hsl(var(--info)) 0%, color-mix(in srgb, hsl(var(--info)) 90%, white) 100%); 
+}
+
+.category-adventure { 
+  background: linear-gradient(135deg, hsl(var(--orange)) 0%, color-mix(in srgb, hsl(var(--orange)) 90%, white) 100%); 
+}
+
+.category-workations { 
+  background: linear-gradient(135deg, hsl(var(--success)) 0%, color-mix(in srgb, hsl(var(--success)) 90%, white) 100%); 
+}
+
+.category-festivals { 
+  background: linear-gradient(135deg, hsl(330, 81%, 60%) 0%, hsl(330, 81%, 70%) 100%); 
+}
+
+/* Utility classes for blue-purple theme */
+.text-primary-gradient {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Enhanced focus states with blue-purple theme */
+.focus\:ring-primary:focus {
+  --tw-ring-color: var(--primary);
+}
+
+/* Loading states with blue-purple theme */
+.loading-gradient {
+  background: linear-gradient(90deg, color-mix(in srgb, hsl(var(--primary)) 5%, white) 25%, color-mix(in srgb, hsl(var(--secondary)) 5%, white) 50%, color-mix(in srgb, hsl(var(--primary)) 5%, white) 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Blue-purple themed success states */
+.success-gradient {
+  background: linear-gradient(135deg, hsl(var(--success)) 0%, hsl(var(--info)) 100%);
+}
+
+/* Enhanced card shadows with blue-purple tint */
+.card-shadow-primary {
+  box-shadow: 0 4px 6px -1px hsl(var(--secondary) / 0.1), 0 2px 4px -1px hsl(var(--secondary) / 0.06);
+}
+
+.card-shadow-primary:hover {
+  box-shadow: 0 20px 25px -5px hsl(var(--secondary) / 0.1), 0 10px 10px -5px hsl(var(--secondary) / 0.04);
+}
+
+/* Blue-purple themed borders */
+.border-primary-light {
+  border-color: var(--primary-90);
+}
+
+.border-secondary-light {
+  border-color: var(--secondary-90);
+}
+
+/* Enhanced navigation with blue-purple accents */
+.nav-glass {
+  backdrop-filter: blur(12px);
+  background: hsla(0, 0%, 100%, 0.95);
+  border-bottom: 1px solid var(--primary-95);
+}
+
+/* Blue-purple themed form elements */
+.form-input-primary:focus {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 3px hsl(var(--secondary) / 0.1);
+}
+
+/* Enhanced testimonial cards */
+.testimonial-card {
+  background: linear-gradient(135deg, hsl(0, 0%, 100%) 0%, var(--primary-99) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 5%, white);
+}
+
+/* Blue-purple themed status indicators */
+.status-approved {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--success)) 5%, white) 0%, color-mix(in srgb, hsl(var(--success)) 2%, white) 100%);
+  color: hsl(var(--success));
+  border: 1px solid color-mix(in srgb, hsl(var(--success)) 10%, white);
+}
+
+.status-pending {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--warning)) 5%, white) 0%, color-mix(in srgb, hsl(var(--warning)) 2%, white) 100%);
+  color: hsl(var(--warning));
+  border: 1px solid color-mix(in srgb, hsl(var(--warning)) 10%, white);
+}
+
+.status-rejected {
+  background: linear-gradient(135deg, hsl(0, 84%, 95%) 0%, hsl(0, 84%, 98%) 100%);
+  color: hsl(0, 84%, 60%);
+  border: 1px solid hsl(0, 84%, 90%);
+}
+
+/* Who's Joining section styling */
+.whos-joining {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 2%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 2%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 8%, white);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.whos-joining h4 {
+  color: var(--primary-45);
+  font-weight: 600;
+}
+
+/* Participant list styling */
+.participant-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.participant-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: hsl(0, 0%, 100%);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 5%, white);
+  transition: all 0.2s ease;
+}
+
+.participant-item:hover {
+  background: var(--primary-99);
+  border-color: color-mix(in srgb, hsl(var(--primary)) 15%, white);
+  transform: translateY(-1px);
+}
+
+.participant-item img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+}
+
+.participant-item span {
+  font-size: 12px;
+  color: var(--primary-35);
+  font-weight: 500;
+}
+
+/* Enhanced mobile responsiveness */
+@media (max-width: 768px) {
+  .hero-overlay {
+    background: linear-gradient(135deg, hsla(0, 0%, 0%, 0.6) 0%, hsl(var(--primary) / 0.4) 50%, hsl(var(--secondary) / 0.4) 100%);
+  }
+  
+  .search-glass {
+    backdrop-filter: blur(12px);
+    background: hsla(0, 0%, 100%, 0.98);
+  }
+
+  .participant-list {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+}
+
+/* Experience page enhancements */
+.experience-hero {
+  position: relative;
+  height: 400px;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.experience-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.experience-hero .overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, hsla(0, 0%, 0%, 0.3) 0%, hsl(var(--primary) / 0.2) 100%);
+}
+
+/* Booking card styling */
+.booking-card {
+  background: linear-gradient(135deg, hsl(0, 0%, 100%) 0%, var(--primary-99) 100%);
+  border: 2px solid var(--primary-92);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px hsl(var(--primary) / 0.1);
+}
+
+.booking-card .price {
+  color: var(--primary-45);
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+/* Social proof elements */
+.social-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--primary-96);
+  border: 1px solid var(--primary-88);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--primary-45);
+  font-weight: 500;
+}
+
+/* Creator dashboard styling */
+.creator-stats {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 3%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 3%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.creator-stats h3 {
+  color: var(--primary-35);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--primary-93);
+}
+
+.stat-item:last-child {
+  border-bottom: none;
+}
+
+.stat-value {
+  color: var(--primary-45);
+  font-weight: 600;
+}
+
+/* Enhanced checkout page styling */
+.checkout-summary {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 2%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 2%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 8%, white);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.payment-form {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+/* Admin dashboard styling */
+.admin-card {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid var(--primary-93);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.admin-card:hover {
+  border-color: color-mix(in srgb, hsl(var(--primary)) 15%, white);
+  box-shadow: 0 8px 24px hsl(var(--primary) / 0.1);
+}
+
+.admin-actions {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+}
+
+.btn-approve {
+  background: linear-gradient(135deg, hsl(var(--success)) 0%, color-mix(in srgb, hsl(var(--success)) 90%, white) 100%);
+  color: hsl(0, 0%, 100%);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-approve:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--success)) 95%, white) 0%, color-mix(in srgb, hsl(var(--success)) 85%, white) 100%);
+  box-shadow: 0 4px 12px color-mix(in srgb, hsl(var(--success)) 30%, transparent);
+}
+
+.btn-reject {
+  background: linear-gradient(135deg, hsl(0, 84%, 60%) 0%, hsl(0, 84%, 70%) 100%);
+  color: hsl(0, 0%, 100%);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-reject:hover {
+  background: linear-gradient(135deg, hsl(0, 84%, 65%) 0%, hsl(0, 84%, 75%) 100%);
+  box-shadow: 0 4px 12px hsla(0, 84%, 60%, 0.3);
+}
+
+/* Enhanced form styling */
+.form-step {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 8%, white);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.step-number {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.step-number.active {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  color: hsl(0, 0%, 100%);
+}
+
+.step-number.inactive {
+  background: hsl(0, 0%, 95%);
+  color: hsl(0, 0%, 60%);
+}
+
+.step-connector {
+  width: 64px;
+  height: 2px;
+  transition: all 0.3s ease;
+}
+
+.step-connector.active {
+  background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+}
+
+.step-connector.inactive {
+  background: hsl(0, 0%, 90%);
+}
+
+/* Review and rating styling */
+.review-card {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 5%, white);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.rating-stars {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.star {
+  color: hsl(45, 100%, 51%);
+  font-size: 14px;
+}
+
+.star.empty {
+  color: hsl(0, 0%, 85%);
+}
+
+/* Responsive utilities */
+@media (max-width: 640px) {
+  .btn-gradient {
+    padding: 12px 24px;
+    font-size: 16px;
+  }
+
+  .search-glass {
+    margin: 0 16px;
+    padding: 16px;
+  }
+
+  .category-card {
+    margin: 0 8px;
+  }
+
+  .experience-card {
+    margin: 0 8px;
+  }
+}
+
+/* Print styles for booking confirmations */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .booking-confirmation {
+    background: hsl(0, 0%, 100%) !important;
+    color: hsl(0, 0%, 0%) !important;
+    box-shadow: none !important;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .btn-gradient {
+    background: var(--primary-45) !important;
+    border: 2px solid hsl(0, 0%, 0%) !important;
+  }
+
+  .search-glass {
+    background: hsl(0, 0%, 100%) !important;
+    border: 2px solid hsl(0, 0%, 0%) !important;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .category-card,
+  .experience-card,
+  .btn-gradient,
+  .avatar,
+  .participant-item {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .float-animation {
+    animation: none !important;
+  }
+}
+
+/* Focus visible for better accessibility */
+.btn-gradient:focus-visible,
+.category-card:focus-visible,
+.experience-card:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Screen reader only content */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Line clamp utility for text truncation */
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.line-clamp-3 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* Enhanced button states */
+.btn-gradient:disabled {
+  background: hsl(0, 0%, 90%);
+  color: hsl(0, 0%, 60%);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-gradient:disabled:hover {
+  background: hsl(0, 0%, 90%);
+  box-shadow: none;
+  transform: none;
+}
+
+/* Font Awesome icons integration */
+.fas, .fab {
+  font-family: "Font Awesome 6 Free", "Font Awesome 6 Brands";
+  font-weight: 900;
+}
+
+/* Loading spinner with blue-purple theme */
+.loading-spinner {
+  border: 4px solid var(--primary-90);
+  border-top: 4px solid var(--primary);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Enhanced card interactions */
+.card-interactive {
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px hsl(var(--primary) / 0.1);
+}
+
+.card-interactive:active {
+  transform: translateY(0);
+}
+
+/* Enhanced input styling */
+.input-primary {
+  border: 1px solid var(--primary-85);
+  border-radius: 8px;
+  padding: 12px 16px;
+  transition: all 0.2s ease;
+}
+
+.input-primary:focus {
+  outline: none;
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 3px hsl(var(--primary) / 0.1);
+}
+
+/* Custom select styling */
+.select-primary {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  padding-right: 40px;
+}
+
+/* Badge styling with blue-purple theme */
+.badge-primary {
+  background: linear-gradient(135deg, var(--primary-95) 0%, var(--secondary-95) 100%);
+  color: var(--primary-45);
+  border: 1px solid var(--primary-85);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Toast notification styling */
+.toast-primary {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 3%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 3%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  color: var(--primary-25);
+}
+
+.toast-success {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--success)) 5%, white) 0%, color-mix(in srgb, hsl(var(--success)) 2%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--success)) 15%, white);
+  color: color-mix(in srgb, hsl(var(--success)) 75%, black);
+}
+
+.toast-error {
+  background: linear-gradient(135deg, hsl(0, 84%, 95%) 0%, hsl(0, 84%, 98%) 100%);
+  border: 1px solid hsl(0, 84%, 85%);
+  color: hsl(0, 84%, 25%);
+}
+
+/* Skeleton loading with blue-purple theme */
+.skeleton {
+  background: linear-gradient(90deg, color-mix(in srgb, hsl(var(--primary)) 5%, white) 25%, color-mix(in srgb, hsl(var(--secondary)) 5%, white) 50%, color-mix(in srgb, hsl(var(--primary)) 5%, white) 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+  border-radius: 8px;
+}
+
+/* Progress bar styling */
+.progress-primary {
+  background: var(--primary-90);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* Dropdown menu styling */
+.dropdown-primary {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px hsla(0, 0%, 0%, 0.1);
+}
+
+.dropdown-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.dropdown-item:hover {
+  background: var(--primary-96);
+}
+
+/* Modal overlay */
+.modal-overlay {
+  background: hsla(0, 0%, 0%, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px hsla(0, 0%, 0%, 0.25);
+}
+
+/* Accordion styling */
+.accordion-trigger {
+  background: hsl(0, 0%, 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.accordion-trigger:hover {
+  background: var(--primary-98);
+}
+
+.accordion-content {
+  background: var(--primary-99);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 10%, white);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 16px;
+}
+
+/* Tab styling */
+.tabs-list {
+  background: var(--primary-96);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.tab-trigger {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-trigger.active {
+  background: hsl(0, 0%, 100%);
+  color: var(--primary-45);
+  box-shadow: 0 1px 3px hsla(0, 0%, 0%, 0.1);
+}
+
+/* Enhanced social proof styling */
+.social-proof-card {
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 2%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 2%, white) 100%);
+  border: 1px solid color-mix(in srgb, hsl(var(--primary)) 8%, white);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.social-proof-avatar {
+  border: 2px solid var(--primary-90);
+  border-radius: 50%;
+}
+
+.social-proof-name {
+  color: var(--primary-35);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* Pricing card styling */
+.pricing-card {
+  background: hsl(0, 0%, 100%);
+  border: 2px solid var(--primary-90);
+  border-radius: 16px;
+  padding: 24px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.pricing-card:hover {
+  border-color: hsl(var(--primary));
+  transform: translateY(-4px);
+  box-shadow: 0 20px 25px -5px hsl(var(--primary) / 0.1);
+}
+
+.pricing-amount {
+  color: var(--primary-45);
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Feature list styling */
+.feature-list {
+  list-style: none;
+  padding: 0;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--primary-95);
+}
+
+.feature-item:last-child {
+  border-bottom: none;
+}
+
+.feature-icon {
+  color: var(--green);
+  margin-right: 12px;
+}
+
+/* Stats counter styling */
+.stats-counter {
+  color: var(--primary-45);
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stats-label {
+  color: hsl(0, 0%, 60%);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Timeline styling */
+.timeline-item {
+  position: relative;
+  padding-left: 32px;
+  margin-bottom: 24px;
+}
+
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  background: var(--primary);
+  border-radius: 50%;
+}
+
+.timeline-item::after {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 16px;
+  width: 2px;
+  height: calc(100% + 8px);
+  background: var(--primary-90);
+}
+
+.timeline-item:last-child::after {
+  display: none;
+}
+
+/* Enhanced button variants */
+.btn-outline-primary {
+  background: transparent;
+  border: 2px solid var(--primary);
+  color: var(--primary);
+  transition: all 0.3s ease;
+}
+
+.btn-outline-primary:hover {
+  background: var(--primary);
+  color: hsl(0, 0%, 100%);
+  box-shadow: 0 4px 12px hsl(var(--primary) / 0.3);
+}
+
+.btn-ghost-primary {
+  background: transparent;
+  border: none;
+  color: var(--primary);
+  transition: all 0.3s ease;
+}
+
+.btn-ghost-primary:hover {
+  background: var(--primary-96);
+  color: var(--primary-55);
+}
+
+/* Enhanced table styling */
+.table-primary {
+  width: 100%;
+  border-collapse: collapse;
+  background: hsl(0, 0%, 100%);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px hsla(0, 0%, 0%, 0.1);
+}
+
+.table-primary th {
+  background: var(--primary-96);
+  color: var(--primary-35);
+  font-weight: 600;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--primary-90);
+}
+
+.table-primary td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--primary-95);
+}
+
+.table-primary tr:hover {
+  background: var(--primary-99);
+}
+
+/* Utility classes for spacing */
+.space-y-1 > * + * { margin-top: 0.25rem; }
+.space-y-2 > * + * { margin-top: 0.5rem; }
+.space-y-3 > * + * { margin-top: 0.75rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
+.space-y-6 > * + * { margin-top: 1.5rem; }
+.space-y-8 > * + * { margin-top: 2rem; }
+
+.space-x-1 > * + * { margin-left: 0.25rem; }
+.space-x-2 > * + * { margin-left: 0.5rem; }
+.space-x-3 > * + * { margin-left: 0.75rem; }
+.space-x-4 > * + * { margin-left: 1rem; }
+.space-x-6 > * + * { margin-left: 1.5rem; }
+.space-x-8 > * + * { margin-left: 2rem; }
+
+/* Enhanced responsive design */
+@media (max-width: 1024px) {
+  .hero-overlay h1 {
+    font-size: 2.5rem;
+  }
+  
+  .search-glass {
+    max-width: 90%;
+  }
+}
+
+@media (max-width: 768px) {
+  .hero-overlay h1 {
+    font-size: 2rem;
+  }
+  
+  .hero-overlay p {
+    font-size: 1.125rem;
+  }
+  
+  .category-card:hover {
+    transform: translateY(-4px) scale(1.01);
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-overlay h1 {
+    font-size: 1.75rem;
+  }
+  
+  .search-glass {
+    padding: 12px;
+  }
+  
+  .search-glass .flex {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .search-glass .flex > div:last-child {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .category-card {
+    height: 160px;
+  }
+  
+  .experience-card .p-6 {
+    padding: 16px;
+  }
+}
+
+/* Enhanced dark mode support */
+@media (prefers-color-scheme: dark) {
+  .dark-mode-auto {
+    --background: hsl(240, 10%, 3.9%);
+    --foreground: hsl(0, 0%, 98%);
+    --card: hsl(240, 10%, 3.9%);
+    --card-foreground: hsl(0, 0%, 98%);
+  }
+}
+
+/* Enhanced accessibility */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Enhanced focus management */
+.focus-ring {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Skip navigation link */
+.skip-nav {
+  position: absolute;
+  top: -40px;
+  left: 6px;
+  background: var(--primary);
+  color: hsl(0, 0%, 100%);
+  padding: 8px;
+  text-decoration: none;
+  border-radius: 4px;
+  font-weight: 600;
+  z-index: 100;
+}
+
+.skip-nav:focus {
+  top: 6px;
+}
+
+/* Live Funding Section Animations */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s ease-out;
+}
+
+.live-indicator {
+  animation: pulse-glow 2s infinite;
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Enhanced print styles */
+@media print {
+  .btn-gradient {
+    background: var(--primary) !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  .hero-overlay {
+    background: hsl(0, 0%, 95%) !important;
+    color: hsl(0, 0%, 0%) !important;
+  }
+  
+  .search-glass {
+    background: hsl(0, 0%, 100%) !important;
+    border: 1px solid hsl(0, 0%, 80%) !important;
+  }
+}

@@ -4,8 +4,13 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
-attached_assets
 *.log
 .replit
 .env
 .env.*
+
+# Ignore the bulk of attached_assets (Replit session notes, screenshots)
+# but keep the actual images the app imports via @assets alias
+attached_assets/Pasted-*
+attached_assets/*.txt
+attached_assets/Screenshot*

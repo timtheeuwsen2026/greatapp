@@ -24,14 +24,11 @@ import { useToast } from "@/hooks/use-toast";
 import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 
-import alpineYogaImage from "@assets/stock_images/alpine_yoga_retreat__ec441345.jpg";
-import baliSurfImage from "@assets/stock_images/bali_surf_retreat_be_43f7cb51.jpg";
-import tuscanyArtImage from "@assets/stock_images/tuscany_art_workshop_e9f6dadf.jpg";
-import costaRicaCyclingImage from "@assets/stock_images/costa_rica_cycling_n_91881812.jpg";
-import avatar1 from "@assets/stock_images/diverse_people_avata_208d2e2b.jpg";
-import avatar2 from "@assets/stock_images/diverse_people_avata_ed8ac9eb.jpg";
-import avatar3 from "@assets/stock_images/diverse_people_avata_0b6e63c9.jpg";
-import avatar4 from "@assets/stock_images/diverse_people_avata_5e8cae0a.jpg";
+// Diverse community avatar images — served from Unsplash (no local files needed)
+const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
+const avatar2 = "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&h=80&fit=crop&crop=face";
+const avatar3 = "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=80&h=80&fit=crop&crop=face";
+const avatar4 = "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&h=80&fit=crop&crop=face";
 
 // Emoji mapping for trip categories
 const CATEGORY_EMOJIS: { [key: string]: string } = {

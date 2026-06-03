@@ -4,6 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, X, Image as ImageIcon, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getAccessToken } from "@/hooks/useAuth";
 
 interface SharedPhotoUploadProps {
   onUploadComplete: (url: string) => void;
@@ -15,9 +16,9 @@ interface SharedPhotoUploadProps {
   children?: React.ReactNode;
   disabled?: boolean;
   variant?: 'default' | 'compact' | 'gallery';
-  uploadType?: 'direct' | 's3'; // Choose upload method
-  getUploadParameters?: () => Promise<{ method: 'PUT'; url: string }>; // For S3 uploads
-  isDemoEvent?: boolean; // For Mystic Marrakesh demo bypass
+  uploadType?: 'direct' | 's3'; // s3 is deprecated — all uploads go through /api/uploads/images
+  getUploadParameters?: () => Promise<{ method: 'PUT'; url: string }>; // unused, kept for compat
+  isDemoEvent?: boolean;
 }
 
 export function SharedPhotoUpload({
@@ -133,11 +134,7 @@ export function SharedPhotoUpload({
     setUploadProgress(0);
 
     try {
-      if (uploadType === 's3') {
-        await uploadToS3(file, blobUrl);
-      } else {
-        await uploadDirect(file, blobUrl);
-      }
+      await uploadDirect(file, blobUrl);
     } catch (error) {
       console.error('Upload error:', error);
       
@@ -298,11 +295,11 @@ export function SharedPhotoUpload({
         reject(new Error("Upload took too long. Please try again."));
       });
 
-      // Start upload
       xhr.open('POST', '/api/uploads/images');
       xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-      xhr.withCredentials = true;
-      xhr.timeout = 60000; // 60 second timeout
+      const token = getAccessToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.timeout = 60000;
       xhr.send(formData);
     });
   };

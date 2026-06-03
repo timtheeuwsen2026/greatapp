@@ -112,6 +112,11 @@ export default function Home() {
     queryKey: ['/api/mvg/recently-funded']
   });
 
+  // Fetch approved venues for homepage section (max 3 featured)
+  const { data: featuredVenues = [] } = useQuery<any[]>({
+    queryKey: ['/api/venues'],
+  });
+
   // Helper to get pricing from ticket SKUs or legacy fields
   // Returns the lowest price/deposit from ticketSkus, falling back to legacy fields
   const getPricingFromTicketSkus = (ticketSkus: any[] | undefined, legacyPrice: any, legacyDeposit: any) => {
@@ -1670,130 +1675,80 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Featured Community Venues - Compact */}
-      <section className="py-12 bg-gray-50 dark:bg-gray-900">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-8">
-            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-3">
-              Community Venues
-            </h2>
-            <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
-              Handpicked spaces designed for connection
-            </p>
-          </div>
+      {/* Featured Community Venues - Live from DB */}
+      {featuredVenues.length > 0 && (
+        <section className="py-12 bg-gray-50 dark:bg-gray-900">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-3">
+                Community Venues
+              </h2>
+              <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+                Approved spaces designed for connection
+              </p>
+            </div>
 
-          {/* Compact Venue Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {/* Mountain Lodge */}
-            <Card className="bg-white dark:bg-gray-800 hover:shadow-lg transition-shadow overflow-hidden group">
-              <div className="relative h-32 overflow-hidden">
-                <img 
-                  src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=200&fit=crop"
-                  alt="Mountain Eco Lodge"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-                <Badge className="absolute top-2 right-2 bg-green-500 text-white border-0 text-xs">
-                  Eco-Certified
-                </Badge>
-              </div>
-              <CardContent className="p-4">
-                <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">
-                  Mountain Eco Lodge
-                </h3>
-                <div className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  <MapPin className="h-3 w-3" />
-                  <span>Swiss Alps, Switzerland</span>
-                </div>
-                <Button 
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-sm"
-                  onClick={() => setLocation('/venues')}
-                  data-testid="button-view-mountain-lodge"
+            {/* Venue Cards — show up to 3 */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              {featuredVenues.slice(0, 3).map((venue: any) => (
+                <Card
+                  key={venue.id}
+                  className="bg-white dark:bg-gray-800 hover:shadow-lg transition-shadow overflow-hidden group cursor-pointer"
+                  onClick={() => setLocation(`/v/${venue.slug || venue.id}`)}
                 >
-                  View Details
-                </Button>
-              </CardContent>
-            </Card>
+                  <div className="relative h-32 overflow-hidden">
+                    {venue.coverImageUrl ? (
+                      <img
+                        src={venue.coverImageUrl}
+                        alt={venue.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
+                        <HomeIcon className="h-10 w-10 text-gray-400" />
+                      </div>
+                    )}
+                    {venue.categories?.[0] && (
+                      <Badge className="absolute top-2 right-2 bg-primary text-white border-0 text-xs">
+                        {venue.categories[0].replace(/_/g, ' ')}
+                      </Badge>
+                    )}
+                  </div>
+                  <CardContent className="p-4">
+                    <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2 line-clamp-1">
+                      {venue.name}
+                    </h3>
+                    <div className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3">
+                      <MapPin className="h-3 w-3 shrink-0" />
+                      <span className="line-clamp-1">{venue.city || venue.location}</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-sm"
+                      onClick={(e) => { e.stopPropagation(); setLocation(`/v/${venue.slug || venue.id}`); }}
+                    >
+                      View Details
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
 
-            {/* Bali Retreat */}
-            <Card className="bg-white dark:bg-gray-800 hover:shadow-lg transition-shadow overflow-hidden group">
-              <div className="relative h-32 overflow-hidden">
-                <img 
-                  src="https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=400&h=200&fit=crop"
-                  alt="Bali Beach Retreat"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-                <Badge className="absolute top-2 right-2 bg-blue-500 text-white border-0 text-xs">
-                  Beachfront
-                </Badge>
-              </div>
-              <CardContent className="p-4">
-                <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">
-                  Bali Beach Retreat
-                </h3>
-                <div className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  <MapPin className="h-3 w-3" />
-                  <span>Canggu, Bali</span>
-                </div>
-                <Button 
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-sm"
-                  onClick={() => setLocation('/venues')}
-                  data-testid="button-view-bali-retreat"
-                >
-                  View Details
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Tuscan Villa */}
-            <Card className="bg-white dark:bg-gray-800 hover:shadow-lg transition-shadow overflow-hidden group">
-              <div className="relative h-32 overflow-hidden">
-                <img 
-                  src="https://images.unsplash.com/photo-1523531294919-4bcd7c65e216?w=400&h=200&fit=crop"
-                  alt="Tuscan Art Villa"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-                <Badge className="absolute top-2 right-2 bg-purple-500 text-white border-0 text-xs">
-                  Historic
-                </Badge>
-              </div>
-              <CardContent className="p-4">
-                <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">
-                  Tuscan Art Villa
-                </h3>
-                <div className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  <MapPin className="h-3 w-3" />
-                  <span>Tuscany, Italy</span>
-                </div>
-                <Button 
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-sm"
-                  onClick={() => setLocation('/venues')}
-                  data-testid="button-view-tuscan-villa"
-                >
-                  View Details
-                </Button>
-              </CardContent>
-            </Card>
+            {/* CTA */}
+            <div className="text-center">
+              <Button
+                variant="outline"
+                onClick={() => setLocation('/venues')}
+                data-testid="button-explore-all-venues"
+              >
+                Explore All Venues
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
           </div>
-
-          {/* Simple CTA */}
-          <div className="text-center">
-            <Button 
-              variant="outline"
-              onClick={() => setLocation('/venues')}
-              data-testid="button-explore-all-venues"
-            >
-              Explore All Venues
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Community Hub Section - Prominent Chat CTA */}
       <section className="py-16 bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-900 dark:to-indigo-900">

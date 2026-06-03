@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest } from "@/lib/queryClient";
-import { normalizeImageUrl } from "@/lib/utils";
+import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import {
   Copy,
   CheckCircle,
@@ -63,7 +63,7 @@ export default function RecruitSquad() {
     },
     onSuccess: (data) => {
       setReferralCode(data.referralCode);
-      setReferralLink(data.referralLink || `${import.meta.env.VITE_APP_BASE_URL || 'https://greatapp.ai'}/experience/${experienceId}?ref=${data.referralCode}`);
+      setReferralLink(data.referralLink || `${getBaseUrl()}/experience/${experienceId}?ref=${data.referralCode}`);
     },
     onError: () => {
       toast({

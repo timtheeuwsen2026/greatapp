@@ -1,4 +1,14 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getAccessToken } from "@/hooks/useAuth";
+
+// ─── Auth header helper ───────────────────────────────────────────────────────
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAccessToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
+}
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -10,25 +20,26 @@ async function throwIfResNotOk(res: Response) {
 export async function apiRequest(
   method: string,
   url: string,
-  data?: unknown | undefined,
+  data?: unknown,
 ): Promise<Response> {
   try {
     const res = await fetch(url, {
       method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers: data
+        ? authHeaders({ "Content-Type": "application/json" })
+        : authHeaders(),
       body: data ? JSON.stringify(data) : undefined,
-      credentials: "include",
     });
 
     await throwIfResNotOk(res);
     return res;
   } catch (error) {
-    // Log network errors for debugging
     if (error instanceof TypeError) {
       console.error(`Network error on ${method} ${url}:`, error.message);
-      throw new Error(`Network error: Unable to connect to server. Please check your connection.`);
+      throw new Error(
+        "Network error: Unable to connect to server. Please check your connection.",
+      );
     }
-    // Re-throw HTTP errors as-is
     throw error;
   }
 }
@@ -41,7 +52,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     try {
       const res = await fetch(queryKey.join("/") as string, {
-        credentials: "include",
+        headers: authHeaders(),
       });
 
       if (unauthorizedBehavior === "returnNull" && res.status === 401) {
@@ -51,12 +62,15 @@ export const getQueryFn: <T>(options: {
       await throwIfResNotOk(res);
       return await res.json();
     } catch (error) {
-      // Log network errors for debugging
       if (error instanceof TypeError) {
-        console.error(`Network error on GET ${queryKey.join("/")}:`, error.message);
-        throw new Error(`Network error: Unable to connect to server. Please check your connection.`);
+        console.error(
+          `Network error on GET ${queryKey.join("/")}:`,
+          error.message,
+        );
+        throw new Error(
+          "Network error: Unable to connect to server. Please check your connection.",
+        );
       }
-      // Re-throw HTTP errors as-is
       throw error;
     }
   };

@@ -58,6 +58,39 @@ function VenueDashboardContent() {
     retry: false,
   }) as { data: any, isLoading: boolean };
 
+  // Task 4 — Pending Offers (Handshake inbox)
+  const { data: pendingOffers = [], isLoading: offersLoading } = useQuery({
+    queryKey: ["/api/venue/pending-offers"],
+    enabled: isAuthenticated,
+    retry: false,
+  }) as { data: any[], isLoading: boolean };
+
+  // Task 4 — Venue Ledger (real sales + my share)
+  const { data: ledger = { totalSales: 0, myShare: 0, bookingsCount: 0 }, isLoading: ledgerLoading } = useQuery({
+    queryKey: ["/api/venue/ledger"],
+    enabled: isAuthenticated,
+    retry: false,
+  }) as { data: any, isLoading: boolean };
+
+  // Accept / Reject offer mutations
+  const acceptOffer = useMutation({
+    mutationFn: (experienceId: string) => apiRequest("POST", `/api/venue/offers/${experienceId}/accept`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
+      toast({ title: "Offer Accepted", description: "The experience is now Live!" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
+  });
+
+  const rejectOffer = useMutation({
+    mutationFn: (experienceId: string) => apiRequest("POST", `/api/venue/offers/${experienceId}/reject`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
+      toast({ title: "Offer Rejected", description: "The creator has been notified." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to reject offer", variant: "destructive" }),
+  });
+
   const submitForReview = useMutation({
     mutationFn: async (venueId: string) => {
       return await apiRequest("PATCH", `/api/venues/${venueId}/submit`);
@@ -209,13 +242,141 @@ function VenueDashboardContent() {
           </Card>
         </div>
 
+        {/* Task 4 — Ledger Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Sales</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                ${ledger.totalSales?.toFixed(2) ?? '0.00'}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">Gross across all linked experiences</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">My Share</p>
+              <p className="text-2xl font-bold text-green-600">
+                ${ledger.myShare?.toFixed(2) ?? '0.00'}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">Based on accepted venue split %</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Offers</p>
+              <p className="text-2xl font-bold text-amber-600">{pendingOffers.length}</p>
+              <p className="text-xs text-gray-500 mt-1">Creator proposals awaiting your decision</p>
+            </CardContent>
+          </Card>
+        </div>
+
         <Tabs defaultValue="venues" className="space-y-6">
           <TabsList>
             <TabsTrigger value="venues">My Venues</TabsTrigger>
+            <TabsTrigger value="offers" className="relative">
+              Offers
+              {pendingOffers.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-amber-500 text-white text-xs w-5 h-5">
+                  {pendingOffers.length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="bookings">Bookings</TabsTrigger>
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
+
+          {/* ── Pending Offers Tab ── */}
+          <TabsContent value="offers" className="space-y-4">
+            <h2 className="text-xl font-semibold">Pending Offers</h2>
+            {offersLoading ? (
+              <div className="text-center py-8 text-gray-500">Loading offers…</div>
+            ) : pendingOffers.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <DollarSign className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No pending offers</p>
+                <p className="text-sm mt-1">When a creator proposes an event at your venue, it will appear here.</p>
+              </div>
+            ) : (
+              pendingOffers.map((offer: any) => {
+                const platformPct = parseFloat(offer.platformPct || offer.platformRevenuePercentage || '15');
+                const venuePct = parseFloat(offer.venueRevenuePercentage || '0');
+                const creatorPct = parseFloat(offer.creatorPct || offer.creatorRevenuePercentage || '85');
+                return (
+                  <Card key={offer.id} className="border-amber-200 dark:border-amber-800">
+                    <CardContent className="p-5">
+                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold text-lg">{offer.title}</h3>
+                            <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+                              <Clock className="w-3 h-3 mr-1" />Awaiting your decision
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div>
+                              <p className="text-xs text-gray-500">Start Date</p>
+                              <p className="font-medium">{offer.startDate ? new Date(offer.startDate).toLocaleDateString() : '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500">End Date</p>
+                              <p className="font-medium">{offer.endDate ? new Date(offer.endDate).toLocaleDateString() : '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500">Max Capacity</p>
+                              <p className="font-medium">{offer.maxParticipants ?? '—'} people</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500">Ticket Price</p>
+                              <p className="font-medium">{offer.price ? `$${parseFloat(offer.price).toFixed(0)}` : '—'}</p>
+                            </div>
+                          </div>
+
+                          {/* Proposed Split */}
+                          <div className="mt-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border">
+                            <p className="text-xs font-semibold text-gray-600 mb-2">Proposed Revenue Split</p>
+                            <div className="flex gap-4 text-sm">
+                              <span className="text-gray-500">Platform: <strong className="text-gray-900 dark:text-white">{platformPct}%</strong></span>
+                              <span className="text-green-600">Your Share: <strong>{venuePct}%</strong></span>
+                              <span className="text-gray-500">Creator: <strong>{creatorPct}%</strong></span>
+                            </div>
+                            {offer.price && offer.maxParticipants && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Est. your earnings if full: <strong className="text-green-600">
+                                  ${(parseFloat(offer.price) * (offer.maxParticipants || 0) * (venuePct / 100)).toFixed(2)}
+                                </strong>
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex md:flex-col gap-2 shrink-0">
+                          <Button
+                            className="bg-green-600 hover:bg-green-700 text-white flex-1 md:flex-none"
+                            onClick={() => acceptOffer.mutate(offer.id)}
+                            disabled={acceptOffer.isPending}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-1" />
+                            Accept
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="border-red-300 text-red-600 hover:bg-red-50 flex-1 md:flex-none"
+                            onClick={() => rejectOffer.mutate(offer.id)}
+                            disabled={rejectOffer.isPending}
+                          >
+                            <XCircle className="w-4 h-4 mr-1" />
+                            Reject
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </TabsContent>
 
           <TabsContent value="venues" className="space-y-6">
             <div className="flex justify-between items-center">

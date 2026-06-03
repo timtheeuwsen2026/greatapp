@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { isUnauthorizedError } from "@/lib/authUtils";
+import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
 
@@ -88,7 +88,7 @@ export default function AdminDashboard() {
 
   // Redirect to login if not authenticated or not admin
   useEffect(() => {
-    if (!isLoading && (!isAuthenticated || user?.email !== "timtheeuwsen@gmail.com")) {
+    if (!isLoading && (!isAuthenticated || !isAdminUser(user))) {
       toast({
         title: "Unauthorized",
         description: "You don't have admin access.",
@@ -104,7 +104,7 @@ export default function AdminDashboard() {
   // All experiences query (for full visibility)
   const { data: allExperiences = [], isLoading: experiencesLoading } = useQuery<Experience[]>({
     queryKey: ["/api/admin/experiences"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
 
@@ -114,14 +114,14 @@ export default function AdminDashboard() {
   // Community applications query
   const { data: communityApplications = [], isLoading: applicationsLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/community-applications"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
 
   // All venues query (not just pending)
   const { data: allVenues = [], isLoading: venuesLoading } = useQuery<VenueWithOwner[]>({
     queryKey: ["/api/admin/venues"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
 
@@ -131,14 +131,14 @@ export default function AdminDashboard() {
   // Pending services query
   const { data: pendingServices = [], isLoading: servicesLoading} = useQuery<ServiceProvider[]>({
     queryKey: ["/api/admin/services"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
 
   // Platform stats query
   const { data: stats = {}, isLoading: statsLoading } = useQuery({
     queryKey: ["/api/admin/stats"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
 
@@ -359,7 +359,7 @@ export default function AdminDashboard() {
     }
   };
 
-  if (isLoading || !isAuthenticated || user?.email !== "timtheeuwsen@gmail.com") {
+  if (isLoading || !isAuthenticated || !isAdminUser(user)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />

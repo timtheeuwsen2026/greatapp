@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MapPin, Users, DollarSign, Building, Clock } from "lucide-react";
+import { MapPin, Users, DollarSign, Building } from "lucide-react";
 import Navigation from "@/components/navigation";
 import { Link } from "wouter";
 import { normalizeImageUrl } from "@/lib/utils";
@@ -46,13 +46,13 @@ export default function Venues() {
     );
   }
 
-  const approvedVenues = venues?.filter(venue => venue.approved) || [];
-  const pendingVenues = venues?.filter(venue => !venue.approved) || [];
+  // API now returns only approved venues for public view
+  const approvedVenues = venues || [];
 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -61,9 +61,7 @@ export default function Venues() {
           </div>
           <div className="flex gap-3">
             <Link href="/services">
-              <Button variant="outline">
-                Browse Services
-              </Button>
+              <Button variant="outline">Browse Services</Button>
             </Link>
             <Link href="/venue-profile-setup">
               <Button>
@@ -74,7 +72,7 @@ export default function Venues() {
           </div>
         </div>
 
-        {approvedVenues.length === 0 && pendingVenues.length === 0 ? (
+        {approvedVenues.length === 0 ? (
           <div className="text-center py-12">
             <Building className="w-16 h-16 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No venues yet</h3>
@@ -84,30 +82,16 @@ export default function Venues() {
             </Link>
           </div>
         ) : (
-          <div className="space-y-8">
-            {approvedVenues.length > 0 && (
-              <div>
-                <h2 className="text-2xl font-semibold text-gray-900 mb-6">Featured Venues</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {approvedVenues.map((venue) => (
-                    <VenueCard key={venue.id} venue={venue} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {pendingVenues.length > 0 && (
-              <div>
-                <h2 className="text-2xl font-semibold text-gray-900 mb-6">
-                  Pending Approval ({pendingVenues.length})
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {pendingVenues.map((venue) => (
-                    <VenueCard key={venue.id} venue={venue} isPending />
-                  ))}
-                </div>
-              </div>
-            )}
+          <div>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-6">
+              Featured Venues
+              <span className="ml-2 text-base font-normal text-gray-500">({approvedVenues.length})</span>
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {approvedVenues.map((venue) => (
+                <VenueCard key={venue.id} venue={venue} />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -115,17 +99,17 @@ export default function Venues() {
   );
 }
 
-function VenueCard({ venue, isPending = false }: { venue: Venue; isPending?: boolean }) {
+function VenueCard({ venue }: { venue: Venue }) {
   const categories = venue.categories || [];
   const vibes = venue.vibes || [];
-  
+
   return (
     <Link href={`/v/${venue.slug}`}>
-      <Card className={`hover:shadow-lg transition-shadow cursor-pointer ${isPending ? 'opacity-75' : ''}`}>
+      <Card className="hover:shadow-lg transition-shadow cursor-pointer">
         {venue.coverImageUrl && (
           <div className="aspect-video w-full overflow-hidden rounded-t-lg">
-            <img 
-              src={normalizeImageUrl(venue.coverImageUrl) || ''} 
+            <img
+              src={normalizeImageUrl(venue.coverImageUrl) || ''}
               alt={venue.name}
               className="w-full h-full object-cover"
             />
@@ -134,12 +118,6 @@ function VenueCard({ venue, isPending = false }: { venue: Venue; isPending?: boo
         <CardHeader>
           <div className="flex justify-between items-start">
             <CardTitle className="text-lg">{venue.name}</CardTitle>
-            {isPending && (
-              <Badge variant="outline" className="text-yellow-600 border-yellow-300">
-                <Clock className="w-3 h-3 mr-1" />
-                Pending
-              </Badge>
-            )}
           </div>
           <CardDescription className="flex items-center text-sm text-gray-600">
             <MapPin className="w-4 h-4 mr-1" />

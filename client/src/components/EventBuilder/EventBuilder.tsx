@@ -104,7 +104,10 @@ const eventBuilderSchema = z.object({
   manualVenueDescription: z.string().optional(),
   manualVenueCapacity: z.coerce.number().min(1).optional().nullable(),
   manualVenuePhotos: z.array(z.string()).default([]), // Allow any string
-  
+  // Daytime Space capacity (for one-day events)
+  standingCapacity: z.coerce.number().int().min(0).optional().nullable(),
+  seatedCapacity: z.coerce.number().int().min(0).optional().nullable(),
+
   // Virtual event fields
   virtualPlatform: z.string().optional(),
   virtualMeetingUrl: z.string().optional(), // Allow any string, URL validation done separately
@@ -253,14 +256,18 @@ const ALL_STEPS = [
   { id: 10, title: "Terms", icon: FileText, description: "Terms and final review" }
 ];
 
-// Helper to get filtered steps based on event type
-// One-day and virtual events skip the Rooms step (id: 7)
+// Helper to get filtered steps based on event type.
+// Event (one-day) / Virtual: skip Rooms (id 7) — no room inventory needed.
+// Trip (multi-day): all steps, including Rooms and MVG threshold.
 function getStepsForEventType(eventType: string | undefined): typeof ALL_STEPS {
   if (eventType === 'one-day' || eventType === 'virtual') {
     return ALL_STEPS.filter(step => step.id !== 7);
   }
   return ALL_STEPS;
 }
+
+// True when the selected type is a local one-day Event (not a multi-day Trip)
+const isEventType = (t: string | undefined) => t === 'one-day';
 
 // Legacy STEPS constant for backward compatibility (will be replaced by dynamic steps)
 const STEPS = ALL_STEPS;
@@ -325,6 +332,8 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
       manualVenueDescription: "",
       manualVenueCapacity: undefined,
       manualVenuePhotos: [],
+      standingCapacity: undefined,
+      seatedCapacity: undefined,
       virtualPlatform: "",
       virtualMeetingUrl: "",
       virtualInstructions: "",
@@ -755,6 +764,10 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
       monetisationMode: data.monetisationMode || 'creator_led',
       creatorPct: data.creatorPct ?? 85,
       platformPct: data.platformPct ?? 15,
+      influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
+      influencerCommissionPct: data.influencerCommissionPct != null ? parseFloat(data.influencerCommissionPct) : 0,
+      standingCapacity: data.standingCapacity ?? null,
+      seatedCapacity: data.seatedCapacity ?? null,
       // Ensure ticketSkus array is properly handled
       ticketSkus: Array.isArray(data.ticketSkus) ? data.ticketSkus : [],
     };
@@ -937,12 +950,21 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
         depositEnabled: formData.depositEnabled || false,
         depositPercentage: formData.depositPercentage || 20,
         
-        // Revenue split fields
+        // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
         creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
         platformPct: formData.platformPct || 15,
-        
+
+        // Promoter bounty (deducted from creator's share)
+        influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
+        influencerCommissionPct: formData.influencerCommissionPct ?? 0,
+        promoterCommission: formData.influencerCommissionPct ?? 0,
+
+        // Daytime Space capacity
+        standingCapacity: formData.standingCapacity ?? null,
+        seatedCapacity: formData.seatedCapacity ?? null,
+
         // Capacity and MVG fields
         maxParticipants: formData.maxParticipants || 1,
         // Map frontend MVG fields to draft schema fields (mvgMinimumSize in db)
@@ -951,7 +973,7 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
         // Also send both names for backward compatibility
         requireMinimumParticipants: formData.requireMinimumParticipants ?? true,
         minimumParticipants: formData.minimumParticipants || 6,
-        
+
         // Services and amenities
         selectedServiceIds: formData.selectedServiceIds || [],
         selectedAmenityIds: formData.selectedAmenityIds || [],
@@ -1286,12 +1308,21 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
         depositEnabled: formData.depositEnabled || false,
         depositPercentage: formData.depositPercentage || 20,
         
-        // Revenue split fields
+        // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
         creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
         platformPct: formData.platformPct || 15,
-        
+
+        // Promoter bounty (deducted from creator's share)
+        influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
+        influencerCommissionPct: formData.influencerCommissionPct ?? 0,
+        promoterCommission: formData.influencerCommissionPct ?? 0,
+
+        // Daytime Space capacity
+        standingCapacity: formData.standingCapacity ?? null,
+        seatedCapacity: formData.seatedCapacity ?? null,
+
         // Capacity and MVG fields
         maxParticipants: formData.maxParticipants || 1,
         // Map frontend MVG fields to draft schema fields (mvgMinimumSize in db)
@@ -1300,7 +1331,7 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
         // Also send both names for backward compatibility
         requireMinimumParticipants: formData.requireMinimumParticipants ?? true,
         minimumParticipants: formData.minimumParticipants || 6,
-        
+
         // Services and amenities
         selectedServiceIds: formData.selectedServiceIds || [],
         selectedAmenityIds: formData.selectedAmenityIds || [],
@@ -1940,13 +1971,14 @@ function BasicInfoStep({ form }: { form: any }) {
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="one-day">One Day</SelectItem>
-                  <SelectItem value="multi-day">Multi Day</SelectItem>
-                  <SelectItem value="virtual">Virtual</SelectItem>
+                  <SelectItem value="one-day">🎟️ Event (Local) — Single day, no rooms or MVG</SelectItem>
+                  <SelectItem value="multi-day">✈️ Trip (Global) — Multi-day with rooms &amp; group thresholds</SelectItem>
+                  <SelectItem value="virtual">💻 Virtual — Online event</SelectItem>
                 </SelectContent>
               </Select>
               <FormDescription>
-                Choose whether this is a single day, multi-day, or virtual experience.
+                <strong>Event</strong> bypasses room inventory and minimum-group thresholds.{" "}
+                <strong>Trip</strong> requires dates, rooms, and a minimum group size.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -2446,11 +2478,12 @@ function VenueStep({ form }: { form: any }) {
   const [venues, setVenues] = useState<any[]>([]);
   const [isLoadingVenues, setIsLoadingVenues] = useState(false);
   const [venuesError, setVenuesError] = useState<string | null>(null);
-  
+
   // Safely watch form values with defaults
   const venueType = form.watch('venueType') ?? 'catalog';
   const selectedVenueId = form.watch('selectedVenueId') ?? '';
   const manualVenuePhotos = form.watch('manualVenuePhotos') ?? [];
+  const eventType = form.watch('type');
 
   // Fetch both approved catalog venues AND user's own venues (including drafts)
   useEffect(() => {
@@ -3055,6 +3088,45 @@ function VenueStep({ form }: { form: any }) {
               </FormItem>
             )}
           />
+        </div>
+      )}
+
+      {/* Daytime Space inputs — raw/functional inputs for one-day events (coffeeshop collabs etc.) */}
+      {eventType === 'one-day' && (
+        <div style={{ border: '1px solid #ccc', padding: '12px', borderRadius: '6px', marginTop: '12px' }}>
+          <p style={{ fontWeight: 600, marginBottom: '8px' }}>Daytime Space Details</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label htmlFor="standing-capacity" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '4px' }}>
+                Standing Capacity
+              </label>
+              <input
+                id="standing-capacity"
+                type="number"
+                min="0"
+                placeholder="e.g. 100"
+                value={form.watch('standingCapacity') ?? ''}
+                onChange={(e) => form.setValue('standingCapacity', e.target.value ? parseInt(e.target.value) : null, { shouldDirty: true })}
+                data-testid="input-standing-capacity"
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: '4px' }}
+              />
+            </div>
+            <div>
+              <label htmlFor="seated-capacity" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '4px' }}>
+                Seated Capacity
+              </label>
+              <input
+                id="seated-capacity"
+                type="number"
+                min="0"
+                placeholder="e.g. 40"
+                value={form.watch('seatedCapacity') ?? ''}
+                onChange={(e) => form.setValue('seatedCapacity', e.target.value ? parseInt(e.target.value) : null, { shouldDirty: true })}
+                data-testid="input-seated-capacity"
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: '4px' }}
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -3801,6 +3873,25 @@ function PricingStep({ form }: { form: any }) {
   const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
   const discounts = form.watch('discounts') || [];
   const ticketSkus = form.watch('ticketSkus') || [];
+
+  // Fetch platform fee from DB and seed form field (runs once on mount)
+  useEffect(() => {
+    fetch('/api/platform-settings')
+      .then(r => r.json())
+      .then((settings: { platformFeePercentage: number }) => {
+        const dbFee = settings.platformFeePercentage ?? 15;
+        // Only override if the field is still at the hardcoded default (avoid overwriting user edits)
+        const currentPlatformPct = form.getValues('platformPct');
+        if (currentPlatformPct === 15 || currentPlatformPct == null) {
+          form.setValue('platformPct', dbFee, { shouldDirty: false });
+          form.setValue('creatorPct', 100 - dbFee, { shouldDirty: false });
+          form.setValue('platformRevenuePercentage', dbFee, { shouldDirty: false });
+          form.setValue('creatorRevenuePercentage', 100 - dbFee, { shouldDirty: false });
+        }
+      })
+      .catch(() => {}); // silently keep defaults on error
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   
   // One-day and virtual events don't have rooms - use Number of Spots instead
   const isNonRoomEvent = eventType === 'one-day' || eventType === 'virtual';
@@ -4217,52 +4308,89 @@ function PricingStep({ form }: { form: any }) {
         </CardContent>
       </Card>
 
-      {/* **4. REVENUE SPLIT** */}
+      {/* **4. REVENUE SPLIT — The Economic Handshake** */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <DollarSign className="w-5 h-5" />
             Revenue Split
           </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Platform takes a fixed 15%. You allocate the remaining 85% between yourself and the venue partner.
+          </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
+            {/* Split grid: Platform (fixed) | Space | Creator */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
-                <Label htmlFor="creator-pct">Creator Share (%)</Label>
+                <Label htmlFor="platform-pct-display">Platform (%)</Label>
+                <Input
+                  id="platform-pct-display"
+                  type="number"
+                  value={platformPct}
+                  readOnly
+                  disabled
+                  className="bg-gray-100 dark:bg-gray-800 cursor-not-allowed"
+                  data-testid="input-platform-pct"
+                />
+                <p className="text-xs text-gray-500 mt-1">Fixed — set by platform</p>
+              </div>
+              <div>
+                <Label htmlFor="venue-revenue-pct">Space / Venue (%)</Label>
+                <Input
+                  id="venue-revenue-pct"
+                  type="number"
+                  min="0"
+                  max={100 - platformPct}
+                  step="1"
+                  value={form.watch('venueRevenuePercentage') ?? 0}
+                  onChange={(e) => {
+                    const spacePct = Math.min(parseFloat(e.target.value) || 0, 100 - platformPct);
+                    form.setValue('venueRevenuePercentage', spacePct, { shouldDirty: true });
+                    form.setValue('creatorPct', Math.max(0, 100 - platformPct - spacePct), { shouldDirty: true });
+                    form.setValue('creatorRevenuePercentage', Math.max(0, 100 - platformPct - spacePct), { shouldDirty: true });
+                  }}
+                  data-testid="input-venue-revenue-pct"
+                />
+                <p className="text-xs text-gray-500 mt-1">Proposed to venue partner</p>
+              </div>
+              <div>
+                <Label htmlFor="creator-pct">Your Share (%)</Label>
                 <Input
                   id="creator-pct"
                   type="number"
                   min="0"
-                  max="100"
+                  max={100 - platformPct}
                   value={creatorPct}
-                  onChange={(e) => handleRevenueSplitChange('creator', parseFloat(e.target.value) || 0)}
+                  readOnly
+                  disabled
+                  className="bg-gray-100 dark:bg-gray-800 cursor-not-allowed"
                   data-testid="input-creator-pct"
                 />
-              </div>
-              <div>
-                <Label htmlFor="platform-pct">Platform Fee (%)</Label>
-                <Input
-                  id="platform-pct"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={platformPct}
-                  onChange={(e) => handleRevenueSplitChange('platform', parseFloat(e.target.value) || 0)}
-                  data-testid="input-platform-pct"
-                />
+                {influencerPromotionEnabled && influencerCommissionPct > 0 && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Promoter bounty ({influencerCommissionPct}%) deducted from your share
+                  </p>
+                )}
               </div>
             </div>
-            
-            {/* Validation warning */}
-            {(creatorPct + platformPct) !== 100 && (
-              <div className="flex items-center gap-2 text-amber-600 text-sm">
-                <AlertTriangle className="w-4 h-4" />
-                <span>Revenue split must total 100% (currently {creatorPct + platformPct}%)</span>
-              </div>
-            )}
-            
-            {/* Example payout calculation - uses ticket SKU totals for accurate revenue */}
+
+            {/* Validation: must add to 100 */}
+            {(() => {
+              const spacePct = form.watch('venueRevenuePercentage') ?? 0;
+              const total = platformPct + spacePct + creatorPct;
+              if (Math.abs(total - 100) > 0.5) {
+                return (
+                  <p className="text-xs text-red-600">
+                    ⚠️ Split total is {total.toFixed(1)}% — must equal 100%
+                  </p>
+                );
+              }
+              return null;
+            })()}
+
+            {/* Example payout calculation — dynamic from DB fee + bounty */}
             <div className="bg-green-50 dark:bg-green-950 p-4 rounded-lg">
               <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">Example Payout</h4>
               <div className="text-sm space-y-1">
@@ -4274,9 +4402,20 @@ function PricingStep({ form }: { form: any }) {
                   <span>Platform Fee ({platformPct}%)</span>
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
+                {influencerPromotionEnabled && influencerCommissionPct > 0 && (
+                  <div className="flex justify-between">
+                    <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>
+                    <span className="text-amber-600">-{formatPriceByCurrency(totalRevenue * influencerCommissionPct / 100, currency)}</span>
+                  </div>
+                )}
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
                   <span>Your Payout</span>
-                  <span data-testid="text-your-payout">{formatPriceByCurrency(revenueSplit.creatorAmount, currency)}</span>
+                  <span data-testid="text-your-payout">
+                    {formatPriceByCurrency(
+                      Math.max(0, revenueSplit.creatorAmount - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)),
+                      currency
+                    )}
+                  </span>
                 </div>
               </div>
             </div>
@@ -4294,7 +4433,12 @@ function PricingStep({ form }: { form: any }) {
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
-            {/* MVG Settings */}
+            {/* MVG hidden for Event (one-day) type */}
+            {isEventType(eventType) ? (
+              <div className="rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 p-4 text-sm text-blue-800 dark:text-blue-200">
+                <strong>🎟️ Event mode:</strong> Minimum-group thresholds are disabled. Participants can book individually without a group commitment.
+              </div>
+            ) : (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -4363,7 +4507,8 @@ function PricingStep({ form }: { form: any }) {
                 </div>
               )}
             </div>
-            
+            )} {/* end isEventType(eventType) ternary — Soft-Hold always visible */}
+
             {/* Soft-Hold Settings */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">

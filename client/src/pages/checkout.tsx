@@ -15,7 +15,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { MapPin, Calendar, Users, Lock, Clock, Shield } from "lucide-react";
-import { normalizeImageUrl } from "@/lib/utils";
+import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 
 type Experience = {
@@ -89,7 +89,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: `${window.location.origin}/booking-success?experience=${experience.id}`,
+          return_url: `${getBaseUrl()}/booking-success?experience=${experience.id}`,
         },
         redirect: "if_required",
       });

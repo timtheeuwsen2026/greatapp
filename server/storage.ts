@@ -80,6 +80,8 @@ import {
   reservations,
   type Reservation,
   type InsertReservation,
+  referralClicks,
+  experienceMessages,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull } from "drizzle-orm";
@@ -87,6 +89,7 @@ import { eq, desc, and, or, sql, count, inArray, asc, not, isNull } from "drizzl
 export interface IStorage {
   // User operations (mandatory for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   getUserByPromoterCode(code: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUserRole(id: string, role: string): Promise<User>;
@@ -113,7 +116,15 @@ export interface IStorage {
   }>>;
   getExperiencesByCreator(creatorId: string): Promise<Experience[]>;
   getExperiencesByVenue(venueId: string): Promise<Experience[]>;
+  getExperiencesByVenueIds(venueIds: string[], status?: string): Promise<Experience[]>;
   updateExperience(id: string, updates: Partial<InsertExperience>): Promise<Experience>;
+  updateExperienceStatus(id: string, status: string): Promise<void>;
+  getBookingsByVenueIds(venueIds: string[]): Promise<any[]>;
+  getBookingsByCreator(creatorId: string): Promise<any[]>;
+  recordReferralClick(data: { promoterCode: string; promoterId: string; experienceId: string | null; visitorUserId: string | null; ipHash: string | null; userAgent: string | null }): Promise<void>;
+  markReferralClickConverted(promoterCode: string, bookingId: string): Promise<void>;
+  getReferralClickStats(promoterId: string): Promise<{ totalClicks: number; uniqueClicks: number; conversions: number; conversionRate: number }>;
+  createExperienceMessage(data: { experienceId: string; userId: string; message: string; messageType?: string }): Promise<void>;
   deleteExperience(id: string): Promise<void>;
   
   // Experience draft operations
@@ -325,6 +336,11 @@ export class DatabaseStorage implements IStorage {
   // User operations (mandatory for Replit Auth)
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
   }
 
@@ -637,6 +653,116 @@ export class DatabaseStorage implements IStorage {
       .where(eq(experiences.id, id))
       .returning();
     return experience;
+  }
+
+  async updateExperienceStatus(id: string, status: string): Promise<void> {
+    await db.update(experiences).set({ status: status as any, updatedAt: new Date() }).where(eq(experiences.id, id));
+  }
+
+  async getExperiencesByVenueIds(venueIds: string[], status?: string): Promise<Experience[]> {
+    if (!venueIds.length) return [];
+    const rows = await db.select().from(experiences)
+      .where(inArray((experiences as any).linkedVenueId, venueIds));
+    if (status) return rows.filter((e: any) => e.status === status);
+    return rows;
+  }
+
+  async getBookingsByVenueIds(venueIds: string[]): Promise<any[]> {
+    if (!venueIds.length) return [];
+    // Get all bookings for experiences linked to these venues
+    const linkedExperiences = await this.getExperiencesByVenueIds(venueIds);
+    if (!linkedExperiences.length) return [];
+    const expIds = linkedExperiences.map(e => e.id);
+    const rows = await db.select().from(bookings).where(inArray(bookings.experienceId, expIds));
+    // Attach experience to each booking for split calculation
+    return rows.map(b => ({
+      ...b,
+      experience: linkedExperiences.find(e => e.id === b.experienceId),
+    }));
+  }
+
+  async getBookingsByCreator(creatorId: string): Promise<any[]> {
+    const creatorExps = await this.getExperiencesByCreator(creatorId);
+    if (!creatorExps.length) return [];
+    const expIds = creatorExps.map(e => e.id);
+    const rows = await db.select().from(bookings).where(inArray(bookings.experienceId, expIds));
+    return rows.map(b => ({
+      ...b,
+      experience: creatorExps.find(e => e.id === b.experienceId),
+    }));
+  }
+
+  // ─── Referral Click Tracking ─────────────────────────────────────────────
+  async recordReferralClick(data: {
+    promoterCode: string;
+    promoterId: string;
+    experienceId: string | null;
+    visitorUserId: string | null;
+    ipHash: string | null;
+    userAgent: string | null;
+  }): Promise<void> {
+    await db.insert(referralClicks).values({
+      promoterCode: data.promoterCode,
+      promoterId: data.promoterId,
+      experienceId: data.experienceId,
+      visitorUserId: data.visitorUserId,
+      ipHash: data.ipHash,
+      userAgent: data.userAgent,
+    });
+  }
+
+  async markReferralClickConverted(promoterCode: string, bookingId: string): Promise<void> {
+    // Mark the most recent unconverted click for this code as converted
+    const [click] = await db
+      .select()
+      .from(referralClicks)
+      .where(and(eq(referralClicks.promoterCode, promoterCode), eq(referralClicks.converted, false)))
+      .orderBy(desc(referralClicks.clickedAt))
+      .limit(1);
+
+    if (click) {
+      await db
+        .update(referralClicks)
+        .set({ converted: true, bookingId, convertedAt: new Date() })
+        .where(eq(referralClicks.id, click.id));
+    }
+  }
+
+  async getReferralClickStats(promoterId: string): Promise<{
+    totalClicks: number;
+    uniqueClicks: number;
+    conversions: number;
+    conversionRate: number;
+  }> {
+    const clicks = await db
+      .select()
+      .from(referralClicks)
+      .where(eq(referralClicks.promoterId, promoterId));
+
+    const totalClicks = clicks.length;
+    const uniqueIps = new Set(clicks.map(c => c.ipHash).filter(Boolean)).size;
+    const conversions = clicks.filter(c => c.converted).length;
+    return {
+      totalClicks,
+      uniqueClicks: uniqueIps,
+      conversions,
+      conversionRate: totalClicks > 0 ? Math.round((conversions / totalClicks) * 100) : 0,
+    };
+  }
+
+  // ─── Chat: create message ─────────────────────────────────────────────────
+  async createExperienceMessage(data: {
+    experienceId: string;
+    userId: string;
+    message: string;
+    messageType?: string;
+  }): Promise<void> {
+    await db.insert(experienceMessages).values({
+      experienceId: data.experienceId,
+      userId: data.userId,
+      message: data.message,
+      messageType: (data.messageType ?? 'text') as any,
+    });
   }
 
   async deleteExperience(id: string): Promise<void> {

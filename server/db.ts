@@ -10,9 +10,16 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
+const databaseUrl = new URL(process.env.DATABASE_URL);
+
 // Configure connection pool with settings that work for local Postgres and hosted Postgres.
-export const pool = new Pool({ 
-  connectionString: process.env.DATABASE_URL,
+export const pool = new Pool({
+  host: databaseUrl.hostname,
+  port: databaseUrl.port ? Number(databaseUrl.port) : 5432,
+  user: decodeURIComponent(databaseUrl.username),
+  password: decodeURIComponent(databaseUrl.password),
+  database: databaseUrl.pathname.replace(/^\//, ""),
+  ssl: { rejectUnauthorized: false },
   max: 10, // Maximum number of connections in the pool
   idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
   connectionTimeoutMillis: 10000, // Connection timeout

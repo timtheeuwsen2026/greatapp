@@ -6,6 +6,20 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Returns the canonical base URL for the app.
+ * Priority:
+ *   1. VITE_APP_BASE_URL env var (set this in .env for production, e.g. https://greatapp.ai)
+ *   2. window.location.origin as automatic fallback (works perfectly in development)
+ *
+ * Use this everywhere a full URL is needed: referral links, share links, Stripe return URLs, etc.
+ */
+export function getBaseUrl(): string {
+  const envUrl = import.meta.env.VITE_APP_BASE_URL as string | undefined;
+  if (envUrl && envUrl.trim() !== "") return envUrl.replace(/\/$/, ""); // strip trailing slash
+  return window.location.origin;
+}
+
+/**
  * Gets the cover image URL with fallback to first gallery image.
  * Returns null if no images are available.
  * 

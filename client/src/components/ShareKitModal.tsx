@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { apiRequest } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { Copy, Check, X, Rocket, MessageSquare, Phone } from "lucide-react";
+import { getBaseUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
 interface ShareKitModalProps {
@@ -39,7 +40,7 @@ export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps)
 
   useEffect(() => {
     if (!open) return;
-    const baseLink = `${import.meta.env.VITE_APP_BASE_URL || 'https://greatapp.ai'}/experience/${experience.id}`;
+    const baseLink = `${getBaseUrl()}/experience/${experience.id}`;
 
     if (!isAuthenticated) {
       setReferralLink(baseLink);

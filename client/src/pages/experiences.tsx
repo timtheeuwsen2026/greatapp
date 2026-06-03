@@ -2,13 +2,12 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import Navigation from "@/components/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Search, MapPin, Calendar, Users, Star, DollarSign, Plane, Hotel, Clock, Loader2 } from "lucide-react";
+import { Search, MapPin, Calendar, Users, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { normalizeImageUrl } from "@/lib/utils";
 
@@ -80,90 +79,6 @@ export default function Experiences() {
     retryDelay: 1000,
   });
 
-  // Great App authentic retreat experiences
-  const externalExperiences = [
-    {
-      id: 'great-theth-sep',
-      title: 'Wilderness Retreat, Theth - September 20-26',
-      description: '7 day immersive experience in nature. Grit. Soul. Leave the noise. Follow the trail. Find you.',
-      location: 'Theth National Park, Albania',
-      price: 1299,
-      duration: '7 days',
-      category: 'retreats',
-      type: 'external',
-      rating: 4.9,
-      reviewCount: 45,
-      image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?ixlib=rb-4.0.3&w=400',
-      flights: { from: 299, airline: 'Various Airlines to Shkodër/Tirana' },
-      accommodation: { name: 'Authentic Mountain Guesthouses', rating: 4.7, pricePerNight: 65 },
-      activities: ['Guided Mountain Hikes', 'Breathwork Sessions', 'River Cold Plunges', 'Shepherd Family Meals', 'Wilderness Orientation', 'Fire Circles']
-    },
-    {
-      id: 'great-bali-oct',
-      title: 'Great Escape Bali - October 18th till October 24th',
-      description: '7 day immersive experience to reconnect, recharge, and transform in the heart of Ubud\'s lush jungle',
-      location: 'Ubud, Bali',
-      price: 1499,
-      duration: '7 days',
-      category: 'retreats',
-      type: 'external',
-      rating: 4.8,
-      reviewCount: 89,
-      image: 'https://images.unsplash.com/photo-1537953773345-d172ccf13cf1?ixlib=rb-4.0.3&w=400',
-      flights: { from: 699, airline: 'Various Airlines to Denpasar' },
-      accommodation: { name: 'Jungle Villa with Yoga Shala', rating: 4.8, pricePerNight: 89 },
-      activities: ['Daily Yoga & Meditation', 'Sound Healing', 'Jungle Hikes', 'Waterfall Explorations', 'Breathwork', 'Art Therapy', 'Cacao Ceremony']
-    },
-    {
-      id: 'great-marrakech-nov',
-      title: 'Mystic Marrakech - November 1–7, 2025',
-      description: '7 day immersive experience in mystical Marrakech, Morocco. Step out of the ordinary. Into the mystic.',
-      location: 'Marrakech, Morocco',
-      price: 1399,
-      duration: '7 days',
-      category: 'retreats',
-      type: 'external',
-      rating: 4.7,
-      reviewCount: 67,
-      image: 'https://images.unsplash.com/photo-1539650116574-75c0c6d73d1e?ixlib=rb-4.0.3&w=400',
-      flights: { from: 399, airline: 'Royal Air Maroc & Partners' },
-      accommodation: { name: 'Boutique Riad & Eco-Retreat', rating: 4.6, pricePerNight: 95 },
-      activities: ['Rooftop Yoga', 'Medina Cultural Tours', 'Traditional Hammam', 'Desert Camel Trek', 'Moroccan Cooking Class', 'Belly Dance Workshop', 'Fire Ceremonies']
-    },
-    {
-      id: 'great-sweden-dec',
-      title: 'The Arctic Within - Swedish Lapland December 1-7',
-      description: '7 day immersive experience to build resilience and reconnect through the cold. Breathe in stillness.',
-      location: 'Kiruna & Abisko, Swedish Lapland',
-      price: 1799,
-      duration: '7 days',
-      category: 'retreats',
-      type: 'external',
-      rating: 4.9,
-      reviewCount: 34,
-      image: 'https://images.unsplash.com/photo-1578662996442-48f60103fc96?ixlib=rb-4.0.3&w=400',
-      flights: { from: 549, airline: 'SAS & Partners to Kiruna' },
-      accommodation: { name: 'Arctic Cabin Lodge & Glass Igloo', rating: 4.8, pricePerNight: 145 },
-      activities: ['Cold Water Immersion', 'Wim Hof Breathwork', 'Arctic Hiking', 'Northern Lights Viewing', 'Sauna Therapy', 'Functional Training', 'Resilience Coaching']
-    },
-    {
-      id: 'great-bali-dec',
-      title: 'Great Escape Bali - December 14th till December 20th',
-      description: '7 day immersive experience to reconnect, recharge, and transform in the heart of Ubud\'s lush jungle',
-      location: 'Ubud, Bali',
-      price: 1299,
-      duration: '7 days',
-      category: 'retreats',
-      type: 'external',
-      rating: 4.8,
-      reviewCount: 126,
-      image: 'https://images.unsplash.com/photo-1537953773345-d172ccf13cf1?ixlib=rb-4.0.3&w=400',
-      flights: { from: 699, airline: 'Various Airlines to Denpasar' },
-      accommodation: { name: 'Serene Jungle Villa with Pool', rating: 4.8, pricePerNight: 75 },
-      activities: ['Feminine Flow Yoga', 'Waterfall Cleansing Rituals', 'Sound Healing', 'Cacao Ceremony', 'Fire Rituals', 'Ecstatic Dance', 'Integration Circles']
-    }
-  ];
-
   // Filter user experiences based on search and category
   const filteredExperiences = Array.isArray(experiences) ? experiences.filter((experience: any) => {
     const matchesSearch = 
@@ -175,18 +90,6 @@ export default function Experiences() {
     
     return matchesSearch && matchesCategory;
   }) : [];
-
-  // Filter external experiences based on search and category
-  const filteredExternalExperiences = externalExperiences.filter((experience) => {
-    const matchesSearch = 
-      experience.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      experience.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      experience.location.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesCategory = selectedCategory === "all" || experience.category === selectedCategory;
-    
-    return matchesSearch && matchesCategory;
-  });
 
   // Currency formatting helper - handles experience currency
   // DATA CONTRACT: Currency must come from experience.currency - never default to USD
@@ -207,11 +110,6 @@ export default function Experiences() {
     return `${symbol}${numAmount.toFixed(0)}`;
   };
   
-  // Legacy formatPrice for external experiences (use EUR as platform default)
-  const formatPrice = (price: number, currency?: string) => {
-    return formatCurrency(price, currency || 'EUR');
-  };
-
   // Helper to get display price from ticket SKUs or legacy price
   const getDisplayPrice = (experience: any): { price: number; hasRange: boolean } => {
     const ticketSkus = experience.ticketSkus || [];
@@ -237,85 +135,6 @@ export default function Experiences() {
       year: 'numeric'
     });
   };
-
-  // Component for external experiences with travel details
-  const ExternalExperienceCard = ({ experience }: { experience: any }) => (
-    <Card className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer">
-      <div className="relative">
-        <img 
-          src={experience.image} 
-          alt={experience.title}
-          className="w-full h-48 object-cover"
-        />
-        <div className="absolute top-3 right-3">
-          <Badge variant="secondary" className="bg-white/90 text-gray-800">
-            {experience.duration}
-          </Badge>
-        </div>
-      </div>
-      <CardContent className="p-4">
-        <div className="flex justify-between items-start mb-2">
-          <h3 className="font-semibold text-lg line-clamp-2">{experience.title}</h3>
-          <div className="text-right ml-2">
-            <div className="text-2xl font-bold text-primary">{formatPrice(experience.price)}</div>
-            <div className="text-sm text-gray-500">per person</div>
-          </div>
-        </div>
-        
-        <p className="text-gray-600 text-sm mb-3 line-clamp-2">{experience.description}</p>
-        
-        <div className="flex items-center gap-2 mb-3">
-          <MapPin className="h-4 w-4 text-gray-500" />
-          <span className="text-sm text-gray-600">{experience.location}</span>
-          <div className="flex items-center gap-1 ml-auto">
-            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-            <span className="text-sm font-medium">{experience.rating}</span>
-            <span className="text-xs text-gray-500">({experience.reviewCount})</span>
-          </div>
-        </div>
-
-        {/* Travel Details */}
-        <div className="space-y-2 mb-4 p-3 bg-gray-50 rounded-lg">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Plane className="h-4 w-4 text-blue-500" />
-              <span className="text-gray-600">{experience.flights.airline}</span>
-            </div>
-            <span className="font-medium">from {formatPrice(experience.flights.from)}</span>
-          </div>
-          
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Hotel className="h-4 w-4 text-green-500" />
-              <span className="text-gray-600">{experience.accommodation.name}</span>
-              <div className="flex items-center gap-1">
-                <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                <span className="text-xs">{experience.accommodation.rating}</span>
-              </div>
-            </div>
-            <span className="font-medium">{formatPrice(experience.accommodation.pricePerNight)}/night</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-1 mb-3">
-          {experience.activities.slice(0, 3).map((activity: string, index: number) => (
-            <Badge key={index} variant="outline" className="text-xs">
-              {activity}
-            </Badge>
-          ))}
-          {experience.activities.length > 3 && (
-            <Badge variant="outline" className="text-xs">
-              +{experience.activities.length - 3} more
-            </Badge>
-          )}
-        </div>
-
-        <Button className="w-full btn-gradient">
-          View Details & Book
-        </Button>
-      </CardContent>
-    </Card>
-  );
 
   // Error state with comprehensive feedback
   if (error) {
@@ -503,8 +322,8 @@ export default function Experiences() {
           <div className="mt-4 text-sm text-gray-600">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
-                <span className={filteredExperiences.length === 0 && filteredExternalExperiences.length === 0 ? 'text-red-600 font-medium' : ''}>
-                  {filteredExperiences.length + filteredExternalExperiences.length} experience{(filteredExperiences.length + filteredExternalExperiences.length) !== 1 ? 's' : ''} found
+                <span className={filteredExperiences.length === 0 ? 'text-red-600 font-medium' : ''}>
+                  {filteredExperiences.length} experience{filteredExperiences.length !== 1 ? 's' : ''} found
                 </span>
                 {searchQuery && (
                   <span> for "<strong className="text-gray-800">{searchQuery}</strong>"</span>
@@ -516,14 +335,14 @@ export default function Experiences() {
               
               {(searchQuery || selectedCategory !== "all") && (
                 <div className="flex items-center gap-2">
-                  <button 
+                  <button
                     onClick={() => { setSearchQuery(""); setSelectedCategory("all"); }}
                     className="text-blue-600 hover:text-blue-800 underline"
                     data-testid="button-quick-clear-filters"
                   >
                     Clear filters
                   </button>
-                  {filteredExperiences.length === 0 && filteredExternalExperiences.length === 0 && (
+                  {filteredExperiences.length === 0 && (
                     <span className="text-red-600 text-xs">• No matches</span>
                   )}
                 </div>
@@ -533,14 +352,14 @@ export default function Experiences() {
         </div>
       </section>
 
-      {/* User Created Experiences Section */}
+      {/* Experiences Section */}
       {filteredExperiences.length > 0 && (
         <section className="py-12">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between mb-8">
-              <h2 className="text-2xl font-bold text-gray-900">Community Experiences</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Available Experiences</h2>
               <Badge className="bg-green-100 text-green-800 border-green-200">
-                Created by our community
+                {filteredExperiences.length} experience{filteredExperiences.length !== 1 ? 's' : ''}
               </Badge>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -629,30 +448,8 @@ export default function Experiences() {
         </section>
       )}
 
-      {/* External Experiences Section */}
-      {filteredExternalExperiences.length > 0 && (
-        <section className="py-12 bg-gray-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-8">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">Featured Travel Experiences</h2>
-                <p className="text-gray-600 mt-1">Curated retreats and adventures with flights & accommodation included</p>
-              </div>
-              <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                All-inclusive packages
-              </Badge>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {filteredExternalExperiences.map((experience) => (
-                <ExternalExperienceCard key={experience.id} experience={experience} />
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-
       {/* Enhanced No Results Section */}
-      {filteredExperiences.length === 0 && filteredExternalExperiences.length === 0 && (
+      {filteredExperiences.length === 0 && (
         <section className="py-16">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center">

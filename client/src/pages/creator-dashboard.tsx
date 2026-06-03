@@ -268,6 +268,13 @@ function CreatorDashboardContent() {
     retry: false,
   });
 
+  // Task 4 — Creator Ledger (real split-based earnings)
+  const { data: ledger = { totalSales: 0, myShare: 0, platformFees: 0, spaceShare: 0, bookingsCount: 0 } } = useQuery({
+    queryKey: ["/api/creator/ledger"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any };
+
   // Revenue analytics query
   const { data: revenueAnalytics = {}, isLoading: revenueLoading } = useQuery({
     queryKey: ["/api/creator/revenue-analytics"],
@@ -455,6 +462,30 @@ function CreatorDashboardContent() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Creator Dashboard</h1>
           <p className="text-gray-600 dark:text-gray-400">Manage your experiences and track your earnings</p>
+        </div>
+
+        {/* Task 4 — Ledger: Total Sales vs My Share */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 p-4 rounded-xl bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950 border border-green-200 dark:border-green-800">
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Sales</p>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white">${ledger.totalSales?.toFixed(2)}</p>
+            <p className="text-xs text-gray-500">{ledger.bookingsCount} booking{ledger.bookingsCount !== 1 ? 's' : ''}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">My Share</p>
+            <p className="text-2xl font-bold text-green-600">${ledger.myShare?.toFixed(2)}</p>
+            <p className="text-xs text-gray-500">Based on accepted creatorPct</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Platform Fees</p>
+            <p className="text-2xl font-bold text-gray-600">${ledger.platformFees?.toFixed(2)}</p>
+            <p className="text-xs text-gray-500">15% fixed fee</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Space Share</p>
+            <p className="text-2xl font-bold text-blue-600">${ledger.spaceShare?.toFixed(2)}</p>
+            <p className="text-xs text-gray-500">Paid to venue partners</p>
+          </div>
         </div>
 
         {/* Revenue Stats Cards */}

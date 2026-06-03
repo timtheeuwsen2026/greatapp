@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { z } from 'zod';
 import { apiRequest } from '@/lib/queryClient';
+import { getAccessToken } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { SharedPhotoUpload, PhotoPreview } from '@/components/SharedPhotoUpload';
 import { Button } from '@/components/ui/button';
@@ -69,11 +70,16 @@ const venueProfileSchema = z.object({
     .max(5000, 'Description must not exceed 5000 characters')
     .trim(),
   
+  venueType: z.enum(['multi_day', 'daytime']).default('multi_day'),
+
   capacity: z.coerce.number()
     .int('Capacity must be a whole number')
     .min(1, 'Capacity must be at least 1 person')
     .max(10000, 'Capacity must not exceed 10,000 people'),
-  
+
+  standingCapacity: z.coerce.number().int().min(0).optional().nullable(),
+  seatedCapacity: z.coerce.number().int().min(0).optional().nullable(),
+
   location: z.string()
     .min(10, 'Please provide a complete address')
     .max(500, 'Address must not exceed 500 characters')
@@ -390,7 +396,11 @@ export default function VenueProfileSetup() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
-  
+
+  // Daytime Space: skip Rooms (step 7) and Default Itinerary (step 8)
+  const isDaytime = form.watch('venueType') === 'daytime';
+  const DAYTIME_SKIP_STEPS = [7, 8]; // Rooms & Itinerary hidden for daytime spaces
+
   // Get venue ID from URL for edit mode
   const urlParams = new URLSearchParams(window.location.search);
   const editVenueId = urlParams.get('edit');
@@ -402,7 +412,10 @@ export default function VenueProfileSetup() {
       tagline: '',
       city: '',
       description: '',
+      venueType: 'multi_day',
       capacity: 1,
+      standingCapacity: undefined,
+      seatedCapacity: undefined,
       location: '',
       friendlyAddress: '',
       logoUrl: '',
@@ -679,6 +692,8 @@ export default function VenueProfileSetup() {
       commissionPercent: data.commissionPercent ? String(data.commissionPercent) : null,
       // Integer fields as numbers (capacity is required so always a number)
       capacity: data.capacity ? Number(data.capacity) : data.capacity,
+      standingCapacity: data.standingCapacity != null ? Number(data.standingCapacity) : null,
+      seatedCapacity: data.seatedCapacity != null ? Number(data.seatedCapacity) : null,
       minimumNights: data.minimumNights ? Number(data.minimumNights) : null,
       softHoldDurationDays: data.softHoldDurationDays ? Number(data.softHoldDurationDays) : null,
       balanceDueDaysBeforeArrival: data.balanceDueDaysBeforeArrival ? Number(data.balanceDueDaysBeforeArrival) : null,
@@ -741,7 +756,12 @@ export default function VenueProfileSetup() {
     }
     
     if (step < 10) {
-      setStep(step + 1);
+      // Skip Rooms & Itinerary steps for daytime spaces
+      let nextStep = step + 1;
+      while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 10) {
+        nextStep++;
+      }
+      setStep(nextStep <= 10 ? nextStep : 10);
     } else {
       form.handleSubmit(onSubmit)();
     }
@@ -749,7 +769,11 @@ export default function VenueProfileSetup() {
 
   const handleBack = () => {
     if (step > 1) {
-      setStep(step - 1);
+      let prevStep = step - 1;
+      while (isDaytime && DAYTIME_SKIP_STEPS.includes(prevStep) && prevStep >= 1) {
+        prevStep--;
+      }
+      setStep(prevStep >= 1 ? prevStep : 1);
     } else {
       setLocation('/');
     }
@@ -1060,6 +1084,42 @@ export default function VenueProfileSetup() {
                       )}
                     />
 
+                    {/* Venue Type — controls which onboarding steps appear */}
+                    <FormField
+                      control={form.control}
+                      name="venueType"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Space Type *</FormLabel>
+                          <FormDescription>
+                            Choose how your venue operates. <strong>Daytime Space</strong> hides multi-day room & itinerary steps.
+                          </FormDescription>
+                          <div className="grid grid-cols-2 gap-3 mt-2">
+                            {[
+                              { value: 'multi_day', label: '🏡 Multi-Day Venue', desc: 'Retreats, overnight stays, multi-day events' },
+                              { value: 'daytime',   label: '☀️ Daytime Space',   desc: 'Co-working hubs, studios, one-day pop-ups' },
+                            ].map((opt) => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => field.onChange(opt.value)}
+                                className={`p-4 rounded-lg border-2 text-left transition-colors ${
+                                  field.value === opt.value
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-border hover:border-primary/50'
+                                }`}
+                                data-testid={`btn-venue-type-${opt.value}`}
+                              >
+                                <div className="font-semibold text-sm">{opt.label}</div>
+                                <div className="text-xs text-muted-foreground mt-1">{opt.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
                     <FormField
                       control={form.control}
                       name="capacity"
@@ -1067,24 +1127,65 @@ export default function VenueProfileSetup() {
                         <FormItem>
                           <FormLabel className="flex items-center gap-2">
                             <Users className="w-4 h-4" />
-                            Capacity (participants) *
+                            {isDaytime ? 'Max Capacity *' : 'Capacity (participants) *'}
                           </FormLabel>
                           <FormControl>
-                            <Input 
-                              type="number" 
-                              min={1} 
+                            <Input
+                              type="number"
+                              min={1}
                               max={10000}
-                              {...field} 
-                              data-testid="input-capacity" 
+                              {...field}
+                              data-testid="input-capacity"
                             />
                           </FormControl>
                           <FormDescription>
-                            Maximum number of participants your venue can accommodate (1-10,000)
+                            {isDaytime
+                              ? 'Total maximum number of people the space can hold'
+                              : 'Maximum number of participants your venue can accommodate (1-10,000)'}
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
+
+                    {/* Daytime-only capacity breakdown */}
+                    {isDaytime && (
+                      <div className="grid grid-cols-2 gap-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700">
+                        <p className="col-span-2 text-sm font-medium text-amber-800 dark:text-amber-300">
+                          ☀️ Daytime Space — Capacity Breakdown
+                        </p>
+                        <FormField
+                          control={form.control}
+                          name="standingCapacity"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Standing Capacity</FormLabel>
+                              <FormControl>
+                                <Input type="number" min={0} placeholder="e.g. 80"
+                                  {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                                  data-testid="input-standing-capacity" />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="seatedCapacity"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Seated Capacity</FormLabel>
+                              <FormControl>
+                                <Input type="number" min={0} placeholder="e.g. 40"
+                                  {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                                  data-testid="input-seated-capacity" />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                    )}
 
                     <FormField
                       control={form.control}
@@ -2229,24 +2330,16 @@ export default function VenueProfileSetup() {
                                           }
                                           
                                           try {
-                                            // Get pre-signed URL for upload
-                                            const response = await apiRequest('POST', '/api/objects/upload');
-                                            if (!response.ok) throw new Error('Failed to get upload URL');
-                                            const { uploadURL } = await response.json();
-                                            
-                                            // Upload to S3
-                                            const uploadResponse = await fetch(uploadURL, {
-                                              method: 'PUT',
-                                              body: file,
-                                              headers: {
-                                                'Content-Type': 'application/pdf',
-                                              },
+                                            const formData = new FormData();
+                                            formData.append('file', file);
+                                            const token = getAccessToken();
+                                            const uploadResponse = await fetch('/api/uploads/documents', {
+                                              method: 'POST',
+                                              headers: token ? { Authorization: `Bearer ${token}` } : {},
+                                              body: formData,
                                             });
-                                            
                                             if (!uploadResponse.ok) throw new Error('Upload failed');
-                                            
-                                            // Extract the public URL (remove query params from signed URL)
-                                            const publicUrl = uploadURL.split('?')[0];
+                                            const { url: publicUrl } = await uploadResponse.json();
                                             field.onChange(publicUrl);
                                             
                                             toast({

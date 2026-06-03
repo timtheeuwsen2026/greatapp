@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { isAdminUser } from "@/lib/authUtils";
 import { ArrowLeft, User, Download, DollarSign, TrendingUp, AlertCircle, Calendar, FileText } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation, Link, useParams } from "wouter";
@@ -73,7 +74,7 @@ export default function AdminPromoterDetailPage() {
   const promoterId = params.promoterId;
 
   useEffect(() => {
-    if (!isLoading && (!isAuthenticated || user?.email !== "timtheeuwsen@gmail.com")) {
+    if (!isLoading && (!isAuthenticated || !isAdminUser(user))) {
       toast({
         title: "Unauthorized",
         description: "You don't have admin access.",
@@ -85,7 +86,7 @@ export default function AdminPromoterDetailPage() {
 
   const { data, isLoading: dataLoading } = useQuery<PromoterDetail>({
     queryKey: ["/api/admin/promoters", promoterId],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com" && !!promoterId,
+    enabled: isAuthenticated && isAdminUser(user) && !!promoterId,
   });
 
   const handleExportCSV = () => {

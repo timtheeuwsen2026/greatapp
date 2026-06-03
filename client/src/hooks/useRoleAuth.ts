@@ -5,10 +5,16 @@ import { useToast } from '@/hooks/use-toast';
 export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin';
 
 export function useRoleAuth(requiredRole: UserRole) {
-  const { user, isAuthenticated, isLoading, error, isError } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const error = null as (Error & { message: string }) | null; // kept for backward compat
+  const isError = false;
   const { toast } = useToast();
 
-  const hasRequiredRole = user?.role === requiredRole || user?.role === 'admin'; // Admin can access all
+  const hasRequiredRole =
+    user?.role === requiredRole ||
+    user?.role === 'admin' ||
+    (user?.userRoles || []).includes(requiredRole) ||
+    (user?.userRoles || []).includes('admin');
   const isAuthorized = isAuthenticated && hasRequiredRole;
 
   useEffect(() => {

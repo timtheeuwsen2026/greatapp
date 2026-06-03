@@ -301,6 +301,9 @@ export const experienceDrafts = pgTable("experience_drafts", {
   manualVenueDescription: text("manual_venue_description"),
   manualVenueCapacity: integer("manual_venue_capacity"),
   manualVenuePhotos: jsonb("manual_venue_photos").default([]),
+  // Daytime Space capacity fields (for one-day events like coffeeshop collabs)
+  standingCapacity: integer("standing_capacity"),
+  seatedCapacity: integer("seated_capacity"),
   // Virtual venue fields
   virtualPlatform: varchar("virtual_platform"),
   virtualMeetingUrl: varchar("virtual_meeting_url"),
@@ -726,6 +729,10 @@ export const experiences = pgTable("experiences", {
     scale: 2,
   }).default("15.00"), // e.g., 15.00 for 15%
 
+  // Daytime Space capacity fields (for one-day events like coffeeshop collabs)
+  standingCapacity: integer("standing_capacity"),
+  seatedCapacity: integer("seated_capacity"),
+
   // Participant Visibility
   showParticipantList: boolean("show_participant_list").default(true), // Whether to show participant list publicly
 
@@ -886,7 +893,11 @@ export const venues = pgTable("venues", {
   tagline: varchar("tagline", { length: 255 }), // Short tagline e.g., "Beachfront Yoga & Surf Lodge"
   city: varchar("city", { length: 255 }).notNull(),
   description: text("description").notNull(),
+  // venueType: "multi_day" (default) or "daytime" — controls onboarding steps and visible fields
+  venueType: varchar("venue_type", { length: 50 }).default("multi_day"),
   capacity: integer("capacity").notNull(),
+  standingCapacity: integer("standing_capacity"), // For daytime spaces (coffeeshop collabs, etc.)
+  seatedCapacity: integer("seated_capacity"),     // For daytime spaces
   location: varchar("location").notNull(), // Full address
   friendlyAddress: varchar("friendly_address"), // Optional short display address
   logoUrl: varchar("logo_url"), // Upload logo
@@ -1607,6 +1618,25 @@ export const experienceMessages = pgTable("experience_messages", {
     onDelete: "cascade",
   }),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ─── Referral Click Tracking ─────────────────────────────────────────────────
+// One row per click on a promoter referral link, before any purchase happens.
+// Used to calculate click-through rates and conversion funnels.
+export const referralClicks = pgTable("referral_clicks", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  promoterCode: varchar("promoter_code").notNull(),          // The ?ref=CODE from the URL
+  promoterId: varchar("promoter_id").references(() => users.id, { onDelete: "set null" }),
+  experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "set null" }),
+  visitorUserId: varchar("visitor_user_id").references(() => users.id, { onDelete: "set null" }), // null = anonymous
+  converted: boolean("converted").default(false),            // true once a booking is confirmed
+  bookingId: varchar("booking_id"),                          // filled in when converted
+  ipHash: varchar("ip_hash"),                                // hashed IP for dedup (no PII stored)
+  userAgent: text("user_agent"),
+  clickedAt: timestamp("clicked_at").defaultNow(),
+  convertedAt: timestamp("converted_at"),
 });
 
 export const experienceAnnouncements = pgTable("experience_announcements", {
@@ -2668,6 +2698,10 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     platformRevenuePercentage: z.coerce.number().min(0).max(100).optional(),
     creatorPct: z.coerce.number().min(0).max(100).optional(),
     platformPct: z.coerce.number().min(0).max(100).optional(),
+
+    // Influencer/promoter commission — DB stores as decimal string; accept number or string
+    influencerCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    promoterCommission: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
 
     // Venue - Foreign key validation
     selectedVenueId: z.string().optional(),

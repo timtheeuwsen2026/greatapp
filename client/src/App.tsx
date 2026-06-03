@@ -1,9 +1,11 @@
+import { useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
+import { AuthProvider } from "@/contexts/AuthContext";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useAuth } from "@/hooks/useAuth";
+import AuthPage from "@/pages/auth";
 import Home from "@/pages/home";
 import ExperienceDetails from "@/pages/experience-details";
 import AdminDashboard from "@/pages/admin-dashboard";
@@ -62,12 +64,9 @@ import AdminPromotersPage from "@/pages/admin-promoters";
 import AdminPromoterDetailPage from "@/pages/admin-promoter-detail";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 
-import { useEffect } from "react";
-
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
-  
+
   // Capture promoter attribution from ?ref= URL params on any page
   usePromoterAttribution();
 
@@ -109,13 +108,14 @@ function Router() {
 
   return (
     <Switch>
+      <Route path="/login" component={AuthPage} />
       <Route path="/" component={Home} />
-      
+
       {/* Homepage CTA Routes - Redirects */}
       <Route path="/create-trip" component={RedirectToEventBuilder} />
       <Route path="/trips" component={RedirectToExperiences} />
       <Route path="/venues/new" component={RedirectToVenueSetup} />
-      
+
       <Route path="/experiences" component={Experiences} />
       <Route path="/experience/:id" component={ExperienceDetails} />
       <Route path="/experiences/:id" component={ExperienceDetails} />
@@ -206,14 +206,15 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary onError={(error, errorInfo) => {
-      // Log errors to console for debugging
       console.error('App Error Boundary caught:', error, errorInfo);
     }}>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
+        <AuthProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );

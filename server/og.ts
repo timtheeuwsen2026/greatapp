@@ -283,7 +283,7 @@ export function registerOGRoutes(app: Express) {
           : `${req.protocol}://${req.get("host")}`;
 
       const refParam = req.query.ref ? `?ref=${req.query.ref}` : "";
-      const appBaseUrl = process.env.APP_BASE_URL || origin;
+      const appBaseUrl = process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || origin;
       const ogUrl = `${appBaseUrl}/experience/${id}${refParam}`;
       const ogImageUrl = `${origin}/api/og/experience/${id}`;
       const ogTitle = buildOGTitle(experience, mvg);

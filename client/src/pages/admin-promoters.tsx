@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { isAdminUser } from "@/lib/authUtils";
 import { ArrowLeft, Users, Eye, DollarSign, TrendingUp, AlertCircle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
@@ -44,7 +45,7 @@ export default function AdminPromotersPage() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    if (!isLoading && (!isAuthenticated || user?.email !== "timtheeuwsen@gmail.com")) {
+    if (!isLoading && (!isAuthenticated || !isAdminUser(user))) {
       toast({
         title: "Unauthorized",
         description: "You don't have admin access.",
@@ -56,7 +57,7 @@ export default function AdminPromotersPage() {
 
   const { data: promoters = [], isLoading: promotersLoading } = useQuery<PromoterSummary[]>({
     queryKey: ["/api/admin/promoters"],
-    enabled: isAuthenticated && user?.email === "timtheeuwsen@gmail.com",
+    enabled: isAuthenticated && isAdminUser(user),
   });
 
   if (isLoading || promotersLoading) {

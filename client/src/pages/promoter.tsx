@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import Navigation from "@/components/navigation";
 import { ShareKitModal } from "@/components/ShareKitModal";
+import { getBaseUrl } from "@/lib/utils";
 
 interface EarningsSummary {
   byCurrency: Array<{
@@ -33,6 +34,8 @@ interface PromotedExperience {
     endDate: string | null;
     location: string | null;
     lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
+    influencerPromotionEnabled?: boolean | null;
+    influencerCommissionPct?: string | null;
   };
   spotsBooked: number;
   estimatedCommission: number;
@@ -296,7 +299,7 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
     );
   }
 
-  const baseUrl = import.meta.env.VITE_APP_BASE_URL || 'https://greatapp.ai';
+  const baseUrl = getBaseUrl();
 
   return (
     <Card className="mb-8">
@@ -410,6 +413,16 @@ function PromotedExperienceItem({
           </div>
         </div>
         
+        {/* Creator-set bounty incentive */}
+        {item.experience.influencerPromotionEnabled && parseFloat(item.experience.influencerCommissionPct || '0') > 0 && (
+          <div className="flex items-center gap-2 text-sm mb-3 p-2 bg-green-50 dark:bg-green-950 rounded">
+            <Trophy className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+            <span className="text-green-700 dark:text-green-300">
+              Creator bounty: <strong>{parseFloat(item.experience.influencerCommissionPct!).toFixed(1)}%</strong> of each ticket price — deducted from creator's share for you
+            </span>
+          </div>
+        )}
+
         {/* Referral Link */}
         {referralLink && (
           <div className="flex items-center gap-2">
@@ -518,7 +531,9 @@ function BookingsTableCard({ data, isLoading }: { data: PromoterBooking[] | unde
 interface ImpactStats {
   referralCode: string | null;
   friendsJoined: number;
-  peopleInvited: number;
+  peopleInvited: number;   // total link clicks
+  uniqueVisitors: number;
+  conversionRate: number;
   tripCreditsEarned: number;
   shareExperience: {
     id: string;
@@ -572,6 +587,8 @@ function RecruitmentStatsSection({
 
   const friendsJoined = stats?.friendsJoined ?? 0;
   const peopleInvited = stats?.peopleInvited ?? 0;
+  const uniqueVisitors = stats?.uniqueVisitors ?? 0;
+  const conversionRate = stats?.conversionRate ?? 0;
   const tripCreditsEarned = stats?.tripCreditsEarned ?? 0;
   const message = getMotivationalMessage(friendsJoined);
   const isTrophyTier = friendsJoined >= 6;
@@ -592,35 +609,45 @@ function RecruitmentStatsSection({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-        {/* Card 1 — People Invited */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+        {/* Card 1 — Link Clicks */}
         <Card className="border-primary/10 dark:border-primary/20 bg-gradient-to-br from-primary/5 to-white dark:from-primary/10 dark:to-gray-900 text-center" data-testid="stat-people-invited">
-          <CardContent className="pt-6 pb-5">
-            <div className="text-3xl mb-1">📨</div>
-            <p className="text-4xl font-black text-primary mb-1">{peopleInvited}</p>
-            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">People Invited</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Travelers who clicked your link</p>
+          <CardContent className="pt-5 pb-4">
+            <div className="text-2xl mb-1">📨</div>
+            <p className="text-3xl font-black text-primary mb-1">{peopleInvited}</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Link Clicks</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{uniqueVisitors} unique visitors</p>
           </CardContent>
         </Card>
 
-        {/* Card 2 — Friends Joined */}
+        {/* Card 2 — Friends Joined (Converted) */}
         <Card className="border-primary/10 dark:border-primary/20 bg-gradient-to-br from-primary/5 to-white dark:from-primary/10 dark:to-gray-900 text-center" data-testid="stat-friends-joined">
-          <CardContent className="pt-6 pb-5">
-            <div className="text-3xl mb-1">👥</div>
-            <p className="text-4xl font-black text-primary mb-1">{friendsJoined}</p>
-            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">Friends Joined</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Travelers who joined through you</p>
+          <CardContent className="pt-5 pb-4">
+            <div className="text-2xl mb-1">👥</div>
+            <p className="text-3xl font-black text-primary mb-1">{friendsJoined}</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Friends Joined</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Booked through your link</p>
           </CardContent>
         </Card>
 
-        {/* Card 3 — Trip Credits Earned */}
+        {/* Card 3 — Conversion Rate */}
+        <Card className="border-blue-100 dark:border-blue-900/40 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/30 dark:to-gray-900 text-center" data-testid="stat-conversion-rate">
+          <CardContent className="pt-5 pb-4">
+            <div className="text-2xl mb-1">🎯</div>
+            <p className="text-3xl font-black text-blue-600 mb-1">{conversionRate}%</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Conversion Rate</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Clicks that became bookings</p>
+          </CardContent>
+        </Card>
+
+        {/* Card 4 — Trip Credits Earned */}
         <Card className="border-green-100 dark:border-green-900/40 bg-gradient-to-br from-green-50 to-white dark:from-green-950/30 dark:to-gray-900 text-center" data-testid="stat-trip-credits">
-          <CardContent className="pt-6 pb-5">
-            <div className="text-3xl mb-1">💰</div>
-            <p className="text-4xl font-black text-green-600 dark:text-green-400 mb-1">
+          <CardContent className="pt-5 pb-4">
+            <div className="text-2xl mb-1">💰</div>
+            <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">
               €{tripCreditsEarned.toFixed(0)}
             </p>
-            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">Trip Credits Earned</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Trip Credits</p>
             <p className="text-xs text-muted-foreground mt-0.5">Applied to your next trip</p>
           </CardContent>
         </Card>
@@ -687,6 +714,8 @@ export default function PromoterDashboard() {
     queryKey: ['/api/promoter/info'],
     enabled: !!user,
   });
+
+  // click stats are now embedded inside impactStats (via /api/me/impact-stats)
 
   // Auto-generate referral code for any logged-in user who doesn't have one yet
   const ensureCodeMutation = useMutation({

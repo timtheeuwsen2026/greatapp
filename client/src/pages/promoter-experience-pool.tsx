@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { getBaseUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
 interface ExperiencePoolItem {
@@ -31,6 +32,9 @@ interface ExperiencePoolItem {
     pricePerPerson: number;
   }> | null;
   isPromoting: boolean;
+  // Creator-set bounty fields
+  influencerPromotionEnabled: boolean | null;
+  influencerCommissionPct: string | null;
 }
 
 function formatCurrency(amount: number, currency: string): string {
@@ -83,22 +87,26 @@ function getLowestPrice(experience: ExperiencePoolItem): { price: number; curren
   return { price: parseFloat(experience.price || '0'), currency: experience.currency || 'EUR' };
 }
 
-function ExperiencePoolCard({ 
-  experience, 
+function ExperiencePoolCard({
+  experience,
   promoterCode,
   onPromote,
   isPromoting,
-}: { 
+  overrideLink,
+}: {
   experience: ExperiencePoolItem;
   promoterCode: string | null;
   onPromote: (experienceId: string) => void;
   isPromoting: boolean;
+  overrideLink?: string; // server-returned absolute link takes priority
 }) {
   const [copied, setCopied] = useState(false);
   const lowestPrice = getLowestPrice(experience);
-  const baseUrl = import.meta.env.VITE_APP_BASE_URL || 'https://greatapp.ai';
-  const experienceSlug = experience.slug || experience.id; // Use ID as fallback if slug is null
-  const referralLink = promoterCode && experienceSlug ? `${baseUrl}/experience/${experienceSlug}?ref=${promoterCode}` : '';
+  const experienceSlug = experience.slug || experience.id;
+  // Use server-returned link if available, otherwise build from env/origin
+  const baseUrl = getBaseUrl();
+  const referralLink = overrideLink ||
+    (promoterCode && experienceSlug ? `${baseUrl}/experience/${experienceSlug}?ref=${promoterCode}` : '');
   
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -138,10 +146,10 @@ function ExperiencePoolCard({
           </div>
         </div>
         
-        <div className="border-t pt-3">
+        <div className="border-t pt-3 space-y-1">
           <div className="flex items-center gap-2 text-sm">
             <Sparkles className="h-4 w-4 text-pink-500" />
-            <span className="text-muted-foreground">Commission:</span>
+            <span className="text-muted-foreground">Platform commission:</span>
             <span className="font-medium">
               {getCommissionDescription(
                 experience.commissionMode,
@@ -150,6 +158,15 @@ function ExperiencePoolCard({
               )}
             </span>
           </div>
+          {experience.influencerPromotionEnabled && parseFloat(experience.influencerCommissionPct || '0') > 0 && (
+            <div className="flex items-center gap-2 text-sm">
+              <Sparkles className="h-4 w-4 text-green-500" />
+              <span className="text-muted-foreground">Creator bounty:</span>
+              <span className="font-semibold text-green-600 dark:text-green-400">
+                {parseFloat(experience.influencerCommissionPct!).toFixed(1)}% of ticket price
+              </span>
+            </div>
+          )}
         </div>
         
         {/* Promote This Trip action */}
@@ -200,28 +217,41 @@ export default function PromoterExperiencePool() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   
-  const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-
   const { data: experiences, isLoading: experiencesLoading, refetch } = useQuery<ExperiencePoolItem[]>({
     queryKey: ['/api/promoter/experience-pool'],
-    enabled: isAuthenticated && hasPromoterRole,
+    enabled: isAuthenticated,
   });
 
   const { data: promoterInfo } = useQuery<{ promoterCode: string | null }>({
     queryKey: ['/api/promoter/info'],
-    enabled: isAuthenticated && hasPromoterRole,
+    enabled: isAuthenticated,
   });
+
+  const [activeLink, setActiveLink] = useState<{ experienceId: string; link: string } | null>(null);
 
   const promoteMutation = useMutation({
     mutationFn: async (experienceId: string) => {
       const response = await apiRequest('POST', `/api/promoter/promote/${experienceId}`);
-      return response.json();
+      return response.json() as Promise<{ referralLink: string; promoterCode: string; experienceId: string }>;
     },
-    onSuccess: (data) => {
+    onSuccess: (data, experienceId) => {
+      // 1. Optimistically mark this experience as promoting so the link shows immediately
+      queryClient.setQueryData<ExperiencePoolItem[]>(
+        ['/api/promoter/experience-pool'],
+        (old) => old?.map(exp => exp.id === experienceId ? { ...exp, isPromoting: true } : exp) ?? old
+      );
+
+      // 2. Store the link returned by the server (absolute URL, correct for dev + prod)
+      setActiveLink({ experienceId, link: data.referralLink });
+
+      // 3. Auto-copy to clipboard
+      navigator.clipboard.writeText(data.referralLink).catch(() => {});
+
       toast({
-        title: "Experience Promoted!",
-        description: "You can now share your referral link to earn commissions.",
+        title: "🎉 Promotion Added — Link Copied!",
+        description: data.referralLink,
       });
+
       queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
       queryClient.invalidateQueries({ queryKey: ['/api/promoter/experiences'] });
     },
@@ -261,17 +291,12 @@ export default function PromoterExperiencePool() {
     );
   }
 
-  if (!hasPromoterRole) {
+  if (false) {
     return (
       <div className="container mx-auto p-6">
         <Card className="max-w-md mx-auto">
           <CardContent className="p-8 text-center">
             <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold mb-2">Access Denied</h2>
-            <p className="text-muted-foreground mb-4">You need a promoter role to access this page.</p>
-            <Button variant="outline" onClick={() => navigate('/promoter')}>
-              Back to Dashboard
-            </Button>
           </CardContent>
         </Card>
       </div>
@@ -331,7 +356,8 @@ export default function PromoterExperiencePool() {
               experience={experience}
               promoterCode={promoterInfo?.promoterCode || null}
               onPromote={(id) => promoteMutation.mutate(id)}
-              isPromoting={promoteMutation.isPending}
+              isPromoting={promoteMutation.isPending && promoteMutation.variables === experience.id}
+              overrideLink={activeLink?.experienceId === experience.id ? activeLink.link : undefined}
             />
           ))}
         </div>

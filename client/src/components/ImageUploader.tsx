@@ -4,6 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, X, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getAccessToken } from "@/hooks/useAuth";
 
 interface ImageUploaderProps {
   onUploadComplete: (url: string) => void;
@@ -175,11 +176,11 @@ export function ImageUploader({
         });
       });
 
-      // Start the upload with enhanced headers
       xhr.open('POST', '/api/uploads/images');
       xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-      xhr.withCredentials = true; // Important for authentication
-      xhr.timeout = 60000; // 60 second timeout
+      const token = getAccessToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.timeout = 60000;
       xhr.send(formData);
 
     } catch (error) {

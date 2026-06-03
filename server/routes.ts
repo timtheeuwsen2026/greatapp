@@ -8,11 +8,11 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings } from "@shared/schema";
+import { bookings, platformSettings } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate } from "./websocket";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { isAuthenticated } from "./supabaseAuth";
 import { notificationService } from "./notifications";
 import { registerOGRoutes } from "./og";
 import { 
@@ -28,11 +28,24 @@ import {
   extendedInsertVenueSchema
 } from "@shared/schema";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
+}
+
+// ─── Base URL Helper ─────────────────────────────────────────────────────────
+// Returns the canonical public URL for the app.
+// Priority:
+//   1. VITE_APP_BASE_URL env var  (same var used by the Vite client — one source of truth)
+//   2. APP_BASE_URL env var       (legacy alias kept for backward compat)
+//   3. Derived from the incoming request (works out of the box in dev)
+function getAppBaseUrl(req: any): string {
+  const env = process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL;
+  if (env && env.trim() !== "") return env.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
 }
 
 // ─── Lifecycle Status Helper ────────────────────────────────────────────────
@@ -243,19 +256,32 @@ function calculateVenueSplitRevenueBreakdown(grossAmount: number, venuePercentag
   };
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware - only setup if in production environment
-  if (process.env.NODE_ENV === 'production') {
-    await setupAuth(app);
-  } else {
-    app.get("/api/login", (_req, res) => {
-      res.redirect("/creator");
-    });
+// ─── Admin Auth Helper ────────────────────────────────────────────────────────
+// Returns true if the request comes from a user with admin role in the DB.
+// Falls back to the bootstrap email so the initial admin never gets locked out.
+const BOOTSTRAP_ADMIN_EMAIL = "timtheeuwsen@gmail.com";
 
-    app.get("/api/logout", (_req, res) => {
-      res.redirect("/");
-    });
+async function checkIsAdmin(req: any): Promise<boolean> {
+  const email: string | undefined = req.user?.claims?.email;
+  const userId: string | undefined = req.user?.claims?.sub;
+  if (!userId && !email) return false;
+  if (email === BOOTSTRAP_ADMIN_EMAIL) return true;
+  if (userId) {
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) return false;
+    return dbUser.role === 'admin' || (dbUser.userRoles || []).includes('admin');
   }
+  return false;
+}
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  // Auth — Supabase JWT-based (stateless, no sessions)
+  app.get("/api/login", (_req, res) => {
+    res.redirect("/login");
+  });
+  app.get("/api/logout", (_req, res) => {
+    res.redirect("/");
+  });
 
   // Register OG image + social bot prerender routes (must come before Vite catch-all)
   registerOGRoutes(app);
@@ -383,36 +409,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Auth routes - get user from database (works in both dev and production)
-  app.get('/api/auth/user', async (req: any, res) => {
+  // Auth routes - get (or auto-create) user from database
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
-      // Use actual session claims if available (respects test OIDC logins), 
-      // fall back to Tim's dev user only when no session exists
-      const userId = req.user?.claims?.sub ?? (process.env.NODE_ENV === 'development' ? "45788955" : null);
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      // Always get user from database to ensure role changes are reflected
-      const user = await storage.getUser(userId);
-      
+      const userId = req.user.claims.sub;
+      const email = req.user.email;
+
+      let user = await storage.getUser(userId);
+
       if (!user) {
-        // Create user if doesn't exist (development fallback)
-        if (process.env.NODE_ENV === 'development') {
-          const newUser = await storage.upsertUser({
-            id: "45788955",
-            email: "timtheeuwsen@gmail.com",
-            firstName: "Tim",
-            lastName: "Theeuwsen",
-            profileImageUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&auto=format&fit=crop&w=40&h=40",
-            role: "participant" // Default to participant instead of creator
-          });
-          return res.json(newUser);
-        } else {
-          return res.status(404).json({ message: "User not found" });
-        }
+        // First Supabase login — auto-create DB row with defaults
+        user = await storage.upsertUser({
+          id: userId,
+          email,
+          firstName: null,
+          lastName: null,
+          profileImageUrl: null,
+          role: "participant",
+        });
       }
-      
+
       res.json(user);
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -420,33 +436,147 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── Guest Checkout ────────────────────────────────────────────────────────
+  // Creates (or finds) a lightweight participant account so unauthenticated
+  // visitors can complete a purchase without hitting a hard login wall.
+  // The returned { guestUserId, isNew } is used by the checkout flow to
+  // associate the booking with the account that was just created/found.
+  app.post('/api/auth/guest-checkout', async (req, res) => {
+    try {
+      const { email, firstName, lastName } = req.body;
+      if (!email || typeof email !== 'string') {
+        return res.status(400).json({ message: 'Email is required' });
+      }
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // Look for an existing user with that email
+      const existing = await storage.getUserByEmail(normalizedEmail);
+      if (existing) {
+        // Return the existing account — they can upgrade to a full login later
+        return res.json({ guestUserId: existing.id, isNew: false });
+      }
+
+      // Programmatically create a guest participant account (no password / Supabase session)
+      const guestId = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const newUser = await storage.upsertUser({
+        id: guestId,
+        email: normalizedEmail,
+        firstName: firstName?.trim() || null,
+        lastName: lastName?.trim() || null,
+        profileImageUrl: null,
+        role: 'participant',
+      });
+
+      return res.json({ guestUserId: newUser.id, isNew: true });
+    } catch (error) {
+      console.error('Error creating guest account:', error);
+      res.status(500).json({ message: 'Failed to create guest account' });
+    }
+  });
+
   // Valid roles list including promoter
   const VALID_ROLES = ['participant', 'creator', 'venue_provider', 'service_provider', 'admin', 'promoter'];
 
-  // Role assignment endpoint (for testing - in production this would be admin-only)
-  // Supports multi-role: when switching to a role, it's added to userRoles array if not present
-  app.post('/api/auth/assign-role', async (req: any, res) => {
+  // Role assignment endpoint — users can switch their own role.
+  // The 'admin' role can only be assigned by an existing admin.
+  app.post('/api/auth/assign-role', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user.claims.sub;
       const { role } = req.body;
-      
+
       if (!VALID_ROLES.includes(role)) {
         return res.status(400).json({ message: "Invalid role" });
       }
 
+      // Only admins may assign the admin role
+      if (role === 'admin' && !await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Only admins can assign the admin role" });
+      }
+
       // Update active role and ensure it's in the userRoles array
       const updatedUser = await storage.updateUserRole(userId, role);
-      
-      // Add role to userRoles array if not already present (multi-role support)
+
+      // Add selected role to userRoles if not already present (multi-role support)
       const currentRoles = updatedUser.userRoles || [];
       if (!currentRoles.includes(role)) {
         await storage.addUserRole(userId, role);
       }
-      
+
+      // Participants automatically get the promoter role so they can
+      // share referral links and earn commission from day one.
+      if (role === 'participant' && !currentRoles.includes('promoter')) {
+        await storage.addUserRole(userId, 'promoter');
+        // Ensure they have a referral code generated
+        await storage.ensureUserReferralCode(userId);
+      }
+
       res.json({ message: "Role updated successfully", user: updatedUser });
     } catch (error) {
       console.error("Error updating user role:", error);
       res.status(500).json({ message: "Failed to update role" });
+    }
+  });
+
+  // Add a role to the user's userRoles array WITHOUT changing their active role.
+  // Used when a user signs up a second time with the same email but a different role —
+  // their current active role is preserved; the new role is simply added to their
+  // collection so they can switch to it via the role switcher in the nav menu.
+  app.post('/api/auth/add-role', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const { role } = req.body;
+
+      if (!VALID_ROLES.includes(role)) {
+        return res.status(400).json({ message: 'Invalid role' });
+      }
+      if (role === 'admin' && !await checkIsAdmin(req)) {
+        return res.status(403).json({ message: 'Only admins can assign the admin role' });
+      }
+
+      const user = await storage.getUser(userId);
+      const currentRoles: string[] = (user?.userRoles as unknown as string[]) || [];
+
+      if (currentRoles.includes(role)) {
+        // Already has this role — nothing to do
+        return res.json({ message: 'Role already present', user });
+      }
+
+      // Only add to userRoles — do NOT touch the active role field
+      await storage.addUserRole(userId, role);
+
+      // Auto-generate a referral code when promoter role is added
+      if (role === 'promoter' || role === 'participant') {
+        await storage.ensureUserReferralCode(userId);
+      }
+
+      const updatedUser = await storage.getUser(userId);
+      res.json({ message: 'Role added successfully', user: updatedUser });
+    } catch (error) {
+      console.error('Error adding role:', error);
+      res.status(500).json({ message: 'Failed to add role' });
+    }
+  });
+
+  // Admin-only: promote another user to admin (or any role)
+  app.post('/api/admin/users/:userId/assign-role', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const { userId } = req.params;
+      const { role } = req.body;
+      if (!VALID_ROLES.includes(role)) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+      const updatedUser = await storage.updateUserRole(userId, role);
+      const currentRoles = updatedUser.userRoles || [];
+      if (!currentRoles.includes(role)) {
+        await storage.addUserRole(userId, role);
+      }
+      res.json({ message: "Role assigned successfully", user: updatedUser });
+    } catch (error) {
+      console.error("Error assigning role:", error);
+      res.status(500).json({ message: "Failed to assign role" });
     }
   });
 
@@ -518,38 +648,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Store promoter attribution in cookie (called when user visits with ?ref=)
-  app.post('/api/promoter-attribution', async (req, res) => {
+  app.post('/api/promoter-attribution', async (req: any, res) => {
     try {
-      const { referralCode } = req.body;
+      const { referralCode, experienceId } = req.body;
       if (!referralCode || referralCode.length < 3) {
         return res.status(400).json({ message: "Invalid referral code" });
       }
-      
+
       // Validate the referral code exists
       const promoter = await storage.getUserByPromoterCode(referralCode);
       if (!promoter) {
         return res.status(404).json({ message: "Referral code not found" });
       }
-      
-      // Set signed HttpOnly cookie with promoter info (survives auth redirect)
-      const cookieValue = JSON.stringify({ 
-        promoterId: promoter.id, 
+
+      // ── Record the referral click ─────────────────────────────────────────
+      const visitorUserId = req.user?.claims?.sub ?? null;
+      // Hash the IP so we can deduplicate without storing PII
+      const rawIp = req.headers['x-forwarded-for']?.toString().split(',')[0] || req.socket.remoteAddress || '';
+      const crypto = await import('crypto');
+      const ipHash = crypto.createHash('sha256').update(rawIp).digest('hex').slice(0, 16);
+
+      await storage.recordReferralClick({
+        promoterCode: referralCode,
+        promoterId: promoter.id,
+        experienceId: experienceId ?? null,
+        visitorUserId,
+        ipHash,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
+
+      // Set HttpOnly cookie with promoter info (survives auth redirect)
+      const cookieValue = JSON.stringify({
+        promoterId: promoter.id,
         referralCode,
         timestamp: Date.now()
       });
-      
+
       res.cookie('promoter_ref', cookieValue, {
         httpOnly: true,
         secure: process.env.NODE_ENV !== 'development',
         sameSite: 'lax',
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-        signed: false // Use signed: true in production with cookie-parser secret
+        signed: false
       });
-      
-      res.json({ 
-        success: true, 
-        promoterId: promoter.id 
-      });
+
+      res.json({ success: true, promoterId: promoter.id });
     } catch (error) {
       console.error("Error storing promoter attribution:", error);
       res.status(500).json({ message: "Failed to store attribution" });
@@ -598,7 +741,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Ensure the logged-in user has a referral code (auto-generates one if needed)
+  // Ensure the logged-in user has a referral code (auto-generates one if needed).
+  // Also auto-registers the experience in promoterExperiences so "My Trips" is populated
+  // for participants who share from the experience page (not just the experience pool).
   app.post('/api/me/ensure-referral-code', isAuthenticated, async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
@@ -608,10 +753,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const referralCode = await storage.ensureUserReferralCode(userId);
 
-      const baseUrl = process.env.APP_BASE_URL || 'https://greatapp.ai';
+      // Use the actual request host so the link works in dev AND production
+      const baseUrl = getAppBaseUrl(req);
       let referralLink: string;
       if (experienceId) {
         referralLink = `${baseUrl}/experience/${experienceId}?ref=${referralCode}`;
+
+        // Auto-register this experience in the user's promoter list so their
+        // "My Trips" section shows it even if they found it via the experience page
+        // (not the experience pool). Idempotent — onConflictDoNothing inside.
+        try {
+          const experience = await storage.getExperience(experienceId);
+          if (experience && (experience.status === 'approved' || experience.status === 'published')) {
+            await storage.promoteExperience(userId, experienceId);
+          }
+        } catch (_) { /* non-fatal */ }
       } else {
         referralLink = `${baseUrl}/?ref=${referralCode}`;
       }
@@ -670,10 +826,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Use real click data from referralClicks table
+      const clickStats = await storage.getReferralClickStats(userId);
+
       res.json({
         referralCode,
         friendsJoined,
-        peopleInvited: friendsJoined, // proxy — no click tracking in place
+        peopleInvited: clickStats.totalClicks,   // real: every click on their referral link
+        uniqueVisitors: clickStats.uniqueClicks,
+        conversionRate: clickStats.conversionRate,
         tripCreditsEarned,
         shareExperience,
       });
@@ -684,22 +845,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===== PROMOTER DASHBOARD ROUTES (Read-Only) =====
-  
+  // Helper: resolve userId with dev bypass + verify promoter access
+  const resolvePromoterUserId = async (req: any, res: any): Promise<string | null> => {
+    const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+    if (!userId) { res.status(401).json({ message: 'Not authenticated' }); return null; }
+    const user = await storage.getUser(userId);
+    // All participants automatically have promoter in userRoles — accept both
+    const ok = user?.role === 'promoter' || user?.role === 'participant' ||
+                (user?.userRoles || []).includes('promoter') ||
+                (user?.userRoles || []).includes('participant');
+    if (!ok) { res.status(403).json({ message: 'Access denied' }); return null; }
+    return userId;
+  };
+
   // Get promoter earnings summary
   app.get('/api/promoter/earnings', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Not authenticated" });
-      }
-      
-      // Verify user has promoter role
-      const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
-      }
-      
+      const userId = await resolvePromoterUserId(req, res);
+      if (!userId) return;
       const summary = await storage.getPromoterEarningsSummary(userId);
       res.json(summary);
     } catch (error) {
@@ -711,17 +874,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get experiences promoted by this promoter
   app.get('/api/promoter/experiences', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Not authenticated" });
-      }
-      
-      // Verify user has promoter role
-      const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
-      }
+      const userId = await resolvePromoterUserId(req, res);
+      if (!userId) return;
       
       const experiences = await storage.getPromoterExperiences(userId);
       // Add lifecycleStatus to each promoted experience
@@ -758,17 +912,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get detailed bookings for promoter
   app.get('/api/promoter/bookings', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Not authenticated" });
-      }
-      
-      // Verify user has promoter role
-      const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
-      }
+      const userId = await resolvePromoterUserId(req, res);
+      if (!userId) return;
       
       const bookings = await storage.getPromoterBookings(userId);
       
@@ -794,19 +939,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get promoter's referral code and info
   app.get('/api/promoter/info', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Not authenticated" });
-      }
-      
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
       const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
-      }
-      
+      // Auto-ensure referral code exists
+      const referralCode = user?.promoterCode || await storage.ensureUserReferralCode(userId);
       res.json({
-        promoterCode: user?.promoterCode || null,
+        promoterCode: referralCode,
         firstName: user?.firstName,
         lastName: user?.lastName,
       });
@@ -816,18 +955,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get experience pool - promotable experiences
+  // Promoter click-through stats (clicks, unique visitors, conversions, rate)
+  app.get('/api/promoter/click-stats', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const stats = await storage.getReferralClickStats(userId);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching click stats:", error);
+      res.status(500).json({ message: "Failed to fetch click stats" });
+    }
+  });
+
+  // Get experience pool - promotable experiences (open to all authenticated users)
   app.get('/api/promoter/experience-pool', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
       if (!userId) {
         return res.status(401).json({ message: "Not authenticated" });
-      }
-      
-      const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
       }
       
       // Get all promotable experiences
@@ -862,12 +1008,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Not authenticated" });
       }
       
-      const user = await storage.getUser(userId);
-      const hasPromoterRole = user?.role === 'promoter' || (user?.userRoles || []).includes('promoter');
-      if (!hasPromoterRole) {
-        return res.status(403).json({ message: "Promoter role required" });
-      }
-      
       const { experienceId } = req.params;
       
       // Verify the experience exists and is promotable (approved/published status only)
@@ -881,25 +1021,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Only approved or published experiences can be promoted" });
       }
       
-      // Check if already promoting
-      const isPromoting = await storage.isPromotingExperience(userId, experienceId);
-      if (isPromoting) {
-        return res.status(400).json({ message: "Already promoting this experience" });
+      // Load promoter's DB record to get (or generate) their referral code
+      let dbUser = await storage.getUser(userId);
+      if (!dbUser) {
+        return res.status(404).json({ message: "User not found" });
       }
-      
-      // Add to promoted experiences
+
+      // Ensure the user has a referral code — generate one if missing
+      if (!dbUser.promoterCode) {
+        await storage.ensureUserReferralCode(userId);
+        dbUser = await storage.getUser(userId);
+      }
+
+      // Register promotion (idempotent — onConflictDoNothing inside)
       await storage.promoteExperience(userId, experienceId);
-      
-      // Generate referral link
-      const promoterCode = user?.promoterCode;
-      const referralLink = promoterCode ? `/experience/${experience.slug}?ref=${promoterCode}` : null;
-      
+
+      // Build a fully-qualified, trackable referral link
+      const baseUrl = getAppBaseUrl(req);
+      const slug = experience.slug || experience.id;
+      const promoterCode = dbUser?.promoterCode ?? '';
+      const referralLink = `${baseUrl}/experience/${slug}?ref=${promoterCode}`;
+
       res.json({
         success: true,
         experienceId,
-        experienceSlug: experience.slug,
+        experienceSlug: slug,
+        promoterCode,
         referralLink,
-        message: "Experience promoted successfully",
+        message: "Experience added to your promotions!",
       });
     } catch (error) {
       console.error("Error promoting experience:", error);
@@ -1077,9 +1226,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Save Draft API endpoint - Creates new draft with incomplete data
-  app.post('/api/events/saveDraft', async (req: any, res) => {
+  app.post('/api/events/saveDraft', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       console.log("Creating new draft for user:", userId);
       console.log("Draft data received:", req.body);
       
@@ -1146,9 +1295,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update Draft API endpoint - Updates existing draft until published
-  app.put('/api/events/updateDraft/:id', async (req: any, res) => {
+  app.put('/api/events/updateDraft/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const draftId = req.params.id;
       console.log("Updating draft:", draftId, "for user:", userId);
       console.log("Update data received:", req.body);
@@ -1370,14 +1519,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
       }
 
-      // Prepare final event data - lock required fields  
-      const eventData = { 
+      // ── Self-Hosted / Manual Address logic ──────────────────────────────────
+      // When no platform Space is linked (venueType = 'manual' or selectedVenueId is blank),
+      // the creator is bringing their own venue.
+      // Force venueRevenuePercentage → 0 and give that % back to the creator.
+      const isLinkedVenue = !!(parsedBody.selectedVenueId && parsedBody.selectedVenueId.trim() !== '');
+      const platformPctRaw = parseFloat(String(parsedBody.platformPct ?? parsedBody.platformRevenuePercentage ?? 15));
+      const venuePctRaw    = isLinkedVenue ? parseFloat(String(parsedBody.venueRevenuePercentage ?? 0)) : 0;
+      const creatorPctRaw  = Math.max(0, 100 - platformPctRaw - venuePctRaw);
+
+      // Prepare final event data - lock required fields
+      const eventData = {
         ...parsedBody,
         creatorId: userId,
         status: 'pending_approval',
         publishedAt: new Date(),
         updatedAt: new Date(),
-        locked: true // Indicate this is locked for changes
+        locked: true, // Indicate this is locked for changes
+        // Apply resolved revenue split (self-hosted gets 0% venue, rest to creator)
+        venueRevenuePercentage: isLinkedVenue ? String(venuePctRaw) : '0.00',
+        creatorPct: creatorPctRaw,
+        creatorRevenuePercentage: creatorPctRaw,
+        platformPct: platformPctRaw,
+        platformRevenuePercentage: platformPctRaw,
       };
       
       // Update draft to pending status (finalizes it)
@@ -1611,11 +1775,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ACCESS CONTROL IMPLEMENTATION
       // In development, use hardcoded user ID for testing; in production, use authenticated session
       const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
-      const userEmail = process.env.NODE_ENV === 'development' ? 'timtheeuwsen@gmail.com' : req.user?.claims?.email;
-      const isAdmin = userEmail === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       const isCreator = userId && experience.creatorId === userId;
       
-      console.log(`[Experience ${req.params.id}] Status: ${experience.status}, User: ${userEmail}, IsAdmin: ${isAdmin}, IsCreator: ${isCreator}`);
+      console.log(`[Experience ${req.params.id}] Status: ${experience.status}, User: ${req.user?.claims?.email ?? 'anonymous'}, IsAdmin: ${isAdmin}, IsCreator: ${isCreator}`);
       
       // Check for valid preview token (ONLY for pending status)
       const previewToken = req.query.preview as string;
@@ -1699,7 +1862,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Experience not found" });
       }
 
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const baseUrl = getAppBaseUrl(req);
       const shareUrl = `${baseUrl}/experience/${id}`;
       const referralCode = `ref_${id.slice(0, 8)}_${Date.now().toString(36)}`;
 
@@ -1727,8 +1890,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       // In development, use hardcoded user ID for testing; in production, use authenticated session
       const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
-      const userEmail = process.env.NODE_ENV === 'development' ? 'timtheeuwsen@gmail.com' : req.user?.claims?.email;
-      const isAdmin = userEmail === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -1760,7 +1922,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Update experience with preview token
       await storage.updateExperience(id, { previewToken });
 
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const baseUrl = getAppBaseUrl(req);
       const previewUrl = `${baseUrl}/experience/${id}?preview=${previewToken}`;
 
       res.json({
@@ -1792,8 +1954,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ACCESS CONTROL IMPLEMENTATION
       // In development, use hardcoded user ID for testing; in production, use authenticated session
       const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
-      const userEmail = process.env.NODE_ENV === 'development' ? 'timtheeuwsen@gmail.com' : req.user?.claims?.email;
-      const isAdmin = userEmail === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       const isCreator = userId && experience.creatorId === userId;
       
       // Check for valid preview token (for pending experiences)
@@ -2092,7 +2253,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Publish draft endpoint - validates and converts draft to live experience
   app.post("/api/experience-drafts/:id/publish", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
       const { id: draftId } = req.params;
       
       // Get the draft
@@ -2236,11 +2397,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         depositAmount: (draft as any).depositAmount || null,
         balanceDueDays: draft.balanceDueDays || 14,
         creatorId: userId,
-        status: "pending_approval" as const,
+        status: "published" as const,
         
         // Venue mapping: map selectedVenueId to linkedVenueId
         linkedVenueId: (draft as any).selectedVenueId || null,
-        
+
+        // ── Self-Hosted / Manual Address logic ──────────────────────────────
+        // If no platform Space is linked the creator is bringing their own venue.
+        // Rules:
+        //   1. Space revenue share is forced to 0% — no external venue gets a cut.
+        //   2. The creator absorbs that % (their share = 100% - platform fee).
+        //   3. No Space Handshake needed — experience publishes immediately.
+        venueRevenuePercentage: ((draft as any).selectedVenueId)
+          ? String(draft.venueRevenuePercentage ?? '0.00')   // platform Space: keep draft value
+          : '0.00',                                           // self-hosted: always 0%
+
         // MVG field mapping: Map frontend MVG fields to backend schema fields
         // Use type assertion for fields that may exist from frontend but not in strict type
         mvgEnabled: draft.mvgEnabled !== undefined ? draft.mvgEnabled : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true),
@@ -2255,10 +2426,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         escrowEnabled: (draft.mvgEnabled !== undefined ? draft.mvgEnabled : true) || false,
         
         // Revenue split fields
-        creatorRevenuePercentage: draft.creatorRevenuePercentage || 85,
-        platformRevenuePercentage: draft.platformRevenuePercentage || 15,
-        creatorPct: draft.creatorPct || 85,
-        platformPct: draft.platformPct || 15,
+        // Self-hosted: creator gets back whatever % was earmarked for the Space.
+        // Platform Space: use the split exactly as the creator configured it.
+        ...((() => {
+          const isLinked = !!((draft as any).selectedVenueId);
+          const platformPct = parseFloat(String(draft.platformPct ?? draft.platformRevenuePercentage ?? 15));
+          const venuePct    = isLinked ? parseFloat(String((draft as any).venueRevenuePercentage ?? 0)) : 0;
+          const creatorPct  = Math.max(0, 100 - platformPct - venuePct);
+          return {
+            creatorPct,
+            platformPct,
+            creatorRevenuePercentage: creatorPct,
+            platformRevenuePercentage: platformPct,
+          };
+        })()),
         
         // Soft-hold fields
         softHoldEnabled: draft.softHoldEnabled || false,
@@ -2311,7 +2492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deleteExperienceDraft(draftId, userId);
       
       // Generate shareable link
-      const shareableLink = `${req.protocol}://${req.get('host')}/experiences/${experience.id}`;
+      const shareableLink = `${getAppBaseUrl(req)}/experiences/${experience.id}`;
       
       res.status(201).json({
         message: "Experience published successfully",
@@ -2590,6 +2771,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
             lifecycle_status: 'confirmed',
           });
         }
+      }
+
+      // ── Mark referral click as converted ──────────────────────────────────
+      if (referralCode && booking?.id) {
+        storage.markReferralClickConverted(referralCode, booking.id).catch(() => {});
+      }
+
+      // ── Auto-add buyer to experience chat ─────────────────────────────────
+      if (booking?.id) {
+        const buyerUserId = booking.userId;
+        const buyerUser = buyerUserId ? await storage.getUser(buyerUserId) : null;
+        const buyerName = buyerUser?.firstName
+          ? `${buyerUser.firstName}${buyerUser.lastName ? ' ' + buyerUser.lastName : ''}`
+          : 'A new participant';
+        storage.createExperienceMessage({
+          experienceId,
+          userId: buyerUserId ?? 'system',
+          message: `👋 ${buyerName} just joined the experience!`,
+          messageType: 'announcement',
+        }).catch(() => {});
       }
 
       // Prepare response message
@@ -3039,7 +3240,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/experiences", isAuthenticated, async (req: any, res) => {
     try {
       // Admin role check
-      if (req.user?.claims?.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       
@@ -3097,7 +3298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/experiences/:id/approve", isAuthenticated, async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -3119,7 +3320,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/experiences/:id/reject", isAuthenticated, async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -3556,7 +3757,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/payments/capture - Capture payment when MVG met (admin only)
   app.post("/api/payments/capture", isAuthenticated, async (req: any, res) => {
     try {
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!isAdmin) {
         return res.status(403).json({
@@ -3609,7 +3810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/payments/refund - Refund payment when MVG failed (admin only)
   app.post("/api/payments/refund", isAuthenticated, async (req: any, res) => {
     try {
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!isAdmin) {
         return res.status(403).json({
@@ -3666,7 +3867,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/payments/logs", isAuthenticated, async (req: any, res) => {
     try {
       const isDev = process.env.NODE_ENV === 'development';
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!isDev && !isAdmin) {
         return res.status(403).json({
@@ -3694,7 +3895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/admin/trips - List pending trips for admin review
   app.get("/api/admin/trips", isAuthenticated, async (req: any, res) => {
     try {
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!isAdmin) {
         return res.status(403).json({ message: "Admin access required" });
@@ -3712,7 +3913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/trips/:id/approve", isAuthenticated, async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -3731,25 +3932,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Object storage routes
-  app.post("/api/objects/upload", isAuthenticated, async (req, res) => {
+  // Legacy signed-URL endpoint — redirects callers to the direct upload endpoint.
+  // All uploads now go through POST /api/uploads/images which uses Supabase Storage.
+  app.post("/api/objects/upload", isAuthenticated, async (_req, res) => {
     try {
-      const { type } = req.body;
-      
-      // Validate MIME type for security - only allow safe image formats
-      const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      if (type && !allowedMimeTypes.includes(type)) {
-        return res.status(400).json({ 
-          error: "Invalid file type. Only JPEG, PNG, and WebP images are allowed." 
-        });
-      }
-      
-      const objectStorageService = new ObjectStorageService();
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      res.json({ uploadURL });
+      res.status(410).json({
+        error: "This endpoint is deprecated. Use POST /api/uploads/images with multipart/form-data instead.",
+      });
     } catch (error) {
-      console.error("Error getting upload URL:", error);
-      res.status(500).json({ error: "Failed to get upload URL" });
+      console.error("Error:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -3787,92 +3979,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
-      if (!userId) {
-        return res.status(401).json({ error: "User not authenticated" });
-      }
-      
+      const userId = req.user.claims.sub;
+
       const file = req.file;
 
-      // Security: Magic-byte validation using file-type package
+      // Magic-byte validation — only allow real images
       const detectedType = await fileTypeFromBuffer(file.buffer);
-      const allowedTypes = [
-        { mime: 'image/jpeg', ext: 'jpg' },
-        { mime: 'image/png', ext: 'png' }, 
-        { mime: 'image/webp', ext: 'webp' }
-      ];
-      
-      // Validate actual file content matches expected image types
-      if (!detectedType || !allowedTypes.some(type => type.mime === detectedType.mime)) {
-        return res.status(400).json({ 
-          error: "Invalid file type. File content does not match expected image format (JPEG, PNG, or WebP)." 
+      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+
+      if (!detectedType || !allowedMimes.includes(detectedType.mime)) {
+        return res.status(400).json({
+          error: "Invalid file type. Only JPEG, PNG, or WebP images are allowed.",
         });
       }
 
-      // Double-check MIME type against detected type for extra security
       if (file.mimetype !== detectedType.mime) {
-        return res.status(400).json({ 
-          error: "File type mismatch. File content does not match the declared MIME type." 
+        return res.status(400).json({
+          error: "File type mismatch. Declared MIME type does not match file content.",
         });
       }
 
-      // File size validation (already handled by multer, but double-check)
       if (file.size > 10 * 1024 * 1024) {
-        return res.status(413).json({ 
-          error: "File too large. Maximum size is 10MB." 
-        });
+        return res.status(413).json({ error: "File too large. Maximum size is 10MB." });
       }
 
-      // Initialize ObjectStorageService and get upload URL
-      const objectStorageService = new ObjectStorageService();
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      
-      // Upload the file buffer to the signed URL
-      const uploadResponse = await fetch(uploadURL, {
-        method: 'PUT',
-        body: file.buffer,
-        headers: {
-          'Content-Type': detectedType.mime, // Use detected MIME type
-          'Content-Length': file.size.toString(),
-        },
-      });
+      // Upload to Supabase Storage
+      const publicUrl = await uploadImageToSupabase(file.buffer, detectedType.mime, userId);
 
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload failed with status: ${uploadResponse.status}`);
-      }
-
-      // Extract and sanitize the object path from the upload URL
-      const urlParts = new URL(uploadURL);
-      let objectPath = urlParts.pathname;
-      
-      // Sanitize path to prevent directory traversal
-      objectPath = objectPath.replace(/\.\./g, '').replace(/\/+/g, '/');
-      
-      // Set ACL policy for public access
-      const publicObjectPath = await objectStorageService.trySetObjectEntityAclPolicy(
-        uploadURL,
-        {
-          owner: userId,
-          visibility: "public",
-        }
-      );
-
-      // Ensure we return an absolute URL for validation
-      let finalUrl = publicObjectPath;
-      if (publicObjectPath && !publicObjectPath.startsWith('http')) {
-        // If not absolute, construct from base URL (adapt as needed for your setup)
-        finalUrl = publicObjectPath.startsWith('/') 
-          ? `${req.protocol}://${req.get('host')}${publicObjectPath}`
-          : `${req.protocol}://${req.get('host')}/${publicObjectPath}`;
-      }
-
-      // Return the response with file details
       res.status(200).json({
-        url: finalUrl,
-        key: objectPath,
+        url: publicUrl,
         contentType: detectedType.mime,
         size: file.size,
-        message: "Image uploaded successfully"
+        message: "Image uploaded successfully",
       });
 
     } catch (error) {
@@ -3905,13 +4043,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Generic error fallback
-      res.status(500).json({ 
-        error: "Failed to upload image", 
-        details: process.env.NODE_ENV === 'development' 
-          ? (error instanceof Error ? error.message : 'Unknown error')
-          : 'Internal server error'
-      });
+      res.status(500).json({ error: "Failed to upload image" });
+    }
+  });
+
+  // Document upload endpoint (PDFs) — Supabase Storage
+  const documentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (file.mimetype === 'application/pdf') cb(null, true);
+      else cb(new Error('Only PDF files are allowed'));
+    },
+  });
+
+  app.post("/api/uploads/documents", isAuthenticated, documentUpload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const userId = req.user.claims.sub;
+      const publicUrl = await uploadDocumentToSupabase(req.file.buffer, req.file.mimetype, userId);
+
+      res.status(200).json({ url: publicUrl, message: "Document uploaded successfully" });
+    } catch (error) {
+      console.error("Error uploading document:", error);
+      res.status(500).json({ error: "Failed to upload document" });
     }
   });
 
@@ -4327,7 +4483,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Generate unique invite link with user reference
-      const baseUrl = req.protocol + '://' + req.get('host');
+      const baseUrl = getAppBaseUrl(req);
       const inviteLink = `${baseUrl}/event/${experienceId}?ref=${userId}`;
       
       res.json({ 
@@ -4766,8 +4922,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create account link for onboarding
       const accountLink = await stripe.accountLinks.create({
         account: account.id,
-        refresh_url: `${req.protocol}://${req.get('host')}/creator-profile-setup?stripe_refresh=true`,
-        return_url: `${req.protocol}://${req.get('host')}/creator-profile-setup?stripe_success=true`,
+        refresh_url: `${getAppBaseUrl(req)}/creator-profile-setup?stripe_refresh=true`,
+        return_url: `${getAppBaseUrl(req)}/creator-profile-setup?stripe_success=true`,
         type: 'account_onboarding',
       });
 
@@ -4802,9 +4958,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // List all venues (public - returns only approved venues by default)
   app.get("/api/venues", async (req, res) => {
     try {
-      const { approved, location } = req.query;
+      const { location } = req.query;
+      // Public endpoint — always return only admin-approved venues.
+      // Pending/rejected venues are never visible to the public.
       const venues = await storage.getVenues({
-        approved: approved === "true" ? true : approved === "false" ? false : undefined,
+        approved: true,
         location: location as string,
       });
       res.json(venues);
@@ -4852,7 +5010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/venues/:id/edit", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5109,7 +5267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/venues/:id", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5301,7 +5459,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/venues/pending", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5323,7 +5481,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/venues/:id/approve", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5346,7 +5504,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/venues/:id/reject", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5368,7 +5526,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/venues/:id", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5401,7 +5559,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/venues/:venueId/availability", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5429,7 +5587,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/venues/:venueId/availability", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5477,7 +5635,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/venues/availability/:id", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5520,7 +5678,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/venues/availability/:id", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5553,7 +5711,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/venues/:venueId/google-calendar", async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const isAdmin = req.user?.claims?.email === "timtheeuwsen@gmail.com";
+      const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -6962,8 +7120,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       // Only admin users can view applications
-      const user = await storage.getUser(userId);
-      if (!user || user.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
       
@@ -6979,8 +7136,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       // Only admin users can review applications
-      const user = await storage.getUser(userId);
-      if (!user || user.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -7378,7 +7534,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/venues", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       const venues = await storage.getVenuesWithCreators();
@@ -7391,7 +7547,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/admin/venues/:id", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       await storage.deleteVenue(req.params.id);
@@ -7404,7 +7560,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/venue-availability", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       
@@ -7427,7 +7583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/services", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       const services = await storage.getServiceProviders({});
@@ -7441,7 +7597,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin Promoter Management Routes
   app.get("/api/admin/promoters", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       
@@ -7486,7 +7642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/promoters/:promoterId", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       
@@ -7534,7 +7690,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/admin/experiences/:id", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       const userId = req.user.claims.sub;
@@ -7560,7 +7716,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/admin/venues/:id", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       const { status, reviewNotes } = req.body;
@@ -7580,7 +7736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update venue display preferences (admin only)
   app.patch("/api/admin/venues/:id/display-prefs", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       
@@ -7595,7 +7751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/admin/services/:id", isAuthenticated, async (req: any, res) => {
     try {
-      if (req.user.claims.email !== "timtheeuwsen@gmail.com") {
+      if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
       const { status, reviewNotes } = req.body;
@@ -8262,6 +8418,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Platform settings - returns fee config for dynamic UI
+  app.get('/api/platform-settings', async (_req, res) => {
+    try {
+      const [settings] = await db.select().from(platformSettings).limit(1);
+      if (settings) {
+        res.json({
+          platformFeePercentage: parseFloat(settings.platformFeePercentage ?? '15.00'),
+          stripeFeePercentage: parseFloat(settings.stripeFeePercentage ?? '2.90'),
+          stripeFeeFixed: settings.stripeFeeFixed ?? 30,
+        });
+      } else {
+        res.json({ platformFeePercentage: 15, stripeFeePercentage: 2.9, stripeFeeFixed: 30 });
+      }
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch platform settings' });
+    }
+  });
+
   // Revenue calculation endpoint for real-time preview
   app.post('/api/calculate-revenue', async (req, res) => {
     try {
@@ -8830,6 +9004,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   initializeWebSocket(httpServer);
   
+  // ─── Task 4: Venue Offer Inbox (The Handshake) ────────────────────────────
+  // Returns all experiences that a creator has proposed to any of this venue's
+  // spaces and are awaiting acceptance (status = 'pending_venue_approval').
+  app.get('/api/venue/pending-offers', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      // Get all venues owned by this user
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!userVenues.length) return res.json([]);
+
+      const venueIds = userVenues.map((v: any) => v.id);
+      // Fetch experiences linked to any of those venues with pending handshake status
+      const offers = await storage.getExperiencesByVenueIds(venueIds, 'pending_venue_approval');
+      res.json(offers);
+    } catch (err: any) {
+      console.error('Error fetching venue offers:', err);
+      res.status(500).json({ message: 'Failed to fetch pending offers' });
+    }
+  });
+
+  // Accept an offer → experience goes Live (status = 'approved')
+  app.post('/api/venue/offers/:experienceId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const { experienceId } = req.params;
+
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      // Verify the experience is linked to one of this user's venues
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const linkedToMyVenue = userVenues.some((v: any) => v.id === experience.linkedVenueId);
+      if (!linkedToMyVenue) return res.status(403).json({ message: 'Access denied' });
+
+      await storage.updateExperienceStatus(experienceId, 'approved');
+      res.json({ success: true, message: 'Offer accepted — experience is now Live' });
+    } catch (err: any) {
+      console.error('Error accepting venue offer:', err);
+      res.status(500).json({ message: 'Failed to accept offer' });
+    }
+  });
+
+  // Reject an offer → experience sent back to draft
+  app.post('/api/venue/offers/:experienceId/reject', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const { experienceId } = req.params;
+      const { reason } = req.body;
+
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const linkedToMyVenue = userVenues.some((v: any) => v.id === experience.linkedVenueId);
+      if (!linkedToMyVenue) return res.status(403).json({ message: 'Access denied' });
+
+      await storage.updateExperienceStatus(experienceId, 'draft');
+      res.json({ success: true, message: 'Offer rejected — experience returned to creator' });
+    } catch (err: any) {
+      console.error('Error rejecting venue offer:', err);
+      res.status(500).json({ message: 'Failed to reject offer' });
+    }
+  });
+
+  // Venue Ledger — real sales totals broken down by the accepted split
+  app.get('/api/venue/ledger', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!userVenues.length) return res.json({ totalSales: 0, myShare: 0, bookingsCount: 0 });
+
+      const venueIds = userVenues.map((v: any) => v.id);
+      const bookings = await storage.getBookingsByVenueIds(venueIds);
+
+      let totalGross = 0;
+      let myShare = 0;
+
+      for (const booking of bookings) {
+        const gross = parseFloat(booking.totalAmount || booking.totalPrice || '0');
+        totalGross += gross;
+        // venueRevenuePercentage stored on the experience
+        const venuePct = parseFloat(booking.experience?.venueRevenuePercentage || '0');
+        myShare += gross * (venuePct / 100);
+      }
+
+      res.json({
+        totalSales: Math.round(totalGross * 100) / 100,
+        myShare: Math.round(myShare * 100) / 100,
+        bookingsCount: bookings.length,
+        venues: userVenues.length,
+      });
+    } catch (err: any) {
+      console.error('Error fetching venue ledger:', err);
+      res.status(500).json({ message: 'Failed to fetch ledger' });
+    }
+  });
+
+  // Creator Ledger — total sales + My Share based on accepted creatorPct
+  app.get('/api/creator/ledger', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const bookings = await storage.getBookingsByCreator(userId);
+
+      let totalGross = 0;
+      let myShare = 0;
+      let platformFees = 0;
+      let spaceShare = 0;
+
+      for (const booking of bookings) {
+        const gross = parseFloat(booking.totalAmount || booking.totalPrice || '0');
+        const creatorPct = parseFloat(booking.experience?.creatorPct || '85');
+        const platformPct = parseFloat(booking.experience?.platformPct || '15');
+        const venuePct = parseFloat(booking.experience?.venueRevenuePercentage || '0');
+        totalGross += gross;
+        platformFees += gross * (platformPct / 100);
+        spaceShare += gross * (venuePct / 100);
+        myShare += gross * (creatorPct / 100);
+      }
+
+      res.json({
+        totalSales: Math.round(totalGross * 100) / 100,
+        myShare: Math.round(myShare * 100) / 100,
+        platformFees: Math.round(platformFees * 100) / 100,
+        spaceShare: Math.round(spaceShare * 100) / 100,
+        bookingsCount: bookings.length,
+      });
+    } catch (err: any) {
+      console.error('Error fetching creator ledger:', err);
+      res.status(500).json({ message: 'Failed to fetch ledger' });
+    }
+  });
+
   return httpServer;
 }
 

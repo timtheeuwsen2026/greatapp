@@ -29,7 +29,6 @@ export default function AISearchAgent() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  // Removed auto-scroll to prevent page jumping when messages update
 
   const handleInitialClick = () => {
     setIsOpen(true);

@@ -19,12 +19,17 @@ export type UserIntent =
   | "meet_people" // Social networking
   | "explore_platform"; // General exploration
 
+type ParticipantProfileStatus = {
+  hasProfile: boolean;
+  profile: ParticipantProfile | null;
+};
+
 export function useUserFlow() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   // Get participant profile
-  const { data: participantProfile, isLoading: participantLoading } = useQuery<ParticipantProfile>({
-    queryKey: ["/api/participant-profile"],
+  const { data: participantProfileStatus, isLoading: participantLoading } = useQuery<ParticipantProfileStatus>({
+    queryKey: ["/api/participant-profile/status"],
     enabled: isAuthenticated,
     retry: false,
   });
@@ -37,6 +42,7 @@ export function useUserFlow() {
   });
 
   const isLoading = authLoading || participantLoading || creatorLoading;
+  const participantProfile = participantProfileStatus?.profile || null;
 
   // Determine user flow state
   const getFlowState = (): UserFlowState => {
@@ -44,7 +50,7 @@ export function useUserFlow() {
     if (!isAuthenticated) return "new_visitor";
     if (!user) return "new_visitor";
 
-    const hasParticipant = !!participantProfile;
+    const hasParticipant = participantProfileStatus?.hasProfile === true;
     const hasCreator = !!creatorProfile;
 
     if (hasParticipant && hasCreator) return "both_profiles";
@@ -155,7 +161,7 @@ export function useUserFlow() {
     isLoading,
     getRecommendedActions,
     getProfileSetupFlow,
-    hasParticipantProfile: !!participantProfile,
+    hasParticipantProfile: participantProfileStatus?.hasProfile === true,
     hasCreatorProfile: !!creatorProfile,
     needsProfileSetup: flowState === "logged_in_no_profile"
   };

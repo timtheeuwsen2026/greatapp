@@ -107,11 +107,12 @@ export function ParticipantProfileSetup({ trigger, open, onOpenChange }: Partici
   const [newSkill, setNewSkill] = useState("");
   const [newLanguage, setNewLanguage] = useState("");
 
-  // Fetch existing profile
-  const { data: profile, isLoading } = useQuery({
-    queryKey: ["/api/participant-profile"],
+  // Fetch existing profile without using a 404 as the missing-profile signal
+  const { data: profileStatus, isLoading } = useQuery<{ hasProfile: boolean; profile: any | null }>({
+    queryKey: ["/api/participant-profile/status"],
     enabled: !!user,
   });
+  const profile = profileStatus?.profile;
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
@@ -159,6 +160,7 @@ export function ParticipantProfileSetup({ trigger, open, onOpenChange }: Partici
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/participant-profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/participant-profile/status"] });
       toast({
         title: "Profile updated",
         description: "Your profile has been saved successfully.",

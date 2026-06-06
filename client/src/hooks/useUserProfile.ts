@@ -11,11 +11,16 @@ export interface UserProfile {
   isComplete: boolean;
 }
 
+type ParticipantProfileStatus = {
+  hasProfile: boolean;
+  profile: unknown | null;
+};
+
 export function useUserProfile() {
   const { user, isAuthenticated } = useAuth();
 
-  const { data: participantProfile, isLoading: participantLoading } = useQuery({
-    queryKey: ['/api/participant-profile'],
+  const { data: participantProfileStatus, isLoading: participantLoading } = useQuery<ParticipantProfileStatus>({
+    queryKey: ['/api/participant-profile/status'],
     enabled: isAuthenticated,
     retry: false,
   });
@@ -29,7 +34,8 @@ export function useUserProfile() {
   const isLoading = participantLoading || creatorLoading;
 
   // Determine user's profile state
-  const hasParticipantProfile = !!participantProfile;
+  const participantProfile = participantProfileStatus?.profile || null;
+  const hasParticipantProfile = participantProfileStatus?.hasProfile === true;
   const hasCreatorProfile = !!creatorProfile;
   const hasAnyProfile = hasParticipantProfile || hasCreatorProfile;
   

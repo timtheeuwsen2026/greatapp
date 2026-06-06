@@ -58,6 +58,11 @@ const participantProfileSchema = z.object({
 
 type ParticipantProfileForm = z.infer<typeof participantProfileSchema>;
 
+type ParticipantProfileStatus = {
+  hasProfile: boolean;
+  profile: any | null;
+};
+
 const interestOptions = [
   'Yoga', 'Meditation', 'Hiking', 'Surfing', 'Fitness', 'Music', 
   'Photography', 'Cooking', 'Art', 'Networking', 'Dancing', 'Reading',
@@ -129,10 +134,11 @@ export default function ParticipantProfileSetup() {
     },
   });
 
-  const { data: existingProfile, isLoading: profileLoading } = useQuery<any>({
-    queryKey: ['/api/participant-profile'],
+  const { data: participantProfileStatus, isLoading: profileLoading } = useQuery<ParticipantProfileStatus>({
+    queryKey: ['/api/participant-profile/status'],
     retry: false,
   });
+  const existingProfile = participantProfileStatus?.profile;
 
   useEffect(() => {
     if (!existingProfile?.id) return;
@@ -170,6 +176,7 @@ export default function ParticipantProfileSetup() {
         description: 'Community Hub and Tribe Chat are now unlocked.',
       });
       queryClient.invalidateQueries({ queryKey: ['/api/participant-profile'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/participant-profile/status'] });
       const postOnboardingRedirect = sessionStorage.getItem('postParticipantOnboardingRedirect');
       if (postOnboardingRedirect) {
         sessionStorage.removeItem('postParticipantOnboardingRedirect');

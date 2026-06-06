@@ -73,8 +73,8 @@ export default function CommunityHub() {
     enabled: isAuthenticated,
   });
 
-  const { error: participantProfileError, isLoading: participantProfileLoading } = useQuery({
-    queryKey: ["/api/participant-profile"],
+  const { data: participantProfileStatus, isLoading: participantProfileLoading } = useQuery<{ hasProfile: boolean }>({
+    queryKey: ["/api/participant-profile/status"],
     enabled: isAuthenticated,
     retry: false,
   });
@@ -248,8 +248,7 @@ export default function CommunityHub() {
     );
   }
 
-  const participantProfileMissing =
-    participantProfileError && (participantProfileError as any).message?.includes("404");
+  const participantProfileMissing = participantProfileStatus?.hasProfile === false;
 
   if (participantProfileLoading) {
     return (

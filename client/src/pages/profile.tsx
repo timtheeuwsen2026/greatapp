@@ -27,6 +27,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+type ParticipantProfileStatus = {
+  hasProfile: boolean;
+  profile: any | null;
+};
+
 function asArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
 }
@@ -145,7 +150,7 @@ function EmptyRoleProfile({
 
 export default function Profile() {
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/user"] });
-  const { data: participantProfile } = useQuery<any>({ queryKey: ["/api/participant-profile"], retry: false });
+  const { data: participantProfileStatus } = useQuery<ParticipantProfileStatus>({ queryKey: ["/api/participant-profile/status"], retry: false });
   const { data: creatorProfile } = useQuery<any>({ queryKey: ["/api/creator-profile"], retry: false });
   const { data: promoterProfile } = useQuery<any>({ queryKey: ["/api/promoter-profile"], retry: false });
   const { data: venues = [] } = useQuery<any[]>({ queryKey: ["/api/user/venues"], retry: false });
@@ -159,6 +164,7 @@ export default function Profile() {
   const [changingPassword, setChangingPassword] = useState(false);
 
   const role = user?.role as string | undefined;
+  const participantProfile = participantProfileStatus?.profile || null;
   const allRoles = Array.from(new Set([...(Array.isArray(user?.userRoles) ? user.userRoles : []), role].filter(Boolean))) as string[];
   const hasRole = (value: string) => role === value || allRoles.includes(value);
 

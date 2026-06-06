@@ -1705,6 +1705,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Mock venues and services endpoints removed - now using real database endpoints below
 
   // Profile routes
+  app.get('/api/participant-profile/status', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      const profile = await storage.getParticipantProfileByUserId(userId);
+      res.json({
+        hasProfile: !!profile,
+        profile: profile || null,
+      });
+    } catch (error) {
+      console.error("Error checking participant profile status:", error);
+      res.status(500).json({ message: "Failed to check profile status" });
+    }
+  });
+
   app.get('/api/participant-profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = resolveCurrentUserId(req);
@@ -6261,6 +6279,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Participant profiles
+  app.get("/api/participant-profile/status", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      const profile = await storage.getProfile(userId);
+      res.json({
+        hasProfile: !!profile,
+        profile: profile || null,
+      });
+    } catch (error) {
+      console.error("Error checking participant profile status:", error);
+      res.status(500).json({ message: "Failed to check profile status" });
+    }
+  });
+
   app.post("/api/participant-profile", isAuthenticated, async (req: any, res) => {
     try {
       const userId = resolveCurrentUserId(req);

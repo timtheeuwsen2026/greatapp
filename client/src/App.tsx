@@ -13,8 +13,7 @@ import CreatorDashboard from "@/pages/creator-dashboard";
 import CommunityHub from "@/pages/community-hub";
 import VenueDashboard from "@/pages/venue-dashboard";
 import ServiceProviderDashboard from "@/pages/service-provider-dashboard";
-import CreatorProfileSetup from "@/pages/creator-profile-setup";
-import ConversationalCreatorSetupPage from "@/pages/conversational-creator-setup";
+import SimpleCreatorProfileSetup from "@/pages/simple-creator-profile-setup";
 import ParticipantProfileSetup from "@/pages/participant-profile-setup";
 import ConversationalProfile from "@/pages/conversational-profile";
 import Checkout from "@/pages/checkout";
@@ -36,7 +35,6 @@ import ProfileSetup from "@/pages/profile-setup";
 import CreatorSetupDemo from "@/pages/creator-setup-demo";
 import CreatorDemo from "@/pages/creator-demo";
 import Creator from "@/pages/creator";
-import ConversationalCreatorSetupV2Page from "@/pages/conversational-creator-setup-v2";
 import RevenueCalculatorDemo from "@/pages/revenue-calculator-demo";
 import ModularPricingDemo from "@/pages/modular-pricing-demo";
 import RoleBasedPricingDemo from "@/pages/role-based-pricing-demo";
@@ -130,15 +128,15 @@ function Router() {
       <Route path="/promoter/experience-pool" component={PromoterExperiencePool} />
       <Route path="/reservations" component={ReservationsDashboard} />
       {/* Standardized Setup Page Routes */}
-      <Route path="/creator-profile-setup" component={ConversationalCreatorSetupV2Page} />
+      <Route path="/creator-profile-setup" component={SimpleCreatorProfileSetup} />
       <Route path="/participant-profile-setup" component={ConversationalProfile} />
       <Route path="/venue-profile-setup" component={VenueProfileSetup} />
       <Route path="/service-provider-setup" component={ServiceProviderSetup} />
       
       {/* Legacy Routes - Redirect to standardized routes */}
-      <Route path="/creator/setup" component={ConversationalCreatorSetupV2Page} />
-      <Route path="/conversational-creator-setup" component={ConversationalCreatorSetupV2Page} />
-      <Route path="/conversational-creator-setup-v2" component={ConversationalCreatorSetupV2Page} />
+      <Route path="/creator/setup" component={SimpleCreatorProfileSetup} />
+      <Route path="/conversational-creator-setup" component={SimpleCreatorProfileSetup} />
+      <Route path="/conversational-creator-setup-v2" component={SimpleCreatorProfileSetup} />
       <Route path="/participant/setup" component={ConversationalProfile} />
       <Route path="/conversational-profile" component={RedirectToCreatorProfileSetup} />
       <Route path="/venue/setup" component={VenueProfileSetup} />
@@ -151,7 +149,7 @@ function Router() {
       <Route path="/event/:id" component={EventInvite} />
       <Route path="/creator" component={CreatorHome} />
       <Route path="/creator/earnings" component={CreatorEarnings} />
-      <Route path="/creator/profile-setup" component={ConversationalCreatorSetupV2Page} />
+      <Route path="/creator/profile-setup" component={SimpleCreatorProfileSetup} />
       <Route path="/venue/profile-setup" component={VenueProfileSetup} />
       <Route path="/service/profile-setup" component={ServiceProviderSetup} />
       <Route path="/venues" component={Venues} />

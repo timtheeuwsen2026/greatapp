@@ -314,7 +314,7 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
       shortDescription: "",
       description: "",
       category: undefined,
-      type: 'multi-day',
+      type: undefined,
       greatPillars: [],
       coverImageUrl: "",
       gallery: [],
@@ -1963,6 +1963,56 @@ function BasicInfoStep({ form }: { form: any }) {
           name="type"
           render={({ field }) => (
             <FormItem>
+              <FormLabel>Choose Your Experience Format *</FormLabel>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    field.onChange("one-day");
+                    form.setValue("rooms", [], { shouldDirty: true });
+                    form.setValue("ticketSkus", [], { shouldDirty: true });
+                    form.setValue("accommodationType", "none", { shouldDirty: true });
+                    form.setValue("roomCapacity", null, { shouldDirty: true });
+                    form.setValue("totalRooms", null, { shouldDirty: true });
+                    form.setValue("requireMinimumParticipants", false, { shouldDirty: true });
+                  }}
+                  className={cn(
+                    "rounded-lg border-2 p-5 text-left transition-colors",
+                    field.value === "one-day"
+                      ? "border-primary bg-primary/5"
+                      : "border-gray-200 hover:border-primary/50 dark:border-gray-700"
+                  )}
+                  data-testid="experience-format-event"
+                >
+                  <Calendar className="mb-3 h-6 w-6 text-primary" />
+                  <div className="text-base font-semibold">Single-Day Event</div>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    One date, start/end time, standing capacity. No rooms or beds.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    field.onChange("multi-day");
+                    form.setValue("requireMinimumParticipants", true, { shouldDirty: true });
+                  }}
+                  className={cn(
+                    "rounded-lg border-2 p-5 text-left transition-colors",
+                    field.value === "multi-day"
+                      ? "border-primary bg-primary/5"
+                      : "border-gray-200 hover:border-primary/50 dark:border-gray-700"
+                  )}
+                  data-testid="experience-format-trip"
+                >
+                  <Bed className="mb-3 h-6 w-6 text-primary" />
+                  <div className="text-base font-semibold">Multi-Day Trip</div>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    Start date to end date, sleeping capacity, rooms and beds.
+                  </p>
+                </button>
+              </div>
+              <div className="sr-only">
               <FormLabel>Experience Type *</FormLabel>
               <Select onValueChange={field.onChange} value={field.value || ""}>
                 <FormControl>
@@ -1980,6 +2030,7 @@ function BasicInfoStep({ form }: { form: any }) {
                 <strong>Event</strong> bypasses room inventory and minimum-group thresholds.{" "}
                 <strong>Trip</strong> requires dates, rooms, and a minimum group size.
               </FormDescription>
+              </div>
               <FormMessage />
             </FormItem>
           )}
@@ -2253,12 +2304,14 @@ function DatesStep({ form }: { form: any }) {
   const endDate = form.watch('endDate');
   const startTime = form.watch('startTime');
   const endTime = form.watch('endTime');
+  const eventType = form.watch('type');
+  const isSingleDayEvent = eventType === 'one-day';
 
   return (
     <div className="space-y-8">
       {/* Single Date Range Section */}
       <div className="space-y-6">
-        <h3 className="text-lg font-semibold">Experience Dates</h3>
+        <h3 className="text-lg font-semibold">{isSingleDayEvent ? "Event Date" : "Trip Dates"}</h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Start Date */}
@@ -2267,7 +2320,7 @@ function DatesStep({ form }: { form: any }) {
             name="startDate"
             render={({ field }) => (
               <FormItem className="flex flex-col">
-                <FormLabel>Start Date *</FormLabel>
+                <FormLabel>{isSingleDayEvent ? "Date *" : "Start Date *"}</FormLabel>
                 <Popover>
                   <PopoverTrigger asChild>
                     <FormControl>
@@ -2289,14 +2342,19 @@ function DatesStep({ form }: { form: any }) {
                     <CalendarComponent
                       mode="single"
                       selected={field.value}
-                      onSelect={field.onChange}
+                      onSelect={(date) => {
+                        field.onChange(date);
+                        if (isSingleDayEvent) {
+                          form.setValue('endDate', date, { shouldDirty: true });
+                        }
+                      }}
                       disabled={(date) => date < new Date()}
                       initialFocus
                     />
                   </PopoverContent>
                 </Popover>
                 <FormDescription>
-                  When does your experience start?
+                   {isSingleDayEvent ? "What date is your event?" : "When does your trip start?"}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -2304,6 +2362,7 @@ function DatesStep({ form }: { form: any }) {
           />
 
           {/* End Date */}
+          {!isSingleDayEvent && (
           <FormField
             control={form.control}
             name="endDate"
@@ -2338,12 +2397,13 @@ function DatesStep({ form }: { form: any }) {
                   </PopoverContent>
                 </Popover>
                 <FormDescription>
-                  When does your experience end?
+                  When does your trip end?
                 </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
+          )}
         </div>
       </div>
 
@@ -2404,6 +2464,40 @@ function DatesStep({ form }: { form: any }) {
           />
         </div>
       </div>
+
+      {isSingleDayEvent ? (
+        <FormField
+          control={form.control}
+          name="maxParticipants"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Capacity (Standing) *</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  min="1"
+                  placeholder="Maximum number of attendees"
+                  value={field.value || ''}
+                  onChange={(event) => {
+                    const value = parseInt(event.target.value) || undefined;
+                    field.onChange(value);
+                    form.setValue('standingCapacity', value ?? null, { shouldDirty: true });
+                  }}
+                  data-testid="input-event-standing-capacity"
+                />
+              </FormControl>
+              <FormDescription>
+                Total number of people who can attend this single-day event.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      ) : (
+        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+          Sleeping capacity is calculated from the rooms and beds you add in the Rooms step.
+        </div>
+      )}
 
       {/* Date Range Summary */}
       {startDate && endDate && (

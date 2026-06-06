@@ -396,10 +396,6 @@ export default function VenueProfileSetup() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
 
-  // Daytime Space: skip Rooms (step 7) and Default Itinerary (step 8)
-  const isDaytime = form.watch('venueType') === 'daytime';
-  const DAYTIME_SKIP_STEPS = [7, 8]; // Rooms & Itinerary hidden for daytime spaces
-
   // Get venue ID from URL for edit mode
   const urlParams = new URLSearchParams(window.location.search);
   const editVenueId = urlParams.get('edit');
@@ -471,6 +467,10 @@ export default function VenueProfileSetup() {
       termsConfirmed: false,
     },
   });
+
+  // Daytime Space: skip Rooms (step 7) and Default Itinerary (step 8)
+  const isDaytime = form.watch('venueType') === 'daytime';
+  const DAYTIME_SKIP_STEPS = [7, 8]; // Rooms & Itinerary hidden for daytime spaces
 
   // Load existing venue data for editing
   const { data: existingVenue, isLoading: isLoadingVenue } = useQuery({

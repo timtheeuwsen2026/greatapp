@@ -2,7 +2,7 @@ import { useAuth } from './useAuth';
 import { useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 
-export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin';
+export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin' | 'promoter';
 
 export function useRoleAuth(requiredRole: UserRole) {
   const { user, isAuthenticated, isLoading } = useAuth();

@@ -3,7 +3,7 @@ import { useDashboardAccessControl } from "@/hooks/useDashboardRedirect";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, Shield, AlertTriangle } from "lucide-react";
 
-export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin';
+export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin' | 'promoter';
 
 interface DashboardGuardProps {
   children: ReactNode;

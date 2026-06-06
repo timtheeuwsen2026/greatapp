@@ -58,7 +58,7 @@ export default function AuthPage() {
   }
 
   async function assignRole(token: string, selectedRole: Role) {
-    await fetch("/api/auth/assign-role", {
+    const res = await fetch("/api/auth/assign-role", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -66,12 +66,18 @@ export default function AuthPage() {
       },
       body: JSON.stringify({ role: selectedRole }),
     });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.message || "Failed to assign role");
+    }
   }
 
   function redirectAfterAuth(userRole: string) {
     const destinations: Record<string, string> = {
       creator: "/creator",
       venue_provider: "/venue-dashboard",
+      service_provider: "/service-provider-dashboard",
       promoter: "/promoter",
       participant: "/experiences",
     };
@@ -88,19 +94,19 @@ export default function AuthPage() {
       ? dbUser.userRoles as string[]
       : [];
 
-    // Role is already in their collection — just log them in
+    // Role already exists on this account — block with a clear error
     if (dbUser?.role === role || existingRoles.includes(role)) {
       toast({
-        title: "Welcome back!",
-        description: `You already have the ${getRoleLabel(role)} role. Logging you in.`,
+        title: "Account already exists",
+        description: `An account with this email already has the ${getRoleLabel(role)} role. Please log in instead.`,
+        variant: "destructive",
       });
-      redirectAfterAuth(dbUser?.role ?? role);
+      setMode("login");
       return;
     }
 
-    // Add the new role to their userRoles WITHOUT overwriting their active role.
-    // They can switch to it any time via the role switcher in the top menu.
-    await fetch("/api/auth/add-role", {
+    // Role is new — add it to userRoles without changing the active role
+    const addRes = await fetch("/api/auth/add-role", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -109,14 +115,37 @@ export default function AuthPage() {
       body: JSON.stringify({ role }),
     });
 
+    if (!addRes.ok) {
+      const data = await addRes.json().catch(() => ({}));
+      toast({
+        title: addRes.status === 409 ? "Account already exists" : "Failed to add role",
+        description:
+          data?.message ||
+          (addRes.status === 409
+            ? `An account with this email already has the ${getRoleLabel(role)} role. Please log in instead.`
+            : "Something went wrong. Please try again."),
+        variant: "destructive",
+      });
+      return;
+    }
+
     toast({
-      title: `${getRoleLabel(role)} role added! ✅`,
+      title: `${getRoleLabel(role)} role added!`,
       description:
         "You can switch between your roles anytime using the menu in the top-right corner.",
     });
 
-    // Stay on their current active role's dashboard — not the new one
+    // Stay on their current active role's dashboard
     redirectAfterAuth(dbUser?.role ?? role);
+  }
+
+  function showEmailExistsError() {
+    toast({
+      title: "Email already exists",
+      description: "This email already has an account. Please log in instead.",
+      variant: "destructive",
+    });
+    setMode("login");
   }
 
   async function handleLogin(e: React.FormEvent) {
@@ -149,23 +178,12 @@ export default function AuthPage() {
     try {
       const { data, error } = await supabase.auth.signUp({ email, password });
 
+      // Supabase explicitly says the email is already registered
       if (
         error?.message?.toLowerCase().includes("already registered") ||
         error?.message?.toLowerCase().includes("already exists")
       ) {
-        const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-        if (loginError) {
-          toast({
-            title: "Email already registered",
-            description: "This email has an account but the password is wrong. Please log in instead.",
-            variant: "destructive",
-          });
-          setMode("login");
-          return;
-        }
-        if (loginData.session) {
-          await handleExistingUser(loginData.session.access_token);
-        }
+        showEmailExistsError();
         return;
       }
 
@@ -174,20 +192,10 @@ export default function AuthPage() {
         return;
       }
 
+      // Supabase returns empty identities when email confirmation is enabled
+      // and the email already exists (it hides this to prevent enumeration)
       if (data.user && (data.user.identities?.length ?? 1) === 0) {
-        const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-        if (loginError) {
-          toast({
-            title: "Email already registered",
-            description: "This email has an account but the password is wrong. Please log in instead.",
-            variant: "destructive",
-          });
-          setMode("login");
-          return;
-        }
-        if (loginData.session) {
-          await handleExistingUser(loginData.session.access_token);
-        }
+        showEmailExistsError();
         return;
       }
 
@@ -199,7 +207,38 @@ export default function AuthPage() {
         return;
       }
 
-      await assignRole(data.session.access_token, role);
+      // When email confirmation is disabled, Supabase silently returns a session
+      // even for existing emails. Always check the DB before assigning a role
+      // so we never overwrite an existing user's role.
+      const token = data.session.access_token;
+      const existsRes = await fetch("/api/auth/user/exists", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const { exists } = existsRes.ok ? await existsRes.json() : { exists: false };
+
+      if (exists) {
+        // Already in the DB — run the existing-user flow (role check / error / add)
+        showEmailExistsError();
+        return;
+      }
+
+      // Genuinely new user — create with the selected role
+      try {
+        await assignRole(token, role);
+      } catch (error: any) {
+        const emailAlreadyExists = error?.message === "This email already exists";
+        toast({
+          title: emailAlreadyExists ? "Email already exists" : "Sign up failed",
+          description: emailAlreadyExists
+            ? "This email already has an account. Please log in instead."
+            : error?.message || "Something went wrong. Please try again.",
+          variant: "destructive",
+        });
+        if (emailAlreadyExists) {
+          setMode("login");
+        }
+        return;
+      }
       toast({ title: "Welcome!", description: "Your account has been created as a " + getRoleLabel(role) + "." });
       redirectAfterAuth(role);
     } finally {

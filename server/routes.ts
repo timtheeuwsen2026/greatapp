@@ -409,23 +409,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Check whether a Supabase-authenticated user already has a DB row.
+  // Returns { exists: true, user } or { exists: false } — never auto-creates.
+  // Used by the signup flow to decide between "new user" and "existing user" paths.
+  app.get('/api/auth/user/exists', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const email = req.user.email || req.user.claims.email;
+      const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+      const user = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
+      res.json({ exists: !!user, user: user ?? null });
+    } catch (error) {
+      console.error("Error checking user existence:", error);
+      res.status(500).json({ message: "Failed to check user" });
+    }
+  });
+
   // Auth routes - get (or auto-create) user from database
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const email = req.user.email;
+      const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
 
       let user = await storage.getUser(userId);
 
       if (!user) {
+        const existingByEmail = normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined;
+        if (existingByEmail) {
+          return res.json(existingByEmail);
+        }
+
         // First Supabase login — auto-create DB row with defaults
         user = await storage.upsertUser({
           id: userId,
-          email,
+          email: normalizedEmail,
           firstName: null,
           lastName: null,
           profileImageUrl: null,
           role: "participant",
+          userRoles: ["participant"],
         });
       }
 
@@ -482,7 +505,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/auth/assign-role', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+      const email = req.user.email || req.user.claims.email;
       const { role } = req.body;
+      const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
 
       if (!VALID_ROLES.includes(role)) {
         return res.status(400).json({ message: "Invalid role" });
@@ -491,6 +516,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Only admins may assign the admin role
       if (role === 'admin' && !await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Only admins can assign the admin role" });
+      }
+
+      // Ensure the DB row exists — on first signup the row hasn't been created yet,
+      // so updateUserRole would hit zero rows and silently return undefined.
+      const existingByEmail = normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined;
+      if (existingByEmail && existingByEmail.id !== userId) {
+        return res.status(409).json({ message: "This email already exists" });
+      }
+
+      const existing = await storage.getUser(userId);
+      if (!existing) {
+        await storage.upsertUser({
+          id: userId,
+          email: normalizedEmail,
+          firstName: null,
+          lastName: null,
+          profileImageUrl: null,
+          role: role as any,
+          userRoles: [role],
+        });
       }
 
       // Update active role and ensure it's in the userRoles array
@@ -504,9 +549,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Participants automatically get the promoter role so they can
       // share referral links and earn commission from day one.
-      if (role === 'participant' && !currentRoles.includes('promoter')) {
-        await storage.addUserRole(userId, 'promoter');
-        // Ensure they have a referral code generated
+      if (role === 'participant') {
         await storage.ensureUserReferralCode(userId);
       }
 
@@ -523,8 +566,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // collection so they can switch to it via the role switcher in the nav menu.
   app.post('/api/auth/add-role', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userId = req.user.claims.sub;
+      const email = req.user.email || req.user.claims.email;
       const { role } = req.body;
+      const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
 
       if (!VALID_ROLES.includes(role)) {
         return res.status(400).json({ message: 'Invalid role' });
@@ -533,23 +578,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Only admins can assign the admin role' });
       }
 
-      const user = await storage.getUser(userId);
+      return res.status(409).json({ message: 'This email already exists' });
+
+      const user = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
       const currentRoles: string[] = (user?.userRoles as unknown as string[]) || [];
 
-      if (currentRoles.includes(role)) {
+      if (!user) {
+        const newUser = await storage.upsertUser({
+          id: userId,
+          email: normalizedEmail,
+          firstName: null,
+          lastName: null,
+          profileImageUrl: null,
+          role,
+          userRoles: [role],
+        });
+        return res.json({ message: 'Role added successfully', user: newUser });
+      }
+
+      if (user.role === role || currentRoles.includes(role)) {
         // Already has this role — nothing to do
-        return res.json({ message: 'Role already present', user });
+        return res.status(409).json({ message: 'User with that role already exists', user });
       }
 
       // Only add to userRoles — do NOT touch the active role field
-      await storage.addUserRole(userId, role);
+      await storage.addUserRole(user.id, role);
 
       // Auto-generate a referral code when promoter role is added
       if (role === 'promoter' || role === 'participant') {
-        await storage.ensureUserReferralCode(userId);
+        await storage.ensureUserReferralCode(user.id);
       }
 
-      const updatedUser = await storage.getUser(userId);
+      const updatedUser = await storage.getUser(user.id);
       res.json({ message: 'Role added successfully', user: updatedUser });
     } catch (error) {
       console.error('Error adding role:', error);
@@ -581,9 +641,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get user's available roles (for role switcher)
-  app.get('/api/auth/user-roles', async (req: any, res) => {
+  app.get('/api/auth/user-roles', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
       
       if (!user) {
@@ -600,24 +660,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user roles:", error);
       res.status(500).json({ message: "Failed to fetch user roles" });
-    }
-  });
-
-  // Add a role to user (enables multi-role)
-  app.post('/api/auth/add-role', async (req: any, res) => {
-    try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      const { role } = req.body;
-      
-      if (!VALID_ROLES.includes(role)) {
-        return res.status(400).json({ message: "Invalid role" });
-      }
-
-      const updatedUser = await storage.addUserRole(userId, role);
-      res.json({ message: "Role added successfully", user: updatedUser });
-    } catch (error) {
-      console.error("Error adding user role:", error);
-      res.status(500).json({ message: "Failed to add role" });
     }
   });
 

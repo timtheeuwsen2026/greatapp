@@ -17,12 +17,16 @@ interface CreatorProfileCardProps {
     isVerified?: boolean;
     averageRating?: number;
     totalExperiences?: number;
+    socialLink?: string | null;
   };
   variant?: 'compact' | 'full';
 }
 
 export default function CreatorProfileCard({ creator, variant = 'compact' }: CreatorProfileCardProps) {
   const displayName = creator.displayName || creator.businessName || 'Creator';
+  const socialLink = creator.socialLink
+    ? (/^https?:\/\//i.test(creator.socialLink) ? creator.socialLink : `https://${creator.socialLink}`)
+    : null;
   const truncatedBio = creator.bio ? 
     (creator.bio.length > 100 ? creator.bio.substring(0, 100) + '...' : creator.bio) : 
     'Passionate experience creator dedicated to building meaningful connections.';
@@ -75,7 +79,7 @@ export default function CreatorProfileCard({ creator, variant = 'compact' }: Cre
                 </div>
               )}
               
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-4 text-sm text-muted-foreground">
                   {creator.averageRating && (
                     <div className="flex items-center gap-1">
@@ -87,10 +91,22 @@ export default function CreatorProfileCard({ creator, variant = 'compact' }: Cre
                     <span>{creator.totalExperiences} experiences</span>
                   )}
                 </div>
-                
-                <Link href={`/creator/${creator.id}`} className="text-primary hover:text-primary/80 text-sm font-medium">
-                  View Profile
-                </Link>
+
+                {socialLink ? (
+                  <a
+                    href={socialLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-sm font-medium"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Social link
+                  </a>
+                ) : (
+                  <Link href={`/creator/${creator.id}`} className="text-primary hover:text-primary/80 text-sm font-medium">
+                    View Profile
+                  </Link>
+                )}
               </div>
             </div>
           </div>
@@ -131,6 +147,18 @@ export default function CreatorProfileCard({ creator, variant = 'compact' }: Cre
             <p className="text-gray-600 mb-4 max-w-2xl">
               {creator.bio || 'Passionate experience creator dedicated to building meaningful connections and unforgettable adventures.'}
             </p>
+
+            {socialLink && (
+              <a
+                href={socialLink}
+                target="_blank"
+                rel="noreferrer"
+                className="mb-4 inline-flex items-center gap-2 text-primary hover:text-primary/80 font-medium"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Social link
+              </a>
+            )}
             
             {creator.expertise && creator.expertise.length > 0 && (
               <div className="flex flex-wrap justify-center md:justify-start gap-2 mb-4">

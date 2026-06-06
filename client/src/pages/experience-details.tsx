@@ -1,4 +1,4 @@
-import { useRoute } from "wouter";
+import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
@@ -11,6 +11,8 @@ import { ParticipantProfileSetup } from "@/components/participant-profile-setup"
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
+import CreatorProfileCard from "@/components/creator-profile-card";
+import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 import { 
   ExperienceWithStats, 
@@ -51,15 +53,33 @@ import {
   Ticket,
   Rocket
 } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+
+type CreatorTrustProfile = {
+  id?: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  profileImageUrl?: string | null;
+  displayName?: string | null;
+  profilePhoto?: string | null;
+  tagline?: string | null;
+  bio?: string | null;
+  location?: string | null;
+  expertiseTags?: string[];
+  socialLink?: string | null;
+};
 
 export default function ExperienceDetails() {
   // Support both singular and plural route patterns
   const [, singularParams] = useRoute("/experience/:id");
   const [, pluralParams] = useRoute("/experiences/:id");
+  const [currentLocation] = useLocation();
   const { isAuthenticated, user } = useAuth();
   const { toast } = useToast();
   const experienceId = singularParams?.id || pluralParams?.id;
+  const promoterRefCode = useMemo(
+    () => new URLSearchParams(currentLocation.split("?")[1] || "").get("ref"),
+    [currentLocation]
+  );
 
   // Connect to WebSocket for real-time MVG updates
   const { isConnected } = useRealtimeMVGUpdates(experienceId || '');
@@ -182,10 +202,22 @@ export default function ExperienceDetails() {
   });
 
   // Fetch creator profile
-  const { data: creatorProfile } = useQuery<{ firstName?: string; lastName?: string; profileImageUrl?: string; bio?: string }>({
+  const { data: creatorProfile } = useQuery<CreatorTrustProfile>({
     queryKey: ["/api/users", experience?.creatorId],
     enabled: !!experience?.creatorId,
   });
+
+  const { data: promoterProfile } = useQuery<PromoterReferralProfile>({
+    queryKey: ["/api/promoter-profile/by-code", promoterRefCode ? encodeURIComponent(promoterRefCode) : ""],
+    enabled: !!promoterRefCode,
+    retry: false,
+  });
+  const promoterReferralProfile = promoterProfile as PromoterReferralProfile | undefined;
+  const promoterReferralSection: ReactNode = promoterReferralProfile ? (
+    <div className="mb-8">
+      <PromoterReferralCard promoter={promoterReferralProfile} />
+    </div>
+  ) : null;
 
   // Fetch user's active reservations
   const { data: userReservations, refetch: refetchReservations } = useQuery<Reservation[]>({
@@ -605,36 +637,29 @@ export default function ExperienceDetails() {
 
             {/* Creator Profile Section - Always show when we have a creatorId */}
             {experience.creatorId && (
-              <Card className="mb-8">
-                <CardContent className="p-4">
-                  <div className="flex items-center space-x-4">
-                    <Avatar className="h-14 w-14">
-                      <AvatarImage 
-                        src={creatorProfile?.profileImageUrl ? (normalizeImageUrl(creatorProfile.profileImageUrl) || undefined) : undefined} 
-                        alt={creatorProfile?.firstName || 'Experience Host'} 
-                      />
-                      <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                        {(creatorProfile?.firstName?.[0] || 'E').toUpperCase()}
-                        {(creatorProfile?.lastName?.[0] || 'H').toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-500">Hosted by</p>
-                      <h3 className="font-semibold text-gray-900" data-testid="text-creator-name">
-                        {creatorProfile?.firstName && creatorProfile?.lastName 
-                          ? `${creatorProfile.firstName} ${creatorProfile.lastName}`
-                          : creatorProfile?.firstName || creatorProfile?.lastName || 'Experience Host'}
-                      </h3>
-                      {creatorProfile?.bio && typeof creatorProfile.bio === 'string' && creatorProfile.bio.length > 0 && (
-                        <p className="text-sm text-gray-600 mt-1 line-clamp-2">
-                          {String(creatorProfile.bio)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="mb-8">
+                <h2 className="mb-4 text-2xl font-semibold">Your Host</h2>
+                <CreatorProfileCard
+                  creator={{
+                    id: experience.creatorId,
+                    displayName:
+                      creatorProfile?.displayName ||
+                      [creatorProfile?.firstName, creatorProfile?.lastName].filter(Boolean).join(" ") ||
+                      "Experience Host",
+                    bio: creatorProfile?.bio || undefined,
+                    avatarUrl:
+                      normalizeImageUrl(creatorProfile?.profilePhoto || creatorProfile?.profileImageUrl || "") ||
+                      undefined,
+                    baseLocation: creatorProfile?.location || undefined,
+                    expertise: creatorProfile?.expertiseTags || [],
+                    socialLink: creatorProfile?.socialLink || null,
+                  }}
+                  variant="compact"
+                />
+              </div>
             )}
+
+            {promoterReferralSection as any}
 
             {/* Social-First Discovery Section */}
             <Card className="mb-8 border-primary/20 bg-gradient-to-r from-primary/5 to-purple-600/5">

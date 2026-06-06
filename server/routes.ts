@@ -19,6 +19,7 @@ import {
   insertCommunityApplicationSchema, 
   insertParticipantProfileSchema, 
   insertCreatorProfileSchema, 
+  insertPromoterProfileSchema,
   insertVenueAvailabilitySchema,
   insertExperienceDraftSchema,
   validateExperienceDraftForPublish,
@@ -998,6 +999,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching promoter info:", error);
       res.status(500).json({ message: "Failed to fetch promoter info" });
+    }
+  });
+
+  app.get('/api/promoter-profile', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const profile = await storage.getPromoterProfile(userId);
+      if (!profile) {
+        return res.status(404).json({ message: "Promoter profile not found" });
+      }
+
+      res.json(profile);
+    } catch (error) {
+      console.error("Error fetching promoter profile:", error);
+      res.status(500).json({ message: "Failed to fetch promoter profile" });
+    }
+  });
+
+  app.post('/api/promoter-profile', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const validation = insertPromoterProfileSchema.safeParse({
+        ...req.body,
+        completed: true,
+      });
+      if (!validation.success) {
+        return res.status(400).json({
+          message: "Invalid promoter profile data",
+          errors: validation.error.issues,
+        });
+      }
+
+      const profile = await storage.createOrUpdatePromoterProfile(userId, validation.data);
+      res.json(profile);
+    } catch (error) {
+      console.error("Error saving promoter profile:", error);
+      res.status(500).json({ message: "Failed to save promoter profile" });
+    }
+  });
+
+  app.get('/api/promoter-profile/by-code/:code', async (req, res) => {
+    try {
+      const { code } = req.params;
+      if (!code || code.length < 3) {
+        return res.status(400).json({ message: "Invalid referral code" });
+      }
+
+      const promoter = await storage.getUserByPromoterCode(code);
+      if (!promoter) {
+        return res.status(404).json({ message: "Referral code not found" });
+      }
+
+      const profile = await storage.getPromoterProfileByUserId(promoter.id);
+      const fallbackName = `${promoter.firstName || ""} ${promoter.lastName || ""}`.trim();
+
+      res.json({
+        promoterId: promoter.id,
+        referralCode: promoter.promoterCode,
+        displayName: profile?.displayName || fallbackName || "Great promoter",
+        profilePhoto: profile?.profilePhoto || promoter.profileImageUrl || null,
+        bio: profile?.bio || null,
+        completed: !!profile?.completed,
+      });
+    } catch (error) {
+      console.error("Error fetching public promoter profile:", error);
+      res.status(500).json({ message: "Failed to fetch promoter profile" });
     }
   });
 
@@ -2194,15 +2265,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         creator: creator ? {
           id: creator.id,
           displayName: creatorProfile?.displayName || null,
-          businessName: creatorProfile?.businessName || null,
           bio: creatorProfile?.bio || null,
           avatarUrl: creatorProfile?.profilePhoto || creator.profileImageUrl || null,
-          baseLocation: creatorProfile?.baseLocation || null,
+          baseLocation: creatorProfile?.location || null,
           expertise: creatorProfile?.expertiseTags || [],
           experienceLevel: creatorProfile?.experienceLevel || null,
-          isVerified: creatorProfile?.isVerified || false,
-          averageRating: creatorProfile?.averageRating || null,
-          totalExperiences: creatorProfile?.totalExperiences || null,
+          isVerified: false,
+          averageRating: stats?.averageRating || null,
+          totalExperiences: null,
+          socialLink: creatorProfile?.socialLinks?.website ||
+            creatorProfile?.socialLinks?.instagram ||
+            creatorProfile?.socialLinks?.linkedin ||
+            creatorProfile?.socialLinks?.youtube ||
+            null,
           // Legacy fields for backward compatibility
           photo: creatorProfile?.profilePhoto || creator.profileImageUrl || null,
           name: creatorProfile?.displayName || `${creator.firstName} ${creator.lastName}`.trim(),
@@ -4593,12 +4668,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
+      const creatorProfile = await storage.getCreatorProfileByUserId(userId);
+      const socialLinks = creatorProfile?.socialLinks || {};
+      const socialLink = socialLinks.website || socialLinks.instagram || socialLinks.linkedin || socialLinks.youtube || null;
+
       // Return limited user info for privacy
       res.json({
         id: user.id,
         firstName: user.firstName,
         lastName: user.lastName,
-        profileImageUrl: user.profileImageUrl
+        profileImageUrl: user.profileImageUrl,
+        displayName: creatorProfile?.displayName || null,
+        profilePhoto: creatorProfile?.profilePhoto || null,
+        tagline: creatorProfile?.tagline || null,
+        bio: creatorProfile?.bio || null,
+        location: creatorProfile?.location || null,
+        expertiseTags: creatorProfile?.expertiseTags || [],
+        socialLink,
       });
     } catch (error) {
       console.error("Error fetching user:", error);

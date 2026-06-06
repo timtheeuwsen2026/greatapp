@@ -25,6 +25,7 @@ import { format } from "date-fns";
 import { VenueInfoCard } from "@/components/VenueInfoCard";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
+import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 
 interface PublicEventData {
@@ -105,6 +106,16 @@ interface PublicEventData {
     photo: string | null;
     name: string;
     tagline: string | null;
+    displayName?: string | null;
+    bio?: string | null;
+    avatarUrl?: string | null;
+    baseLocation?: string | null;
+    expertise?: string[];
+    experienceLevel?: string | null;
+    isVerified?: boolean;
+    averageRating?: number | null;
+    totalExperiences?: number | null;
+    socialLink?: string | null;
   } | null;
   stats: any;
   bookings: any[];
@@ -122,6 +133,7 @@ export default function PublicEventPage() {
   // Extract preview token from URL query params
   const searchParams = new URLSearchParams(location.split('?')[1] || '');
   const previewToken = searchParams.get('preview');
+  const promoterRefCode = searchParams.get('ref');
 
   // Build query key with preview token if present
   const queryKey = previewToken 
@@ -132,6 +144,13 @@ export default function PublicEventPage() {
     queryKey,
     enabled: !!slugOrId,
   });
+
+  const { data: promoterProfile } = useQuery<PromoterReferralProfile>({
+    queryKey: ["/api/promoter-profile/by-code", promoterRefCode ? encodeURIComponent(promoterRefCode) : ""],
+    enabled: !!promoterRefCode,
+    retry: false,
+  });
+  const promoterReferralProfile = promoterProfile as PromoterReferralProfile | undefined;
 
   // Loading State
   if (isLoading) {
@@ -908,9 +927,30 @@ export default function PublicEventPage() {
               Your Host
             </h2>
           </div>
-          <CreatorProfileCard creator={event.creator} variant="compact" />
+          <CreatorProfileCard
+            creator={{
+              id: event.creator.id,
+              displayName: event.creator.displayName || event.creator.name || undefined,
+              bio: event.creator.bio || undefined,
+              avatarUrl: event.creator.avatarUrl || event.creator.photo || undefined,
+              baseLocation: event.creator.baseLocation || undefined,
+              expertise: event.creator.expertise || [],
+              experienceLevel: event.creator.experienceLevel || undefined,
+              isVerified: event.creator.isVerified,
+              averageRating: event.creator.averageRating ?? undefined,
+              totalExperiences: event.creator.totalExperiences ?? undefined,
+              socialLink: event.creator.socialLink || undefined,
+            }}
+            variant="compact"
+          />
         </div>
       )}
+
+      {promoterReferralProfile ? (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+          <PromoterReferralCard promoter={promoterReferralProfile} />
+        </div>
+      ) : null}
 
       {/* Service Needs (Optional) */}
       {event.services && event.services.length > 0 && (

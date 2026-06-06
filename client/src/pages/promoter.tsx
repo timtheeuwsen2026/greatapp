@@ -63,6 +63,14 @@ interface PromoterInfo {
   lastName: string | null;
 }
 
+interface PromoterProfile {
+  id: string;
+  displayName: string;
+  profilePhoto: string | null;
+  bio: string;
+  completed: boolean;
+}
+
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -252,6 +260,72 @@ function PromoterInfoCard({ data, isLoading }: { data: PromoterInfo | undefined;
             Copy the link for any trip and share it — anyone who books earns you trip credit.
           </p>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PromoterProfileStatusCard({ profile, isLoading }: { profile: PromoterProfile | undefined; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <Card className="mb-8">
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-20 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!profile?.completed) {
+    return (
+      <Card className="mb-8 border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20">
+        <CardHeader>
+          <CardTitle>Promoter Profile</CardTitle>
+          <CardDescription>Add the public trust details shown from your referral links.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button asChild>
+            <Link href="/promoter/profile-setup">Complete Profile</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-8">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <CardTitle>Promoter Profile</CardTitle>
+            <CardDescription>This is visible to buyers who open your referral links.</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/promoter/profile-setup">Edit</Link>
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-start gap-4">
+          {profile.profilePhoto ? (
+            <img
+              src={profile.profilePhoto}
+              alt={profile.displayName}
+              className="h-14 w-14 rounded-full object-cover"
+            />
+          ) : (
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 font-semibold text-primary">
+              {profile.displayName?.[0]?.toUpperCase() || "P"}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-gray-900 dark:text-white">{profile.displayName}</h3>
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{profile.bio}</p>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -715,6 +789,12 @@ export default function PromoterDashboard() {
     enabled: !!user,
   });
 
+  const { data: promoterProfile, isLoading: profileLoading } = useQuery<PromoterProfile>({
+    queryKey: ['/api/promoter-profile'],
+    enabled: !!user,
+    retry: false,
+  });
+
   // click stats are now embedded inside impactStats (via /api/me/impact-stats)
 
   // Auto-generate referral code for any logged-in user who doesn't have one yet
@@ -818,6 +898,8 @@ export default function PromoterDashboard() {
             </div>
           </CardContent>
         </Card>
+
+        <PromoterProfileStatusCard profile={promoterProfile} isLoading={profileLoading} />
 
         {/* Referral Code */}
         <PromoterInfoCard data={promoterInfo} isLoading={infoLoading} />

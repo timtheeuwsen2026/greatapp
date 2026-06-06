@@ -5,7 +5,6 @@ import Navigation from "@/components/navigation";
 import { PhotoPreview, SharedPhotoUpload } from "@/components/SharedPhotoUpload";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,92 +12,72 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
-type CreatorProfileForm = {
+type PromoterProfileForm = {
   displayName: string;
-  bio: string;
   profilePhoto: string;
-  socialLink: string;
-  termsAccepted: boolean;
+  bio: string;
 };
 
-const initialForm: CreatorProfileForm = {
+const initialForm: PromoterProfileForm = {
   displayName: "",
-  bio: "",
   profilePhoto: "",
-  socialLink: "",
-  termsAccepted: false,
+  bio: "",
 };
 
-function fallbackEmail(user: any) {
-  if (user?.email) return user.email;
-  const safeId = String(user?.id || "creator").replace(/[^a-zA-Z0-9]/g, "");
-  return `${safeId || "creator"}@great.local`;
+function userDisplayName(user: any) {
+  return `${user?.firstName || ""} ${user?.lastName || ""}`.trim();
 }
 
-export default function SimpleCreatorProfileSetup() {
+export default function PromoterProfileSetup() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
-  const [form, setForm] = useState<CreatorProfileForm>(initialForm);
+  const [form, setForm] = useState<PromoterProfileForm>(initialForm);
 
   const { data: existingProfile, isLoading } = useQuery({
-    queryKey: ["/api/creator-profile"],
+    queryKey: ["/api/promoter-profile"],
     retry: false,
   });
 
   useEffect(() => {
     const profile = existingProfile as any;
-    if (!profile || !profile.id) return;
+    if (profile?.id) {
+      setForm({
+        displayName: profile.displayName || "",
+        profilePhoto: profile.profilePhoto || "",
+        bio: profile.bio || "",
+      });
+      return;
+    }
 
-    setForm({
-      displayName: profile.displayName || "",
-      bio: profile.bio || "",
-      profilePhoto: profile.profilePhoto || "",
-      socialLink:
-        profile.socialLinks?.website ||
-        profile.socialLinks?.instagram ||
-        profile.socialLinks?.linkedin ||
-        profile.socialLinks?.youtube ||
-        "",
-      termsAccepted: !!profile.termsAccepted,
-    });
-  }, [existingProfile]);
+    const fallbackName = userDisplayName(user);
+    if (fallbackName) {
+      setForm((current) => ({ ...current, displayName: current.displayName || fallbackName }));
+    }
+  }, [existingProfile, user]);
 
-  const updateField = <K extends keyof CreatorProfileForm>(key: K, value: CreatorProfileForm[K]) => {
+  const updateField = <K extends keyof PromoterProfileForm>(key: K, value: PromoterProfileForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
   const saveProfile = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/creator-profile", {
+      const response = await apiRequest("POST", "/api/promoter-profile", {
         displayName: form.displayName.trim(),
-        tagline: "",
-        bio: form.bio.trim(),
-        location: "Not specified",
-        experienceLevel: "Experienced",
-        expertiseTags: [],
-        gallery: [],
         profilePhoto: form.profilePhoto,
-        payoutEmail: fallbackEmail(user),
-        termsAccepted: form.termsAccepted,
+        bio: form.bio.trim(),
         completed: true,
-        socialLinks: {
-          website: form.socialLink.trim(),
-          instagram: "",
-          linkedin: "",
-          youtube: "",
-        },
       });
 
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/creator-profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/promoter-profile"] });
       toast({
-        title: "Creator profile complete",
-        description: "You can now start building an experience.",
+        title: "Promoter profile saved",
+        description: "Your referral links can now show your recommendation details.",
       });
-      setLocation("/event-builder");
+      setLocation("/promoter");
     },
     onError: (error: Error) => {
       toast({
@@ -109,12 +88,7 @@ export default function SimpleCreatorProfileSetup() {
     },
   });
 
-  const canSubmit =
-    form.displayName.trim() &&
-    form.bio.trim().length >= 10 &&
-    form.profilePhoto &&
-    form.socialLink.trim() &&
-    form.termsAccepted;
+  const canSubmit = form.displayName.trim() && form.profilePhoto && form.bio.trim().length >= 10;
 
   if (isLoading) {
     return (
@@ -129,13 +103,13 @@ export default function SimpleCreatorProfileSetup() {
       <Navigation />
       <main className="mx-auto max-w-3xl px-4 py-24">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">Creator Profile</h1>
-          <p className="mt-2 text-gray-600">Complete this public profile before creating an experience.</p>
+          <h1 className="text-3xl font-bold text-gray-900">Promoter Profile</h1>
+          <p className="mt-2 text-gray-600">Add the public details buyers will see from your referral link.</p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Public Host Details</CardTitle>
+            <CardTitle>Public Recommendation Details</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="space-y-2">
@@ -144,7 +118,7 @@ export default function SimpleCreatorProfileSetup() {
                 id="displayName"
                 value={form.displayName}
                 onChange={(event) => updateField("displayName", event.target.value)}
-                placeholder="Sarah Lopez or Yoga Flow Retreats"
+                placeholder="Maya Chen"
               />
             </div>
 
@@ -154,7 +128,7 @@ export default function SimpleCreatorProfileSetup() {
                 {form.profilePhoto && (
                   <PhotoPreview
                     src={form.profilePhoto}
-                    alt="Creator profile"
+                    alt="Promoter profile"
                     onRemove={() => updateField("profilePhoto", "")}
                     size="lg"
                   />
@@ -169,35 +143,14 @@ export default function SimpleCreatorProfileSetup() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="bio">Bio *</Label>
+              <Label htmlFor="bio">Bio / Why I recommend this *</Label>
               <Textarea
                 id="bio"
                 value={form.bio}
                 onChange={(event) => updateField("bio", event.target.value)}
-                placeholder="Briefly describe who you are, what you host, and why buyers can trust your experience."
+                placeholder="Share who you are and why you recommend this experience to your community."
                 className="min-h-32"
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="socialLink">Social link *</Label>
-              <Input
-                id="socialLink"
-                value={form.socialLink}
-                onChange={(event) => updateField("socialLink", event.target.value)}
-                placeholder="https://instagram.com/yourhandle"
-              />
-            </div>
-
-            <div className="flex items-start gap-3 rounded-md border p-4">
-              <Checkbox
-                id="termsAccepted"
-                checked={form.termsAccepted}
-                onCheckedChange={(checked) => updateField("termsAccepted", checked === true)}
-              />
-              <Label htmlFor="termsAccepted" className="leading-5">
-                I agree to the Creator Terms and understand that Stripe will handle payout onboarding.
-              </Label>
             </div>
 
             <div className="flex justify-end">
@@ -206,7 +159,7 @@ export default function SimpleCreatorProfileSetup() {
                 disabled={!canSubmit || saveProfile.isPending}
                 onClick={() => saveProfile.mutate()}
               >
-                {saveProfile.isPending ? "Saving..." : "Complete Profile"}
+                {saveProfile.isPending ? "Saving..." : "Save Profile"}
               </Button>
             </div>
           </CardContent>

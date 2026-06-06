@@ -58,6 +58,7 @@ import PublicEventPage from "@/pages/public-event-page";
 import About from "@/pages/about";
 import AdminAPIConsole from "@/pages/admin-api-console";
 import PromoterDashboard from "@/pages/promoter";
+import PromoterProfileSetup from "@/pages/promoter-profile-setup";
 import PromoterExperiencePool from "@/pages/promoter-experience-pool";
 import AdminPromotersPage from "@/pages/admin-promoters";
 import AdminPromoterDetailPage from "@/pages/admin-promoter-detail";
@@ -177,6 +178,7 @@ function Router() {
       <Route path="/venue-dashboard" component={VenueDashboard} />
       <Route path="/service-provider-dashboard" component={ServiceProviderDashboard} />
       <Route path="/promoter" component={PromoterDashboard} />
+      <Route path="/promoter/profile-setup" component={PromoterProfileSetup} />
       <Route path="/my-referrals" component={() => { window.location.replace('/my-impact'); return null; }} />
       <Route path="/my-impact" component={PromoterDashboard} />
       <Route path="/promoter/experience-pool" component={PromoterExperiencePool} />

@@ -1,11 +1,10 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { 
   Plus, 
@@ -17,14 +16,11 @@ import {
   CheckCircle,
   ArrowRight
 } from "lucide-react";
-import ConversationalCreatorSetup from "@/components/conversational-creator-setup";
 import Navigation from "@/components/navigation";
 
 export default function Creator() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
-  const { toast } = useToast();
-  const [showSetup, setShowSetup] = useState(false);
 
   // Check if creator profile exists
   const { data: creatorProfile, isLoading: profileLoading, error: profileError } = useQuery<{
@@ -38,6 +34,12 @@ export default function Creator() {
 
   const profileExists = creatorProfile && !profileError;
   const profileMissing = profileError && (profileError as any).message?.includes('404');
+
+  useEffect(() => {
+    if (!authLoading && !profileLoading && isAuthenticated && profileMissing) {
+      setLocation('/creator/profile-setup');
+    }
+  }, [authLoading, profileLoading, isAuthenticated, profileMissing, setLocation]);
 
   // Show loading skeleton while fetching
   if (authLoading || profileLoading) {
@@ -70,50 +72,10 @@ export default function Creator() {
     return null;
   }
 
-  // Handle profile setup success
-  const handleSetupSuccess = () => {
-    setShowSetup(false);
-    toast({
-      title: "Profile Created!",
-      description: "Welcome to your creator dashboard. You can now start creating experiences!",
-    });
-  };
-
-  // Show conversational setup inline if profile missing
-  if (profileMissing || showSetup) {
+  if (profileMissing) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
-        <Navigation />
-        <div className="max-w-6xl mx-auto px-4 py-8">
-          <div className="text-center mb-8">
-            <Badge className="mb-4">Creator Setup</Badge>
-            <h1 className="text-4xl font-bold text-gray-900 mb-4">
-              Complete Your Creator Profile
-            </h1>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Let's set up your creator profile so you can start hosting amazing experiences and earning money.
-            </p>
-          </div>
-
-          {/* Inline Conversational Setup */}
-          <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-            <ConversationalCreatorSetup />
-          </div>
-
-          {profileExists && (
-            <div className="mt-8 text-center">
-              <Button 
-                onClick={handleSetupSuccess}
-                size="lg" 
-                className="bg-green-600 hover:bg-green-700"
-                data-testid="button-continue-to-dashboard"
-              >
-                <CheckCircle className="w-5 h-5 mr-2" />
-                Continue to Dashboard
-              </Button>
-            </div>
-          )}
-        </div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
       </div>
     );
   }

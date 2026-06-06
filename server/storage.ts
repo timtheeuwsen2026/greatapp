@@ -20,6 +20,7 @@ import {
   experienceAnnouncements,
   participantReactions,
   promoterExperiences,
+  promoterProfiles,
   type User,
   type UpsertUser,
   type Experience,
@@ -63,6 +64,8 @@ import {
   creatorProfiles,
   type CreatorProfile,
   type InsertCreatorProfile,
+  type PromoterProfile,
+  type InsertPromoterProfile,
   communityGroups,
   communityGroupMembers,
   communityGroupMessages,
@@ -282,6 +285,9 @@ export interface IStorage {
   getCreatorProfileByUserId(userId: string): Promise<CreatorProfile | undefined>;
   createOrUpdateCreatorProfile(userId: string, profileData: Omit<InsertCreatorProfile, 'userId'>): Promise<CreatorProfile>;
   updateCreatorProfileStripe(userId: string, stripeAccountId: string): Promise<void>;
+  getPromoterProfile(userId: string): Promise<PromoterProfile | undefined>;
+  getPromoterProfileByUserId(userId: string): Promise<PromoterProfile | undefined>;
+  createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile>;
 
   // Participant interaction operations
   createConnection(connection: InsertParticipantConnection): Promise<ParticipantConnection>;
@@ -2051,6 +2057,45 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       })
       .where(eq(creatorProfiles.userId, userId));
+  }
+
+  async getPromoterProfile(userId: string): Promise<PromoterProfile | undefined> {
+    const [profile] = await db
+      .select()
+      .from(promoterProfiles)
+      .where(eq(promoterProfiles.userId, userId));
+    return profile;
+  }
+
+  async getPromoterProfileByUserId(userId: string): Promise<PromoterProfile | undefined> {
+    return this.getPromoterProfile(userId);
+  }
+
+  async createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile> {
+    const existing = await this.getPromoterProfile(userId);
+    const dataWithUserId = {
+      ...profileData,
+      completed: profileData.completed ?? true,
+      userId,
+    };
+
+    if (existing) {
+      const [updated] = await db
+        .update(promoterProfiles)
+        .set({
+          ...dataWithUserId,
+          updatedAt: new Date(),
+        })
+        .where(eq(promoterProfiles.userId, userId))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(promoterProfiles)
+      .values(dataWithUserId)
+      .returning();
+    return created;
   }
 
   async getCreatorExperiences(userId: string): Promise<Experience[]> {

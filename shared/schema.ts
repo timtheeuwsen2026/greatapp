@@ -165,6 +165,23 @@ export const creatorProfiles = pgTable("creator_profiles", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Promoter profiles table - public trust details shown when a referral link is used
+export const promoterProfiles = pgTable("promoter_profiles", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id)
+    .unique(),
+  profilePhoto: varchar("profile_photo"),
+  displayName: varchar("display_name").notNull(),
+  bio: text("bio").notNull(),
+  completed: boolean("completed").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Categories enum
 export const categoryEnum = pgEnum("category", [
   "sports_wellness",
@@ -2385,6 +2402,23 @@ export const insertCreatorProfileSchema = createInsertSchema(creatorProfiles)
 
 export type CreatorProfile = typeof creatorProfiles.$inferSelect;
 export type InsertCreatorProfile = z.infer<typeof insertCreatorProfileSchema>;
+
+export const insertPromoterProfileSchema = createInsertSchema(promoterProfiles)
+  .omit({
+    id: true,
+    userId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .extend({
+    displayName: z.string().min(1, "Name is required"),
+    bio: z.string().min(10, "Bio must be at least 10 characters"),
+    profilePhoto: z.string().optional(),
+    completed: z.boolean().optional(),
+  });
+
+export type PromoterProfile = typeof promoterProfiles.$inferSelect;
+export type InsertPromoterProfile = z.infer<typeof insertPromoterProfileSchema>;
 
 // Platform revenue settings
 export const platformSettings = pgTable("platform_settings", {

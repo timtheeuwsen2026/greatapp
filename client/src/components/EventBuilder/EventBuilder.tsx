@@ -274,19 +274,53 @@ const STEPS = ALL_STEPS;
 
 interface EventBuilderProps {
   draftId?: string;
+  initialExperienceType?: "one-day" | "multi-day";
   onComplete?: (experienceId: string) => void;
 }
 
 // Client-side normalization to prevent bad payloads
 function normalizeDraftForSave(draft: any) {
-  const copy = { ...draft };
+  const copy = normalizeEventTripFields(draft);
   if (copy.startDate) copy.startDate = new Date(copy.startDate).toISOString();
   if (copy.endDate) copy.endDate = new Date(copy.endDate).toISOString();
   if (copy.mvgDeadline) copy.mvgDeadline = new Date(copy.mvgDeadline).toISOString();
   return copy;
 }
 
-export default function EventBuilder({ draftId, onComplete }: EventBuilderProps) {
+function normalizeEventTripFields(draft: any) {
+  const copy = { ...draft };
+  const type = copy.type || 'one-day';
+
+  if (type === 'one-day') {
+    copy.endDate = copy.startDate || copy.endDate;
+    copy.rooms = [];
+    copy.ticketSkus = [];
+    copy.accommodationType = null;
+    copy.roomCapacity = null;
+    copy.totalRooms = null;
+    copy.maxParticipants = Number(copy.standingCapacity || copy.maxParticipants || 1);
+  }
+
+  if (type === 'multi-day') {
+    copy.startTime = '';
+    copy.endTime = '';
+    copy.standingCapacity = null;
+    copy.seatedCapacity = null;
+    const rooms = Array.isArray(copy.rooms) ? copy.rooms : [];
+    const sleepingCapacity = rooms.reduce((total: number, room: any) => {
+      const capacity = Number(room?.capacity || 0);
+      const quantity = Number(room?.quantity || 0);
+      return total + capacity * quantity;
+    }, 0);
+    if (sleepingCapacity > 0) {
+      copy.maxParticipants = sleepingCapacity;
+    }
+  }
+
+  return copy;
+}
+
+export default function EventBuilder({ draftId, initialExperienceType, onComplete }: EventBuilderProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -303,7 +337,7 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
   const { user } = useAuth();
   
   // Track event type to dynamically show/hide Rooms step
-  const [activeSteps, setActiveSteps] = useState(ALL_STEPS);
+  const [activeSteps, setActiveSteps] = useState(getStepsForEventType(initialExperienceType));
   
 
   const form = useForm<EventBuilderData>({
@@ -314,7 +348,7 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
       shortDescription: "",
       description: "",
       category: undefined,
-      type: undefined,
+      type: initialExperienceType,
       greatPillars: [],
       coverImageUrl: "",
       gallery: [],
@@ -401,30 +435,31 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
   const autoSaveMutation = useMutation({
     mutationFn: async (data: Partial<EventBuilderData>) => {
       if (!user?.id) throw new Error("User not authenticated");
+      const normalizedData = normalizeEventTripFields(data);
       
       // Map form field names to draft schema field names
       // CRITICAL: Explicitly preserve all array fields to prevent data loss during autosave
       const mappedData = {
-        ...data,
+        ...normalizedData,
         // Handle date fields safely - ensure proper serialization for all date types
-        startDate: data.startDate ? (typeof data.startDate === 'string' ? data.startDate : 
-                   (data.startDate instanceof Date ? data.startDate.toISOString() : null)) : null,
-        endDate: data.endDate ? (typeof data.endDate === 'string' ? data.endDate : 
-                 (data.endDate instanceof Date ? data.endDate.toISOString() : null)) : null,
-        mvgDeadline: data.mvgDeadline ? (typeof data.mvgDeadline === 'string' ? data.mvgDeadline : 
-                     (data.mvgDeadline instanceof Date ? data.mvgDeadline.toISOString() : null)) : null,
+        startDate: normalizedData.startDate ? (typeof normalizedData.startDate === 'string' ? normalizedData.startDate : 
+                   (normalizedData.startDate instanceof Date ? normalizedData.startDate.toISOString() : null)) : null,
+        endDate: normalizedData.endDate ? (typeof normalizedData.endDate === 'string' ? normalizedData.endDate : 
+                 (normalizedData.endDate instanceof Date ? normalizedData.endDate.toISOString() : null)) : null,
+        mvgDeadline: normalizedData.mvgDeadline ? (typeof normalizedData.mvgDeadline === 'string' ? normalizedData.mvgDeadline : 
+                     (normalizedData.mvgDeadline instanceof Date ? normalizedData.mvgDeadline.toISOString() : null)) : null,
         // Map MVG form fields to draft schema fields
-        mvgEnabled: (data as any).requireMinimumParticipants ?? (data as any).mvgEnabled ?? true,
-        mvgMinimumSize: (data as any).minimumParticipants || (data as any).mvgMinimumSize || 6,
+        mvgEnabled: (normalizedData as any).requireMinimumParticipants ?? (normalizedData as any).mvgEnabled ?? true,
+        mvgMinimumSize: (normalizedData as any).minimumParticipants || (normalizedData as any).mvgMinimumSize || 6,
         // Ensure maxParticipants is preserved
-        maxParticipants: data.maxParticipants || 1,
+        maxParticipants: normalizedData.maxParticipants || 1,
         // STABILITY: Explicitly preserve greatPillars array to prevent silent data loss
-        greatPillars: Array.isArray((data as any).greatPillars) ? (data as any).greatPillars : [],
+        greatPillars: Array.isArray((normalizedData as any).greatPillars) ? (normalizedData as any).greatPillars : [],
         // Preserve other critical arrays
-        gallery: Array.isArray(data.gallery) ? data.gallery : [],
-        rooms: Array.isArray(data.rooms) ? data.rooms : [],
-        roles: Array.isArray((data as any).roles) ? (data as any).roles : [],
-        ticketSkus: Array.isArray(data.ticketSkus) ? data.ticketSkus : [],
+        gallery: Array.isArray(normalizedData.gallery) ? normalizedData.gallery : [],
+        rooms: Array.isArray(normalizedData.rooms) ? normalizedData.rooms : [],
+        roles: Array.isArray((normalizedData as any).roles) ? (normalizedData as any).roles : [],
+        ticketSkus: Array.isArray(normalizedData.ticketSkus) ? normalizedData.ticketSkus : [],
       };
       
       const draftData = {
@@ -1120,6 +1155,30 @@ export default function EventBuilder({ draftId, onComplete }: EventBuilderProps)
     // Required: at least one date
     if (!data.startDate) {
       errors.push("Start date is required");
+    }
+
+    const experienceType = data.type || 'one-day';
+
+    if (experienceType === 'one-day') {
+      if (!data.startTime || data.startTime.trim() === '') {
+        errors.push("Start time is required for a single-day event");
+      }
+      if (!data.endTime || data.endTime.trim() === '') {
+        errors.push("End time is required for a single-day event");
+      }
+      if (!data.standingCapacity && !data.maxParticipants) {
+        errors.push("Standing capacity is required for a single-day event");
+      }
+    }
+
+    if (experienceType === 'multi-day') {
+      if (!data.endDate) {
+        errors.push("End date is required for a multi-day trip");
+      }
+      const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+      if (rooms.length === 0) {
+        errors.push("At least one room or sleeping option is required for a multi-day trip");
+      }
     }
     
     // Required: location
@@ -1963,55 +2022,6 @@ function BasicInfoStep({ form }: { form: any }) {
           name="type"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Choose Your Experience Format *</FormLabel>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    field.onChange("one-day");
-                    form.setValue("rooms", [], { shouldDirty: true });
-                    form.setValue("ticketSkus", [], { shouldDirty: true });
-                    form.setValue("accommodationType", "none", { shouldDirty: true });
-                    form.setValue("roomCapacity", null, { shouldDirty: true });
-                    form.setValue("totalRooms", null, { shouldDirty: true });
-                    form.setValue("requireMinimumParticipants", false, { shouldDirty: true });
-                  }}
-                  className={cn(
-                    "rounded-lg border-2 p-5 text-left transition-colors",
-                    field.value === "one-day"
-                      ? "border-primary bg-primary/5"
-                      : "border-gray-200 hover:border-primary/50 dark:border-gray-700"
-                  )}
-                  data-testid="experience-format-event"
-                >
-                  <Calendar className="mb-3 h-6 w-6 text-primary" />
-                  <div className="text-base font-semibold">Single-Day Event</div>
-                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                    One date, start/end time, standing capacity. No rooms or beds.
-                  </p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    field.onChange("multi-day");
-                    form.setValue("requireMinimumParticipants", true, { shouldDirty: true });
-                  }}
-                  className={cn(
-                    "rounded-lg border-2 p-5 text-left transition-colors",
-                    field.value === "multi-day"
-                      ? "border-primary bg-primary/5"
-                      : "border-gray-200 hover:border-primary/50 dark:border-gray-700"
-                  )}
-                  data-testid="experience-format-trip"
-                >
-                  <Bed className="mb-3 h-6 w-6 text-primary" />
-                  <div className="text-base font-semibold">Multi-Day Trip</div>
-                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                    Start date to end date, sleeping capacity, rooms and beds.
-                  </p>
-                </button>
-              </div>
               <div className="sr-only">
               <FormLabel>Experience Type *</FormLabel>
               <Select onValueChange={field.onChange} value={field.value || ""}>

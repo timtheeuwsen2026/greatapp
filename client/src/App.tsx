@@ -5,6 +5,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import AuthPage from "@/pages/auth";
 import Home from "@/pages/home";
 import ExperienceDetails from "@/pages/experience-details";
@@ -61,6 +62,7 @@ import PromoterExperiencePool from "@/pages/promoter-experience-pool";
 import AdminPromotersPage from "@/pages/admin-promoters";
 import AdminPromoterDetailPage from "@/pages/admin-promoter-detail";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
+import Navigation from "@/components/navigation";
 
 function Router() {
   const [, setLocation] = useLocation();
@@ -97,6 +99,65 @@ function Router() {
     return <div className="flex items-center justify-center min-h-screen">Redirecting...</div>;
   };
 
+  const VenueListingTypeGate = () => {
+    const params = new URLSearchParams(window.location.search);
+    const editVenueId = params.get('edit');
+    const selectedVenueType = params.get('venueType') || params.get('type');
+
+    if (editVenueId || selectedVenueType) {
+      return <VenueProfileSetup />;
+    }
+
+    return (
+      <div className="min-h-screen bg-white">
+        <Navigation />
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setLocation('/venue-dashboard');
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>What kind of space are you listing?</DialogTitle>
+              <DialogDescription>
+                Choose the listing type first so the venue form shows the right capacity, room, and availability fields.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setLocation('/venues/new?venueType=daytime')}
+                className="rounded-lg border border-primary/20 bg-white p-5 text-left shadow-sm transition hover:border-primary hover:shadow-md"
+                data-testid="button-day-event-space"
+              >
+                <div className="text-lg font-semibold text-gray-900">Day Event Space</div>
+                <p className="mt-2 text-sm leading-6 text-gray-600">
+                  Studios, coworking spaces, pop-ups, workshops, and one-day event venues.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLocation('/venues/new?venueType=multi_day')}
+                className="rounded-lg border border-primary/20 bg-white p-5 text-left shadow-sm transition hover:border-primary hover:shadow-md"
+                data-testid="button-trip-location"
+              >
+                <div className="text-lg font-semibold text-gray-900">Trip Location</div>
+                <p className="mt-2 text-sm leading-6 text-gray-600">
+                  Retreat centers, villas, hotels, lodges, and overnight locations with rooms or beds.
+                </p>
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  };
+
   return (
     <Switch>
       <Route path="/login" component={AuthPage} />
@@ -105,7 +166,7 @@ function Router() {
       {/* Homepage CTA Routes - Redirects */}
       <Route path="/create-trip" component={RedirectToEventBuilder} />
       <Route path="/trips" component={RedirectToExperiences} />
-      <Route path="/venues/new" component={VenueProfileSetup} />
+      <Route path="/venues/new" component={VenueListingTypeGate} />
 
       <Route path="/experiences" component={Experiences} />
       <Route path="/experience/:id" component={ExperienceDetails} />

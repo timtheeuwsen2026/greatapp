@@ -1105,7 +1105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Experience draft routes
   app.get('/api/experience-drafts', async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const drafts = await storage.getExperienceDraftsByCreator(userId);
       res.json(drafts);
     } catch (error) {
@@ -2269,6 +2269,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         errors.push("Experience start date must be in the future");
       }
     }
+
+    const experienceType = data.type || "one-day";
+    if (experienceType === "one-day") {
+      if (!data.startTime || data.startTime.trim() === "") {
+        errors.push("Please add a start time for your single-day event");
+      }
+      if (!data.endTime || data.endTime.trim() === "") {
+        errors.push("Please add an end time for your single-day event");
+      }
+      if (!data.standingCapacity && !data.maxParticipants) {
+        errors.push("Please add standing capacity for your single-day event");
+      }
+    }
+    if (experienceType === "multi-day") {
+      if (!data.endDate) {
+        errors.push("Please select an end date for your multi-day trip");
+      }
+      if (!Array.isArray(data.rooms) || data.rooms.length === 0) {
+        errors.push("Please add at least one room or sleeping option for your multi-day trip");
+      }
+    }
     
     // Required: venue or online location
     if (!data.location || data.location.trim() === '') {
@@ -2303,7 +2324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id: draftId } = req.params;
       
       // Get the draft
-      const draft = await storage.getExperienceDraftById(draftId);
+      let draft = await storage.getExperienceDraftById(draftId);
       if (!draft) {
         return res.status(404).json({ message: "Draft not found" });
       }
@@ -2312,6 +2333,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (draft.creatorId !== userId) {
         return res.status(403).json({ message: "Access denied" });
       }
+
+      // Publish using the latest submitted form values, while preserving ownership.
+      draft = { ...draft, ...req.body, creatorId: draft.creatorId };
       
       // Validate draft against publication requirements
       const validation = validateDraftForPublication(draft);
@@ -2324,10 +2348,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Convert date strings to Date objects
+      const experienceType = (draft.type as "one-day" | "multi-day" | "virtual") || "one-day";
+      const isSingleDayEvent = experienceType === "one-day";
+      const isMultiDayTrip = experienceType === "multi-day";
       const startDate = draft.startDate ? new Date(draft.startDate) : new Date();
-      const endDate = draft.endDate 
-        ? new Date(draft.endDate) 
-        : (draft.type === "one-day" && startDate ? startDate : startDate);
+      const endDate = isSingleDayEvent
+        ? startDate
+        : (draft.endDate ? new Date(draft.endDate) : startDate);
+      const normalizedRooms = isMultiDayTrip ? (draft.rooms || []) : [];
+      const sleepingCapacity = normalizedRooms.reduce((total: number, room: any) => {
+        const capacity = Number(room?.capacity || 0);
+        const quantity = Number(room?.quantity || 0);
+        return total + capacity * quantity;
+      }, 0);
+      const normalizedMaxParticipants = isSingleDayEvent
+        ? Number((draft as any).standingCapacity || draft.maxParticipants || 1)
+        : (sleepingCapacity || draft.maxParticipants || 10);
         
       // Calculate MVG deadline from draft data
       const mvgDeadline = draft.mvgEnabled && draft.mvgDeadlineDays && startDate ? 
@@ -2427,14 +2463,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         description: draft.description || '',
         shortDescription: draft.shortDescription,
         category: (draft.category as "sports_wellness" | "retreats" | "community_social" | "adventure_trips" | "workations" | "festivals_events") || "community_social" as const,
-        experienceType: (draft.type as "one-day" | "multi-day" | "virtual") || "one-day" as const, // Map 'type' to 'experienceType' for database
+        experienceType,
         coverImageUrl,
         gallery: draft.gallery || [],
         location: draft.location || '',
         venue: draft.venue,
         startDate,
         endDate,
-        maxParticipants: draft.maxParticipants || 10,
+        startTime: isSingleDayEvent ? (draft as any).startTime || null : null,
+        endTime: isSingleDayEvent ? (draft as any).endTime || null : null,
+        maxParticipants: normalizedMaxParticipants,
         currentParticipants: 0,
         price: (draft.price || '0').toString(),
         currency: draft.currency || 'usd',
@@ -2500,10 +2538,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         itinerary: (draft as any).itinerary || [],
         
         // Rooms and accommodation
-        rooms: draft.rooms || [],
-        ticketSkus: ((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0) 
+        rooms: normalizedRooms,
+        ticketSkus: isSingleDayEvent
+          ? []
+          : (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0) 
           ? (draft as any).ticketSkus 
-          : (draft.rooms || []).map((room: any, index: number) => ({
+          : normalizedRooms.map((room: any, index: number) => ({
               id: `sku-${Date.now()}-${index}`,
               sourceRoomId: room.id || `room-${index}`,
               ticketName: room.name || `Ticket ${index + 1}`,
@@ -2515,8 +2555,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               depositPerPerson: room.depositAmount || 0,
               notes: room.notes || '',
               gallery: room.gallery || [],
-            })),
-        accommodationType: draft.accommodationType,
+            }))),
+        accommodationType: isMultiDayTrip ? draft.accommodationType : null,
         
         // Virtual meeting fields
         virtualMeetingUrl: draft.virtualMeetingUrl,

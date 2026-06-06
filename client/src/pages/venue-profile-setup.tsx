@@ -399,6 +399,11 @@ export default function VenueProfileSetup() {
   // Get venue ID from URL for edit mode
   const urlParams = new URLSearchParams(window.location.search);
   const editVenueId = urlParams.get('edit');
+  const requestedVenueType = urlParams.get('venueType') || urlParams.get('type');
+  const initialVenueType: VenueProfileForm['venueType'] =
+    requestedVenueType === 'daytime' || requestedVenueType === 'day_event'
+      ? 'daytime'
+      : 'multi_day';
 
   const form = useForm<VenueProfileForm>({
     resolver: zodResolver(venueProfileSchema),
@@ -407,7 +412,7 @@ export default function VenueProfileSetup() {
       tagline: '',
       city: '',
       description: '',
-      venueType: 'multi_day',
+      venueType: initialVenueType,
       capacity: 1,
       standingCapacity: undefined,
       seatedCapacity: undefined,

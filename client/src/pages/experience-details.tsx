@@ -7,7 +7,6 @@ import ParticipantAvatars from "@/components/participant-avatars";
 import { SocialProofGallery } from "@/components/SocialProofGallery";
 import ParticipantList from "@/components/ParticipantList";
 import { ParticipantInteractions } from "@/components/participant-interactions";
-import { ParticipantProfileSetup } from "@/components/participant-profile-setup";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
@@ -1511,14 +1510,6 @@ export default function ExperienceDetails() {
                               )}
                             </>
                           )}
-                          
-                          <ParticipantProfileSetup
-                            trigger={
-                              <Button variant="outline" className="w-full">
-                                Setup Profile
-                              </Button>
-                            }
-                          />
                         </>
                       ) : (
                         <div className="space-y-2">

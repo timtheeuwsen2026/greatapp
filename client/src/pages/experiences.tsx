@@ -246,21 +246,11 @@ export default function Experiences() {
               variant="outline"
               className="border-2 border-white text-white hover:bg-white hover:text-gray-800 bg-white/10 backdrop-blur-sm"
               onClick={() => {
-                try {
-                  console.log("🎯 Experiences Page - Navigating to participant profile setup");
-                  setLocation('/participant-profile-setup');
-                } catch (error) {
-                  console.error("❌ Navigation error to participant profile:", error);
-                  // Fallback to experiences page after brief delay
-                  setTimeout(() => {
-                    console.log("🔄 Fallback routing to experiences page");
-                    setLocation('/experiences');
-                  }, 1000);
-                }
+                window.scrollTo({ top: 520, behavior: 'smooth' });
               }}
-              data-testid="button-setup-profile"
+              data-testid="button-browse-experiences"
             >
-              Set Up Your Profile
+              Browse Experiences
             </Button>
             <Button 
               size="lg"

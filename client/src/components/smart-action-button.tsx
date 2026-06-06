@@ -19,7 +19,7 @@ export default function SmartActionButton({
   size = "default",
   variant = "default"
 }: SmartActionButtonProps) {
-  const { isAuthenticated, hasAnyProfile, needsProfileSetup, profileType } = useUserProfile();
+  const { isAuthenticated, hasParticipantProfile, profileType } = useUserProfile();
   const [, setLocation] = useLocation();
 
   const handleClick = () => {
@@ -30,22 +30,15 @@ export default function SmartActionButton({
       return;
     }
 
-    // Logged in but no profile - go to profile setup
-    if (needsProfileSetup) {
-      // Remember where the user was trying to go so we can return them after profile setup
-      if (action === 'book_experience' && experienceId) {
-        sessionStorage.setItem('postProfileRedirect', `/checkout/${experienceId}`);
-      } else if (action === 'join_community') {
-        sessionStorage.setItem('postProfileRedirect', '/community');
-      }
-      setLocation('/profile-setup');
+    if (action === 'join_community' && !hasParticipantProfile) {
+      sessionStorage.setItem('postParticipantOnboardingRedirect', '/community-hub');
+      setLocation('/participant-profile-setup');
       return;
     }
 
-    // Has profile - go to appropriate action
     switch (action) {
       case 'join_community':
-        setLocation('/community');
+        setLocation('/community-hub');
         break;
       case 'create_experience':
         console.log("Navigating to create experience, profile type:", profileType);

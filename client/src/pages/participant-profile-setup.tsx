@@ -100,11 +100,13 @@ const dietaryOptions = [
 ];
 
 export default function ParticipantProfileSetup() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [imagePreview, setImagePreview] = useState<string>('');
+  const searchParams = new URLSearchParams(location.split('?')[1] || '');
+  const isAfterCheckout = searchParams.get('afterCheckout') === 'true';
 
   const form = useForm<ParticipantProfileForm>({
     resolver: zodResolver(participantProfileSchema),
@@ -134,10 +136,16 @@ export default function ParticipantProfileSetup() {
     onSuccess: () => {
       toast({
         title: 'Profile Created!',
-        description: 'Your participant profile has been successfully created.',
+        description: 'Community Hub and Tribe Chat are now unlocked.',
       });
       queryClient.invalidateQueries({ queryKey: ['/api/participant-profile'] });
-      setLocation('/user-dashboard');
+      const postOnboardingRedirect = sessionStorage.getItem('postParticipantOnboardingRedirect');
+      if (postOnboardingRedirect) {
+        sessionStorage.removeItem('postParticipantOnboardingRedirect');
+        setLocation(postOnboardingRedirect);
+        return;
+      }
+      setLocation(isAfterCheckout ? '/community-hub' : '/user-dashboard');
     },
     onError: (error: any) => {
       toast({
@@ -187,10 +195,10 @@ export default function ParticipantProfileSetup() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-            Create Your Participant Profile
+            Participant Onboarding
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
-            Build connections and unlock co-creation opportunities
+            Complete your profile to unlock the Community Hub and join the Tribe Chat.
           </p>
           
           {/* Progress indicator */}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import Navigation from "@/components/navigation";
@@ -158,6 +158,7 @@ function BalancePaymentForm({ bookingId, amount, currency, onSuccess }: {
 }
 
 export default function BookingSuccess() {
+  const [, setLocation] = useLocation();
   const [experienceId, setExperienceId] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
@@ -186,6 +187,11 @@ export default function BookingSuccess() {
   const { data: myBookings } = useQuery<Array<Booking & { experience?: any }>>({
     queryKey: ["/api/bookings/my-bookings"],
     enabled: !!experienceId && !bookingId,
+  });
+
+  const { error: participantProfileError, isLoading: participantProfileLoading } = useQuery({
+    queryKey: ["/api/participant-profile"],
+    retry: false,
   });
 
   const booking: Booking | undefined = bookingDirect || (
@@ -229,6 +235,42 @@ export default function BookingSuccess() {
     queryClient.invalidateQueries({ queryKey: ["/api/bookings/my-bookings"] });
   };
 
+  const isCancelled =
+    booking?.status === 'cancelled' ||
+    experience?.status === 'cancelled' ||
+    experience?.lifecycleStatus === 'cancelled';
+
+  const participantProfileMissing =
+    participantProfileError && (participantProfileError as any).message?.includes("404");
+
+  useEffect(() => {
+    if (
+      !isLoading &&
+      experience &&
+      !participantProfileLoading &&
+      participantProfileMissing &&
+      !isCancelled &&
+      !balanceJustPaid
+    ) {
+      sessionStorage.setItem("postParticipantOnboardingRedirect", "/community-hub");
+      const params = new URLSearchParams();
+      params.set("afterCheckout", "true");
+      if (experienceId) params.set("experience", experienceId);
+      if (booking?.id) params.set("booking", booking.id);
+      setLocation(`/participant-profile-setup?${params.toString()}`);
+    }
+  }, [
+    isLoading,
+    experience,
+    participantProfileLoading,
+    participantProfileMissing,
+    isCancelled,
+    balanceJustPaid,
+    experienceId,
+    booking?.id,
+    setLocation,
+  ]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-white">
@@ -261,11 +303,6 @@ export default function BookingSuccess() {
   const isFullyPaid = booking?.balancePaid === true || booking?.status === "fully_paid" || balanceJustPaid;
   const hasOutstandingBalance = isDeposit && !isFullyPaid && parseFloat(booking?.balanceAmount || "0") > 0;
   const currency = experience.currency || 'EUR';
-
-  const isCancelled =
-    booking?.status === 'cancelled' ||
-    experience.status === 'cancelled' ||
-    experience.lifecycleStatus === 'cancelled';
 
   if (isCancelled) {
     return (

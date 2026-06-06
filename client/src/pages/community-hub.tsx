@@ -56,25 +56,31 @@ export default function CommunityHub() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
   // Fetch community groups
-  const { data: groups = [], isLoading: groupsLoading } = useQuery({
+  const { data: groups = [], isLoading: groupsLoading } = useQuery<any[]>({
     queryKey: ["/api/community/groups"],
     enabled: isAuthenticated,
   });
 
   // Fetch featured members
-  const { data: featuredMembers = [], isLoading: membersLoading } = useQuery({
+  const { data: featuredMembers = [], isLoading: membersLoading } = useQuery<any[]>({
     queryKey: ["/api/community/featured-members"],
     enabled: isAuthenticated,
   });
 
   // Fetch community events
-  const { data: events = [], isLoading: eventsLoading } = useQuery({
+  const { data: events = [], isLoading: eventsLoading } = useQuery<any[]>({
     queryKey: ["/api/community/events"],
     enabled: isAuthenticated,
   });
 
+  const { error: participantProfileError, isLoading: participantProfileLoading } = useQuery({
+    queryKey: ["/api/participant-profile"],
+    enabled: isAuthenticated,
+    retry: false,
+  });
+
   // Fetch group messages
-  const { data: messages = [], isLoading: messagesLoading } = useQuery({
+  const { data: messages = [], isLoading: messagesLoading } = useQuery<any[]>({
     queryKey: ["/api/community/groups", selectedGroup, "messages"],
     enabled: !!selectedGroup,
   });
@@ -206,6 +212,46 @@ export default function CommunityHub() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  const participantProfileMissing =
+    participantProfileError && (participantProfileError as any).message?.includes("404");
+
+  if (participantProfileLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  if (participantProfileMissing) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
+        <Navigation />
+        <div className="mx-auto flex min-h-[70vh] max-w-xl items-center px-4">
+          <Card>
+            <CardContent className="pt-6 text-center">
+              <MessageCircle className="h-12 w-12 text-primary mx-auto mb-4" />
+              <h2 className="text-2xl font-semibold mb-3">Participant Onboarding</h2>
+              <p className="text-gray-600 mb-6">
+                Complete your profile to unlock the Community Hub and join the Tribe Chat.
+              </p>
+              <Button
+                onClick={() => {
+                  sessionStorage.setItem("postParticipantOnboardingRedirect", "/community-hub");
+                  setLocation("/participant-profile-setup");
+                }}
+                className="w-full"
+                data-testid="button-complete-participant-profile"
+              >
+                Complete Profile
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }

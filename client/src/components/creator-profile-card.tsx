@@ -2,7 +2,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MapPin, Star, ExternalLink } from 'lucide-react';
-import { Link } from 'wouter';
 
 interface CreatorProfileCardProps {
   creator: {
@@ -79,35 +78,33 @@ export default function CreatorProfileCard({ creator, variant = 'compact' }: Cre
                 </div>
               )}
               
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  {creator.averageRating && (
-                    <div className="flex items-center gap-1">
-                      <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                      <span>{creator.averageRating.toFixed(1)}</span>
-                    </div>
-                  )}
-                  {creator.totalExperiences && (
-                    <span>{creator.totalExperiences} experiences</span>
+              {(creator.averageRating || creator.totalExperiences || socialLink) && (
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                    {creator.averageRating && (
+                      <div className="flex items-center gap-1">
+                        <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                        <span>{creator.averageRating.toFixed(1)}</span>
+                      </div>
+                    )}
+                    {creator.totalExperiences && (
+                      <span>{creator.totalExperiences} experiences</span>
+                    )}
+                  </div>
+
+                  {socialLink && (
+                    <a
+                      href={socialLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-sm font-medium"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Social link
+                    </a>
                   )}
                 </div>
-
-                {socialLink ? (
-                  <a
-                    href={socialLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-sm font-medium"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Social link
-                  </a>
-                ) : (
-                  <Link href={`/creator/${creator.id}`} className="text-primary hover:text-primary/80 text-sm font-medium">
-                    View Profile
-                  </Link>
-                )}
-              </div>
+              )}
             </div>
           </div>
         </CardContent>

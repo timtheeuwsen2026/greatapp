@@ -1179,11 +1179,11 @@ export default function ExperienceDetails() {
                   {isAuthenticated && spotsLeft > 0 && !userActiveReservation && ticketSkus.length === 0 && (
                     <Link href={`/checkout/${experience.id}`}>
                       <Button 
-                        className="w-full btn-gradient shadow-lg hover:shadow-xl transition-all duration-200 py-5 text-base font-semibold mb-3" 
+                        className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-primary/90 hover:text-white hover:shadow-xl"
                         size="lg" 
                         data-testid="button-book-single-price"
                       >
-                        <Ticket className="h-5 w-5 mr-2" />
+                        <Ticket className="h-5 w-5 mr-2 text-white" />
                         {depositAmount > 0 
                           ? `Book Now – ${formatCurrency(depositAmount, experience.currency)} Deposit`
                           : 'Book Now'
@@ -1197,11 +1197,11 @@ export default function ExperienceDetails() {
                     <Button
                       onClick={handleConvertReservation}
                       disabled={convertReservationMutation.isPending}
-                      className="w-full btn-gradient shadow-lg hover:shadow-xl transition-all duration-200 py-5 text-base font-semibold mb-3"
+                      className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-primary/90 hover:text-white hover:shadow-xl"
                       size="lg"
                       data-testid="button-complete-booking-top"
                     >
-                      <Ticket className="h-5 w-5 mr-2" />
+                      <Ticket className="h-5 w-5 mr-2 text-white" />
                       {convertReservationMutation.isPending ? "Processing..." : "Complete Your Booking"}
                     </Button>
                   )}
@@ -1209,7 +1209,7 @@ export default function ExperienceDetails() {
                   {/* Show ticket selection prompt when there are ticket options */}
                   {spotsLeft > 0 && ticketSkus.length > 0 && (
                     <Button
-                      className="w-full btn-gradient shadow-lg hover:shadow-xl transition-all duration-200 py-5 text-base font-semibold mb-3"
+                      className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-primary/90 hover:text-white hover:shadow-xl"
                       size="lg"
                       onClick={() => {
                         const ticketSection = document.getElementById('ticket-options-section') || document.querySelector('[data-testid="ticket-options-section"]');
@@ -1217,14 +1217,14 @@ export default function ExperienceDetails() {
                       }}
                       data-testid="button-choose-ticket"
                     >
-                      <Ticket className="h-5 w-5 mr-2" />
+                      <Ticket className="h-5 w-5 mr-2 text-white" />
                       Choose Your Ticket
                     </Button>
                   )}
                   
                   {!isAuthenticated && (
                     <a href="/api/login">
-                      <Button className="w-full btn-gradient shadow-md py-5 text-base font-semibold mb-3" size="lg" data-testid="button-login-first">
+                      <Button className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-md hover:bg-primary/90 hover:text-white" size="lg" data-testid="button-login-first">
                         Sign In to Book
                       </Button>
                     </a>
@@ -1240,7 +1240,7 @@ export default function ExperienceDetails() {
                   <Button
                     variant="outline"
                     size="lg"
-                    className="w-full border-primary/30 text-primary hover:bg-primary/5 dark:border-primary/50 dark:text-primary/90 dark:hover:bg-primary/10 font-semibold py-5"
+                    className="w-full border-2 border-primary bg-white py-5 font-semibold text-primary shadow-sm hover:bg-primary hover:text-white dark:border-primary/70 dark:bg-gray-950 dark:text-primary-foreground dark:hover:bg-primary dark:hover:text-white"
                     onClick={() => setShowShareModal(true)}
                     data-testid="button-boost-trip-detail"
                     aria-label="Invite the Squad"

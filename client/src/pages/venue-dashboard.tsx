@@ -454,7 +454,11 @@ function VenueDashboardContent() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setLocation(venue.slug ? `/v/${venue.slug}` : `/v/${venue.id}`)}
+                          onClick={() => setLocation(
+                            venue.status === 'approved'
+                              ? (venue.slug ? `/v/${venue.slug}` : `/v/${venue.id}`)
+                              : `/venues/new?edit=${venue.id}`
+                          )}
                           className="flex-1"
                           data-testid="button-view-venue"
                         >
@@ -464,7 +468,7 @@ function VenueDashboardContent() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setLocation(`/venue/setup?edit=${venue.id}`)}
+                          onClick={() => setLocation(`/venues/new?edit=${venue.id}`)}
                           className="flex-1"
                           data-testid="button-edit-venue"
                         >

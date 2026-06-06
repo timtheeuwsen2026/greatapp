@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { z } from 'zod';
 import { apiRequest } from '@/lib/queryClient';
-import { getAccessToken } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { SharedPhotoUpload, PhotoPreview } from '@/components/SharedPhotoUpload';
 import { Button } from '@/components/ui/button';
@@ -477,8 +476,7 @@ export default function VenueProfileSetup() {
   const { data: existingVenue, isLoading: isLoadingVenue } = useQuery({
     queryKey: ['/api/venues', editVenueId, 'edit'],
     queryFn: async () => {
-      const response = await fetch(`/api/venues/${editVenueId}/edit`);
-      if (!response.ok) throw new Error('Failed to fetch venue');
+      const response = await apiRequest('GET', `/api/venues/${editVenueId}/edit`);
       return response.json();
     },
     enabled: !!editVenueId,
@@ -492,7 +490,10 @@ export default function VenueProfileSetup() {
         tagline: existingVenue.tagline || '',
         city: existingVenue.city || '',
         description: existingVenue.description || '',
+        venueType: existingVenue.venueType || 'multi_day',
         capacity: existingVenue.capacity || 1,
+        standingCapacity: existingVenue.standingCapacity ?? undefined,
+        seatedCapacity: existingVenue.seatedCapacity ?? undefined,
         location: existingVenue.location || '',
         friendlyAddress: existingVenue.friendlyAddress || '',
         logoUrl: existingVenue.logoUrl || '',
@@ -614,9 +615,8 @@ export default function VenueProfileSetup() {
       if (editVenueId) {
         setLocation('/venue-dashboard');
       } else {
-        // Update the URL to edit mode
-        window.history.replaceState({}, '', `/venue-profile-setup?edit=${venue.id}`);
-        window.location.href = `/venue-profile-setup?edit=${venue.id}`;
+        // Keep the user in the listing flow after the draft is created.
+        setLocation(`/venues/new?edit=${venue.id}`);
       }
     },
     onError: (error: Error) => {
@@ -2561,7 +2561,7 @@ export default function VenueProfileSetup() {
                             await queryClient.invalidateQueries({ queryKey: ['/api/venues'] });
                             await queryClient.invalidateQueries({ queryKey: ['/api/user/venues'] });
                             
-                            window.history.replaceState({}, '', `/venue-profile-setup?edit=${venue.id}`);
+                            window.history.replaceState({}, '', `/venues/new?edit=${venue.id}`);
                             
                             submitForReviewMutation.mutate(venue.id);
                           } catch (error) {

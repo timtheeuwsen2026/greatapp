@@ -5019,9 +5019,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get user's own venues (protected - returns all statuses for owner)
-  app.get("/api/user/venues", async (req: any, res) => {
+  app.get("/api/user/venues", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5036,9 +5036,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get authenticated user's venues (alias for creator dashboard)
-  app.get("/api/venues/my", async (req: any, res) => {
+  app.get("/api/venues/my", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5053,9 +5053,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get venue for editing (protected - allows owner/admin to access draft venues)
-  app.get("/api/venues/:id/edit", async (req: any, res) => {
+  app.get("/api/venues/:id/edit", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5153,9 +5153,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create venue (protected - creates draft venue by default)
-  app.post("/api/venues", async (req: any, res) => {
+  app.post("/api/venues", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5180,7 +5180,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: req.body.name,
         city: req.body.city,
         description: req.body.description,
+        venueType: req.body.venueType || 'multi_day',
         capacity: req.body.capacity,
+        standingCapacity: req.body.standingCapacity ?? null,
+        seatedCapacity: req.body.seatedCapacity ?? null,
         location: req.body.location,
         
         // Basic optional fields
@@ -5310,9 +5313,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update venue (protected - owner or admin only)
-  app.put("/api/venues/:id", async (req: any, res) => {
+  app.put("/api/venues/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5336,7 +5339,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: req.body.name ?? existingVenue.name,
         city: req.body.city ?? existingVenue.city,
         description: req.body.description ?? existingVenue.description,
+        venueType: req.body.venueType ?? existingVenue.venueType,
         capacity: req.body.capacity ?? existingVenue.capacity,
+        standingCapacity: req.body.standingCapacity !== undefined ? req.body.standingCapacity : existingVenue.standingCapacity,
+        seatedCapacity: req.body.seatedCapacity !== undefined ? req.body.seatedCapacity : existingVenue.seatedCapacity,
         location: req.body.location ?? existingVenue.location,
         
         // Basic optional fields
@@ -5469,9 +5475,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
 
   // Submit venue for review (protected - owner only)
-  app.patch("/api/venues/:id/submit", async (req: any, res) => {
+  app.patch("/api/venues/:id/submit", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5502,9 +5508,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
 
   // Get all pending venues for admin review (admin only)
-  app.get("/api/admin/venues/pending", async (req: any, res) => {
+  app.get("/api/admin/venues/pending", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5524,9 +5530,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Approve venue (admin only)
-  app.patch("/api/venues/:id/approve", async (req: any, res) => {
+  app.patch("/api/venues/:id/approve", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5547,9 +5553,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Reject venue (admin only)
-  app.patch("/api/venues/:id/reject", async (req: any, res) => {
+  app.patch("/api/venues/:id/reject", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5569,9 +5575,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/venues/:id", async (req: any, res) => {
+  app.delete("/api/venues/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5602,9 +5608,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
 
   // Get venue availability (protected - owner or admin only)
-  app.get("/api/venues/:venueId/availability", async (req: any, res) => {
+  app.get("/api/venues/:venueId/availability", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5630,9 +5636,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create venue availability block (protected - owner or admin only)
-  app.post("/api/venues/:venueId/availability", async (req: any, res) => {
+  app.post("/api/venues/:venueId/availability", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5678,9 +5684,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update venue availability block (protected - owner or admin only)
-  app.put("/api/venues/availability/:id", async (req: any, res) => {
+  app.put("/api/venues/availability/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5721,9 +5727,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Delete venue availability block (protected - owner or admin only)
-  app.delete("/api/venues/availability/:id", async (req: any, res) => {
+  app.delete("/api/venues/availability/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -5754,9 +5760,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/venues/:venueId/google-calendar", async (req: any, res) => {
+  app.patch("/api/venues/:venueId/google-calendar", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
       
       if (!userId) {
@@ -9053,9 +9059,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── Task 4: Venue Offer Inbox (The Handshake) ────────────────────────────
   // Returns all experiences that a creator has proposed to any of this venue's
   // spaces and are awaiting acceptance (status = 'pending_venue_approval').
+  app.get('/api/venue/bookings', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!userVenues.length) return res.json([]);
+
+      const venueIds = userVenues.map((venue: any) => venue.id);
+      const bookings = await storage.getBookingsByVenueIds(venueIds);
+      res.json(bookings);
+    } catch (err: any) {
+      console.error('Error fetching venue bookings:', err);
+      res.status(500).json({ message: 'Failed to fetch venue bookings' });
+    }
+  });
+
+  app.get('/api/venue/analytics', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!userVenues.length) {
+        return res.json({
+          totalRevenue: 0,
+          monthlyRevenue: 0,
+          lastMonthRevenue: 0,
+          totalBookings: 0,
+          occupancyRate: 0,
+          averageBookingValue: 0,
+          repeatBookings: 0,
+        });
+      }
+
+      const venueIds = userVenues.map((venue: any) => venue.id);
+      const bookings = await storage.getBookingsByVenueIds(venueIds);
+      const now = new Date();
+      const thisMonth = now.getMonth();
+      const thisYear = now.getFullYear();
+      const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
+      const lastMonth = lastMonthDate.getMonth();
+      const lastMonthYear = lastMonthDate.getFullYear();
+      const getAmount = (booking: any) => parseFloat(booking.totalAmount || booking.totalPrice || '0') || 0;
+
+      const totalRevenue = bookings.reduce((sum: number, booking: any) => sum + getAmount(booking), 0);
+      const monthlyRevenue = bookings.reduce((sum: number, booking: any) => {
+        const date = new Date(booking.createdAt || booking.bookingDate || booking.startDate || 0);
+        return date.getMonth() === thisMonth && date.getFullYear() === thisYear ? sum + getAmount(booking) : sum;
+      }, 0);
+      const lastMonthRevenue = bookings.reduce((sum: number, booking: any) => {
+        const date = new Date(booking.createdAt || booking.bookingDate || booking.startDate || 0);
+        return date.getMonth() === lastMonth && date.getFullYear() === lastMonthYear ? sum + getAmount(booking) : sum;
+      }, 0);
+
+      res.json({
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+        monthlyRevenue: Math.round(monthlyRevenue * 100) / 100,
+        lastMonthRevenue: Math.round(lastMonthRevenue * 100) / 100,
+        totalBookings: bookings.length,
+        occupancyRate: 0,
+        averageBookingValue: bookings.length ? Math.round((totalRevenue / bookings.length) * 100) / 100 : 0,
+        repeatBookings: 0,
+      });
+    } catch (err: any) {
+      console.error('Error fetching venue analytics:', err);
+      res.status(500).json({ message: 'Failed to fetch venue analytics' });
+    }
+  });
+
   app.get('/api/venue/pending-offers', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       // Get all venues owned by this user
       const userVenues = await storage.getVenuesByCreator(userId);
       if (!userVenues.length) return res.json([]);
@@ -9073,7 +9145,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Accept an offer → experience goes Live (status = 'approved')
   app.post('/api/venue/offers/:experienceId/accept', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const { experienceId } = req.params;
 
       const experience = await storage.getExperience(experienceId);
@@ -9095,7 +9167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Reject an offer → experience sent back to draft
   app.post('/api/venue/offers/:experienceId/reject', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const { experienceId } = req.params;
       const { reason } = req.body;
 
@@ -9117,7 +9189,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Venue Ledger — real sales totals broken down by the accepted split
   app.get('/api/venue/ledger', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const userVenues = await storage.getVenuesByCreator(userId);
       if (!userVenues.length) return res.json({ totalSales: 0, myShare: 0, bookingsCount: 0 });
 

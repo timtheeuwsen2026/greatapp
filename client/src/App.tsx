@@ -97,13 +97,6 @@ function Router() {
     return <div className="flex items-center justify-center min-h-screen">Redirecting...</div>;
   };
 
-  const RedirectToVenueSetup = () => {
-    useEffect(() => {
-      setLocation('/venue-profile-setup');
-    }, []);
-    return <div className="flex items-center justify-center min-h-screen">Redirecting...</div>;
-  };
-
   return (
     <Switch>
       <Route path="/login" component={AuthPage} />
@@ -112,7 +105,7 @@ function Router() {
       {/* Homepage CTA Routes - Redirects */}
       <Route path="/create-trip" component={RedirectToEventBuilder} />
       <Route path="/trips" component={RedirectToExperiences} />
-      <Route path="/venues/new" component={RedirectToVenueSetup} />
+      <Route path="/venues/new" component={VenueProfileSetup} />
 
       <Route path="/experiences" component={Experiences} />
       <Route path="/experience/:id" component={ExperienceDetails} />

@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfile";
+import { cn } from "@/lib/utils";
 
 interface SimpleSmartButtonProps {
   action: 'join_community' | 'create_experience' | 'book_experience';
@@ -24,6 +25,11 @@ export default function SimpleSmartButton({
   const [, setLocation] = useLocation();
   const [isLoading, setIsLoading] = useState(false);
   const { isAuthenticated, hasParticipantProfile } = useUserProfile();
+  const resolvedClassName = cn(
+    action === 'join_community' &&
+      "!bg-primary !text-white hover:!bg-primary/90 !border-primary shadow-sm",
+    className
+  );
 
   const handleClick = async () => {
     setIsLoading(true);
@@ -61,7 +67,7 @@ export default function SimpleSmartButton({
   return (
     <Button 
       onClick={handleClick}
-      className={className}
+      className={resolvedClassName}
       size={size}
       variant={variant}
       disabled={isLoading}

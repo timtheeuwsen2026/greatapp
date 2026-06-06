@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -157,11 +157,12 @@ const serviceTags = [
 ];
 
 export default function ServiceProviderSetup() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const editServiceId = new URLSearchParams(location.split('?')[1] || '').get('edit');
 
   const form = useForm<ServiceProviderForm>({
     resolver: zodResolver(serviceProviderSchema),
@@ -186,21 +187,58 @@ export default function ServiceProviderSetup() {
     },
   });
 
+  const { data: existingService, isLoading: existingServiceLoading } = useQuery<any>({
+    queryKey: ['/api/service-providers', editServiceId],
+    enabled: !!editServiceId,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!existingService?.id) return;
+
+    form.reset({
+      name: existingService.name || '',
+      description: existingService.description || '',
+      location: existingService.location || '',
+      profileImageUrl: existingService.profileImageUrl || '',
+      galleryImages: Array.isArray(existingService.galleryImages) ? existingService.galleryImages : [],
+      serviceCategory: existingService.serviceCategory || '',
+      serviceType: Array.isArray(existingService.serviceType) ? existingService.serviceType : [],
+      tags: Array.isArray(existingService.tags) ? existingService.tags : [],
+      priceModel: existingService.priceModel || 'per_day',
+      price: existingService.price ? Number(existingService.price) : undefined,
+      availabilityType: existingService.availabilityType || 'always',
+      contactEmail: existingService.contactEmail || '',
+      phoneNumber: existingService.phoneNumber || '',
+      socialLinks: {
+        website: existingService.socialLinks?.website || '',
+        instagram: existingService.socialLinks?.instagram || '',
+        portfolio: existingService.socialLinks?.portfolio || '',
+      },
+    });
+    setSelectedCategory(existingService.serviceCategory || '');
+  }, [existingService, form]);
+
   const profileMutation = useMutation({
     mutationFn: async (data: ServiceProviderForm) => {
-      return apiRequest('POST', '/api/service-providers', data);
+      return editServiceId
+        ? apiRequest('PUT', `/api/service-providers/${editServiceId}`, data)
+        : apiRequest('POST', '/api/service-providers', data);
     },
     onSuccess: () => {
       toast({
-        title: 'Service provider profile submitted!',
-        description: 'Your profile will be reviewed and approved by our team.',
+        title: editServiceId ? 'Service provider profile updated!' : 'Service provider profile submitted!',
+        description: editServiceId
+          ? 'Your service provider details have been saved.'
+          : 'Your profile will be reviewed and approved by our team.',
       });
       queryClient.invalidateQueries({ queryKey: ['/api/service-providers'] });
-      setLocation('/');
+      queryClient.invalidateQueries({ queryKey: ['/api/user/service-providers'] });
+      setLocation(editServiceId ? '/profile' : '/service-provider-dashboard');
     },
     onError: (error: Error) => {
       toast({
-        title: 'Error creating service provider profile',
+        title: editServiceId ? 'Error updating service provider profile' : 'Error creating service provider profile',
         description: error.message,
         variant: 'destructive',
       });
@@ -232,7 +270,7 @@ export default function ServiceProviderSetup() {
     if (step > 1) {
       setStep(step - 1);
     } else {
-      setLocation('/');
+      setLocation(editServiceId ? '/profile' : '/service-provider-dashboard');
     }
   };
 
@@ -252,6 +290,14 @@ export default function ServiceProviderSetup() {
     form.setValue('tags', newTags);
   };
 
+  if (existingServiceLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -270,10 +316,10 @@ export default function ServiceProviderSetup() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Briefcase className="w-5 h-5" />
-              Create Service Provider Profile
+              {editServiceId ? 'Edit Service Provider Profile' : 'Create Service Provider Profile'}
             </CardTitle>
             <CardDescription>
-              Step {step} of 4 - Set up your service profile to connect with experience creators
+              Step {step} of 4 - {editServiceId ? 'Update your service profile details' : 'Set up your service profile to connect with experience creators'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -769,7 +815,7 @@ export default function ServiceProviderSetup() {
                     disabled={profileMutation.isPending}
                   >
                     {profileMutation.isPending ? 'Submitting...' : 
-                     step === 4 ? 'Submit for Review' : 'Next'}
+                     step === 4 ? (editServiceId ? 'Save Changes' : 'Submit for Review') : 'Next'}
                   </Button>
                 </div>
               </form>

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { z } from 'zod';
 import { apiRequest } from '@/lib/queryClient';
@@ -129,13 +129,44 @@ export default function ParticipantProfileSetup() {
     },
   });
 
+  const { data: existingProfile, isLoading: profileLoading } = useQuery<any>({
+    queryKey: ['/api/participant-profile'],
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!existingProfile?.id) return;
+
+    form.reset({
+      avatarUrl: existingProfile.avatarUrl || '',
+      displayName: existingProfile.displayName || '',
+      bio: existingProfile.bio || '',
+      location: existingProfile.location || '',
+      interests: Array.isArray(existingProfile.interests) ? existingProfile.interests : [],
+      experienceLevel: existingProfile.experienceLevel || 'Beginner',
+      travelStyle: Array.isArray(existingProfile.travelStyle) ? existingProfile.travelStyle : [],
+      fitnessLevel: existingProfile.fitnessLevel || undefined,
+      occupation: existingProfile.occupation || '',
+      skills: Array.isArray(existingProfile.skills) ? existingProfile.skills : [],
+      willingToTakeRoles: !!existingProfile.willingToTakeRoles,
+      rolePreferences: Array.isArray(existingProfile.rolePreferences) ? existingProfile.rolePreferences : [],
+      languages: Array.isArray(existingProfile.languages) ? existingProfile.languages : [],
+      professionalInterests: Array.isArray(existingProfile.professionalInterests) ? existingProfile.professionalInterests : [],
+      profileVisibility: existingProfile.profileVisibility || 'Public',
+      contactMethod: existingProfile.contactMethod || 'In-App Messaging',
+      dietaryPreferences: Array.isArray(existingProfile.dietaryPreferences) ? existingProfile.dietaryPreferences : [],
+      emergencyContact: existingProfile.emergencyContact || '',
+    });
+    setImagePreview(existingProfile.avatarUrl || '');
+  }, [existingProfile, form]);
+
   const createParticipantProfile = useMutation({
     mutationFn: async (data: ParticipantProfileForm) => {
       return apiRequest('POST', '/api/participant-profile', data);
     },
     onSuccess: () => {
       toast({
-        title: 'Profile Created!',
+        title: existingProfile?.id ? 'Profile Updated!' : 'Profile Created!',
         description: 'Community Hub and Tribe Chat are now unlocked.',
       });
       queryClient.invalidateQueries({ queryKey: ['/api/participant-profile'] });
@@ -155,6 +186,8 @@ export default function ParticipantProfileSetup() {
       });
     },
   });
+
+  const isEditing = !!existingProfile?.id;
 
   const onSubmit = (data: ParticipantProfileForm) => {
     createParticipantProfile.mutate(data);
@@ -189,13 +222,21 @@ export default function ParticipantProfileSetup() {
     }
   };
 
+  if (profileLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 py-8">
       <div className="container mx-auto px-4 max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-            Participant Onboarding
+            {isEditing ? 'Edit Participant Profile' : 'Participant Onboarding'}
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
             Complete your profile to unlock the Community Hub and join the Tribe Chat.
@@ -358,7 +399,7 @@ export default function ParticipantProfileSetup() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Experience Level</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger>
                                 <SelectValue placeholder="Select your experience level" />
@@ -409,7 +450,7 @@ export default function ParticipantProfileSetup() {
                           <FormLabel>Fitness / Comfort Level (Optional)</FormLabel>
                           <RadioGroup
                             onValueChange={field.onChange}
-                            defaultValue={field.value}
+                            value={field.value}
                             className="flex flex-row space-x-6"
                           >
                             <div className="flex items-center space-x-2">
@@ -608,7 +649,7 @@ export default function ParticipantProfileSetup() {
                           <FormLabel>Profile Visibility</FormLabel>
                           <RadioGroup
                             onValueChange={field.onChange}
-                            defaultValue={field.value}
+                            value={field.value}
                             className="flex flex-col space-y-3"
                           >
                             <div className="flex items-center space-x-2">
@@ -637,7 +678,7 @@ export default function ParticipantProfileSetup() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Preferred Contact Method</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger>
                                 <SelectValue />
@@ -744,12 +785,12 @@ export default function ParticipantProfileSetup() {
                   {createParticipantProfile.isPending ? (
                     <>
                       <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full" />
-                      Creating...
+                      {isEditing ? 'Saving...' : 'Creating...'}
                     </>
                   ) : (
                     <>
                       <CheckCircle className="w-4 h-4" />
-                      Complete Profile
+                      {isEditing ? 'Save Profile' : 'Complete Profile'}
                     </>
                   )}
                 </Button>

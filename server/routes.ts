@@ -276,6 +276,28 @@ async function checkIsAdmin(req: any): Promise<boolean> {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const resolveCurrentUserId = (req: any): string | undefined => {
+    return req.user?.claims?.sub || req.user?.id || (process.env.NODE_ENV === 'development' ? "45788955" : undefined);
+  };
+
+  const requireParticipantProfileForCommunity = async (req: any, res: any): Promise<string | null> => {
+    const userId = resolveCurrentUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return null;
+    }
+
+    const profile = await storage.getProfile(userId);
+    if (!profile) {
+      res.status(403).json({
+        code: "PARTICIPANT_PROFILE_REQUIRED",
+        message: "Complete your profile to unlock the Community Hub and join the Tribe Chat.",
+      });
+      return null;
+    }
+
+    return userId;
+  };
   // Auth — Supabase JWT-based (stateless, no sessions)
   app.get("/api/login", (_req, res) => {
     res.redirect("/login");
@@ -1004,7 +1026,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/promoter-profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const profile = await storage.getPromoterProfile(userId);
@@ -1021,7 +1043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/promoter-profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const validation = insertPromoterProfileSchema.safeParse({
@@ -1683,9 +1705,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Mock venues and services endpoints removed - now using real database endpoints below
 
   // Profile routes
-  app.get('/api/participant-profile', async (req: any, res) => {
+  app.get('/api/participant-profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
       const profile = await storage.getParticipantProfileByUserId(userId);
       if (!profile) {
         return res.status(404).json({ message: "Profile not found" });
@@ -1697,9 +1722,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/creator-profile', async (req: any, res) => {
+  app.get('/api/creator-profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
       const profile = await storage.getCreatorProfileByUserId(userId);
       if (!profile) {
         return res.status(404).json({ message: "Profile not found" });
@@ -1711,9 +1739,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/creator-profile', async (req: any, res) => {
+  app.post('/api/creator-profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
       console.log("Creating creator profile for user:", userId);
       console.log("Profile data received:", req.body);
       
@@ -5147,7 +5178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get user's own venues (protected - returns all statuses for owner)
   app.get("/api/user/venues", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5161,10 +5192,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/user/service-providers", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const services = await storage.getServiceProviders();
+      res.json(services.filter((service) => service.createdBy === userId));
+    } catch (error) {
+      console.error("Error fetching user service providers:", error);
+      res.status(500).json({ message: "Failed to fetch service provider profiles" });
+    }
+  });
+
   // Get authenticated user's venues (alias for creator dashboard)
   app.get("/api/venues/my", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -5997,7 +6044,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/service-providers", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
       const serviceData = {
         ...req.body,
         createdBy: userId,
@@ -6009,6 +6059,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error creating service provider:", error);
       res.status(500).json({ message: "Failed to create service provider" });
+    }
+  });
+
+  app.put("/api/service-providers/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const service = await storage.getServiceProvider(req.params.id);
+      if (!service) {
+        return res.status(404).json({ message: "Service provider not found" });
+      }
+
+      const isAdmin = await checkIsAdmin(req);
+      if (service.createdBy !== userId && !isAdmin) {
+        return res.status(403).json({ message: "You don't have permission to edit this service provider profile" });
+      }
+
+      const editableFields = { ...(req.body || {}) };
+      const requestedApproved = editableFields.approved;
+      delete editableFields.id;
+      delete editableFields.createdBy;
+      delete editableFields.createdAt;
+      delete editableFields.updatedAt;
+      delete editableFields.approved;
+
+      const updatedService = await storage.updateServiceProvider(req.params.id, {
+        ...editableFields,
+        createdBy: service.createdBy,
+        approved: isAdmin && typeof requestedApproved === "boolean" ? requestedApproved : service.approved,
+      });
+
+      res.json(updatedService);
+    } catch (error) {
+      console.error("Error updating service provider:", error);
+      res.status(500).json({ message: "Failed to update service provider" });
     }
   });
 
@@ -6147,7 +6235,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Messaging routes
   app.post("/api/experiences/:id/messages", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
       const message = await storage.createMessage({
         ...req.body,
         experienceId: req.params.id,
@@ -6174,7 +6263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Participant profiles
   app.post("/api/participant-profile", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) {
         return res.status(401).json({ message: "User not authenticated" });
       }
@@ -6198,7 +6287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/participant-profile", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) {
         return res.status(401).json({ message: "User not authenticated" });
       }
@@ -6239,7 +6328,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Creator profile routes
   app.get("/api/creator-profile", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
       const profile = await storage.getCreatorProfile(userId);
       if (!profile) {
         return res.status(404).json({ message: "Creator profile not found" });
@@ -6253,7 +6345,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/creator-profile", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
       
       // Validate request body with schema (userId already excluded from schema)
       const validation = insertCreatorProfileSchema.safeParse(req.body);
@@ -7242,7 +7337,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/experiences/:id/messages", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
       const messageData = {
         experienceId: req.params.id,
         userId: userId,
@@ -7343,13 +7439,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/community/groups", async (req: any, res) => {
+  app.post("/api/community/groups", isAuthenticated, async (req: any, res) => {
     try {
-      // For development, use mock user ID
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
       
       const groupData = {
         ...req.body,
@@ -7374,13 +7467,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/community/groups/:id/messages", async (req: any, res) => {
+  app.post("/api/community/groups/:id/messages", isAuthenticated, async (req: any, res) => {
     try {
-      // For development, use mock user ID
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
       
       const messageData = {
         groupId: req.params.id,

@@ -102,7 +102,8 @@ export default function CommunityHub() {
         description: "Your community group has been created successfully.",
       });
     },
-    onError: () => {
+    onError: (error: Error) => {
+      if (handleCommunityLockError(error)) return;
       toast({
         title: "Error",
         description: "Failed to create group. Please try again.",
@@ -123,6 +124,14 @@ export default function CommunityHub() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/community/groups", selectedGroup, "messages"] });
       setNewMessage("");
+    },
+    onError: (error: Error) => {
+      if (handleCommunityLockError(error)) return;
+      toast({
+        title: "Message not sent",
+        description: "Failed to send message. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -189,6 +198,29 @@ export default function CommunityHub() {
     return colors[category as keyof typeof colors] || colors.general;
   };
 
+  const redirectToParticipantProfile = () => {
+    sessionStorage.setItem("postParticipantOnboardingRedirect", "/community-hub");
+    setLocation("/participant-profile-setup");
+  };
+
+  const handleCommunityLockError = (error: Error) => {
+    const message = error.message || "";
+    const needsProfile =
+      message.includes("PARTICIPANT_PROFILE_REQUIRED") ||
+      message.includes("Complete your profile to unlock the Community Hub") ||
+      message.startsWith("403:");
+
+    if (!needsProfile) return false;
+
+    toast({
+      title: "Complete your profile first",
+      description: "Complete your profile to unlock the Community Hub and join the Tribe Chat.",
+      variant: "destructive",
+    });
+    redirectToParticipantProfile();
+    return true;
+  };
+
   if (!isAuthenticated && !isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
@@ -241,8 +273,7 @@ export default function CommunityHub() {
               </p>
               <Button
                 onClick={() => {
-                  sessionStorage.setItem("postParticipantOnboardingRedirect", "/community-hub");
-                  setLocation("/participant-profile-setup");
+                  redirectToParticipantProfile();
                 }}
                 className="w-full"
                 data-testid="button-complete-participant-profile"

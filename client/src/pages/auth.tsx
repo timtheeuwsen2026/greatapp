@@ -176,7 +176,15 @@ export default function AuthPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            selected_role: role,
+          },
+        },
+      });
 
       // Supabase explicitly says the email is already registered
       if (
@@ -207,22 +215,10 @@ export default function AuthPage() {
         return;
       }
 
-      // When email confirmation is disabled, Supabase silently returns a session
-      // even for existing emails. Always check the DB before assigning a role
-      // so we never overwrite an existing user's role.
+      // When email confirmation is disabled, Supabase returns a session right away.
+      // Assign the selected role immediately so the auth bootstrap cannot leave
+      // a fresh account on the default participant role.
       const token = data.session.access_token;
-      const existsRes = await fetch("/api/auth/user/exists", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const { exists } = existsRes.ok ? await existsRes.json() : { exists: false };
-
-      if (exists) {
-        // Already in the DB — run the existing-user flow (role check / error / add)
-        showEmailExistsError();
-        return;
-      }
-
-      // Genuinely new user — create with the selected role
       try {
         await assignRole(token, role);
       } catch (error: any) {

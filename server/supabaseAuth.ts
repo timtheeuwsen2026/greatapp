@@ -13,11 +13,13 @@ function getAdminClient() {
 
 // Shape req.user to match the existing req.user.claims.sub pattern so every
 // existing route works without changes.
-function makeUserShape(id: string, email: string | undefined) {
+function makeUserShape(id: string, email: string | undefined, userMetadata: Record<string, any> = {}) {
   return {
     claims: { sub: id, email: email ?? "" },
     id,
     email: email ?? "",
+    userMetadata,
+    signupRole: userMetadata.selected_role,
   };
 }
 
@@ -51,6 +53,6 @@ export const isAuthenticated: RequestHandler = async (req: any, res, next) => {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  req.user = makeUserShape(user.id, user.email);
+  req.user = makeUserShape(user.id, user.email, user.user_metadata ?? {});
   next();
 };

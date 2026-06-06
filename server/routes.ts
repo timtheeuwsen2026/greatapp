@@ -431,6 +431,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const email = req.user.email;
       const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+      const metadataRole = typeof req.user.signupRole === 'string' ? req.user.signupRole : undefined;
+      const initialRole = metadataRole && metadataRole !== 'admin' && VALID_ROLES.includes(metadataRole)
+        ? metadataRole
+        : 'participant';
 
       let user = await storage.getUser(userId);
 
@@ -447,8 +451,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           firstName: null,
           lastName: null,
           profileImageUrl: null,
-          role: "participant",
-          userRoles: ["participant"],
+          role: initialRole as any,
+          userRoles: [initialRole],
         });
       }
 

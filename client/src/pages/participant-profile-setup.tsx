@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, type FieldErrors } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
@@ -63,6 +63,12 @@ type ParticipantProfileStatus = {
   profile: any | null;
 };
 
+const stepValidationFields: Record<number, Array<keyof ParticipantProfileForm>> = {
+  1: ['displayName', 'bio', 'location'],
+  2: ['interests', 'experienceLevel', 'occupation'],
+  3: ['languages', 'profileVisibility', 'contactMethod'],
+};
+
 const interestOptions = [
   'Yoga', 'Meditation', 'Hiking', 'Surfing', 'Fitness', 'Music', 
   'Photography', 'Cooking', 'Art', 'Networking', 'Dancing', 'Reading',
@@ -116,6 +122,7 @@ export default function ParticipantProfileSetup() {
   const form = useForm<ParticipantProfileForm>({
     resolver: zodResolver(participantProfileSchema),
     defaultValues: {
+      avatarUrl: '',
       displayName: '',
       bio: '',
       location: '',
@@ -131,6 +138,7 @@ export default function ParticipantProfileSetup() {
       profileVisibility: 'Public',
       contactMethod: 'In-App Messaging',
       dietaryPreferences: [],
+      emergencyContact: '',
     },
   });
 
@@ -200,6 +208,23 @@ export default function ParticipantProfileSetup() {
     createParticipantProfile.mutate(data);
   };
 
+  const getStepForErrors = (errors: FieldErrors<ParticipantProfileForm>) => {
+    const errorKeys = Object.keys(errors) as Array<keyof ParticipantProfileForm>;
+    return Number(Object.entries(stepValidationFields).find(([, fields]) =>
+      fields.some((field) => errorKeys.includes(field))
+    )?.[0] || 1);
+  };
+
+  const onInvalidSubmit = (errors: FieldErrors<ParticipantProfileForm>) => {
+    const firstErrorStep = getStepForErrors(errors);
+    setStep(firstErrorStep);
+    toast({
+      title: 'Complete the missing details',
+      description: 'Please fill the required fields highlighted on this step.',
+      variant: 'destructive',
+    });
+  };
+
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -213,8 +238,20 @@ export default function ParticipantProfileSetup() {
     }
   };
 
-  const nextStep = () => {
-    if (step < 3) setStep(step + 1);
+  const nextStep = async () => {
+    const isStepValid = await form.trigger(stepValidationFields[step]);
+    if (isStepValid && step < 3) {
+      setStep(step + 1);
+      return;
+    }
+
+    if (!isStepValid) {
+      toast({
+        title: 'Missing required details',
+        description: 'Please complete the highlighted fields before continuing.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const prevStep = () => {
@@ -273,7 +310,7 @@ export default function ParticipantProfileSetup() {
         </div>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          <form onSubmit={form.handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-6">
             
             {/* Step 1: Core Identity */}
             {step === 1 && (
@@ -315,7 +352,7 @@ export default function ParticipantProfileSetup() {
                       <FormItem>
                         <FormLabel>Display Name</FormLabel>
                         <FormControl>
-                          <Input placeholder="How should others know you?" {...field} />
+                          <Input placeholder="How should others know you?" {...field} value={field.value ?? ''} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -334,6 +371,7 @@ export default function ParticipantProfileSetup() {
                             className="resize-none"
                             rows={3}
                             {...field}
+                            value={field.value ?? ''}
                           />
                         </FormControl>
                         <FormDescription>
@@ -351,7 +389,7 @@ export default function ParticipantProfileSetup() {
                       <FormItem>
                         <FormLabel>Location / Home Base</FormLabel>
                         <FormControl>
-                          <Input placeholder="City, Country" {...field} />
+                          <Input placeholder="City, Country" {...field} value={field.value ?? ''} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -386,9 +424,9 @@ export default function ParticipantProfileSetup() {
                             {interestOptions.map((interest) => (
                               <div key={interest} className="flex items-center space-x-2">
                                 <Checkbox
-                                  checked={field.value.includes(interest)}
+                                  checked={(field.value ?? []).includes(interest)}
                                   onCheckedChange={() => 
-                                    toggleArrayValue(field.value, interest, field.onChange)
+                                    toggleArrayValue(field.value ?? [], interest, field.onChange)
                                   }
                                 />
                                 <Label className="text-sm">{interest}</Label>
@@ -434,10 +472,10 @@ export default function ParticipantProfileSetup() {
                             {travelStyleOptions.map((style) => (
                               <Badge
                                 key={style}
-                                variant={field.value.includes(style) ? "default" : "outline"}
+                                variant={(field.value ?? []).includes(style) ? "default" : "outline"}
                                 className="cursor-pointer"
                                 onClick={() => 
-                                  toggleArrayValue(field.value, style, field.onChange)
+                                  toggleArrayValue(field.value ?? [], style, field.onChange)
                                 }
                               >
                                 {style}
@@ -457,7 +495,7 @@ export default function ParticipantProfileSetup() {
                           <FormLabel>Fitness / Comfort Level (Optional)</FormLabel>
                           <RadioGroup
                             onValueChange={field.onChange}
-                            value={field.value}
+                            value={field.value ?? ''}
                             className="flex flex-row space-x-6"
                           >
                             <div className="flex items-center space-x-2">
@@ -498,7 +536,7 @@ export default function ParticipantProfileSetup() {
                         <FormItem>
                           <FormLabel>Occupation / Main Skill</FormLabel>
                           <FormControl>
-                            <Input placeholder="e.g., Yoga Instructor, Chef, Software Engineer" {...field} />
+                            <Input placeholder="e.g., Yoga Instructor, Chef, Software Engineer" {...field} value={field.value ?? ''} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -516,9 +554,9 @@ export default function ParticipantProfileSetup() {
                             {skillOptions.map((skill) => (
                               <div key={skill} className="flex items-center space-x-2">
                                 <Checkbox
-                                  checked={field.value.includes(skill)}
+                                  checked={(field.value ?? []).includes(skill)}
                                   onCheckedChange={() => 
-                                    toggleArrayValue(field.value, skill, field.onChange)
+                                    toggleArrayValue(field.value ?? [], skill, field.onChange)
                                   }
                                 />
                                 <Label className="text-sm">{skill}</Label>
@@ -545,7 +583,7 @@ export default function ParticipantProfileSetup() {
                           </div>
                           <FormControl>
                             <Switch
-                              checked={field.value}
+                              checked={!!field.value}
                               onCheckedChange={field.onChange}
                             />
                           </FormControl>
@@ -565,9 +603,9 @@ export default function ParticipantProfileSetup() {
                               {roleOptions.map((role) => (
                                 <div key={role} className="flex items-center space-x-2">
                                   <Checkbox
-                                    checked={field.value.includes(role)}
+                                    checked={(field.value ?? []).includes(role)}
                                     onCheckedChange={() => 
-                                      toggleArrayValue(field.value, role, field.onChange)
+                                      toggleArrayValue(field.value ?? [], role, field.onChange)
                                     }
                                   />
                                   <Label className="text-sm">{role}</Label>
@@ -608,9 +646,9 @@ export default function ParticipantProfileSetup() {
                             {languageOptions.map((language) => (
                               <div key={language} className="flex items-center space-x-2">
                                 <Checkbox
-                                  checked={field.value.includes(language)}
+                                  checked={(field.value ?? []).includes(language)}
                                   onCheckedChange={() => 
-                                    toggleArrayValue(field.value, language, field.onChange)
+                                    toggleArrayValue(field.value ?? [], language, field.onChange)
                                   }
                                 />
                                 <Label className="text-sm">{language}</Label>
@@ -633,10 +671,10 @@ export default function ParticipantProfileSetup() {
                             {professionalInterestOptions.map((interest) => (
                               <Badge
                                 key={interest}
-                                variant={field.value.includes(interest) ? "default" : "outline"}
+                                variant={(field.value ?? []).includes(interest) ? "default" : "outline"}
                                 className="cursor-pointer"
                                 onClick={() => 
-                                  toggleArrayValue(field.value, interest, field.onChange)
+                                  toggleArrayValue(field.value ?? [], interest, field.onChange)
                                 }
                               >
                                 {interest}
@@ -725,10 +763,10 @@ export default function ParticipantProfileSetup() {
                             {dietaryOptions.map((dietary) => (
                               <Badge
                                 key={dietary}
-                                variant={field.value.includes(dietary) ? "default" : "outline"}
+                                variant={(field.value ?? []).includes(dietary) ? "default" : "outline"}
                                 className="cursor-pointer"
                                 onClick={() => 
-                                  toggleArrayValue(field.value, dietary, field.onChange)
+                                  toggleArrayValue(field.value ?? [], dietary, field.onChange)
                                 }
                               >
                                 {dietary}
@@ -747,7 +785,7 @@ export default function ParticipantProfileSetup() {
                         <FormItem>
                           <FormLabel>Emergency Contact (Optional)</FormLabel>
                           <FormControl>
-                            <Input placeholder="Name and phone number" {...field} />
+                            <Input placeholder="Name and phone number" {...field} value={field.value ?? ''} />
                           </FormControl>
                           <FormDescription>
                             Only visible to organizers for safety purposes

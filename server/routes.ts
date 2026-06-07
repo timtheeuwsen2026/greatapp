@@ -1207,12 +1207,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const normalizeGreatPillarsPayload = (value: unknown): string[] => {
+    const allowed = new Set(["health", "sports", "wellness", "food"]);
+    const rawValues = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(",")
+        : [];
+
+    return rawValues
+      .map((item) => String(item).trim().toLowerCase())
+      .filter((item) => allowed.has(item));
+  };
+
   app.post('/api/experience-drafts', async (req: any, res) => {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
       
       // Normalize date fields before saving (defense in depth)
       const parsedBody = { ...req.body };
+      parsedBody.greatPillars = normalizeGreatPillarsPayload(parsedBody.greatPillars);
+      parsedBody.monetisationMode = "creator_led";
       
       // Convert date strings to valid Date objects or null if invalid
       if (parsedBody.startDate) {
@@ -1248,6 +1263,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Normalize date fields before saving (defense in depth)
       const updateData = { ...cleanBody };
+      updateData.greatPillars = normalizeGreatPillarsPayload(updateData.greatPillars);
+      updateData.monetisationMode = "creator_led";
       
       // Convert date strings to valid Date objects or null if invalid
       if (updateData.startDate !== undefined) {
@@ -2488,10 +2505,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const normalizedMaxParticipants = isSingleDayEvent
         ? Number((draft as any).standingCapacity || draft.maxParticipants || 1)
         : (sleepingCapacity || draft.maxParticipants || 10);
+      const resolvedMvgEnabled = draft.mvgEnabled !== undefined
+        ? draft.mvgEnabled
+        : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true);
         
       // Calculate MVG deadline from draft data
-      const mvgDeadline = draft.mvgEnabled && draft.mvgDeadlineDays && startDate ? 
-        new Date(startDate.getTime() - (draft.mvgDeadlineDays * 24 * 60 * 60 * 1000)) : 
+      const mvgDeadline = resolvedMvgEnabled && draft.mvgDeadlineDays && startDate ?
+        new Date(startDate.getTime() - (draft.mvgDeadlineDays * 24 * 60 * 60 * 1000)) :
         undefined;
       
       // Check if this is a demo event for placeholder image fallback
@@ -2557,7 +2577,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       // Convert selectedServiceIds to structured service objects
-      const services = Array.isArray((draft as any).selectedServiceIds) 
+      const services = isMultiDayTrip && Array.isArray((draft as any).selectedServiceIds)
         ? (draft as any).selectedServiceIds.map((id: string) => ({
             id,
             name: serviceMap[id]?.name || id,
@@ -2568,7 +2588,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : [];
 
       // Convert selectedAmenityIds to structured amenity objects
-      const amenities = Array.isArray((draft as any).selectedAmenityIds)
+      const amenities = isMultiDayTrip && Array.isArray((draft as any).selectedAmenityIds)
         ? (draft as any).selectedAmenityIds.map((id: string) => ({
             id,
             name: amenityMap[id]?.name || id,
@@ -2588,6 +2608,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         shortDescription: draft.shortDescription,
         category: (draft.category as "sports_wellness" | "retreats" | "community_social" | "adventure_trips" | "workations" | "festivals_events") || "community_social" as const,
         experienceType,
+        greatPillars: normalizeGreatPillarsPayload((draft as any).greatPillars),
         coverImageUrl,
         gallery: draft.gallery || [],
         location: draft.location || '',
@@ -2622,7 +2643,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // MVG field mapping: Map frontend MVG fields to backend schema fields
         // Use type assertion for fields that may exist from frontend but not in strict type
-        mvgEnabled: draft.mvgEnabled !== undefined ? draft.mvgEnabled : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true),
+        requireMinimumParticipants: resolvedMvgEnabled,
+        mvgEnabled: resolvedMvgEnabled,
         // mvgMinimumSize (draft) → minimumParticipants, mvgMinimumSize, mvgMin (experience)
         // Note: Frontend sends as minimumParticipants but draft schema stores as mvgMinimumSize
         minimumParticipants: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
@@ -2630,8 +2652,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mvgMin: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
         // Calculate mvgDeadlineDays from mvgDeadline if provided (use mvgDeadlineDays from draft)
         mvgDeadlineDays: draft.mvgDeadlineDays || 7,
-        mvgStatus: (draft.mvgEnabled !== undefined ? draft.mvgEnabled : true) ? "pending" as const : undefined,
-        escrowEnabled: (draft.mvgEnabled !== undefined ? draft.mvgEnabled : true) || false,
+        mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
+        escrowEnabled: resolvedMvgEnabled || false,
+        monetisationMode: "creator_led" as const,
         
         // Revenue split fields
         // Self-hosted: creator gets back whatever % was earmarked for the Space.
@@ -5493,7 +5516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use validated data
       const venueData = validationResult.data;
 
-      console.log('Creating venue with validated data:', JSON.stringify(venueData, null, 2));
+      console.log(`Creating venue draft: ${venueData.name} (${venueData.venueType})`);
       
       const venue = await storage.createVenue(venueData);
       res.json(venue);

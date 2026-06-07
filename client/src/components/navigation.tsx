@@ -126,7 +126,7 @@ export default function Navigation() {
                 className="bg-primary hover:bg-primary/90 text-white font-semibold px-5 py-2 h-auto"
                 data-testid="nav-start-a-trip"
               >
-                Start a Trip
+                Start an Experience
               </Button>
             </Link>
 
@@ -289,7 +289,7 @@ export default function Navigation() {
             <div className="px-3 py-2">
               <Link href="/event-builder" onClick={() => setMobileMenuOpen(false)}>
                 <Button className="w-full bg-primary hover:bg-primary/90 text-white font-semibold" data-testid="mobile-nav-start-a-trip">
-                  Start a Trip
+                  Start an Experience
                 </Button>
               </Link>
             </div>

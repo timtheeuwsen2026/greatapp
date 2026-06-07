@@ -57,6 +57,7 @@ interface OnboardingChecklistProps {
 function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChecklistProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
 
   const updateStep = useMutation({
     mutationFn: async ({ step, data }: { step: string; data?: any }) => {
@@ -95,7 +96,7 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">Complete</Badge>
         ) : (
-          <Button size="sm" onClick={() => window.location.href = '/creator/profile-setup'}>
+          <Button size="sm" onClick={() => setLocation('/creator/profile-setup')}>
             Complete Profile
           </Button>
         );
@@ -111,7 +112,7 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">{stepData.data.venuesCreated} Venues</Badge>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => window.location.href = '/venues'}>
+          <Button size="sm" variant="outline" onClick={() => setLocation('/venues')}>
             Add Venue
           </Button>
         );
@@ -119,7 +120,7 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">{stepData.data.experiencesCreated} Created</Badge>
         ) : (
-          <Button size="sm" onClick={() => window.location.href = '/event-builder'}>
+          <Button size="sm" onClick={() => setLocation('/event-builder')}>
             Create First Experience
           </Button>
         );
@@ -208,7 +209,7 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
               <p className="mb-4">
                 {progress.completed === 3 ? "Just one more step to unlock the Event Builder!" : "Keep going to unlock experience creation"}
               </p>
-              <Button variant="secondary" onClick={() => window.location.href = '/event-builder'}>
+              <Button variant="secondary" onClick={() => setLocation('/event-builder')}>
                 Start Event Builder
               </Button>
             </CardContent>

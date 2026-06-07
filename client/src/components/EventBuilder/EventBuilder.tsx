@@ -33,7 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -69,6 +69,22 @@ import {
   safeAdd
 } from '@shared/pricingService';
 
+const GREAT_PILLAR_VALUES = ["health", "sports", "wellness", "food"] as const;
+
+function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES[number]> {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+
+  return rawValues
+    .map((item) => String(item).trim().toLowerCase())
+    .filter((item): item is typeof GREAT_PILLAR_VALUES[number] =>
+      (GREAT_PILLAR_VALUES as readonly string[]).includes(item)
+    );
+}
+
 // 9-Step Event Builder Schema aligned with database fields
 const eventBuilderSchema = z.object({
   // Step 1: Basic Info
@@ -77,7 +93,10 @@ const eventBuilderSchema = z.object({
   description: z.string().min(10, "Description must be at least 10 characters").optional().or(z.literal('')),
   category: z.enum(["sports_wellness", "retreats", "community_social", "adventure_trips", "workations", "festivals_events"]).optional(),
   type: z.enum(["one-day", "multi-day", "virtual"]).optional(),
-  greatPillars: z.array(z.enum(["health", "sports", "wellness", "food"])).default([]),
+  greatPillars: z.preprocess(
+    normalizeGreatPillars,
+    z.array(z.enum(GREAT_PILLAR_VALUES)).default([])
+  ),
 
   // Step 2: Media - Allow empty during editing, validate on publish
   coverImageUrl: z.string().optional().or(z.literal('')),
@@ -193,7 +212,7 @@ const eventBuilderSchema = z.object({
   platformCommission: z.coerce.number().optional().nullable(),
   stripeFee: z.coerce.number().optional().nullable(),
   
-  // New Monetisation Mode (Phase 3)
+  // Creator-led monetisation default
   monetisationMode: z.enum(["creator_led", "great_managed", "promo_only", "extra_services"]).optional(),
   
   // Influencer Commission Pool
@@ -257,11 +276,11 @@ const ALL_STEPS = [
 ];
 
 // Helper to get filtered steps based on event type.
-// Event (one-day) / Virtual: skip Rooms (id 7) — no room inventory needed.
-// Trip (multi-day): all steps, including Rooms and MVG threshold.
+// Event (one-day) / Virtual: skip Services & Amenities and Rooms to keep the pilot flow lean.
+// Trip (multi-day): all steps, including Services, Amenities, Rooms, and MVG threshold.
 function getStepsForEventType(eventType: string | undefined): typeof ALL_STEPS {
   if (eventType === 'one-day' || eventType === 'virtual') {
-    return ALL_STEPS.filter(step => step.id !== 7);
+    return ALL_STEPS.filter(step => step.id !== 5 && step.id !== 7);
   }
   return ALL_STEPS;
 }
@@ -290,6 +309,8 @@ function normalizeDraftForSave(draft: any) {
 function normalizeEventTripFields(draft: any) {
   const copy = { ...draft };
   const type = copy.type || 'one-day';
+  copy.greatPillars = normalizeGreatPillars(copy.greatPillars);
+  copy.monetisationMode = 'creator_led';
 
   if (type === 'one-day') {
     copy.endDate = copy.startDate || copy.endDate;
@@ -299,6 +320,12 @@ function normalizeEventTripFields(draft: any) {
     copy.roomCapacity = null;
     copy.totalRooms = null;
     copy.maxParticipants = Number(copy.standingCapacity || copy.maxParticipants || 1);
+    copy.selectedServices = [];
+    copy.selectedAmenities = [];
+    copy.selectedServiceIds = [];
+    copy.selectedAmenityIds = [];
+    copy.serviceDemandNotes = {};
+    copy.serviceConnectRequests = {};
   }
 
   if (type === 'multi-day') {
@@ -454,7 +481,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Ensure maxParticipants is preserved
         maxParticipants: normalizedData.maxParticipants || 1,
         // STABILITY: Explicitly preserve greatPillars array to prevent silent data loss
-        greatPillars: Array.isArray((normalizedData as any).greatPillars) ? (normalizedData as any).greatPillars : [],
+        greatPillars: normalizeGreatPillars((normalizedData as any).greatPillars),
+        monetisationMode: 'creator_led',
         // Preserve other critical arrays
         gallery: Array.isArray(normalizedData.gallery) ? normalizedData.gallery : [],
         rooms: Array.isArray(normalizedData.rooms) ? normalizedData.rooms : [],
@@ -551,7 +579,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         mvgEnabled: (data as any).requireMinimumParticipants ?? (data as any).mvgEnabled ?? true,
         mvgMinimumSize: (data as any).minimumParticipants || (data as any).mvgMinimumSize || 6,
         // STABILITY: Explicitly preserve greatPillars array to prevent silent data loss
-        greatPillars: Array.isArray((data as any).greatPillars) ? (data as any).greatPillars : [],
+        greatPillars: normalizeGreatPillars((data as any).greatPillars),
+        monetisationMode: 'creator_led',
         // Preserve other critical arrays
         gallery: Array.isArray(data.gallery) ? data.gallery : [],
         rooms: Array.isArray(data.rooms) ? data.rooms : [],
@@ -735,12 +764,13 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     const newSteps = getStepsForEventType(eventType);
     setActiveSteps(newSteps);
     
-    // If user was on Rooms step and switched to one-day/virtual, move to next step
-    if (currentStep === 7 && (eventType === 'one-day' || eventType === 'virtual')) {
-      setCurrentStep(8); // Skip to Plan step
+    // If the current step is hidden for this type, move to the next available step.
+    if (!newSteps.some(step => step.id === currentStep)) {
+      const nextVisibleStep = newSteps.find(step => step.id > currentStep) || newSteps[newSteps.length - 1];
+      setCurrentStep(nextVisibleStep.id);
     }
     
-    // Clear rooms and ticketSkus when switching TO one-day or virtual FROM multi-day
+    // Clear trip-only fields when switching TO one-day or virtual FROM multi-day
     const wasMultiDay = prevEventTypeForClear.current === 'multi-day';
     const isNowNonRoom = eventType === 'one-day' || eventType === 'virtual';
     if (wasMultiDay && isNowNonRoom) {
@@ -749,6 +779,12 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         form.setValue('rooms', [], { shouldDirty: true });
         form.setValue('ticketSkus', [], { shouldDirty: true });
       }
+      (form as any).setValue('selectedServices', [], { shouldDirty: true });
+      (form as any).setValue('selectedAmenities', [], { shouldDirty: true });
+      form.setValue('selectedServiceIds', [], { shouldDirty: true });
+      form.setValue('selectedAmenityIds', [], { shouldDirty: true });
+      form.setValue('serviceDemandNotes', {}, { shouldDirty: true });
+      form.setValue('serviceConnectRequests', {}, { shouldDirty: true });
     }
     prevEventTypeForClear.current = eventType || 'multi-day';
   }, [eventType, currentStep, form]);
@@ -773,7 +809,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       minimumParticipants: data.mvgMinimumSize || data.minimumParticipants || 6,
       mvgDeadline: data.mvgDeadline,
       // Ensure Great Pillars array is properly handled
-      greatPillars: Array.isArray(data.greatPillars) ? data.greatPillars : [],
+      greatPillars: normalizeGreatPillars(data.greatPillars),
       // Ensure image fields are properly handled
       coverImageUrl: data.coverImageUrl || '',
       gallery: Array.isArray(data.gallery) ? data.gallery.filter((url: string) => url && url.startsWith('http')) : [],
@@ -796,7 +832,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       maxParticipants: data.maxParticipants || data.capacity,
       price: data.price || data.basePrice,
       // PHASE 3 FIX: Ensure pricing defaults are preserved when loading drafts
-      monetisationMode: data.monetisationMode || 'creator_led',
+      monetisationMode: 'creator_led',
       creatorPct: data.creatorPct ?? 85,
       platformPct: data.platformPct ?? 15,
       influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
@@ -949,6 +985,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         description: formData.description || '',
         category: formData.category || '',
         type: formData.type || 'one-day',
+        greatPillars: normalizeGreatPillars(formData.greatPillars),
         
         // Media fields
         coverImageUrl: formData.coverImageUrl || '',
@@ -990,6 +1027,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
         platformPct: formData.platformPct || 15,
+        monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
@@ -1331,6 +1369,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         description: formData.description || '',
         category: formData.category || '',
         type: formData.type || 'one-day',
+        greatPillars: normalizeGreatPillars(formData.greatPillars),
         
         // Media fields
         coverImageUrl: formData.coverImageUrl || '',
@@ -1372,6 +1411,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
         platformPct: formData.platformPct || 15,
+        monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
@@ -2031,13 +2071,13 @@ function BasicInfoStep({ form }: { form: any }) {
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="one-day">🎟️ Event (Local) — Single day, no rooms or MVG</SelectItem>
+                  <SelectItem value="one-day">Event (Local) - single day, no rooms, MVG allowed</SelectItem>
                   <SelectItem value="multi-day">✈️ Trip (Global) — Multi-day with rooms &amp; group thresholds</SelectItem>
                   <SelectItem value="virtual">💻 Virtual — Online event</SelectItem>
                 </SelectContent>
               </Select>
               <FormDescription>
-                <strong>Event</strong> bypasses room inventory and minimum-group thresholds.{" "}
+                <strong>Event</strong> bypasses room inventory but can still use an MVG threshold.{" "}
                 <strong>Trip</strong> requires dates, rooms, and a minimum group size.
               </FormDescription>
               </div>
@@ -2057,7 +2097,7 @@ function BasicInfoStep({ form }: { form: any }) {
               { value: "wellness", label: "Wellness" },
               { value: "food", label: "Food" },
             ];
-            const currentValue = Array.isArray(field.value) ? field.value : [];
+            const currentValue = normalizeGreatPillars(field.value);
             
             return (
               <FormItem>
@@ -2069,8 +2109,9 @@ function BasicInfoStep({ form }: { form: any }) {
                   {pillars.map((pillar) => {
                     const isSelected = currentValue.includes(pillar.value);
                     return (
-                      <div
+                      <button
                         key={pillar.value}
+                        type="button"
                         className={`flex items-center space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-primary/10 border-primary"
@@ -2080,7 +2121,11 @@ function BasicInfoStep({ form }: { form: any }) {
                           const newValue = isSelected
                             ? currentValue.filter((v: string) => v !== pillar.value)
                             : [...currentValue, pillar.value];
-                          field.onChange(newValue);
+                          form.setValue("greatPillars", newValue, {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          });
                         }}
                         data-testid={`pillar-${pillar.value}`}
                       >
@@ -2095,7 +2140,7 @@ function BasicInfoStep({ form }: { form: any }) {
                           {isSelected && <CheckCircle className="w-3 h-3 text-white" />}
                         </div>
                         <span className="text-sm font-medium">{pillar.label}</span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -3996,6 +4041,13 @@ function PricingStep({ form }: { form: any }) {
       .catch(() => {}); // silently keep defaults on error
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (form.getValues('monetisationMode') !== 'creator_led') {
+      form.setValue('monetisationMode', 'creator_led', { shouldDirty: false });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   
   // One-day and virtual events don't have rooms - use Number of Spots instead
   const isNonRoomEvent = eventType === 'one-day' || eventType === 'virtual';
@@ -4374,45 +4426,7 @@ function PricingStep({ form }: { form: any }) {
         </CardContent>
       </Card>
 
-      {/* **3. MONETISATION MODE** */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <UserCog className="w-5 h-5" />
-            Monetisation Mode
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="monetisation-mode">Business Model *</Label>
-              <Select 
-                value={monetisationMode || 'creator_led'} 
-                onValueChange={(value) => form.setValue('monetisationMode', value, { shouldDirty: true })}
-              >
-                <SelectTrigger data-testid="select-monetisation-mode">
-                  <SelectValue placeholder="Select monetisation approach" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="creator_led">Creator-Led</SelectItem>
-                  <SelectItem value="great_managed">Great-Managed</SelectItem>
-                  <SelectItem value="promo_only">Promo-Only</SelectItem>
-                  <SelectItem value="extra_services">Extra Services</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="text-sm text-gray-600 bg-gray-50 dark:bg-gray-900 p-3 rounded">
-              {monetisationMode === 'creator_led' && 'You manage everything independently with platform support.'}
-              {monetisationMode === 'great_managed' && 'Great. handles venue booking, services, and logistics.'}
-              {monetisationMode === 'promo_only' && 'Focus on promotion and marketing with minimal operational overhead.'}
-              {monetisationMode === 'extra_services' && 'Offer additional premium services and upsells.'}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* **4. REVENUE SPLIT — The Economic Handshake** */}
+      {/* **3. REVENUE SPLIT — The Economic Handshake** */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -4527,27 +4541,28 @@ function PricingStep({ form }: { form: any }) {
         </CardContent>
       </Card>
 
-      {/* **5. MVG + SOFT-HOLD** */}
+      {/* **4. MVG + SOFT-HOLD** */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="w-5 h-5" />
             Minimum Viable Group & Reservations
           </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Day events and trips can require a minimum number of bookings before the experience proceeds.
+          </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
-            {/* MVG hidden for Event (one-day) type */}
-            {isEventType(eventType) ? (
-              <div className="rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 p-4 text-sm text-blue-800 dark:text-blue-200">
-                <strong>🎟️ Event mode:</strong> Minimum-group thresholds are disabled. Participants can book individually without a group commitment.
-              </div>
-            ) : (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="mvg-enabled">Require Minimum Participants</Label>
-                  <p className="text-xs text-gray-500">Experience only proceeds if minimum bookings are met</p>
+                  <p className="text-xs text-gray-500">
+                    {isEventType(eventType)
+                      ? "Event only proceeds if enough people book for food and space prep"
+                      : "Experience only proceeds if minimum bookings are met"}
+                  </p>
                 </div>
                 <Switch
                   id="mvg-enabled"
@@ -4611,7 +4626,6 @@ function PricingStep({ form }: { form: any }) {
                 </div>
               )}
             </div>
-            )} {/* end isEventType(eventType) ternary — Soft-Hold always visible */}
 
             {/* Soft-Hold Settings */}
             <div className="space-y-4">
@@ -4650,7 +4664,7 @@ function PricingStep({ form }: { form: any }) {
         </CardContent>
       </Card>
 
-      {/* **6. INFLUENCER COMMISSION POOL** */}
+      {/* **5. INFLUENCER COMMISSION POOL** */}
       {(monetisationMode === 'promo_only' || monetisationMode === 'creator_led') && (
         <Card>
           <CardHeader>
@@ -4705,7 +4719,7 @@ function PricingStep({ form }: { form: any }) {
         </Card>
       )}
 
-      {/* **7. DISCOUNTS SYSTEM** */}
+      {/* **6. DISCOUNTS SYSTEM** */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -4889,8 +4903,8 @@ function PricingStep({ form }: { form: any }) {
               <span className="text-blue-800 dark:text-blue-200">{currency?.toUpperCase() || 'Not set'}</span>
             </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Monetisation:</span>{" "}
-              <span className="text-blue-800 dark:text-blue-200 capitalize">{monetisationMode?.replace('_', ' ') || 'Not set'}</span>
+              <span className="font-medium text-blue-900 dark:text-blue-100">Business Model:</span>{" "}
+              <span className="text-blue-800 dark:text-blue-200">Creator-Led</span>
             </div>
             <div>
               <span className="font-medium text-blue-900 dark:text-blue-100">Revenue Split:</span>{" "}

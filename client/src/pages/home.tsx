@@ -1866,7 +1866,7 @@ export default function Home() {
         <div className="bg-gradient-to-r from-primary to-secondary py-12">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Ready to Start a Trip?
+              Ready to Start an Experience?
             </h2>
             <p className="text-lg text-gray-100 mb-6 max-w-2xl mx-auto">
               Build your dream experience with our Journey Builder and connect with travelers worldwide
@@ -1879,7 +1879,7 @@ export default function Home() {
               aria-label="Start creating a trip using the journey builder"
             >
               <Sparkles className="mr-2 h-5 w-5" aria-hidden="true" />
-              Start a Trip
+              Start an Experience
               <ArrowRight className="ml-2 h-5 w-5" aria-hidden="true" />
             </Button>
           </div>

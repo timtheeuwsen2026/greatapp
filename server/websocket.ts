@@ -31,9 +31,17 @@ export class WebSocketManager {
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
   constructor(server: HttpServer) {
-    this.wss = new WebSocketServer({ 
-      server, 
-      path: '/ws'
+    this.wss = new WebSocketServer({ noServer: true });
+
+    server.on('upgrade', (req, socket, head) => {
+      const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+      if (pathname !== '/ws') {
+        return;
+      }
+
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit('connection', ws, req);
+      });
     });
 
     this.wss.on('connection', this.handleConnection.bind(this));

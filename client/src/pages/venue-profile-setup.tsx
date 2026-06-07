@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,12 +18,35 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
-import VenueAvailability from '@/components/VenueAvailability';
-import { VenueServicesEditor, type VenueService } from '@/components/VenueServicesEditor';
-import { RolesEditor, type Role } from '@/components/RolesEditor';
-import { GroupedMultiSelect } from '@/components/GroupedMultiSelect';
-import servicesAndAmenitiesData from '@/data/options/services_and_amenities.json';
+import type { VenueService } from '@/components/VenueServicesEditor';
+import type { Role } from '@/components/RolesEditor';
 import Navigation from '@/components/navigation';
+
+const VenueAvailability = lazy(() => import('@/components/VenueAvailability'));
+const VenueServicesEditor = lazy(() =>
+  import('@/components/VenueServicesEditor').then((module) => ({
+    default: module.VenueServicesEditor,
+  }))
+);
+const RolesEditor = lazy(() =>
+  import('@/components/RolesEditor').then((module) => ({
+    default: module.RolesEditor,
+  }))
+);
+const GroupedMultiSelect = lazy(() =>
+  import('@/components/GroupedMultiSelect').then((module) => ({
+    default: module.GroupedMultiSelect,
+  }))
+);
+
+function StepLoading({ label = 'Loading step...' }: { label?: string }) {
+  return (
+    <div className="flex min-h-32 items-center justify-center gap-3 rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm font-medium text-gray-600">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      {label}
+    </div>
+  );
+}
 
 // Service validation schema
 const venueServiceSchema = z.object({
@@ -317,6 +340,17 @@ const venueProfileSchema = z.object({
 
 type VenueProfileForm = z.infer<typeof venueProfileSchema>;
 
+type GroupedOptionsData = {
+  services: Array<{
+    category: string;
+    items: Array<{ id: string; name: string; description?: string }>;
+  }>;
+  amenities: Array<{
+    category: string;
+    items: Array<{ id: string; name: string; description?: string }>;
+  }>;
+};
+
 // Amenities - physical features of the venue (ordered by most frequently used)
 const commonAmenities = [
   'WiFi',
@@ -395,13 +429,17 @@ export default function VenueProfileSetup() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
+  const [servicesAndAmenitiesData, setServicesAndAmenitiesData] = useState<GroupedOptionsData | null>(null);
 
   // Get venue ID from URL for edit mode
   const urlParams = new URLSearchParams(window.location.search);
   const editVenueId = urlParams.get('edit');
   const requestedVenueType = urlParams.get('venueType') || urlParams.get('type');
   const initialVenueType: VenueProfileForm['venueType'] =
-    requestedVenueType === 'daytime' || requestedVenueType === 'day_event'
+    requestedVenueType === 'daytime' ||
+    requestedVenueType === 'day_event' ||
+    requestedVenueType === 'one-day' ||
+    requestedVenueType === 'single-day'
       ? 'daytime'
       : 'multi_day';
 
@@ -476,6 +514,14 @@ export default function VenueProfileSetup() {
   // Daytime Space: skip Rooms (step 7) and Default Itinerary (step 8)
   const isDaytime = form.watch('venueType') === 'daytime';
   const DAYTIME_SKIP_STEPS = [7, 8]; // Rooms & Itinerary hidden for daytime spaces
+
+  useEffect(() => {
+    if (step !== 5 || servicesAndAmenitiesData) return;
+
+    void import('@/data/options/services_and_amenities.json').then((module) => {
+      setServicesAndAmenitiesData(module.default as GroupedOptionsData);
+    });
+  }, [servicesAndAmenitiesData, step]);
 
   // Load existing venue data for editing
   const { data: existingVenue, isLoading: isLoadingVenue } = useQuery({
@@ -558,6 +604,39 @@ export default function VenueProfileSetup() {
   }, [existingVenue, form]);
 
   // Filter and sort amenities based on search
+  const refreshVenueCaches = (venue?: { id?: string; slug?: string | null }) => {
+    const invalidations = [
+      queryClient.invalidateQueries({ queryKey: ['/api/venues'] }),
+      queryClient.invalidateQueries({ queryKey: ['/api/user/venues'] }),
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/venues'] }),
+    ];
+
+    if (venue?.id) {
+      invalidations.push(
+        queryClient.invalidateQueries({ queryKey: ['venue', venue.id] }),
+        queryClient.invalidateQueries({ queryKey: ['services', venue.id] }),
+        queryClient.invalidateQueries({ queryKey: ['pricing', venue.id] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/venues', venue.id, 'availability'] })
+      );
+    }
+
+    if (venue?.slug) {
+      invalidations.push(
+        queryClient.invalidateQueries({ queryKey: ['venue', venue.slug] }),
+        queryClient.invalidateQueries({ queryKey: [`/api/v/${venue.slug}`] })
+      );
+    }
+
+    if (editVenueId) {
+      invalidations.push(
+        queryClient.invalidateQueries({ queryKey: ['/api/venues', editVenueId, 'edit'] })
+      );
+    }
+
+    void Promise.all(invalidations).catch((error) => {
+      console.error('Failed to refresh venue caches:', error);
+    });
+  };
 
   // Mutation for saving venue (create or update)
   const profileMutation = useMutation({
@@ -577,52 +656,15 @@ export default function VenueProfileSetup() {
           ? 'Your venue has been successfully updated.' 
           : 'Your venue has been saved. Submit it for review when ready.',
       });
-      
-      // Comprehensive cache invalidation for immediate UI update
-      const invalidationPromises = [
-        // All venues lists
-        queryClient.invalidateQueries({ queryKey: ['/api/venues'] }),
-        queryClient.invalidateQueries({ queryKey: ['/api/user/venues'] }),
-        queryClient.invalidateQueries({ queryKey: ['/api/admin/venues'] }),
-        
-        // Venue-specific queries
-        queryClient.invalidateQueries({ queryKey: ['venue', venue.slug] }),
-        queryClient.invalidateQueries({ queryKey: ['venue', venue.id] }),
-        
-        // Venue services (if services were updated)
-        queryClient.invalidateQueries({ queryKey: ['services', venue.id] }),
-        
-        // Venue pricing (if pricing was updated)
-        queryClient.invalidateQueries({ queryKey: ['pricing', venue.id] }),
-        
-        // Venue availability
-        queryClient.invalidateQueries({ queryKey: ['/api/venues', venue.id, 'availability'] }),
-      ];
-      
-      // Invalidate public venue page by slug
-      if (venue.slug) {
-        invalidationPromises.push(
-          queryClient.invalidateQueries({ queryKey: [`/api/v/${venue.slug}`] })
-        );
-      }
-      
-      // Invalidate edit mode query
-      if (editVenueId) {
-        invalidationPromises.push(
-          queryClient.invalidateQueries({ queryKey: ['/api/venues', editVenueId, 'edit'] })
-        );
-      }
-      
-      // Wait for all invalidations to complete
-      await Promise.all(invalidationPromises);
-      
-      // Stay on the page if it's a new venue so user can submit for review
+
       if (editVenueId) {
         setLocation('/venue-dashboard');
       } else {
         // Keep the user in the listing flow after the draft is created.
         setLocation(`/venues/new?edit=${venue.id}`);
       }
+
+      refreshVenueCaches(venue);
     },
     onError: (error: Error) => {
       toast({
@@ -638,35 +680,17 @@ export default function VenueProfileSetup() {
     mutationFn: async (venueId: string) => {
       return apiRequest('PATCH', `/api/venues/${venueId}/submit`, {});
     },
-    onSuccess: async () => {
+    onSuccess: () => {
       toast({
         title: 'Venue submitted for review!',
         description: 'Your venue will be reviewed by our team. You\'ll be notified once it\'s approved.',
       });
-      
-      // Comprehensive cache invalidation for venue status change
-      const invalidationPromises = [
-        // All venues lists (admin will see it in pending)
-        queryClient.invalidateQueries({ queryKey: ['/api/venues'] }),
-        queryClient.invalidateQueries({ queryKey: ['/api/user/venues'] }),
-        queryClient.invalidateQueries({ queryKey: ['/api/admin/venues'] }),
-        
-        // Venue-specific queries
-        queryClient.invalidateQueries({ queryKey: ['venue', existingVenue?.slug] }),
-        queryClient.invalidateQueries({ queryKey: ['venue', editVenueId] }),
-      ];
-      
-      // Invalidate public venue page by slug
-      if (existingVenue?.slug) {
-        invalidationPromises.push(
-          queryClient.invalidateQueries({ queryKey: [`/api/v/${existingVenue.slug}`] })
-        );
-      }
-      
-      // Wait for all invalidations
-      await Promise.all(invalidationPromises);
-      
+
       setLocation('/venue-dashboard');
+      refreshVenueCaches({
+        id: editVenueId || existingVenue?.id,
+        slug: existingVenue?.slug,
+      });
     },
     onError: (error: Error) => {
       toast({
@@ -678,13 +702,6 @@ export default function VenueProfileSetup() {
   });
 
   const onSubmit = (data: VenueProfileForm) => {
-    console.log('Submitting venue profile:', {
-      ...data,
-      coverImageUrl: data.coverImageUrl || '(empty)',
-      galleryImages: data.galleryImages?.length ? `${data.galleryImages.length} images` : '(empty)',
-      galleryImagesList: data.galleryImages
-    });
-    
     // Convert decimal fields to strings and integer fields to numbers for backend compatibility
     const cleanedData = {
       ...data,
@@ -706,7 +723,6 @@ export default function VenueProfileSetup() {
       minStay: data.minStay ? Number(data.minStay) : null,
     };
     
-    console.log('Cleaned data for submission:', cleanedData);
     profileMutation.mutate(cleanedData as unknown as VenueProfileForm);
   };
 
@@ -1505,6 +1521,15 @@ export default function VenueProfileSetup() {
                         control={form.control}
                         name="amenities"
                         render={({ field }) => {
+                          if (!servicesAndAmenitiesData) {
+                            return (
+                              <FormItem>
+                                <FormLabel>Physical features available at your venue</FormLabel>
+                                <StepLoading label="Loading amenities..." />
+                              </FormItem>
+                            );
+                          }
+
                           const selected = (field.value || []).map((id: string) => {
                             const found = servicesAndAmenitiesData.amenities
                               .flatMap(g => g.items)
@@ -1519,14 +1544,16 @@ export default function VenueProfileSetup() {
                                 List amenities that guests can expect, such as sauna, outdoor deck, or pool.
                               </FormDescription>
                               <FormControl>
-                                <GroupedMultiSelect
-                                  options={servicesAndAmenitiesData.amenities}
-                                  selected={selected}
-                                  onChange={(items) => field.onChange(items.map(item => item.id))}
-                                  placeholder="Search or select amenities..."
-                                  allowCustom={true}
-                                  data-testid="select-amenities"
-                                />
+                                <Suspense fallback={<StepLoading label="Loading amenities..." />}>
+                                  <GroupedMultiSelect
+                                    options={servicesAndAmenitiesData.amenities}
+                                    selected={selected}
+                                    onChange={(items) => field.onChange(items.map(item => item.id))}
+                                    placeholder="Search or select amenities..."
+                                    allowCustom={true}
+                                    data-testid="select-amenities"
+                                  />
+                                </Suspense>
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -1541,6 +1568,15 @@ export default function VenueProfileSetup() {
                         control={form.control}
                         name="servicesOffered"
                         render={({ field }) => {
+                          if (!servicesAndAmenitiesData) {
+                            return (
+                              <FormItem>
+                                <FormLabel>Services your venue can provide</FormLabel>
+                                <StepLoading label="Loading services..." />
+                              </FormItem>
+                            );
+                          }
+
                           const selected = (field.value || []).map((id: string) => {
                             const found = servicesAndAmenitiesData.services
                               .flatMap(g => g.items)
@@ -1555,14 +1591,16 @@ export default function VenueProfileSetup() {
                                 Common services include airport pickup, chef, or yoga equipment.
                               </FormDescription>
                               <FormControl>
-                                <GroupedMultiSelect
-                                  options={servicesAndAmenitiesData.services}
-                                  selected={selected}
-                                  onChange={(items) => field.onChange(items.map(item => item.id))}
-                                  placeholder="Search or select services..."
-                                  allowCustom={true}
-                                  data-testid="select-services"
-                                />
+                                <Suspense fallback={<StepLoading label="Loading services..." />}>
+                                  <GroupedMultiSelect
+                                    options={servicesAndAmenitiesData.services}
+                                    selected={selected}
+                                    onChange={(items) => field.onChange(items.map(item => item.id))}
+                                    placeholder="Search or select services..."
+                                    allowCustom={true}
+                                    data-testid="select-services"
+                                  />
+                                </Suspense>
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -1582,11 +1620,13 @@ export default function VenueProfileSetup() {
                         render={({ field }) => (
                           <FormItem>
                             <FormControl>
-                              <VenueServicesEditor
-                                services={field.value}
-                                onChange={field.onChange}
-                                maxServices={20}
-                              />
+                              <Suspense fallback={<StepLoading label="Loading paid services..." />}>
+                                <VenueServicesEditor
+                                  services={field.value}
+                                  onChange={field.onChange}
+                                  maxServices={20}
+                                />
+                              </Suspense>
                             </FormControl>
                             <FormMessage />
                           </FormItem>
@@ -1606,10 +1646,12 @@ export default function VenueProfileSetup() {
                       </p>
                     </div>
                     
-                    <RolesEditor
-                      roles={form.watch("venueRoles")}
-                      onChange={(roles) => form.setValue("venueRoles", roles, { shouldDirty: true })}
-                    />
+                    <Suspense fallback={<StepLoading label="Loading roles..." />}>
+                      <RolesEditor
+                        roles={form.watch("venueRoles")}
+                        onChange={(roles) => form.setValue("venueRoles", roles, { shouldDirty: true })}
+                      />
+                    </Suspense>
                   </div>
                 )}
 
@@ -2563,10 +2605,8 @@ export default function VenueProfileSetup() {
                               description: 'Now submitting for review...',
                             });
                             
-                            await queryClient.invalidateQueries({ queryKey: ['/api/venues'] });
-                            await queryClient.invalidateQueries({ queryKey: ['/api/user/venues'] });
-                            
                             window.history.replaceState({}, '', `/venues/new?edit=${venue.id}`);
+                            refreshVenueCaches(venue);
                             
                             submitForReviewMutation.mutate(venue.id);
                           } catch (error) {
@@ -2603,18 +2643,20 @@ export default function VenueProfileSetup() {
                     
                     <FormField
                       control={form.control}
-                      name="services"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormControl>
-                            <VenueServicesEditor
-                              services={field.value}
-                              onChange={field.onChange}
-                              maxServices={20}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
+                        name="services"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <Suspense fallback={<StepLoading label="Loading services..." />}>
+                                <VenueServicesEditor
+                                  services={field.value}
+                                  onChange={field.onChange}
+                                  maxServices={20}
+                                />
+                              </Suspense>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
                       )}
                     />
                   </div>
@@ -2633,7 +2675,9 @@ export default function VenueProfileSetup() {
                       </p>
                       
                       {editVenueId ? (
-                        <VenueAvailability venueId={editVenueId} />
+                        <Suspense fallback={<StepLoading label="Loading availability..." />}>
+                          <VenueAvailability venueId={editVenueId} />
+                        </Suspense>
                       ) : (
                         <Alert>
                           <AlertCircle className="h-4 w-4" />

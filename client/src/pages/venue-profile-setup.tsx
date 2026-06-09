@@ -392,14 +392,25 @@ const commonServices = [
   'Marketing Support'
 ];
 
-const venueCategories = [
+const multiDayVenueCategories = [
   'Retreat Center', 'Villa', 'Studio', 'Eco-Lodge', 'Hotel',
   'Co-Living', 'Workation Property', 'Outdoor Spot'
 ];
 
-const venueVibes = [
+const daytimeVenueCategories = [
+  'Cafe', 'Restaurant', 'Bar', 'Retail Space', 'Creative Studio',
+  'Fitness Studio', 'Workshop Space', 'Gallery', 'Coworking Space',
+  'Community Space', 'Rooftop', 'Outdoor Area'
+];
+
+const multiDayVenueVibes = [
   'Jungle', 'Beach', 'Urban', 'Mountain', 'Remote', 'Luxury',
   'Eco', 'Spiritual', 'Adventure', 'Digital Nomad Friendly'
+];
+
+const daytimeVenueVibes = [
+  'Cozy', 'Bright', 'Industrial', 'Minimal', 'Premium', 'Family Friendly',
+  'Community Driven', 'Creative', 'High Energy', 'Quiet', 'Late Night', 'Pop-Up Ready'
 ];
 
 const viewsEnvironment = [
@@ -511,9 +522,37 @@ export default function VenueProfileSetup() {
     },
   });
 
-  // Daytime Space: skip Rooms (step 7) and Default Itinerary (step 8)
+  // Daytime Space: skip staff roles, rooms, and default itinerary for cafes/studios/retail venues.
   const isDaytime = form.watch('venueType') === 'daytime';
-  const DAYTIME_SKIP_STEPS = [7, 8]; // Rooms & Itinerary hidden for daytime spaces
+  const DAYTIME_SKIP_STEPS = [6, 7, 8];
+  const visibleStepIds = useMemo(
+    () => Array.from({ length: 10 }, (_, index) => index + 1).filter((id) => !isDaytime || !DAYTIME_SKIP_STEPS.includes(id)),
+    [isDaytime]
+  );
+  const currentVisibleStep = Math.max(visibleStepIds.indexOf(step), 0) + 1;
+  const totalVisibleSteps = visibleStepIds.length;
+  const activeVenueCategories = isDaytime ? daytimeVenueCategories : multiDayVenueCategories;
+  const activeVenueVibes = isDaytime ? daytimeVenueVibes : multiDayVenueVibes;
+
+  useEffect(() => {
+    const allowedCategories = new Set(activeVenueCategories);
+    const allowedVibes = new Set(activeVenueVibes);
+    form.setValue('categories', form.getValues('categories').filter((category) => allowedCategories.has(category)));
+    form.setValue('vibes', form.getValues('vibes').filter((vibe) => allowedVibes.has(vibe)));
+
+    if (isDaytime) {
+      form.setValue('venueRoles', []);
+      form.setValue('venueRoomTypes', []);
+      form.setValue('defaultItinerary', []);
+      form.setValue('useRoomPricesFromRoomsPage', false);
+      form.setValue('defaultPricePerRoomPerNight', undefined);
+      form.setValue('minimumNights', undefined);
+      form.setValue('minStay', undefined);
+      if (form.getValues('pricingModel') === 'per_room') {
+        form.setValue('pricingModel', '');
+      }
+    }
+  }, [activeVenueCategories, activeVenueVibes, form, isDaytime]);
 
   useEffect(() => {
     if (step !== 5 || servicesAndAmenitiesData) return;
@@ -702,6 +741,7 @@ export default function VenueProfileSetup() {
   });
 
   const onSubmit = (data: VenueProfileForm) => {
+    const isDaytimeVenue = data.venueType === 'daytime';
     // Convert decimal fields to strings and integer fields to numbers for backend compatibility
     const cleanedData = {
       ...data,
@@ -709,18 +749,22 @@ export default function VenueProfileSetup() {
       // Decimal fields (prices, percentages) as strings - basePricePerEvent and cleaningFee removed per Milestone 1
       basePrice: data.basePrice ? String(data.basePrice) : null,
       basePricePerDay: data.basePricePerDay ? String(data.basePricePerDay) : null,
-      defaultPricePerRoomPerNight: data.defaultPricePerRoomPerNight ? String(data.defaultPricePerRoomPerNight) : null,
+      defaultPricePerRoomPerNight: isDaytimeVenue ? null : data.defaultPricePerRoomPerNight ? String(data.defaultPricePerRoomPerNight) : null,
       depositPercent: data.depositPercent ? String(data.depositPercent) : null,
       commissionPercent: data.commissionPercent ? String(data.commissionPercent) : null,
       // Integer fields as numbers (capacity is required so always a number)
       capacity: data.capacity ? Number(data.capacity) : data.capacity,
       standingCapacity: data.standingCapacity != null ? Number(data.standingCapacity) : null,
       seatedCapacity: data.seatedCapacity != null ? Number(data.seatedCapacity) : null,
-      minimumNights: data.minimumNights ? Number(data.minimumNights) : null,
+      minimumNights: isDaytimeVenue ? null : data.minimumNights ? Number(data.minimumNights) : null,
       softHoldDurationDays: data.softHoldDurationDays ? Number(data.softHoldDurationDays) : null,
       balanceDueDaysBeforeArrival: data.balanceDueDaysBeforeArrival ? Number(data.balanceDueDaysBeforeArrival) : null,
       softHoldDays: data.softHoldDays ? Number(data.softHoldDays) : null,
-      minStay: data.minStay ? Number(data.minStay) : null,
+      minStay: isDaytimeVenue ? null : data.minStay ? Number(data.minStay) : null,
+      useRoomPricesFromRoomsPage: isDaytimeVenue ? false : data.useRoomPricesFromRoomsPage,
+      venueRoles: isDaytimeVenue ? [] : data.venueRoles,
+      venueRoomTypes: isDaytimeVenue ? [] : data.venueRoomTypes,
+      defaultItinerary: isDaytimeVenue ? [] : data.defaultItinerary,
     };
     
     profileMutation.mutate(cleanedData as unknown as VenueProfileForm);
@@ -972,20 +1016,39 @@ export default function VenueProfileSetup() {
     );
   }
 
-  const progress = (step / 10) * 100;
+  const progress = (currentVisibleStep / totalVisibleSteps) * 100;
 
-  const stepTitles = [
-    'Basic Information',
-    'Photos & Media',
-    'Calendar & Availability',
-    'Location Details',
-    'Services & Amenities',
-    'Roles & Staffing',
-    'Rooms',
-    'Default Itinerary',
-    'Pricing',
-    'Terms & Review'
-  ];
+  const stepTitles: Record<number, string> = {
+    1: 'Basic Information',
+    2: 'Photos & Media',
+    3: 'Calendar & Availability',
+    4: 'Location Details',
+    5: 'Services & Amenities',
+    6: 'Roles & Staffing',
+    7: 'Rooms',
+    8: 'Default Itinerary',
+    9: isDaytime ? 'Pricing & Booking' : 'Pricing',
+    10: 'Terms & Review'
+  };
+
+  const stepDescriptions: Record<number, string> = {
+    1: isDaytime
+      ? 'Add the core details for your cafe, studio, retail space, or other daytime venue.'
+      : "Enter your venue's basic details including name, location, and capacity.",
+    2: 'Upload photos to showcase your venue to potential event creators.',
+    3: "Manage your venue's availability and booking calendar settings.",
+    4: 'Provide detailed location information including address and public-facing links.',
+    5: isDaytime
+      ? 'Select the amenities and services your space can support for day events.'
+      : 'Select amenities and services your venue offers to guests.',
+    6: 'Define roles and staffing available at your venue.',
+    7: 'Configure room types and accommodation options.',
+    8: 'Create a default itinerary template for events at your venue.',
+    9: isDaytime
+      ? 'Set event pricing, payment terms, and booking conditions.'
+      : 'Set up pricing, payment terms, and commercial details.',
+    10: 'Review and accept the terms before submitting your venue.'
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -999,7 +1062,7 @@ export default function VenueProfileSetup() {
                 {editVenueId ? 'Edit Venue Profile' : 'Create Venue Profile'}
               </h1>
               <p className="text-gray-600 dark:text-gray-400">
-                Step {step} of 10: {stepTitles[step - 1]}
+                Step {currentVisibleStep} of {totalVisibleSteps}: {stepTitles[step]}
               </p>
             </div>
           </div>
@@ -1014,19 +1077,10 @@ export default function VenueProfileSetup() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Building className="w-5 h-5" />
-                  {stepTitles[step - 1]}
+                  {stepTitles[step]}
                 </CardTitle>
                 <p className="text-gray-600 dark:text-gray-400">
-                  {step === 1 && 'Enter your venue\'s basic details including name, location, and capacity.'}
-                  {step === 2 && 'Upload photos to showcase your venue to potential event creators.'}
-                  {step === 3 && 'Manage your venue\'s availability and booking calendar settings.'}
-                  {step === 4 && 'Provide detailed location information including address and coordinates.'}
-                  {step === 5 && 'Select amenities and services your venue offers to guests.'}
-                  {step === 6 && 'Define roles and staffing available at your venue.'}
-                  {step === 7 && 'Configure room types and accommodation options.'}
-                  {step === 8 && 'Create a default itinerary template for events at your venue.'}
-                  {step === 9 && 'Set up pricing, payment terms, and commercial details.'}
-                  {step === 10 && 'Review and accept the terms before submitting your venue.'}
+                  {stepDescriptions[step]}
                 </p>
               </CardHeader>
               <CardContent className="min-h-[400px]">
@@ -1043,7 +1097,7 @@ export default function VenueProfileSetup() {
                           <FormLabel>Venue Name *</FormLabel>
                           <FormControl>
                             <Input 
-                              placeholder="Amazing Retreat Center" 
+                              placeholder={isDaytime ? "Neighborhood Cafe" : "Amazing Retreat Center"}
                               {...field} 
                               maxLength={255}
                               data-testid="input-venue-name" 
@@ -1089,7 +1143,10 @@ export default function VenueProfileSetup() {
                           <FormLabel>Description *</FormLabel>
                           <FormControl>
                             <Textarea 
-                              placeholder="Beachfront yoga shala with accommodation for 20 participants. Located in a peaceful area with stunning ocean views..."
+                              placeholder={isDaytime
+                                ? "A bright cafe and event space for workshops, pop-ups, tastings, and community gatherings..."
+                                : "Beachfront yoga shala with accommodation for 20 participants. Located in a peaceful area with stunning ocean views..."
+                              }
                               rows={6}
                               {...field}
                               maxLength={5000}
@@ -1113,12 +1170,12 @@ export default function VenueProfileSetup() {
                         <FormItem>
                           <FormLabel>Space Type *</FormLabel>
                           <FormDescription>
-                            Choose how your venue operates. <strong>Daytime Space</strong> hides multi-day room & itinerary steps.
+                            Choose the format that best matches your venue and events.
                           </FormDescription>
                           <div className="grid grid-cols-2 gap-3 mt-2">
                             {[
-                              { value: 'multi_day', label: '🏡 Multi-Day Venue', desc: 'Retreats, overnight stays, multi-day events' },
-                              { value: 'daytime',   label: '☀️ Daytime Space',   desc: 'Co-working hubs, studios, one-day pop-ups' },
+                              { value: 'multi_day', label: 'Multi-Day Venue', desc: 'Retreats, overnight stays, multi-day events' },
+                              { value: 'daytime', label: 'Daytime Space', desc: 'Cafes, retail spaces, studios, workshops, pop-ups' },
                             ].map((opt) => (
                               <button
                                 key={opt.value}
@@ -1213,12 +1270,15 @@ export default function VenueProfileSetup() {
                       name="categories"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Venue Type *</FormLabel>
+                          <FormLabel>{isDaytime ? 'Space Category *' : 'Venue Type *'}</FormLabel>
                           <FormDescription>
-                            Select the categories that best describe your venue
+                            {isDaytime
+                              ? 'Select the categories that best describe your daytime space'
+                              : 'Select the categories that best describe your venue'
+                            }
                           </FormDescription>
                           <div className="flex flex-wrap gap-2 mt-2">
-                            {venueCategories.map((category) => {
+                            {activeVenueCategories.map((category) => {
                               const isSelected = field.value?.includes(category);
                               return (
                                 <Badge
@@ -1250,12 +1310,15 @@ export default function VenueProfileSetup() {
                       name="vibes"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Venue Vibes</FormLabel>
+                          <FormLabel>{isDaytime ? 'Space Vibes' : 'Venue Vibes'}</FormLabel>
                           <FormDescription>
-                            Select the vibes and atmosphere of your venue
+                            {isDaytime
+                              ? 'Select the atmosphere creators can expect in your space'
+                              : 'Select the vibes and atmosphere of your venue'
+                            }
                           </FormDescription>
                           <div className="flex flex-wrap gap-2 mt-2">
-                            {venueVibes.map((vibe) => {
+                            {activeVenueVibes.map((vibe) => {
                               const isSelected = field.value?.includes(vibe);
                               return (
                                 <Badge
@@ -1940,7 +2003,9 @@ export default function VenueProfileSetup() {
                     <Card className="p-6">
                       <h3 className="text-lg font-semibold mb-4">Pricing Model</h3>
                       <p className="text-gray-600 dark:text-gray-400 mb-6">
-                        Choose how you want to price your venue for event organizers.
+                        {isDaytime
+                          ? 'Choose how organizers can book your space for workshops, pop-ups, classes, and community events.'
+                          : 'Choose how you want to price your venue for event organizers.'}
                       </p>
                       
                       <FormField
@@ -1957,22 +2022,42 @@ export default function VenueProfileSetup() {
                                 >
                                   <div className="flex items-center gap-2 mb-2">
                                     <Building className="h-5 w-5 text-primary" />
-                                    <span className="font-medium">Whole Venue Pricing</span>
+                                    <span className="font-medium">
+                                      {isDaytime ? 'Whole Space Rental' : 'Whole Venue Pricing'}
+                                    </span>
                                   </div>
-                                  <p className="text-sm text-gray-600">Charge a flat rate for the entire venue per day or per event</p>
+                                  <p className="text-sm text-gray-600">
+                                    {isDaytime
+                                      ? 'Charge a flat rate for private events, pop-ups, or full-day use'
+                                      : 'Charge a flat rate for the entire venue per day or per event'}
+                                  </p>
                                 </Card>
                                 
-                                <Card 
-                                  className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_room' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                  onClick={() => field.onChange('per_room')}
-                                  data-testid="card-pricing-per-room"
-                                >
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <Users className="h-5 w-5 text-primary" />
-                                    <span className="font-medium">Per Room / Per Night</span>
-                                  </div>
-                                  <p className="text-sm text-gray-600">Charge based on individual room bookings per night</p>
-                                </Card>
+                                {isDaytime ? (
+                                  <Card
+                                    className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_hour' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                    onClick={() => field.onChange('per_hour')}
+                                    data-testid="card-pricing-per-hour"
+                                  >
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Clock className="h-5 w-5 text-primary" />
+                                      <span className="font-medium">Hourly Space Rental</span>
+                                    </div>
+                                    <p className="text-sm text-gray-600">Charge for shorter bookings such as classes, tastings, shoots, or pop-ups</p>
+                                  </Card>
+                                ) : (
+                                  <Card
+                                    className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_room' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                    onClick={() => field.onChange('per_room')}
+                                    data-testid="card-pricing-per-room"
+                                  >
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Users className="h-5 w-5 text-primary" />
+                                      <span className="font-medium">Per Room / Per Night</span>
+                                    </div>
+                                    <p className="text-sm text-gray-600">Charge based on individual room bookings per night</p>
+                                  </Card>
+                                )}
                               </div>
                             </FormControl>
                           </FormItem>
@@ -1982,13 +2067,15 @@ export default function VenueProfileSetup() {
                       {/* Whole Venue Pricing Fields */}
                       {form.watch('pricingModel') === 'whole_venue' && (
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">Whole Venue Pricing</h4>
+                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
+                            {isDaytime ? 'Whole Space Pricing' : 'Whole Venue Pricing'}
+                          </h4>
                           <FormField
                             control={form.control}
                             name="basePricePerDay"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>Price Per Day</FormLabel>
+                                <FormLabel>{isDaytime ? 'Day Rate' : 'Price Per Day'}</FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
@@ -2006,8 +2093,34 @@ export default function VenueProfileSetup() {
                         </div>
                       )}
 
+                      {form.watch('pricingModel') === 'per_hour' && (
+                        <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                          <h4 className="font-medium text-blue-800 dark:text-blue-200">Hourly Space Rental</h4>
+                          <FormField
+                            control={form.control}
+                            name="basePricePerDay"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Hourly Rate</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="e.g., 125"
+                                    {...field}
+                                    data-testid="input-base-price-per-hour"
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      )}
+
                       {/* Per Room Pricing Fields */}
-                      {form.watch('pricingModel') === 'per_room' && (
+                      {!isDaytime && form.watch('pricingModel') === 'per_room' && (
                         <div className="mt-6 space-y-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
                           <h4 className="font-medium text-green-800 dark:text-green-200">Per Room Pricing Options</h4>
                           
@@ -2083,9 +2196,13 @@ export default function VenueProfileSetup() {
 
                     {/* Section 2: Payment Timing Model (MVG) */}
                     <Card className="p-6">
-                      <h3 className="text-lg font-semibold mb-4">Payment Timing Model (MVG)</h3>
+                      <h3 className="text-lg font-semibold mb-4">
+                        {isDaytime ? 'Payment Timing' : 'Payment Timing Model (MVG)'}
+                      </h3>
                       <p className="text-gray-600 dark:text-gray-400 mb-6">
-                        Choose how payments should be collected in relation to the Minimum Viable Group threshold.
+                        {isDaytime
+                          ? 'Choose when deposits and balances are collected for event bookings.'
+                          : 'Choose how payments should be collected in relation to the Minimum Viable Group threshold.'}
                       </p>
                       
                       <FormField
@@ -2105,10 +2222,16 @@ export default function VenueProfileSetup() {
                                     <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500' : 'border-gray-400'}`}>
                                       {field.value === 'soft_hold_deposit_balance' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
                                     </div>
-                                    <span className="font-medium">Soft Hold → Deposit After MVG → Balance Before Arrival</span>
+                                    <span className="font-medium">
+                                      {isDaytime
+                                        ? 'Soft Hold -> Deposit After Approval -> Balance Before Event'
+                                        : 'Soft Hold -> Deposit After MVG -> Balance Before Arrival'}
+                                    </span>
                                   </div>
                                   <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    Dates are held without payment, deposit collected after MVG is met, balance due before arrival
+                                    {isDaytime
+                                      ? 'Date and time are held without payment, deposit collected after approval, balance due before the event'
+                                      : 'Dates are held without payment, deposit collected after MVG is met, balance due before arrival'}
                                   </p>
                                 </Card>
 
@@ -2122,10 +2245,16 @@ export default function VenueProfileSetup() {
                                     <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_upfront_balance' ? 'border-green-500' : 'border-gray-400'}`}>
                                       {field.value === 'deposit_upfront_balance' && <div className="w-2 h-2 rounded-full bg-green-500" />}
                                     </div>
-                                    <span className="font-medium">Deposit Upfront (Refundable Until MVG) → Balance Before Arrival</span>
+                                    <span className="font-medium">
+                                      {isDaytime
+                                        ? 'Deposit Upfront (Refundable Until Approval) -> Balance Before Event'
+                                        : 'Deposit Upfront (Refundable Until MVG) -> Balance Before Arrival'}
+                                    </span>
                                   </div>
                                   <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    Deposit collected immediately but refundable if MVG not met, balance due before arrival
+                                    {isDaytime
+                                      ? 'Deposit collected immediately but refundable until approval, balance due before the event'
+                                      : 'Deposit collected immediately but refundable if MVG not met, balance due before arrival'}
                                   </p>
                                 </Card>
 
@@ -2139,10 +2268,14 @@ export default function VenueProfileSetup() {
                                     <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_balance_arrival' ? 'border-orange-500' : 'border-gray-400'}`}>
                                       {field.value === 'deposit_balance_arrival' && <div className="w-2 h-2 rounded-full bg-orange-500" />}
                                     </div>
-                                    <span className="font-medium">Deposit After MVG → Balance on Arrival</span>
+                                    <span className="font-medium">
+                                      {isDaytime ? 'Deposit After Approval -> Balance on Event Day' : 'Deposit After MVG -> Balance on Arrival'}
+                                    </span>
                                   </div>
                                   <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    Deposit collected only after MVG is met, remaining balance paid on arrival
+                                    {isDaytime
+                                      ? 'Deposit collected only after approval, remaining balance paid on the event day'
+                                      : 'Deposit collected only after MVG is met, remaining balance paid on arrival'}
                                   </p>
                                 </Card>
                               </div>
@@ -2215,9 +2348,11 @@ export default function VenueProfileSetup() {
                               name="balanceDueDaysBeforeArrival"
                               render={({ field }) => (
                                 <FormItem>
-                                  <FormLabel>Balance Due (Days Before Arrival)</FormLabel>
+                                  <FormLabel>{isDaytime ? 'Balance Due (Days Before Event)' : 'Balance Due (Days Before Arrival)'}</FormLabel>
                                   <FormDescription>
-                                    Number of days before arrival when the remaining balance is due
+                                    {isDaytime
+                                      ? 'Number of days before the event when the remaining balance is due'
+                                      : 'Number of days before arrival when the remaining balance is due'}
                                   </FormDescription>
                                   <FormControl>
                                     <Input
@@ -2281,7 +2416,11 @@ export default function VenueProfileSetup() {
                             </FormDescription>
                             <FormControl>
                               <Textarea
-                                placeholder="e.g., 10% discount for bookings over 14 days, special rates available for retreats during low season..."
+                                placeholder={
+                                  isDaytime
+                                    ? 'e.g., weekend rates, minimum booking hours, add-on staffing fees, or discounts for recurring events...'
+                                    : 'e.g., 10% discount for bookings over 14 days, special rates available for retreats during low season...'
+                                }
                                 rows={4}
                                 {...field}
                                 data-testid="textarea-pricing-notes"
@@ -2581,20 +2720,25 @@ export default function VenueProfileSetup() {
                         } else {
                           try {
                             const formData = form.getValues();
+                            const isDaytimeVenue = formData.venueType === 'daytime';
                             
                             const cleanedData = {
                               ...formData,
                               capacity: formData.capacity ? Number(formData.capacity) : null,
                               basePrice: formData.basePrice ? String(formData.basePrice) : null,
                               basePricePerDay: formData.basePricePerDay ? String(formData.basePricePerDay) : null,
-                              defaultPricePerRoomPerNight: formData.defaultPricePerRoomPerNight ? String(formData.defaultPricePerRoomPerNight) : null,
-                              minimumNights: formData.minimumNights ? Number(formData.minimumNights) : null,
+                              defaultPricePerRoomPerNight: isDaytimeVenue ? null : formData.defaultPricePerRoomPerNight ? String(formData.defaultPricePerRoomPerNight) : null,
+                              minimumNights: isDaytimeVenue ? null : formData.minimumNights ? Number(formData.minimumNights) : null,
                               softHoldDurationDays: formData.softHoldDurationDays ? Number(formData.softHoldDurationDays) : null,
                               softHoldDays: formData.softHoldDays ? Number(formData.softHoldDays) : null,
                               depositPercent: formData.depositPercent ? String(formData.depositPercent) : null,
                               commissionPercent: formData.commissionPercent ? String(formData.commissionPercent) : null,
                               balanceDueDaysBeforeArrival: formData.balanceDueDaysBeforeArrival ? Number(formData.balanceDueDaysBeforeArrival) : null,
-                              minStay: formData.minStay ? Number(formData.minStay) : null,
+                              minStay: isDaytimeVenue ? null : formData.minStay ? Number(formData.minStay) : null,
+                              useRoomPricesFromRoomsPage: isDaytimeVenue ? false : formData.useRoomPricesFromRoomsPage,
+                              venueRoles: isDaytimeVenue ? [] : formData.venueRoles,
+                              venueRoomTypes: isDaytimeVenue ? [] : formData.venueRoomTypes,
+                              defaultItinerary: isDaytimeVenue ? [] : formData.defaultItinerary,
                             };
                             
                             const response = await apiRequest('POST', '/api/venues', cleanedData);

@@ -70,6 +70,14 @@ import {
 } from '@shared/pricingService';
 
 const GREAT_PILLAR_VALUES = ["health", "sports", "wellness", "food"] as const;
+const FIXED_PLATFORM_FEE_PCT = 15;
+const VENUE_COMPENSATION_MODELS = [
+  "fixed_fee",
+  "per_head",
+  "minimum_spend",
+  "revenue_share",
+  "access_only",
+] as const;
 
 function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES[number]> {
   const rawValues = Array.isArray(value)
@@ -235,9 +243,17 @@ const eventBuilderSchema = z.object({
   stripeConnectRequired: z.boolean().default(true),
   balanceDueDays: z.number().min(1, "Balance due days must be at least 1").max(90, "Maximum 90 days").default(14),
   
-  // Revenue Splits (Simplified - Creator % and Platform %)
+  // Pillar A: Infrastructure fee (fixed) and creator net economics
   creatorPct: z.coerce.number().min(0).max(100).optional().nullable().default(85),
-  platformPct: z.coerce.number().min(0).max(100).optional().nullable().default(15),
+  platformPct: z.coerce.number().min(0).max(100).optional().nullable().default(FIXED_PLATFORM_FEE_PCT),
+
+  // Pillar B: Commercial venue terms
+  venueCompensationModel: z.enum(VENUE_COMPENSATION_MODELS).default("access_only"),
+  venueFixedFee: z.coerce.number().min(0).optional().nullable().default(0),
+  venuePerHeadAmount: z.coerce.number().min(0).optional().nullable().default(0),
+  venueMinimumSpend: z.coerce.number().min(0).optional().nullable().default(0),
+  venueRevenueSharePct: z.coerce.number().min(0).max(100).optional().nullable().default(0),
+  venueAccessFee: z.coerce.number().min(0).optional().nullable().default(0),
   
   // Legacy Revenue Splits (keep for backward compatibility)
   venueRevenuePercentage: z.coerce.number().min(0).max(100).optional().nullable().default(0),
@@ -434,14 +450,22 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       stripeConnectRequired: true,
       balanceDueDays: 14,
       
-      // Revenue Splits (Simplified)
+      // Pillar A: Infrastructure fee (fixed)
       creatorPct: 85,
-      platformPct: 15,
+      platformPct: FIXED_PLATFORM_FEE_PCT,
+
+      // Pillar B: Commercial venue terms
+      venueCompensationModel: "access_only",
+      venueFixedFee: 0,
+      venuePerHeadAmount: 0,
+      venueMinimumSpend: 0,
+      venueRevenueSharePct: 0,
+      venueAccessFee: 0,
       
       // Legacy Revenue Splits
       venueRevenuePercentage: 0,
       creatorRevenuePercentage: 85,
-      platformRevenuePercentage: 15,
+      platformRevenuePercentage: FIXED_PLATFORM_FEE_PCT,
       
       // MVG fields
       requireMinimumParticipants: true,
@@ -831,11 +855,19 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       // Map experience-specific fields to form fields
       maxParticipants: data.maxParticipants || data.capacity,
       price: data.price || data.basePrice,
-      // PHASE 3 FIX: Ensure pricing defaults are preserved when loading drafts
+      // Ensure marketplace economics defaults are preserved when loading drafts.
       monetisationMode: 'creator_led',
-      venueRevenuePercentage: data.venueRevenuePercentage ?? 0,
+      venueCompensationModel: data.venueCompensationModel ?? "access_only",
+      venueFixedFee: data.venueFixedFee != null ? parseFloat(data.venueFixedFee) : 0,
+      venuePerHeadAmount: data.venuePerHeadAmount != null ? parseFloat(data.venuePerHeadAmount) : 0,
+      venueMinimumSpend: data.venueMinimumSpend != null ? parseFloat(data.venueMinimumSpend) : 0,
+      venueRevenueSharePct: data.venueRevenueSharePct != null
+        ? parseFloat(data.venueRevenueSharePct)
+        : (data.venueRevenuePercentage ?? 0),
+      venueAccessFee: data.venueAccessFee != null ? parseFloat(data.venueAccessFee) : 0,
+      venueRevenuePercentage: data.venueRevenuePercentage ?? data.venueRevenueSharePct ?? 0,
       creatorPct: data.creatorPct ?? 85,
-      platformPct: data.platformPct ?? 15,
+      platformPct: FIXED_PLATFORM_FEE_PCT,
       influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
       influencerCommissionPct: data.influencerCommissionPct != null ? parseFloat(data.influencerCommissionPct) : 0,
       standingCapacity: data.standingCapacity ?? null,
@@ -1021,12 +1053,21 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         depositEnabled: formData.depositEnabled || false,
         depositPercentage: formData.depositPercentage || 20,
         
-        // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
-        venueRevenuePercentage: formData.venueRevenuePercentage || 0,
-        creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
-        platformRevenuePercentage: formData.platformRevenuePercentage || 15,
-        creatorPct: formData.creatorPct || 85,
-        platformPct: formData.platformPct || 15,
+        // Marketplace economics
+        venueCompensationModel: formData.venueCompensationModel || "access_only",
+        venueFixedFee: formData.venueFixedFee || 0,
+        venuePerHeadAmount: formData.venuePerHeadAmount || 0,
+        venueMinimumSpend: formData.venueMinimumSpend || 0,
+        venueRevenueSharePct: formData.venueRevenueSharePct || 0,
+        venueAccessFee: formData.venueAccessFee || 0,
+        // Legacy percentage fields remain for compatibility, but platform is fixed.
+        venueRevenuePercentage: formData.venueCompensationModel === "revenue_share"
+          ? (formData.venueRevenueSharePct || 0)
+          : 0,
+        creatorRevenuePercentage: 85,
+        platformRevenuePercentage: FIXED_PLATFORM_FEE_PCT,
+        creatorPct: 85,
+        platformPct: FIXED_PLATFORM_FEE_PCT,
         monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
@@ -1407,12 +1448,21 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         depositEnabled: formData.depositEnabled || false,
         depositPercentage: formData.depositPercentage || 20,
         
-        // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
-        venueRevenuePercentage: formData.venueRevenuePercentage || 0,
-        creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
-        platformRevenuePercentage: formData.platformRevenuePercentage || 15,
-        creatorPct: formData.creatorPct || 85,
-        platformPct: formData.platformPct || 15,
+        // Marketplace economics
+        venueCompensationModel: formData.venueCompensationModel || "access_only",
+        venueFixedFee: formData.venueFixedFee || 0,
+        venuePerHeadAmount: formData.venuePerHeadAmount || 0,
+        venueMinimumSpend: formData.venueMinimumSpend || 0,
+        venueRevenueSharePct: formData.venueRevenueSharePct || 0,
+        venueAccessFee: formData.venueAccessFee || 0,
+        // Legacy percentage fields remain for compatibility, but platform is fixed.
+        venueRevenuePercentage: formData.venueCompensationModel === "revenue_share"
+          ? (formData.venueRevenueSharePct || 0)
+          : 0,
+        creatorRevenuePercentage: 85,
+        platformRevenuePercentage: FIXED_PLATFORM_FEE_PCT,
+        creatorPct: 85,
+        platformPct: FIXED_PLATFORM_FEE_PCT,
         monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
@@ -4006,9 +4056,14 @@ function PricingStep({ form }: { form: any }) {
   const maxParticipants = form.watch('maxParticipants') || 0;
   const eventType = form.watch('type'); // Track event type for dynamic UI
   const monetisationMode = form.watch('monetisationMode');
-  const venueRevenuePercentage = form.watch('venueRevenuePercentage') || 0;
   const creatorPct = form.watch('creatorPct') || 85;
-  const platformPct = form.watch('platformPct') || 15;
+  const platformPct = FIXED_PLATFORM_FEE_PCT;
+  const venueCompensationModel = form.watch('venueCompensationModel') || "access_only";
+  const venueFixedFee = form.watch('venueFixedFee') || 0;
+  const venuePerHeadAmount = form.watch('venuePerHeadAmount') || 0;
+  const venueMinimumSpend = form.watch('venueMinimumSpend') || 0;
+  const venueRevenueSharePct = form.watch('venueRevenueSharePct') || 0;
+  const venueAccessFee = form.watch('venueAccessFee') || 0;
   const requireMinimumParticipants = form.watch('requireMinimumParticipants');
   const minimumParticipants = form.watch('minimumParticipants') || 6;
   const softHoldEnabled = form.watch('softHoldEnabled');
@@ -4018,22 +4073,12 @@ function PricingStep({ form }: { form: any }) {
   const discounts = form.watch('discounts') || [];
   const ticketSkus = form.watch('ticketSkus') || [];
 
-  // Fetch platform fee from DB and seed form field (runs once on mount)
+  // The platform infrastructure fee is fixed and non-negotiable.
   useEffect(() => {
-    fetch('/api/platform-settings')
-      .then(r => r.json())
-      .then((settings: { platformFeePercentage: number }) => {
-        const dbFee = settings.platformFeePercentage ?? 15;
-        // Only override if the field is still at the hardcoded default (avoid overwriting user edits)
-        const currentPlatformPct = form.getValues('platformPct');
-        if (currentPlatformPct === 15 || currentPlatformPct == null) {
-          form.setValue('platformPct', dbFee, { shouldDirty: false });
-          form.setValue('creatorPct', 100 - dbFee, { shouldDirty: false });
-          form.setValue('platformRevenuePercentage', dbFee, { shouldDirty: false });
-          form.setValue('creatorRevenuePercentage', 100 - dbFee, { shouldDirty: false });
-        }
-      })
-      .catch(() => {}); // silently keep defaults on error
+    form.setValue('platformPct', FIXED_PLATFORM_FEE_PCT, { shouldDirty: false });
+    form.setValue('platformRevenuePercentage', FIXED_PLATFORM_FEE_PCT, { shouldDirty: false });
+    form.setValue('creatorPct', 100 - FIXED_PLATFORM_FEE_PCT, { shouldDirty: false });
+    form.setValue('creatorRevenuePercentage', 100 - FIXED_PLATFORM_FEE_PCT, { shouldDirty: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4167,24 +4212,35 @@ function PricingStep({ form }: { form: any }) {
   const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => 
     safeAdd(total, safeMultiply(sku.pricePerPerson || 0, sku.ticketCapacity || 0)), 0);
 
-  // **3. REVENUE SPLIT** - Creator % and Platform Fee % validation
-  const handleRevenueSplitChange = (field: 'creator' | 'platform', value: number) => {
-    if (field === 'creator') {
-      const newPlatformPct = Math.max(0, Math.min(100, 100 - value));
-      form.setValue('creatorPct', value, { shouldDirty: true });
-      form.setValue('platformPct', newPlatformPct, { shouldDirty: true });
-    } else {
-      const newCreatorPct = Math.max(0, Math.min(100, 100 - value));
-      form.setValue('platformPct', value, { shouldDirty: true });
-      form.setValue('creatorPct', newCreatorPct, { shouldDirty: true });
-    }
-  };
+  useEffect(() => {
+    form.setValue(
+      'venueRevenuePercentage',
+      venueCompensationModel === "revenue_share" ? venueRevenueSharePct : 0,
+      { shouldDirty: false }
+    );
+  }, [form, venueCompensationModel, venueRevenueSharePct]);
 
   // Compute example payout using ticket SKU totals
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
   const totalRevenue = ticketTotalRevenue > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
   const revenueSplit = computeRevenueSplit(totalRevenue, creatorPct, platformPct);
-  const venueAmount = safeMultiply(totalRevenue, venueRevenuePercentage / 100);
+  const venueRevenueShareAmount = safeMultiply(totalRevenue, venueRevenueSharePct / 100);
+  const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
+  const venueCommercialEstimate = (() => {
+    switch (venueCompensationModel) {
+      case "fixed_fee":
+        return venueFixedFee;
+      case "per_head":
+        return venuePerHeadEstimate;
+      case "minimum_spend":
+        return venueMinimumSpend;
+      case "revenue_share":
+        return venueRevenueShareAmount;
+      case "access_only":
+      default:
+        return venueAccessFee;
+    }
+  })();
 
   // **4. MVG PROGRESS** - Using pricing service computation
   const mvgProgress = computeMVGProgress(0, minimumParticipants); // 0 current bookings in draft mode
@@ -4222,7 +4278,7 @@ function PricingStep({ form }: { form: any }) {
       <div className="text-center">
         <h3 className="text-lg font-semibold mb-2">Pricing & Monetisation</h3>
         <p className="text-gray-600 dark:text-gray-400">
-          Configure your pricing structure, revenue splits, and promotional settings.
+          Configure pricing, marketplace economics, and payment triggers.
         </p>
       </div>
 
@@ -4422,23 +4478,23 @@ function PricingStep({ form }: { form: any }) {
         </CardContent>
       </Card>
 
-      {/* **3. REVENUE SPLIT — The Economic Handshake** */}
+      {/* **3. MARKETPLACE ECONOMICS — The Digital Handshake** */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <DollarSign className="w-5 h-5" />
-            Revenue Split
+            Marketplace Economics
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Platform fee is fixed. The venue offer is stored as a percentage and the actual amount is calculated from confirmed booking revenue.
+            Platform fee, venue commercial terms, and payment risk logic are stored separately for the digital handshake.
           </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
             {/* Split grid: Platform (fixed) | Space | Creator */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <Label htmlFor="platform-pct-display">Platform (%)</Label>
+                <Label htmlFor="platform-pct-display">Platform Fee (%)</Label>
                 <Input
                   id="platform-pct-display"
                   type="number"
@@ -4451,31 +4507,31 @@ function PricingStep({ form }: { form: any }) {
                 <p className="text-xs text-gray-500 mt-1">Fixed — set by platform</p>
               </div>
               <div>
-                <Label htmlFor="venue-revenue-pct">Space / Venue (%)</Label>
-                <Input
-                  id="venue-revenue-pct"
-                  type="number"
-                  min="0"
-                  max={100 - platformPct}
-                  step="1"
-                  value={venueRevenuePercentage}
-                  onChange={(e) => {
-                    const spacePct = Math.min(parseFloat(e.target.value) || 0, 100 - platformPct);
-                    form.setValue('venueRevenuePercentage', spacePct, { shouldDirty: true });
-                    form.setValue('creatorPct', Math.max(0, 100 - platformPct - spacePct), { shouldDirty: true });
-                    form.setValue('creatorRevenuePercentage', Math.max(0, 100 - platformPct - spacePct), { shouldDirty: true });
-                  }}
-                  data-testid="input-venue-revenue-pct"
-                />
-                <p className="text-xs text-gray-500 mt-1">Percentage offer, not a fixed amount</p>
+                <Label htmlFor="venue-compensation-model">Venue Compensation</Label>
+                <Select
+                  value={venueCompensationModel}
+                  onValueChange={(value) => form.setValue('venueCompensationModel', value, { shouldDirty: true })}
+                >
+                  <SelectTrigger id="venue-compensation-model" data-testid="select-venue-compensation-model">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed_fee">Fixed Fee</SelectItem>
+                    <SelectItem value="per_head">Per-Head</SelectItem>
+                    <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
+                    <SelectItem value="revenue_share">Revenue Share</SelectItem>
+                    <SelectItem value="access_only">Access-Only</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">Commercial offer to the venue</p>
               </div>
               <div>
-                <Label htmlFor="creator-pct">Your Share (%)</Label>
+                <Label htmlFor="creator-pct">Creator Net Before Venue Terms (%)</Label>
                 <Input
                   id="creator-pct"
                   type="number"
                   min="0"
-                  max={100 - platformPct}
+                  max={100 - FIXED_PLATFORM_FEE_PCT}
                   value={creatorPct}
                   readOnly
                   disabled
@@ -4490,19 +4546,84 @@ function PricingStep({ form }: { form: any }) {
               </div>
             </div>
 
-            {/* Validation: must add to 100 */}
-            {(() => {
-              const spacePct = venueRevenuePercentage;
-              const total = platformPct + spacePct + creatorPct;
-              if (Math.abs(total - 100) > 0.5) {
-                return (
-                  <p className="text-xs text-red-600">
-                    ⚠️ Split total is {total.toFixed(1)}% — must equal 100%
-                  </p>
-                );
-              }
-              return null;
-            })()}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {venueCompensationModel === "fixed_fee" && (
+                <div>
+                  <Label htmlFor="venue-fixed-fee">Fixed Fee</Label>
+                  <Input
+                    id="venue-fixed-fee"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={venueFixedFee || ''}
+                    onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-fixed-fee"
+                  />
+                </div>
+              )}
+              {venueCompensationModel === "per_head" && (
+                <div>
+                  <Label htmlFor="venue-per-head">Per-Head Amount</Label>
+                  <Input
+                    id="venue-per-head"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={venuePerHeadAmount || ''}
+                    onChange={(e) => form.setValue('venuePerHeadAmount', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-per-head"
+                  />
+                </div>
+              )}
+              {venueCompensationModel === "minimum_spend" && (
+                <div>
+                  <Label htmlFor="venue-minimum-spend">Minimum Spend</Label>
+                  <Input
+                    id="venue-minimum-spend"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={venueMinimumSpend || ''}
+                    onChange={(e) => form.setValue('venueMinimumSpend', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-minimum-spend"
+                  />
+                </div>
+              )}
+              {venueCompensationModel === "revenue_share" && (
+                <div>
+                  <Label htmlFor="venue-revenue-share">Venue Revenue Share (%)</Label>
+                  <Input
+                    id="venue-revenue-share"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={venueRevenueSharePct || ''}
+                    onChange={(e) => form.setValue('venueRevenueSharePct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-revenue-share-pct"
+                  />
+                </div>
+              )}
+              {venueCompensationModel === "access_only" && (
+                <div>
+                  <Label htmlFor="venue-access-fee">Optional Access Fee</Label>
+                  <Input
+                    id="venue-access-fee"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={venueAccessFee || ''}
+                    onChange={(e) => form.setValue('venueAccessFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-access-fee"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Venue keeps its own food and beverage sales.</p>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Venue compensation is negotiated separately from the 15% platform infrastructure fee.
+            </p>
 
             {/* Example payout calculation — dynamic from DB fee + bounty */}
             <div className="bg-green-50 dark:bg-green-950 p-4 rounded-lg">
@@ -4516,10 +4637,10 @@ function PricingStep({ form }: { form: any }) {
                   <span>Platform Fee ({platformPct}%)</span>
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
-                {venueRevenuePercentage > 0 && (
+                {venueCommercialEstimate > 0 && (
                   <div className="flex justify-between">
-                    <span>Venue Partner ({venueRevenuePercentage}%)</span>
-                    <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueAmount, currency)}</span>
+                    <span>Venue Commercial Estimate</span>
+                    <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueCommercialEstimate, currency)}</span>
                   </div>
                 )}
                 {influencerPromotionEnabled && influencerCommissionPct > 0 && (
@@ -4532,7 +4653,7 @@ function PricingStep({ form }: { form: any }) {
                   <span>Your Payout</span>
                   <span data-testid="text-your-payout">
                     {formatPriceByCurrency(
-                      Math.max(0, revenueSplit.creatorAmount - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)),
+                      Math.max(0, revenueSplit.creatorAmount - venueCommercialEstimate - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)),
                       currency
                     )}
                   </span>
@@ -4909,8 +5030,10 @@ function PricingStep({ form }: { form: any }) {
               <span className="text-blue-800 dark:text-blue-200">Creator-Led</span>
             </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Revenue Split:</span>{" "}
-              <span className="text-blue-800 dark:text-blue-200">{creatorPct}% / {platformPct}%</span>
+              <span className="font-medium text-blue-900 dark:text-blue-100">Marketplace Economics:</span>{" "}
+              <span className="text-blue-800 dark:text-blue-200">
+                15% platform fee / {form.watch('venueCompensationModel') || "access_only"} venue terms
+              </span>
             </div>
           </div>
         </CardContent>

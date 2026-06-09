@@ -49,6 +49,30 @@ function getAppBaseUrl(req: any): string {
   return `${req.protocol}://${req.get("host")}`;
 }
 
+const FIXED_PLATFORM_FEE_PCT = 15;
+
+function applyMarketplaceEconomics(input: any = {}) {
+  const model = input.venueCompensationModel || "access_only";
+  const revenueSharePct = model === "revenue_share"
+    ? parseFloat(String(input.venueRevenueSharePct ?? input.venueRevenuePercentage ?? 0))
+    : 0;
+
+  return {
+    ...input,
+    platformPct: FIXED_PLATFORM_FEE_PCT,
+    platformRevenuePercentage: FIXED_PLATFORM_FEE_PCT,
+    creatorPct: 100 - FIXED_PLATFORM_FEE_PCT,
+    creatorRevenuePercentage: 100 - FIXED_PLATFORM_FEE_PCT,
+    venueCompensationModel: model,
+    venueFixedFee: input.venueFixedFee ?? "0.00",
+    venuePerHeadAmount: input.venuePerHeadAmount ?? "0.00",
+    venueMinimumSpend: input.venueMinimumSpend ?? "0.00",
+    venueRevenueSharePct: revenueSharePct,
+    venueAccessFee: input.venueAccessFee ?? "0.00",
+    venueRevenuePercentage: revenueSharePct,
+  };
+}
+
 // ─── Lifecycle Status Helper ────────────────────────────────────────────────
 // Single source of truth: FORMING → CONFIRMED → CANCELLED
 // Uses DB fields only so it works without extra queries.
@@ -1243,7 +1267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
       }
       
-      const draftData = { ...parsedBody, creatorId: userId };
+      const draftData = applyMarketplaceEconomics({ ...parsedBody, creatorId: userId });
       const draft = await storage.createExperienceDraft(draftData);
       res.json(draft);
     } catch (error) {
@@ -1422,7 +1446,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const draftData: any = { 
+      const draftData: any = applyMarketplaceEconomics({
         ...validationResult.data,
         // Convert types to match database schema
         price: validationResult.data.price?.toString(),
@@ -1430,7 +1454,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: 'draft' as const,
         createdAt: new Date(),
         updatedAt: new Date()
-      };
+      });
       
       // Always create new draft - don't update existing ones here
       const result = await storage.createExperienceDraft(draftData);
@@ -1680,25 +1704,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the creator is bringing their own venue.
       // Force venueRevenuePercentage → 0 and give that % back to the creator.
       const isLinkedVenue = !!(parsedBody.selectedVenueId && parsedBody.selectedVenueId.trim() !== '');
-      const platformPctRaw = parseFloat(String(parsedBody.platformPct ?? parsedBody.platformRevenuePercentage ?? 15));
-      const venuePctRaw    = isLinkedVenue ? parseFloat(String(parsedBody.venueRevenuePercentage ?? 0)) : 0;
-      const creatorPctRaw  = Math.max(0, 100 - platformPctRaw - venuePctRaw);
-
       // Prepare final event data - lock required fields
-      const eventData = {
+      const eventData = applyMarketplaceEconomics({
         ...parsedBody,
         creatorId: userId,
         status: 'pending_approval',
         publishedAt: new Date(),
         updatedAt: new Date(),
         locked: true, // Indicate this is locked for changes
-        // Apply resolved revenue split (self-hosted gets 0% venue, rest to creator)
-        venueRevenuePercentage: isLinkedVenue ? String(venuePctRaw) : '0.00',
-        creatorPct: creatorPctRaw,
-        creatorRevenuePercentage: creatorPctRaw,
-        platformPct: platformPctRaw,
-        platformRevenuePercentage: platformPctRaw,
-      };
+        venueCompensationModel: isLinkedVenue ? parsedBody.venueCompensationModel : 'access_only',
+      });
       
       // Update draft to pending status (finalizes it)
       const result = await storage.updateExperienceDraft(draftId, userId, eventData);
@@ -2611,7 +2626,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
       
       // Prepare experience data from draft with explicit type mapping
-      const experienceData = {
+      const experienceData = applyMarketplaceEconomics({
         title: draft.title || '',
         description: draft.description || '',
         shortDescription: draft.shortDescription,
@@ -2641,6 +2656,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Venue mapping: map selectedVenueId to linkedVenueId
         linkedVenueId: (draft as any).selectedVenueId || null,
+        venueCompensationModel: ((draft as any).selectedVenueId)
+          ? ((draft as any).venueCompensationModel || "access_only")
+          : "access_only",
+        venueFixedFee: (draft as any).venueFixedFee || "0.00",
+        venuePerHeadAmount: (draft as any).venuePerHeadAmount || "0.00",
+        venueMinimumSpend: (draft as any).venueMinimumSpend || "0.00",
+        venueRevenueSharePct: (draft as any).venueRevenueSharePct || (draft as any).venueRevenuePercentage || "0.00",
+        venueAccessFee: (draft as any).venueAccessFee || "0.00",
 
         // ── Self-Hosted / Manual Address logic ──────────────────────────────
         // If no platform Space is linked the creator is bringing their own venue.
@@ -2727,7 +2750,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      });
       
       // Create the published experience
       const experience = await storage.createExperience(experienceData);
@@ -2766,14 +2789,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const requestedStatus = req.body.status;
       const status = requestedStatus === "draft" ? "draft" : "pending_approval";
         
-      const experienceData = {
+      const experienceData = applyMarketplaceEconomics({
         ...req.body,
         experienceType: req.body.type, // Map 'type' to 'experienceType' for database
         creatorId: userId,
         status: status as any,
         startDate,
         endDate,
-      };
+      });
 
       const experience = await storage.createExperience(experienceData);
       res.json(experience);
@@ -3605,7 +3628,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
       }
       
-      const draftData = { ...parsedBody, creatorId: userId };
+      const draftData = applyMarketplaceEconomics({ ...parsedBody, creatorId: userId });
       const draft = await storage.createExperienceDraft(draftData);
       res.json(draft);
     } catch (error) {
@@ -3688,12 +3711,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Convert draft to experience with pending_approval status
-      const experienceData = {
+      const experienceData = applyMarketplaceEconomics({
         ...existingDraft,
         creatorId: userId,
         status: "pending_approval" as any,
         submittedAt: new Date()
-      };
+      });
       
       // Create the experience from the draft
       const experience = await storage.createExperience(experienceData as any);

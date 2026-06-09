@@ -433,13 +433,21 @@ export const experienceDrafts = pgTable("experience_drafts", {
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
   stripeConnectVerified: boolean("stripe_connect_verified").default(false),
 
-  // Simplified Revenue Splits (percentages)
+  // Pillar A: Infrastructure fee (hardcoded platform economics)
   creatorPct: decimal("creator_pct", { precision: 5, scale: 2 }).default(
     "85.00",
   ),
   platformPct: decimal("platform_pct", { precision: 5, scale: 2 }).default(
     "15.00",
   ),
+
+  // Pillar B: Commercial venue terms (decoupled from platform fee)
+  venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
+  venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
+  venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
+  venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
+  venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
+  venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)
   venueRevenuePercentage: decimal("venue_revenue_percentage", {
@@ -724,13 +732,21 @@ export const experiences = pgTable("experiences", {
   payoutBankName: varchar("payout_bank_name"),
   payoutCountry: varchar("payout_country").default("US"),
 
-  // Simplified Revenue Splits (percentages)
+  // Pillar A: Infrastructure fee (hardcoded platform economics)
   creatorPct: decimal("creator_pct", { precision: 5, scale: 2 }).default(
     "85.00",
   ),
   platformPct: decimal("platform_pct", { precision: 5, scale: 2 }).default(
     "15.00",
   ),
+
+  // Pillar B: Commercial venue terms (decoupled from platform fee)
+  venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
+  venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
+  venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
+  venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
+  venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
+  venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)
   venueRevenuePercentage: decimal("venue_revenue_percentage", {

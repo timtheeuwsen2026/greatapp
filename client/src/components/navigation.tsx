@@ -51,7 +51,7 @@ export default function Navigation() {
     new Set(["participant", user?.role, ...userRolesArray].filter(Boolean) as string[])
   );
 
-  // "Explore Trips" — scroll on homepage, navigate + scroll flag on other pages
+  // "Explore experiences" - scroll on homepage, navigate + scroll flag on other pages
   const handleExploreTrips = () => {
     setMobileMenuOpen(false);
     if (pathname === "/") {
@@ -112,7 +112,7 @@ export default function Navigation() {
               className="text-gray-700 hover:text-primary transition-colors font-medium"
               data-testid="nav-explore-trips"
             >
-              Explore Trips
+              Explore experiences
             </button>
             <Link href="/community" className="text-gray-700 hover:text-primary transition-colors font-medium">
               Community
@@ -269,7 +269,7 @@ export default function Navigation() {
               className="block w-full text-left px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
               data-testid="mobile-nav-explore-trips"
             >
-              Explore Trips
+              Explore experiences
             </button>
             <Link
               href="/community"

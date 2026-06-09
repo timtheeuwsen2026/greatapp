@@ -77,7 +77,7 @@ export default function Home() {
     }
   }, []);
 
-  // Scroll to trips section when navigated here from another page via "Explore Trips"
+  // Scroll to experiences section when navigated here from another page via "Explore experiences"
   useEffect(() => {
     if (sessionStorage.getItem("scrollToTrips") === "1") {
       sessionStorage.removeItem("scrollToTrips");

@@ -556,9 +556,7 @@ function CreatorDashboardContent() {
           <TabsList>
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
             <TabsTrigger value="experiences">My Experiences</TabsTrigger>
-            <TabsTrigger value="venues">My Venues</TabsTrigger>
             <TabsTrigger value="earnings">Earnings</TabsTrigger>
-            <TabsTrigger value="pricing">Pricing Strategy</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 

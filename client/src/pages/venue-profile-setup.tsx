@@ -398,9 +398,8 @@ const multiDayVenueCategories = [
 ];
 
 const daytimeVenueCategories = [
-  'Cafe', 'Restaurant', 'Bar', 'Retail Space', 'Creative Studio',
-  'Fitness Studio', 'Workshop Space', 'Gallery', 'Coworking Space',
-  'Community Space', 'Rooftop', 'Outdoor Area'
+  'Coffee Shop/Cafe', 'Restaurant', 'Yoga/Fitness Studio',
+  'Retail/Gallery', 'Co-working Space'
 ];
 
 const multiDayVenueVibes = [
@@ -412,6 +411,8 @@ const daytimeVenueVibes = [
   'Cozy', 'Bright', 'Industrial', 'Minimal', 'Premium', 'Family Friendly',
   'Community Driven', 'Creative', 'High Energy', 'Quiet', 'Late Night', 'Pop-Up Ready'
 ];
+
+const daytimePricingModels = ['percentage_split', 'per_head_package', 'minimum_spend', 'access_only'];
 
 const viewsEnvironment = [
   'Ocean View', 'Lake View', 'Mountain View', 'Forest View',
@@ -548,7 +549,10 @@ export default function VenueProfileSetup() {
       form.setValue('defaultPricePerRoomPerNight', undefined);
       form.setValue('minimumNights', undefined);
       form.setValue('minStay', undefined);
-      if (form.getValues('pricingModel') === 'per_room') {
+      if (!form.getValues('paymentTimingModel')) {
+        form.setValue('paymentTimingModel', 'deposit_balance_arrival');
+      }
+      if (!daytimePricingModels.includes(form.getValues('pricingModel') || '')) {
         form.setValue('pricingModel', '');
       }
     }
@@ -752,6 +756,7 @@ export default function VenueProfileSetup() {
       defaultPricePerRoomPerNight: isDaytimeVenue ? null : data.defaultPricePerRoomPerNight ? String(data.defaultPricePerRoomPerNight) : null,
       depositPercent: data.depositPercent ? String(data.depositPercent) : null,
       commissionPercent: data.commissionPercent ? String(data.commissionPercent) : null,
+      paymentTimingModel: isDaytimeVenue ? (data.paymentTimingModel || 'deposit_balance_arrival') : data.paymentTimingModel,
       // Integer fields as numbers (capacity is required so always a number)
       capacity: data.capacity ? Number(data.capacity) : data.capacity,
       standingCapacity: data.standingCapacity != null ? Number(data.standingCapacity) : null,
@@ -2015,48 +2020,79 @@ export default function VenueProfileSetup() {
                           <FormItem className="space-y-4">
                             <FormControl>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <Card 
-                                  className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'whole_venue' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                  onClick={() => field.onChange('whole_venue')}
-                                  data-testid="card-pricing-whole-venue"
-                                >
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <Building className="h-5 w-5 text-primary" />
-                                    <span className="font-medium">
-                                      {isDaytime ? 'Whole Space Rental' : 'Whole Venue Pricing'}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-gray-600">
-                                    {isDaytime
-                                      ? 'Charge a flat rate for private events, pop-ups, or full-day use'
-                                      : 'Charge a flat rate for the entire venue per day or per event'}
-                                  </p>
-                                </Card>
-                                
                                 {isDaytime ? (
-                                  <Card
-                                    className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_hour' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                    onClick={() => field.onChange('per_hour')}
-                                    data-testid="card-pricing-per-hour"
-                                  >
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <Clock className="h-5 w-5 text-primary" />
-                                      <span className="font-medium">Hourly Space Rental</span>
-                                    </div>
-                                    <p className="text-sm text-gray-600">Charge for shorter bookings such as classes, tastings, shoots, or pop-ups</p>
-                                  </Card>
+                                  [
+                                    {
+                                      value: 'percentage_split',
+                                      title: 'Percentage Split',
+                                      description: '% of total ticket revenue.',
+                                      icon: DollarSign,
+                                      testId: 'card-pricing-percentage-split',
+                                    },
+                                    {
+                                      value: 'per_head_package',
+                                      title: 'Per-Head Package',
+                                      description: 'Fixed amount per participant.',
+                                      icon: Users,
+                                      testId: 'card-pricing-per-head-package',
+                                    },
+                                    {
+                                      value: 'minimum_spend',
+                                      title: 'Minimum Spend',
+                                      description: 'Flat guaranteed amount.',
+                                      icon: Building,
+                                      testId: 'card-pricing-minimum-spend',
+                                    },
+                                    {
+                                      value: 'access_only',
+                                      title: 'Access-Only (Cash Bar)',
+                                      description: 'Venue keeps 100% of F&B sales, with $0 or a flat space fee.',
+                                      icon: Clock,
+                                      testId: 'card-pricing-access-only',
+                                    },
+                                  ].map((model) => {
+                                    const Icon = model.icon;
+                                    return (
+                                      <Card
+                                        key={model.value}
+                                        className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                        onClick={() => field.onChange(model.value)}
+                                        data-testid={model.testId}
+                                      >
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <Icon className="h-5 w-5 text-primary" />
+                                          <span className="font-medium">{model.title}</span>
+                                        </div>
+                                        <p className="text-sm text-gray-600">{model.description}</p>
+                                      </Card>
+                                    );
+                                  })
                                 ) : (
-                                  <Card
-                                    className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_room' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                    onClick={() => field.onChange('per_room')}
-                                    data-testid="card-pricing-per-room"
-                                  >
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <Users className="h-5 w-5 text-primary" />
-                                      <span className="font-medium">Per Room / Per Night</span>
-                                    </div>
-                                    <p className="text-sm text-gray-600">Charge based on individual room bookings per night</p>
-                                  </Card>
+                                  <>
+                                    <Card
+                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'whole_venue' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                      onClick={() => field.onChange('whole_venue')}
+                                      data-testid="card-pricing-whole-venue"
+                                    >
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <Building className="h-5 w-5 text-primary" />
+                                        <span className="font-medium">Whole Venue Pricing</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600">Charge a flat rate for the entire venue per day or per event</p>
+                                    </Card>
+
+                                    <Card
+                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_room' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                      onClick={() => field.onChange('per_room')}
+                                      data-testid="card-pricing-per-room"
+                                    >
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <Users className="h-5 w-5 text-primary" />
+                                        <span className="font-medium">Per Room / Per Night</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600">Charge based on individual room bookings per night</p>
+                                    </Card>
+                                  </>
                                 )}
                               </div>
                             </FormControl>
@@ -2065,17 +2101,15 @@ export default function VenueProfileSetup() {
                       />
 
                       {/* Whole Venue Pricing Fields */}
-                      {form.watch('pricingModel') === 'whole_venue' && (
+                      {!isDaytime && form.watch('pricingModel') === 'whole_venue' && (
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
-                            {isDaytime ? 'Whole Space Pricing' : 'Whole Venue Pricing'}
-                          </h4>
+                          <h4 className="font-medium text-blue-800 dark:text-blue-200">Whole Venue Pricing</h4>
                           <FormField
                             control={form.control}
                             name="basePricePerDay"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>{isDaytime ? 'Day Rate' : 'Price Per Day'}</FormLabel>
+                                <FormLabel>Price Per Day</FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
@@ -2093,25 +2127,53 @@ export default function VenueProfileSetup() {
                         </div>
                       )}
 
-                      {form.watch('pricingModel') === 'per_hour' && (
+                      {isDaytime && daytimePricingModels.includes(form.watch('pricingModel') || '') && (
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">Hourly Space Rental</h4>
+                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
+                            {{
+                              percentage_split: 'Percentage Split',
+                              per_head_package: 'Per-Head Package',
+                              minimum_spend: 'Minimum Spend',
+                              access_only: 'Access-Only (Cash Bar)',
+                            }[form.watch('pricingModel') || '']}
+                          </h4>
                           <FormField
                             control={form.control}
                             name="basePricePerDay"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>Hourly Rate</FormLabel>
+                                <FormLabel>
+                                  {{
+                                    percentage_split: 'Venue Share (%)',
+                                    per_head_package: 'Amount Per Participant',
+                                    minimum_spend: 'Guaranteed Minimum Spend',
+                                    access_only: 'Flat Space Fee (Optional)',
+                                  }[form.watch('pricingModel') || '']}
+                                </FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
                                     min="0"
-                                    step="0.01"
-                                    placeholder="e.g., 125"
+                                    max={form.watch('pricingModel') === 'percentage_split' ? '100' : undefined}
+                                    step={form.watch('pricingModel') === 'percentage_split' ? '1' : '0.01'}
+                                    placeholder={{
+                                      percentage_split: 'e.g., 20',
+                                      per_head_package: 'e.g., 18',
+                                      minimum_spend: 'e.g., 750',
+                                      access_only: 'e.g., 0',
+                                    }[form.watch('pricingModel') || '']}
                                     {...field}
-                                    data-testid="input-base-price-per-hour"
+                                    data-testid="input-daytime-pricing-value"
                                   />
                                 </FormControl>
+                                <FormDescription>
+                                  {{
+                                    percentage_split: 'The venue receives this percentage of confirmed ticket revenue.',
+                                    per_head_package: 'The venue receives this fixed amount for each participant.',
+                                    minimum_spend: 'The venue receives this guaranteed minimum regardless of final attendance.',
+                                    access_only: 'Use 0 when the venue only keeps food and beverage sales.',
+                                  }[form.watch('pricingModel') || '']}
+                                </FormDescription>
                                 <FormMessage />
                               </FormItem>
                             )}
@@ -2269,12 +2331,12 @@ export default function VenueProfileSetup() {
                                       {field.value === 'deposit_balance_arrival' && <div className="w-2 h-2 rounded-full bg-orange-500" />}
                                     </div>
                                     <span className="font-medium">
-                                      {isDaytime ? 'Deposit After Approval -> Balance on Event Day' : 'Deposit After MVG -> Balance on Arrival'}
+                                      {isDaytime ? 'Deposit After MVG -> Balance on Event Day' : 'Deposit After MVG -> Balance on Arrival'}
                                     </span>
                                   </div>
                                   <p className="text-sm text-gray-600 ml-6 mt-1">
                                     {isDaytime
-                                      ? 'Deposit collected only after approval, remaining balance paid on the event day'
+                                      ? 'Deposit collected only after MVG is met, remaining balance paid on the event day'
                                       : 'Deposit collected only after MVG is met, remaining balance paid on arrival'}
                                   </p>
                                 </Card>
@@ -2733,6 +2795,7 @@ export default function VenueProfileSetup() {
                               softHoldDays: formData.softHoldDays ? Number(formData.softHoldDays) : null,
                               depositPercent: formData.depositPercent ? String(formData.depositPercent) : null,
                               commissionPercent: formData.commissionPercent ? String(formData.commissionPercent) : null,
+                              paymentTimingModel: isDaytimeVenue ? (formData.paymentTimingModel || 'deposit_balance_arrival') : formData.paymentTimingModel,
                               balanceDueDaysBeforeArrival: formData.balanceDueDaysBeforeArrival ? Number(formData.balanceDueDaysBeforeArrival) : null,
                               minStay: isDaytimeVenue ? null : formData.minStay ? Number(formData.minStay) : null,
                               useRoomPricesFromRoomsPage: isDaytimeVenue ? false : formData.useRoomPricesFromRoomsPage,

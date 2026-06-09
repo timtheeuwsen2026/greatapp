@@ -73,7 +73,9 @@ interface PublicEventData {
   pricing: {
     currency: string;
     basePrice: number;
+    pricePerPerson?: number;
     depositEnabled: boolean;
+    depositAmount?: number;
     depositPercentage: number;
     rooms: Array<{
       id: string;
@@ -347,7 +349,9 @@ export default function PublicEventPage() {
   };
 
   // DATA CONTRACT: Currency must come from experience.currency - default EUR for migration
-  const formatCurrency = (amount: number, currency: string = 'eur') => {
+  const formatCurrency = (amount: number | string | null | undefined, currency: string = 'eur') => {
+    const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount || 0);
+    const safeAmount = Number.isFinite(numericAmount) ? numericAmount : 0;
     if (!currency || currency === 'eur') {
       // Silence warning for EUR default since it's expected
     }
@@ -357,15 +361,23 @@ export default function PublicEventPage() {
       gbp: '£',
     };
     const symbol = currencySymbols[currency.toLowerCase()] || '€';
-    return `${symbol}${amount.toLocaleString()}`;
+    return `${symbol}${safeAmount.toLocaleString(undefined, {
+      minimumFractionDigits: safeAmount % 1 ? 2 : 0,
+      maximumFractionDigits: 2,
+    })}`;
   };
 
   const getLowestPrice = () => {
-    if (!event.pricing.rooms || event.pricing.rooms.length === 0) {
-      return null;
+    const roomPrices = event.pricing.rooms
+      ?.map(room => Number(room.price || 0))
+      .filter(price => Number.isFinite(price) && price > 0) || [];
+
+    if (roomPrices.length > 0) {
+      return Math.min(...roomPrices);
     }
-    const prices = event.pricing.rooms.map(room => room.price);
-    return Math.min(...prices);
+
+    const directPrice = Number(event.pricing.pricePerPerson || event.pricing.basePrice || 0);
+    return Number.isFinite(directPrice) && directPrice > 0 ? directPrice : null;
   };
 
   const getTotalAvailableSpots = () => {
@@ -377,6 +389,7 @@ export default function PublicEventPage() {
 
   const lowestPrice = getLowestPrice();
   const totalSpots = getTotalAvailableSpots();
+  const depositAmount = Number(event.pricing.depositAmount || 0);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -516,6 +529,20 @@ export default function PublicEventPage() {
                     <p className="text-sm text-gray-600">From</p>
                     <p className="text-xl font-bold text-gray-900">
                       {formatCurrency(lowestPrice, event.pricing.currency)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {event.pricing.depositEnabled && depositAmount > 0 && (
+                <div className="flex items-center gap-3" data-testid="fact-deposit-amount">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Lock className="w-6 h-6 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Deposit</p>
+                    <p className="text-xl font-bold text-gray-900">
+                      {formatCurrency(depositAmount, event.pricing.currency)}
                     </p>
                   </div>
                 </div>

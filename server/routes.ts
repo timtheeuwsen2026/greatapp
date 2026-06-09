@@ -2271,8 +2271,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Pricing data (rooms/SKUs with price, discount, available spots)
         pricing: {
           currency: (experience as any).currency || 'usd',
-          basePrice: experience.price ? parseFloat(experience.price) : 0,
+          basePrice: (experience as any).pricePerPerson
+            ? parseFloat((experience as any).pricePerPerson.toString())
+            : (experience.price ? parseFloat(experience.price.toString()) : 0),
+          pricePerPerson: (experience as any).pricePerPerson
+            ? parseFloat((experience as any).pricePerPerson.toString())
+            : (experience.price ? parseFloat(experience.price.toString()) : 0),
           depositEnabled: experience.depositEnabled || false,
+          depositAmount: (experience as any).depositAmount
+            ? parseFloat((experience as any).depositAmount.toString())
+            : 0,
           depositPercentage: experience.depositPercentage ? parseFloat(experience.depositPercentage) : 0,
           rooms: ((experience as any).rooms as any[] || []).map((room: any) => {
             // Find discount for this room/SKU
@@ -2748,31 +2756,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       
-      // Check if creator has completed profile (required for instant publish)
-      const creatorProfile = await storage.getCreatorProfile(userId);
-      const hasCompletedProfile = creatorProfile && (creatorProfile as any).completed;
-      
       // Convert date strings to Date objects
       const startDate = req.body.startDate ? new Date(req.body.startDate) : null;
       const endDate = req.body.endDate 
         ? new Date(req.body.endDate) 
         : (req.body.type === "one-day" && startDate ? startDate : startDate);
         
-      // Validate and sanitize status
+      // New submissions always go through admin review unless explicitly saved as draft.
       const requestedStatus = req.body.status;
-      const validStatuses = ["published", "pending_approval", "draft"];
-      let status = "published"; // Default to published for creators with completed profiles
-      
-      // Only allow published status if creator has completed their profile
-      if (requestedStatus && validStatuses.includes(requestedStatus)) {
-        if (requestedStatus === "published" && !hasCompletedProfile) {
-          status = "pending_approval"; // Downgrade to pending if profile incomplete
-        } else {
-          status = requestedStatus;
-        }
-      } else if (!hasCompletedProfile) {
-        status = "pending_approval"; // Default to pending if profile incomplete
-      }
+      const status = requestedStatus === "draft" ? "draft" : "pending_approval";
         
       const experienceData = {
         ...req.body,
@@ -2867,7 +2859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const fullPrice = amount;
+      let fullPrice = parseFloat((amount || 0).toString());
       let isDepositOnly = false;
       let depositAmount = 0;
       let balanceAmount = 0;
@@ -2880,6 +2872,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectedTicket = ticketSkus.find((t: any, i: number) => 
           (t.id || t.sourceRoomId || `ticket-${i}`) === bookingTicketSkuId
         );
+      }
+
+      const resolvedFullPrice = selectedTicket?.pricePerPerson
+        ? parseFloat(selectedTicket.pricePerPerson.toString())
+        : ((experience as any).pricePerPerson
+          ? parseFloat((experience as any).pricePerPerson.toString())
+          : (experience.price ? parseFloat(experience.price.toString()) : fullPrice));
+
+      fullPrice = Number.isFinite(resolvedFullPrice) ? resolvedFullPrice : 0;
+
+      if (fullPrice <= 0) {
+        return res.status(400).json({ message: "Unable to determine booking price for this experience" });
       }
       
       const fixedDeposit = selectedTicket?.depositPerPerson
@@ -4329,7 +4333,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const fullPrice = selectedTicket 
         ? parseFloat(selectedTicket.pricePerPerson || 0)
-        : amount;
+        : ((experience as any).pricePerPerson
+          ? parseFloat((experience as any).pricePerPerson.toString())
+          : (experience.price ? parseFloat(experience.price.toString()) : parseFloat((amount || 0).toString())));
+
+      if (!Number.isFinite(fullPrice) || fullPrice <= 0) {
+        return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
+      }
       
       const fixedDeposit = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
@@ -5494,7 +5504,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // System fields
         slug,
         createdBy: userId,
-        // status defaults to 'draft' in database schema
+        status: 'draft' as const,
+        approved: false,
       };
       
       // Validate using Zod schema
@@ -5711,8 +5722,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only the venue owner can submit for review" });
       }
 
-      // Update status to pending
-      const updatedVenue = await storage.updateVenueStatus(req.params.id, 'pending');
+      // Update status to pending and keep the venue unpublished until admin approval.
+      const updatedVenue = await storage.updateVenue(req.params.id, {
+        status: 'pending',
+        approved: false,
+        submittedAt: new Date(),
+      } as any);
       res.json(updatedVenue);
     } catch (error) {
       console.error("Error submitting venue for review:", error);

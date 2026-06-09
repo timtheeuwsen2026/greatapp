@@ -55,6 +55,7 @@ export default function CommunityHub() {
   const [newMessage, setNewMessage] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("groups");
 
   // Fetch community groups
   const { data: groups = [], isLoading: groupsLoading } = useQuery<any[]>({
@@ -99,6 +100,7 @@ export default function CommunityHub() {
       setNewGroupDescription("");
       setNewGroupCategory("general");
       setSelectedGroup(createdGroup?.id || null);
+      setActiveTab("chat");
       setCreateGroupOpen(false);
       toast({
         title: "Group created!",
@@ -373,7 +375,7 @@ export default function CommunityHub() {
           </div>
         </div>
 
-        <Tabs defaultValue="groups" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="groups" className="flex items-center gap-2">
               <Users className="h-4 w-4" />
@@ -442,7 +444,10 @@ export default function CommunityHub() {
                         </div>
                         <Button 
                           size="sm" 
-                          onClick={() => setSelectedGroup(group.id)}
+                          onClick={() => {
+                            setSelectedGroup(group.id);
+                            setActiveTab("chat");
+                          }}
                           className="ml-auto"
                         >
                           Join Chat

@@ -24,6 +24,8 @@ type Experience = {
   shortDescription?: string;
   description: string;
   price: number;
+  pricePerPerson?: number;
+  depositAmount?: number;
   startDate: string;
   endDate: string;
   location: string;
@@ -76,7 +78,8 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isDeposit = paymentMode === 'deposit' && (paymentInfo?.hasDeposit || paymentInfo?.isDepositPayment);
-  const chargeAmount = isDeposit ? paymentInfo?.depositAmount || 0 : (paymentInfo?.fullPrice || experience.price);
+  const experienceFullPrice = paymentInfo?.fullPrice || experience.pricePerPerson || experience.price;
+  const chargeAmount = isDeposit ? paymentInfo?.depositAmount || 0 : experienceFullPrice;
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,7 +113,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           
           const response = await apiRequest("POST", "/api/bookings", {
             experienceId: experience.id,
-            amount: paymentInfo?.fullPrice || experience.price,
+            amount: experienceFullPrice,
             isEscrow: experience.requireMinimumParticipants,
             stripePaymentIntentId: paymentIntent.id,
             promoterId: attribution.promoterId,
@@ -158,7 +161,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           
           const response = await apiRequest("POST", "/api/bookings", {
             experienceId: experience.id,
-            amount: paymentInfo?.fullPrice || experience.price,
+            amount: experienceFullPrice,
             isEscrow: experience.requireMinimumParticipants,
             stripePaymentIntentId: paymentIntent.id,
             promoterId: attribution.promoterId,
@@ -331,7 +334,7 @@ export default function Checkout() {
       }
 
       const res = await apiRequest("POST", "/api/create-payment-intent", { 
-        amount: experience.price,
+        amount: experience.pricePerPerson || experience.price,
         experienceId: experienceId,
         ticketSkuId: ticketSkuId || undefined,
         paymentMode: mode
@@ -346,7 +349,7 @@ export default function Checkout() {
         isDepositPayment: data.isDepositPayment || false,
         depositAmount: data.depositAmount || 0,
         balanceAmount: data.balanceAmount || 0,
-        fullPrice: data.fullPrice || experience.price,
+        fullPrice: data.fullPrice || experience.pricePerPerson || experience.price,
         mvgMin: data.mvgMin,
         mvgDeadline: data.mvgDeadline,
         ticketSkuId: ticketSkuId || undefined,
@@ -644,7 +647,7 @@ export default function Checkout() {
                   <div className="flex justify-between items-center text-lg font-semibold border-t pt-3">
                     <span>{isDepositMode ? 'Due Today' : 'Total'}</span>
                     <span>{formatCurrency(
-                      isDepositMode ? paymentInfo!.depositAmount : (paymentInfo?.fullPrice || experience.price), 
+                      isDepositMode ? paymentInfo!.depositAmount : (paymentInfo?.fullPrice || experience.pricePerPerson || experience.price),
                       experience.currency
                     )}</span>
                   </div>

@@ -319,7 +319,7 @@ function normalizeEventTripFields(draft: any) {
     copy.accommodationType = null;
     copy.roomCapacity = null;
     copy.totalRooms = null;
-    copy.maxParticipants = Number(copy.standingCapacity || copy.maxParticipants || 1);
+    copy.maxParticipants = Number(copy.standingCapacity || copy.seatedCapacity || copy.maxParticipants || 1);
     copy.selectedServices = [];
     copy.selectedAmenities = [];
     copy.selectedServiceIds = [];
@@ -833,6 +833,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       price: data.price || data.basePrice,
       // PHASE 3 FIX: Ensure pricing defaults are preserved when loading drafts
       monetisationMode: 'creator_led',
+      venueRevenuePercentage: data.venueRevenuePercentage ?? 0,
       creatorPct: data.creatorPct ?? 85,
       platformPct: data.platformPct ?? 15,
       influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
@@ -1021,6 +1022,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         depositPercentage: formData.depositPercentage || 20,
         
         // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
+        venueRevenuePercentage: formData.venueRevenuePercentage || 0,
         creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
@@ -1037,7 +1039,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         seatedCapacity: formData.seatedCapacity ?? null,
 
         // Capacity and MVG fields
-        maxParticipants: formData.maxParticipants || 1,
+        maxParticipants: formData.maxParticipants || formData.standingCapacity || formData.seatedCapacity || 1,
         // Map frontend MVG fields to draft schema fields (mvgMinimumSize in db)
         mvgEnabled: formData.requireMinimumParticipants ?? true,
         mvgMinimumSize: formData.minimumParticipants || 6,
@@ -1202,8 +1204,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       if (!data.endTime || data.endTime.trim() === '') {
         errors.push("End time is required for a single-day event");
       }
-      if (!data.standingCapacity && !data.maxParticipants) {
-        errors.push("Standing capacity is required for a single-day event");
+      if (!data.standingCapacity && !data.seatedCapacity && !data.maxParticipants) {
+        errors.push("Standing or seated capacity is required for a single-day event");
       }
     }
 
@@ -1398,13 +1400,15 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         rooms: formData.rooms || [],
         
         // Pricing and deposit fields
-        price: formData.price || '',
+        price: formData.price || formData.pricePerPerson || '',
+        pricePerPerson: formData.pricePerPerson || formData.price || 0,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
         depositEnabled: formData.depositEnabled || false,
         depositPercentage: formData.depositPercentage || 20,
         
         // Revenue split fields (platformPct comes from DB; creatorPct is what creator keeps)
+        venueRevenuePercentage: formData.venueRevenuePercentage || 0,
         creatorRevenuePercentage: formData.creatorRevenuePercentage || 85,
         platformRevenuePercentage: formData.platformRevenuePercentage || 15,
         creatorPct: formData.creatorPct || 85,
@@ -1421,7 +1425,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         seatedCapacity: formData.seatedCapacity ?? null,
 
         // Capacity and MVG fields
-        maxParticipants: formData.maxParticipants || 1,
+        maxParticipants: formData.maxParticipants || formData.standingCapacity || formData.seatedCapacity || 1,
         // Map frontend MVG fields to draft schema fields (mvgMinimumSize in db)
         mvgEnabled: formData.requireMinimumParticipants ?? true,
         mvgMinimumSize: formData.minimumParticipants || 6,
@@ -1654,18 +1658,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
         {/* Form Content */}
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit, (errors) => {
-              console.error('[EventBuilder] Form validation errors:', errors);
-              // Get the first error field name and message
-              const errorFields = Object.keys(errors);
-              const firstError = errorFields[0];
-              const firstErrorMessage = (errors as Record<string, any>)[firstError]?.message || 'Unknown validation error';
-              toast({
-                title: `Validation failed: ${firstError}`,
-                description: `${firstErrorMessage}. Fields with errors: ${errorFields.join(', ')}`,
-                variant: "destructive",
-              });
-            })}>
+          <form onSubmit={(event) => event.preventDefault()} noValidate>
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -1844,7 +1837,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                       </Button>
                     ) : (
                       <Button
-                        type="submit"
+                        type="button"
+                        onClick={() => handleSubmit(form.getValues())}
                         disabled={!currentValidation.isValid || isPublishing}
                         data-testid="button-submit-experience"
                         className={(!currentValidation.isValid || isPublishing) ? "opacity-50 cursor-not-allowed" : ""}
@@ -4012,6 +4006,7 @@ function PricingStep({ form }: { form: any }) {
   const maxParticipants = form.watch('maxParticipants') || 0;
   const eventType = form.watch('type'); // Track event type for dynamic UI
   const monetisationMode = form.watch('monetisationMode');
+  const venueRevenuePercentage = form.watch('venueRevenuePercentage') || 0;
   const creatorPct = form.watch('creatorPct') || 85;
   const platformPct = form.watch('platformPct') || 15;
   const requireMinimumParticipants = form.watch('requireMinimumParticipants');
@@ -4189,6 +4184,7 @@ function PricingStep({ form }: { form: any }) {
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
   const totalRevenue = ticketTotalRevenue > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
   const revenueSplit = computeRevenueSplit(totalRevenue, creatorPct, platformPct);
+  const venueAmount = safeMultiply(totalRevenue, venueRevenuePercentage / 100);
 
   // **4. MVG PROGRESS** - Using pricing service computation
   const mvgProgress = computeMVGProgress(0, minimumParticipants); // 0 current bookings in draft mode
@@ -4434,7 +4430,7 @@ function PricingStep({ form }: { form: any }) {
             Revenue Split
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Platform takes a fixed 15%. You allocate the remaining 85% between yourself and the venue partner.
+            Platform fee is fixed. The venue offer is stored as a percentage and the actual amount is calculated from confirmed booking revenue.
           </p>
         </CardHeader>
         <CardContent>
@@ -4462,7 +4458,7 @@ function PricingStep({ form }: { form: any }) {
                   min="0"
                   max={100 - platformPct}
                   step="1"
-                  value={form.watch('venueRevenuePercentage') ?? 0}
+                  value={venueRevenuePercentage}
                   onChange={(e) => {
                     const spacePct = Math.min(parseFloat(e.target.value) || 0, 100 - platformPct);
                     form.setValue('venueRevenuePercentage', spacePct, { shouldDirty: true });
@@ -4471,7 +4467,7 @@ function PricingStep({ form }: { form: any }) {
                   }}
                   data-testid="input-venue-revenue-pct"
                 />
-                <p className="text-xs text-gray-500 mt-1">Proposed to venue partner</p>
+                <p className="text-xs text-gray-500 mt-1">Percentage offer, not a fixed amount</p>
               </div>
               <div>
                 <Label htmlFor="creator-pct">Your Share (%)</Label>
@@ -4496,7 +4492,7 @@ function PricingStep({ form }: { form: any }) {
 
             {/* Validation: must add to 100 */}
             {(() => {
-              const spacePct = form.watch('venueRevenuePercentage') ?? 0;
+              const spacePct = venueRevenuePercentage;
               const total = platformPct + spacePct + creatorPct;
               if (Math.abs(total - 100) > 0.5) {
                 return (
@@ -4520,6 +4516,12 @@ function PricingStep({ form }: { form: any }) {
                   <span>Platform Fee ({platformPct}%)</span>
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
+                {venueRevenuePercentage > 0 && (
+                  <div className="flex justify-between">
+                    <span>Venue Partner ({venueRevenuePercentage}%)</span>
+                    <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueAmount, currency)}</span>
+                  </div>
+                )}
                 {influencerPromotionEnabled && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
                     <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>

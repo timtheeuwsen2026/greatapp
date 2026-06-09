@@ -2728,6 +2728,7 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
       .optional(),
 
     // Revenue splits - Validate percentages
+    venueRevenuePercentage: z.coerce.number().min(0).max(100).optional(),
     creatorRevenuePercentage: z.coerce.number().min(0).max(100).optional(),
     platformRevenuePercentage: z.coerce.number().min(0).max(100).optional(),
     creatorPct: z.coerce.number().min(0).max(100).optional(),

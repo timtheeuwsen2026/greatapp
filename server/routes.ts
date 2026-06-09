@@ -2503,7 +2503,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return total + capacity * quantity;
       }, 0);
       const normalizedMaxParticipants = isSingleDayEvent
-        ? Number((draft as any).standingCapacity || draft.maxParticipants || 1)
+        ? Number((draft as any).standingCapacity || (draft as any).seatedCapacity || draft.maxParticipants || 1)
         : (sleepingCapacity || draft.maxParticipants || 10);
       const resolvedMvgEnabled = draft.mvgEnabled !== undefined
         ? draft.mvgEnabled
@@ -9411,8 +9411,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userVenues.length) return res.json([]);
 
       const venueIds = userVenues.map((v: any) => v.id);
-      // Fetch experiences linked to any of those venues with pending handshake status
-      const offers = await storage.getExperiencesByVenueIds(venueIds, 'pending_venue_approval');
+      // Linked venue submissions are stored as pending_approval because the DB enum
+      // does not include a separate pending_venue_approval state.
+      const linkedPendingExperiences = await storage.getExperiencesByVenueIds(venueIds);
+      const offers = linkedPendingExperiences.filter((experience: any) =>
+        experience.status === 'pending_approval' || experience.status === 'pending'
+      );
       res.json(offers);
     } catch (err: any) {
       console.error('Error fetching venue offers:', err);

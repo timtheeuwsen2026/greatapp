@@ -412,7 +412,8 @@ const daytimeVenueVibes = [
   'Community Driven', 'Creative', 'High Energy', 'Quiet', 'Late Night', 'Pop-Up Ready'
 ];
 
-const daytimePricingModels = ['percentage_split', 'per_head_package', 'minimum_spend', 'access_only'];
+const daytimePricingModels = ['minimum_spend', 'access_only', 'flat_rental'];
+const multiDayPricingModels = ['revenue_share', 'per_head_package', 'whole_venue', 'per_room'];
 
 const viewsEnvironment = [
   'Ocean View', 'Lake View', 'Mountain View', 'Forest View',
@@ -512,7 +513,7 @@ export default function VenueProfileSetup() {
       useRoomPricesFromRoomsPage: true,
       defaultPricePerRoomPerNight: undefined,
       minimumNights: undefined,
-      paymentTimingModel: undefined,
+      paymentTimingModel: initialVenueType === 'daytime' ? 'deposit_balance_arrival' : undefined,
       softHoldDurationDays: undefined,
       balanceDueDaysBeforeArrival: undefined,
       // New Page 10 fields
@@ -542,6 +543,9 @@ export default function VenueProfileSetup() {
     form.setValue('vibes', form.getValues('vibes').filter((vibe) => allowedVibes.has(vibe)));
 
     if (isDaytime) {
+      if (DAYTIME_SKIP_STEPS.includes(step)) {
+        setStep(9);
+      }
       form.setValue('venueRoles', []);
       form.setValue('venueRoomTypes', []);
       form.setValue('defaultItinerary', []);
@@ -549,14 +553,14 @@ export default function VenueProfileSetup() {
       form.setValue('defaultPricePerRoomPerNight', undefined);
       form.setValue('minimumNights', undefined);
       form.setValue('minStay', undefined);
-      if (!form.getValues('paymentTimingModel')) {
-        form.setValue('paymentTimingModel', 'deposit_balance_arrival');
-      }
+      form.setValue('paymentTimingModel', 'deposit_balance_arrival');
       if (!daytimePricingModels.includes(form.getValues('pricingModel') || '')) {
         form.setValue('pricingModel', '');
       }
+    } else if (!multiDayPricingModels.includes(form.getValues('pricingModel') || '')) {
+      form.setValue('pricingModel', '');
     }
-  }, [activeVenueCategories, activeVenueVibes, form, isDaytime]);
+  }, [activeVenueCategories, activeVenueVibes, form, isDaytime, step]);
 
   useEffect(() => {
     if (step !== 5 || servicesAndAmenitiesData) return;
@@ -2023,32 +2027,25 @@ export default function VenueProfileSetup() {
                                 {isDaytime ? (
                                   [
                                     {
-                                      value: 'percentage_split',
-                                      title: 'Percentage Split',
-                                      description: '% of total ticket revenue.',
-                                      icon: DollarSign,
-                                      testId: 'card-pricing-percentage-split',
-                                    },
-                                    {
-                                      value: 'per_head_package',
-                                      title: 'Per-Head Package',
-                                      description: 'Fixed amount per participant.',
-                                      icon: Users,
-                                      testId: 'card-pricing-per-head-package',
-                                    },
-                                    {
                                       value: 'minimum_spend',
-                                      title: 'Minimum Spend',
-                                      description: 'Flat guaranteed amount.',
+                                      title: 'Minimum Spend Guarantee',
+                                      description: 'Creators must guarantee a minimum total revenue for your space.',
                                       icon: Building,
                                       testId: 'card-pricing-minimum-spend',
                                     },
                                     {
                                       value: 'access_only',
-                                      title: 'Access-Only (Cash Bar)',
-                                      description: 'Venue keeps 100% of F&B sales, with $0 or a flat space fee.',
+                                      title: 'Access-Only / Pay-at-Counter',
+                                      description: 'Participants pay directly at your counter for F&B. You keep 100% of those sales.',
                                       icon: Clock,
                                       testId: 'card-pricing-access-only',
+                                    },
+                                    {
+                                      value: 'flat_rental',
+                                      title: 'Flat Rental Fee',
+                                      description: 'Creators pay a fixed price for the duration of the event.',
+                                      icon: DollarSign,
+                                      testId: 'card-pricing-flat-rental',
                                     },
                                   ].map((model) => {
                                     const Icon = model.icon;
@@ -2068,31 +2065,52 @@ export default function VenueProfileSetup() {
                                     );
                                   })
                                 ) : (
-                                  <>
-                                    <Card
-                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'whole_venue' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                      onClick={() => field.onChange('whole_venue')}
-                                      data-testid="card-pricing-whole-venue"
-                                    >
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <Building className="h-5 w-5 text-primary" />
-                                        <span className="font-medium">Whole Venue Pricing</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600">Charge a flat rate for the entire venue per day or per event</p>
-                                    </Card>
-
-                                    <Card
-                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'per_room' ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                      onClick={() => field.onChange('per_room')}
-                                      data-testid="card-pricing-per-room"
-                                    >
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <Users className="h-5 w-5 text-primary" />
-                                        <span className="font-medium">Per Room / Per Night</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600">Charge based on individual room bookings per night</p>
-                                    </Card>
-                                  </>
+                                  [
+                                    {
+                                      value: 'revenue_share',
+                                      title: 'Percentage Revenue Share',
+                                      description: "You take a percentage of the Creator's total ticket sales.",
+                                      icon: DollarSign,
+                                      testId: 'card-pricing-revenue-share',
+                                    },
+                                    {
+                                      value: 'per_head_package',
+                                      title: 'Per-Head Package',
+                                      description: 'You charge a fixed catering/lodging rate per participant.',
+                                      icon: Users,
+                                      testId: 'card-pricing-per-head-package',
+                                    },
+                                    {
+                                      value: 'whole_venue',
+                                      title: 'Whole Venue Flat Fee',
+                                      description: 'Charge a flat rate for the entire venue per day or event.',
+                                      icon: Building,
+                                      testId: 'card-pricing-whole-venue',
+                                    },
+                                    {
+                                      value: 'per_room',
+                                      title: 'Per Room / Per Night',
+                                      description: 'Charge based on individual room bookings.',
+                                      icon: Users,
+                                      testId: 'card-pricing-per-room',
+                                    },
+                                  ].map((model) => {
+                                    const Icon = model.icon;
+                                    return (
+                                      <Card
+                                        key={model.value}
+                                        className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                        onClick={() => field.onChange(model.value)}
+                                        data-testid={model.testId}
+                                      >
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <Icon className="h-5 w-5 text-primary" />
+                                          <span className="font-medium">{model.title}</span>
+                                        </div>
+                                        <p className="text-sm text-gray-600">{model.description}</p>
+                                      </Card>
+                                    );
+                                  })
                                 )}
                               </div>
                             </FormControl>
@@ -2100,26 +2118,50 @@ export default function VenueProfileSetup() {
                         )}
                       />
 
-                      {/* Whole Venue Pricing Fields */}
-                      {!isDaytime && form.watch('pricingModel') === 'whole_venue' && (
+                      {/* Multi-day pricing fields */}
+                      {!isDaytime && ['whole_venue', 'revenue_share', 'per_head_package'].includes(form.watch('pricingModel') || '') && (
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">Whole Venue Pricing</h4>
+                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
+                            {{
+                              revenue_share: 'Percentage Revenue Share',
+                              per_head_package: 'Per-Head Package',
+                              whole_venue: 'Whole Venue Flat Fee',
+                            }[form.watch('pricingModel') || '']}
+                          </h4>
                           <FormField
                             control={form.control}
                             name="basePricePerDay"
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>Price Per Day</FormLabel>
+                                <FormLabel>
+                                  {{
+                                    revenue_share: 'Revenue Share (%)',
+                                    per_head_package: 'Package Amount Per Participant',
+                                    whole_venue: 'Flat Fee Per Day/Event',
+                                  }[form.watch('pricingModel') || '']}
+                                </FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
                                     min="0"
-                                    step="0.01"
-                                    placeholder="e.g., 2500"
+                                    max={form.watch('pricingModel') === 'revenue_share' ? '100' : undefined}
+                                    step={form.watch('pricingModel') === 'revenue_share' ? '1' : '0.01'}
+                                    placeholder={{
+                                      revenue_share: 'e.g., 20',
+                                      per_head_package: 'e.g., 95',
+                                      whole_venue: 'e.g., 2500',
+                                    }[form.watch('pricingModel') || '']}
                                     {...field}
                                     data-testid="input-base-price-per-day"
                                   />
                                 </FormControl>
+                                <FormDescription>
+                                  {{
+                                    revenue_share: "The venue receives this percentage of the creator's total ticket sales.",
+                                    per_head_package: 'The venue receives this fixed amount per participant.',
+                                    whole_venue: 'The venue receives this flat amount for the venue per day or event.',
+                                  }[form.watch('pricingModel') || '']}
+                                </FormDescription>
                                 <FormMessage />
                               </FormItem>
                             )}
@@ -2131,10 +2173,9 @@ export default function VenueProfileSetup() {
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                           <h4 className="font-medium text-blue-800 dark:text-blue-200">
                             {{
-                              percentage_split: 'Percentage Split',
-                              per_head_package: 'Per-Head Package',
-                              minimum_spend: 'Minimum Spend',
-                              access_only: 'Access-Only (Cash Bar)',
+                              minimum_spend: 'Minimum Spend Guarantee',
+                              access_only: 'Access-Only / Pay-at-Counter',
+                              flat_rental: 'Flat Rental Fee',
                             }[form.watch('pricingModel') || '']}
                           </h4>
                           <FormField
@@ -2144,23 +2185,20 @@ export default function VenueProfileSetup() {
                               <FormItem>
                                 <FormLabel>
                                   {{
-                                    percentage_split: 'Venue Share (%)',
-                                    per_head_package: 'Amount Per Participant',
                                     minimum_spend: 'Guaranteed Minimum Spend',
                                     access_only: 'Flat Space Fee (Optional)',
+                                    flat_rental: 'Flat Rental Fee',
                                   }[form.watch('pricingModel') || '']}
                                 </FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
                                     min="0"
-                                    max={form.watch('pricingModel') === 'percentage_split' ? '100' : undefined}
-                                    step={form.watch('pricingModel') === 'percentage_split' ? '1' : '0.01'}
+                                    step="0.01"
                                     placeholder={{
-                                      percentage_split: 'e.g., 20',
-                                      per_head_package: 'e.g., 18',
                                       minimum_spend: 'e.g., 750',
                                       access_only: 'e.g., 0',
+                                      flat_rental: 'e.g., 350',
                                     }[form.watch('pricingModel') || '']}
                                     {...field}
                                     data-testid="input-daytime-pricing-value"
@@ -2168,10 +2206,9 @@ export default function VenueProfileSetup() {
                                 </FormControl>
                                 <FormDescription>
                                   {{
-                                    percentage_split: 'The venue receives this percentage of confirmed ticket revenue.',
-                                    per_head_package: 'The venue receives this fixed amount for each participant.',
                                     minimum_spend: 'The venue receives this guaranteed minimum regardless of final attendance.',
-                                    access_only: 'Use 0 when the venue only keeps food and beverage sales.',
+                                    access_only: 'Participants pay at your counter for F&B; use 0 when there is no space fee.',
+                                    flat_rental: 'The venue receives this fixed amount for the event duration.',
                                   }[form.watch('pricingModel') || '']}
                                 </FormDescription>
                                 <FormMessage />
@@ -2274,51 +2311,43 @@ export default function VenueProfileSetup() {
                           <FormItem className="space-y-4">
                             <FormControl>
                               <div className="space-y-3">
-                                {/* Model 1 */}
-                                <Card 
-                                  className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 hover:border-gray-300'}`}
-                                  onClick={() => field.onChange('soft_hold_deposit_balance')}
-                                  data-testid="card-payment-model-1"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500' : 'border-gray-400'}`}>
-                                      {field.value === 'soft_hold_deposit_balance' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
-                                    </div>
-                                    <span className="font-medium">
-                                      {isDaytime
-                                        ? 'Soft Hold -> Deposit After Approval -> Balance Before Event'
-                                        : 'Soft Hold -> Deposit After MVG -> Balance Before Arrival'}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    {isDaytime
-                                      ? 'Date and time are held without payment, deposit collected after approval, balance due before the event'
-                                      : 'Dates are held without payment, deposit collected after MVG is met, balance due before arrival'}
-                                  </p>
-                                </Card>
+                                {!isDaytime && (
+                                  <>
+                                    {/* Model 1 */}
+                                    <Card
+                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 hover:border-gray-300'}`}
+                                      onClick={() => field.onChange('soft_hold_deposit_balance')}
+                                      data-testid="card-payment-model-1"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500' : 'border-gray-400'}`}>
+                                          {field.value === 'soft_hold_deposit_balance' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                                        </div>
+                                        <span className="font-medium">{'Soft Hold -> Deposit After MVG -> Balance Before Arrival'}</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600 ml-6 mt-1">
+                                        Dates are held without payment, deposit collected after MVG is met, balance due before arrival
+                                      </p>
+                                    </Card>
 
-                                {/* Model 2 */}
-                                <Card 
-                                  className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'deposit_upfront_balance' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-gray-200 hover:border-gray-300'}`}
-                                  onClick={() => field.onChange('deposit_upfront_balance')}
-                                  data-testid="card-payment-model-2"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_upfront_balance' ? 'border-green-500' : 'border-gray-400'}`}>
-                                      {field.value === 'deposit_upfront_balance' && <div className="w-2 h-2 rounded-full bg-green-500" />}
-                                    </div>
-                                    <span className="font-medium">
-                                      {isDaytime
-                                        ? 'Deposit Upfront (Refundable Until Approval) -> Balance Before Event'
-                                        : 'Deposit Upfront (Refundable Until MVG) -> Balance Before Arrival'}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    {isDaytime
-                                      ? 'Deposit collected immediately but refundable until approval, balance due before the event'
-                                      : 'Deposit collected immediately but refundable if MVG not met, balance due before arrival'}
-                                  </p>
-                                </Card>
+                                    {/* Model 2 */}
+                                    <Card
+                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'deposit_upfront_balance' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-gray-200 hover:border-gray-300'}`}
+                                      onClick={() => field.onChange('deposit_upfront_balance')}
+                                      data-testid="card-payment-model-2"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_upfront_balance' ? 'border-green-500' : 'border-gray-400'}`}>
+                                          {field.value === 'deposit_upfront_balance' && <div className="w-2 h-2 rounded-full bg-green-500" />}
+                                        </div>
+                                        <span className="font-medium">{'Deposit Upfront (Refundable Until MVG) -> Balance Before Arrival'}</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600 ml-6 mt-1">
+                                        Deposit collected immediately but refundable if MVG not met, balance due before arrival
+                                      </p>
+                                    </Card>
+                                  </>
+                                )}
 
                                 {/* Model 3 */}
                                 <Card 
@@ -2331,12 +2360,12 @@ export default function VenueProfileSetup() {
                                       {field.value === 'deposit_balance_arrival' && <div className="w-2 h-2 rounded-full bg-orange-500" />}
                                     </div>
                                     <span className="font-medium">
-                                      {isDaytime ? 'Deposit After MVG -> Balance on Event Day' : 'Deposit After MVG -> Balance on Arrival'}
+                                      {isDaytime ? 'Deposit After MVG -> Balance Before Arrival' : 'Deposit After MVG -> Balance on Arrival'}
                                     </span>
                                   </div>
                                   <p className="text-sm text-gray-600 ml-6 mt-1">
                                     {isDaytime
-                                      ? 'Deposit collected only after MVG is met, remaining balance paid on the event day'
+                                      ? 'Deposit collected only after MVG is met, remaining balance due before arrival/event start'
                                       : 'Deposit collected only after MVG is met, remaining balance paid on arrival'}
                                   </p>
                                 </Card>

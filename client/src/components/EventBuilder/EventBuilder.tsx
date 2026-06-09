@@ -909,6 +909,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     const currentIdx = activeSteps.findIndex(s => s.id === currentStep);
     if (currentIdx < activeSteps.length - 1) {
       const nextStepId = activeSteps[currentIdx + 1].id;
+      setCurrentStep(nextStepId);
+
       try {
         const formData = form.getValues();
         
@@ -924,34 +926,29 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
           }
           
           // Create initial draft before navigation
-          const draftData = {
+          const draftData = normalizeDraftForSave({
             ...formData,
             currentStep: nextStepId, // Set to next step
             creatorId: user.id
-          };
+          });
           
           const response = await apiRequest("POST", "/api/experience-drafts", draftData);
-          if (!response.ok) {
-            throw new Error("Failed to create draft");
-          }
           
           const result = await response.json();
           if (result.id) {
             setCurrentDraftId(result.id);
-            setLocation(`/event-builder/${result.id}`);
+            window.history.replaceState(null, "", `/event-builder/${result.id}`);
           }
         } else {
           // Update existing draft - note: currentStep will be updated separately in the mutation function
-          autoSaveMutation.mutate(formData);
+          autoSaveMutation.mutate({ ...formData, currentStep: nextStepId } as any);
         }
-        
-        // Navigate to next step (using step ID from activeSteps)
-        setCurrentStep(nextStepId);
       } catch (error) {
-        console.error("Navigation error:", error);
+        console.error("Draft save during navigation failed:", error);
+        setSaveError(error instanceof Error ? error.message : "Draft save failed");
         toast({
-          title: "Navigation failed",
-          description: "Unable to proceed to next step. Please try again.",
+          title: "Draft not saved yet",
+          description: "You can keep building. Save or submit will retry syncing your draft.",
           variant: "destructive",
         });
       }
@@ -1016,7 +1013,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         rooms: formData.rooms || [],
         
         // Pricing and deposit fields
-        price: formData.price || '',
+        price: formData.price || formData.pricePerPerson || '',
+        pricePerPerson: formData.pricePerPerson || formData.price || 0,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
         depositEnabled: formData.depositEnabled || false,
@@ -1457,18 +1455,20 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       // Normalize dates to prevent bad payloads
       const publishPayload = normalizeDraftForSave(rawPublishPayload);
 
-      // Must have a draft ID to publish
-      if (!currentDraftId) {
-        toast({
-          title: "No draft found",
-          description: "Please save your draft first before publishing.",
-          variant: "destructive",
+      let publishDraftId = currentDraftId;
+      if (!publishDraftId) {
+        const createDraftResponse = await apiRequest("POST", "/api/experience-drafts", {
+          ...publishPayload,
+          status: "draft",
+          currentStep,
         });
-        return;
+        const createdDraft = await createDraftResponse.json();
+        publishDraftId = createdDraft.id;
+        setCurrentDraftId(publishDraftId);
       }
 
       // Call the publish API to convert draft to experience
-      const response = await apiRequest("POST", `/api/experience-drafts/${currentDraftId}/publish`, publishPayload);
+      const response = await apiRequest("POST", `/api/experience-drafts/${publishDraftId}/publish`, publishPayload);
 
       if (response.ok) {
         const result = await response.json();

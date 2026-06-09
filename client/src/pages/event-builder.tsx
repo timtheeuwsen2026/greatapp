@@ -198,8 +198,8 @@ export default function EventBuilderPage() {
             draftId={draftId}
             initialExperienceType={initialExperienceType}
             onComplete={(experienceId) => {
-              // Handle successful submission
-              window.location.href = `/experience/${experienceId}`;
+              // Submitted experiences wait for admin review before public listing.
+              setLocation("/creator-dashboard?tab=pending");
             }}
           />
         </Suspense>

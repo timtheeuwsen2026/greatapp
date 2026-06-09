@@ -54,6 +54,7 @@ export default function CommunityHub() {
   const [newGroupCategory, setNewGroupCategory] = useState("general");
   const [newMessage, setNewMessage] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
 
   // Fetch community groups
   const { data: groups = [], isLoading: groupsLoading } = useQuery<any[]>({
@@ -92,11 +93,13 @@ export default function CommunityHub() {
       if (!response.ok) throw new Error('Failed to create group');
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (createdGroup) => {
       queryClient.invalidateQueries({ queryKey: ["/api/community/groups"] });
       setNewGroupName("");
       setNewGroupDescription("");
       setNewGroupCategory("general");
+      setSelectedGroup(createdGroup?.id || null);
+      setCreateGroupOpen(false);
       toast({
         title: "Group created!",
         description: "Your community group has been created successfully.",
@@ -302,7 +305,7 @@ export default function CommunityHub() {
                 <User className="w-4 h-4 mr-2" />
                 Browse Members
               </Button>
-              <Dialog>
+              <Dialog open={createGroupOpen} onOpenChange={setCreateGroupOpen}>
                 <DialogTrigger asChild>
                   <Button>
                     <Plus className="w-4 h-4 mr-2" />

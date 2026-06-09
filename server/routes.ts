@@ -2600,6 +2600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get roles from draft
       const roles = Array.isArray((draft as any).roles) ? (draft as any).roles : [];
+      const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
       
       // Prepare experience data from draft with explicit type mapping
       const experienceData = {
@@ -2619,14 +2620,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         endTime: isSingleDayEvent ? (draft as any).endTime || null : null,
         maxParticipants: normalizedMaxParticipants,
         currentParticipants: 0,
-        price: (draft.price || '0').toString(),
+        price: resolvedPrice.toString(),
+        pricePerPerson: resolvedPrice.toString(),
         currency: draft.currency || 'usd',
         depositEnabled: draft.depositEnabled || false,
         depositPercentage: draft.depositPercentage,
         depositAmount: (draft as any).depositAmount || null,
         balanceDueDays: draft.balanceDueDays || 14,
         creatorId: userId,
-        status: "published" as const,
+        status: "pending_approval" as const,
+        submittedAt: new Date(),
         
         // Venue mapping: map selectedVenueId to linkedVenueId
         linkedVenueId: (draft as any).selectedVenueId || null,
@@ -2728,7 +2731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const shareableLink = `${getAppBaseUrl(req)}/experiences/${experience.id}`;
       
       res.status(201).json({
-        message: "Experience published successfully",
+        message: "Experience submitted for approval",
         experience,
         shareableLink,
         id: experience.id

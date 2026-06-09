@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { MapPin, Calendar, Users, Lock, Clock, Shield } from "lucide-react";
+import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle } from "lucide-react";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 
@@ -50,10 +50,9 @@ const formatCurrency = (amount: number | string | undefined | null, currency?: s
   return `${symbol}${numAmount.toFixed(2)}`;
 };
 
-if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
-  throw new Error('Missing required Stripe key: VITE_STRIPE_PUBLIC_KEY');
-}
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+const stripePromise = import.meta.env.VITE_STRIPE_PUBLIC_KEY
+  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY)
+  : Promise.resolve(null);
 
 const CheckoutForm = ({ experience, paymentInfo, paymentMode }: { 
   experience: Experience; 
@@ -74,6 +73,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
   const stripe = useStripe();
   const elements = useElements();
   const { toast } = useToast();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isDeposit = paymentMode === 'deposit' && (paymentInfo?.hasDeposit || paymentInfo?.isDepositPayment);
   const chargeAmount = isDeposit ? paymentInfo?.depositAmount || 0 : (paymentInfo?.fullPrice || experience.price);
@@ -85,6 +85,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
@@ -191,6 +192,8 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
         description: err.message || "An unexpected error occurred",
         variant: "destructive",
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -222,12 +225,14 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       
       <Button 
         type="submit" 
-        disabled={!stripe} 
+        disabled={!stripe || isSubmitting} 
         className="w-full btn-gradient" 
         size="lg"
         data-testid="button-complete-booking"
       >
-        {isDeposit
+        {isSubmitting
+          ? "Processing..."
+          : isDeposit
           ? `Pay Deposit - ${formatCurrency(chargeAmount, experience.currency)}`
           : `Complete Booking - ${formatCurrency(chargeAmount, experience.currency)}`
         }
@@ -283,6 +288,7 @@ export default function Checkout() {
   const { toast } = useToast();
   const [clientSecret, setClientSecret] = useState("");
   const [paymentIntentLoading, setPaymentIntentLoading] = useState(false);
+  const [paymentInitError, setPaymentInitError] = useState<string | null>(null);
   const [paymentInfo, setPaymentInfo] = useState<{
     isMVGExperience: boolean;
     isDepositPayment: boolean;
@@ -318,7 +324,12 @@ export default function Checkout() {
     if (!experience || !experienceId) return;
     
     setPaymentIntentLoading(true);
+    setPaymentInitError(null);
     try {
+      if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
+        throw new Error("Stripe checkout is not configured. Add VITE_STRIPE_PUBLIC_KEY and restart the app.");
+      }
+
       const res = await apiRequest("POST", "/api/create-payment-intent", { 
         amount: experience.price,
         experienceId: experienceId,
@@ -326,6 +337,9 @@ export default function Checkout() {
         paymentMode: mode
       });
       const data = await res.json();
+      if (!data.clientSecret) {
+        throw new Error("Payment setup did not return a client secret.");
+      }
       setClientSecret(data.clientSecret);
       setPaymentInfo({
         isMVGExperience: data.isMVGExperience || false,
@@ -343,10 +357,12 @@ export default function Checkout() {
       if (data.hasDeposit === false && mode === 'deposit') {
         setPaymentMode('full');
       }
-    } catch (error) {
+    } catch (error: any) {
+      const message = error?.message || "Failed to initialize payment. Please try again.";
+      setPaymentInitError(message);
       toast({
-        title: "Error",
-        description: "Failed to initialize payment. Please try again.",
+        title: "Payment setup failed",
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -425,6 +441,31 @@ export default function Checkout() {
           <Card>
             <CardContent className="text-center py-12">
               <p className="text-gray-600">Experience not found.</p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (paymentInitError && !paymentIntentLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navigation />
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <Card>
+            <CardContent className="py-10 text-center">
+              <AlertCircle className="mx-auto mb-4 h-10 w-10 text-red-600" />
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">Payment setup failed</h2>
+              <p className="mb-6 text-sm text-gray-600">{paymentInitError}</p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+                <Button onClick={() => createPaymentIntent(paymentMode)}>
+                  Try Again
+                </Button>
+                <Button variant="outline" onClick={() => window.history.back()}>
+                  Back
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>

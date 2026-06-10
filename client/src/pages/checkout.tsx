@@ -1,6 +1,6 @@
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import Navigation from "@/components/navigation";
@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle } from "lucide-react";
+import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle, CheckCircle } from "lucide-react";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 
@@ -292,6 +292,14 @@ export default function Checkout() {
   const [clientSecret, setClientSecret] = useState("");
   const [paymentIntentLoading, setPaymentIntentLoading] = useState(false);
   const [paymentInitError, setPaymentInitError] = useState<string | null>(null);
+  const [freeRsvpInfo, setFreeRsvpInfo] = useState<{
+    fullPrice: number;
+    ticketSkuId?: string;
+    ticketName?: string;
+  } | null>(null);
+  const [freeRsvpSubmitting, setFreeRsvpSubmitting] = useState(false);
+  const [freeRsvpError, setFreeRsvpError] = useState<string | null>(null);
+  const freeRsvpStartedRef = useRef(false);
   const [paymentInfo, setPaymentInfo] = useState<{
     isMVGExperience: boolean;
     isDepositPayment: boolean;
@@ -340,6 +348,27 @@ export default function Checkout() {
         paymentMode: mode
       });
       const data = await res.json();
+      if (data.freeRsvp) {
+        setFreeRsvpInfo({
+          fullPrice: 0,
+          ticketSkuId: ticketSkuId || undefined,
+          ticketName: data.ticketName,
+        });
+        setPaymentInfo({
+          isMVGExperience: data.isMVGExperience || false,
+          isDepositPayment: false,
+          depositAmount: 0,
+          balanceAmount: 0,
+          fullPrice: 0,
+          mvgMin: data.mvgMin,
+          mvgDeadline: data.mvgDeadline,
+          ticketSkuId: ticketSkuId || undefined,
+          ticketName: data.ticketName,
+          hasDeposit: false
+        });
+        setClientSecret("");
+        return;
+      }
       if (!data.clientSecret) {
         throw new Error("Payment setup did not return a client secret.");
       }
@@ -403,6 +432,59 @@ export default function Checkout() {
     setClientSecret("");
     await createPaymentIntent(newMode);
   }, [paymentMode, createPaymentIntent]);
+
+  const completeFreeRsvp = useCallback(async () => {
+    if (!experience || !experienceId || freeRsvpSubmitting || freeRsvpStartedRef.current) return;
+
+    freeRsvpStartedRef.current = true;
+    setFreeRsvpSubmitting(true);
+    setFreeRsvpError(null);
+    try {
+      const attribution = getAttribution();
+      const response = await apiRequest("POST", "/api/bookings", {
+        experienceId: experience.id,
+        amount: 0,
+        isEscrow: experience.requireMinimumParticipants,
+        stripePaymentIntentId: null,
+        promoterId: attribution.promoterId,
+        referralCode: attribution.referralCode,
+        ticketSkuId: freeRsvpInfo?.ticketSkuId,
+        paymentType: 'full'
+      });
+      const data = await response.json();
+      clearAttribution();
+
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences", experience.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences", experience.id, "participants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences", experience.id, "participants-with-skills"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences", experience.id, "booking-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
+
+      toast({
+        title: "RSVP Confirmed!",
+        description: data.message || "Your free RSVP is confirmed and community chat is unlocked.",
+      });
+
+      const bookingId = data.booking?.id || '';
+      window.location.href = `/booking-success?experience=${experience.id}&booking=${bookingId}`;
+    } catch (error: any) {
+      setFreeRsvpError(error?.message || "Please try again.");
+      toast({
+        title: "RSVP failed",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setFreeRsvpSubmitting(false);
+    }
+  }, [experience, experienceId, freeRsvpInfo?.ticketSkuId, freeRsvpSubmitting, toast]);
+
+  useEffect(() => {
+    if (freeRsvpInfo && isAuthenticated && experience && !freeRsvpError) {
+      completeFreeRsvp();
+    }
+  }, [freeRsvpInfo, isAuthenticated, experience, freeRsvpError, completeFreeRsvp]);
 
   if (authLoading || experienceLoading) {
     return (
@@ -469,6 +551,37 @@ export default function Checkout() {
                   Back
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (freeRsvpInfo) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navigation />
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <Card>
+            <CardContent className="py-10 text-center">
+              <CheckCircle className="mx-auto mb-4 h-10 w-10 text-green-600" />
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">Confirming Free RSVP</h2>
+              <p className="mb-6 text-sm text-gray-600">
+                This ticket is free, so Stripe checkout is skipped. We are saving your RSVP and unlocking the community chat.
+              </p>
+              {freeRsvpError && (
+                <p className="mb-4 text-sm text-red-600">{freeRsvpError}</p>
+              )}
+              <Button
+                disabled={freeRsvpSubmitting}
+                onClick={() => {
+                  freeRsvpStartedRef.current = false;
+                  completeFreeRsvp();
+                }}
+              >
+                {freeRsvpSubmitting ? "Confirming..." : freeRsvpError ? "Try Again" : "Confirm RSVP"}
+              </Button>
             </CardContent>
           </Card>
         </div>

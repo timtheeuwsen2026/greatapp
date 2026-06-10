@@ -2897,15 +2897,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
-      const resolvedFullPrice = selectedTicket?.pricePerPerson
+      const resolvedFullPrice = selectedTicket && selectedTicket.pricePerPerson !== undefined && selectedTicket.pricePerPerson !== null
         ? parseFloat(selectedTicket.pricePerPerson.toString())
-        : ((experience as any).pricePerPerson
+        : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
           ? parseFloat((experience as any).pricePerPerson.toString())
           : (experience.price ? parseFloat(experience.price.toString()) : fullPrice));
 
       fullPrice = Number.isFinite(resolvedFullPrice) ? resolvedFullPrice : 0;
 
-      if (fullPrice <= 0) {
+      if (fullPrice < 0) {
         return res.status(400).json({ message: "Unable to determine booking price for this experience" });
       }
       
@@ -2935,7 +2935,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let paymentIntentId = stripePaymentIntentId;
 
       // If no payment intent ID provided, create a new one
-      if (!paymentIntentId) {
+      if (!paymentIntentId && (isDepositOnly ? depositAmount : fullPrice) > 0) {
         const chargeAmount = isDepositOnly ? depositAmount : fullPrice;
         const paymentIntentData: any = {
           amount: Math.round(chargeAmount * 100), // Convert to cents
@@ -2962,7 +2962,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let commissionCurrency: string | null = null;
       let commissionStatus: 'estimated' | 'locked' | 'voided' | null = null;
       
-      if (promoterId) {
+      if (promoterId && fullPrice > 0) {
         // Commission is calculated on FULL PRICE, not deposit
         // DATA CONTRACT: Price comes from ticketSkus.pricePerPerson, currency from experience.currency
         const pricePerPerson = selectedTicket?.pricePerPerson
@@ -4356,11 +4356,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const fullPrice = selectedTicket 
         ? parseFloat(selectedTicket.pricePerPerson || 0)
-        : ((experience as any).pricePerPerson
+        : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
           ? parseFloat((experience as any).pricePerPerson.toString())
           : (experience.price ? parseFloat(experience.price.toString()) : parseFloat((amount || 0).toString())));
 
-      if (!Number.isFinite(fullPrice) || fullPrice <= 0) {
+      if (!Number.isFinite(fullPrice) || fullPrice < 0) {
         return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
       }
       
@@ -4370,6 +4370,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hasDeposit = experience.depositEnabled && fixedDeposit > 0;
       
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
+
+      if (fullPrice === 0) {
+        return res.json({
+          freeRsvp: true,
+          clientSecret: null,
+          isMVGExperience,
+          isDepositPayment: false,
+          depositAmount: 0,
+          balanceAmount: 0,
+          fullPrice: 0,
+          ticketName,
+          ticketSkuId: ticketSkuId || null,
+          mvgMin: experience.mvgMin || experience.minimumParticipants,
+          mvgDeadline: experience.mvgDeadline,
+          paymentMode: 'free',
+          hasDeposit: false
+        });
+      }
       
       let chargeAmount = fullPrice;
       let depositAmount = 0;

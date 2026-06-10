@@ -331,7 +331,6 @@ function normalizeEventTripFields(draft: any) {
   if (type === 'one-day') {
     copy.endDate = copy.startDate || copy.endDate;
     copy.rooms = [];
-    copy.ticketSkus = [];
     copy.accommodationType = null;
     copy.roomCapacity = null;
     copy.totalRooms = null;
@@ -4055,6 +4054,8 @@ function PricingStep({ form }: { form: any }) {
   const pricePerPerson = form.watch('pricePerPerson') || 0;
   const maxParticipants = form.watch('maxParticipants') || 0;
   const eventType = form.watch('type'); // Track event type for dynamic UI
+  const venueType = form.watch('venueType') || "catalog";
+  const selectedVenueId = form.watch('selectedVenueId') || "";
   const monetisationMode = form.watch('monetisationMode');
   const creatorPct = form.watch('creatorPct') || 85;
   const platformPct = FIXED_PLATFORM_FEE_PCT;
@@ -4072,6 +4073,40 @@ function PricingStep({ form }: { form: any }) {
   const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
   const discounts = form.watch('discounts') || [];
   const ticketSkus = form.watch('ticketSkus') || [];
+  const [selectedMarketplaceVenue, setSelectedMarketplaceVenue] = useState<any | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchSelectedVenue = async () => {
+      if (venueType !== "catalog" || !selectedVenueId) {
+        setSelectedMarketplaceVenue(null);
+        return;
+      }
+
+      try {
+        const [catalogResponse, userVenuesResponse] = await Promise.all([
+          apiRequest("GET", "/api/venues?approved=true"),
+          apiRequest("GET", "/api/user/venues").catch(() => null),
+        ]);
+        const catalogVenues = await catalogResponse.json();
+        let userVenues: any[] = [];
+        if (userVenuesResponse && userVenuesResponse.ok) {
+          userVenues = await userVenuesResponse.json();
+        }
+        const selected = [...(Array.isArray(userVenues) ? userVenues : []), ...(Array.isArray(catalogVenues) ? catalogVenues : [])]
+          .find((venue: any) => venue.id === selectedVenueId);
+        if (!cancelled) setSelectedMarketplaceVenue(selected || null);
+      } catch {
+        if (!cancelled) setSelectedMarketplaceVenue(null);
+      }
+    };
+
+    fetchSelectedVenue();
+    return () => {
+      cancelled = true;
+    };
+  }, [venueType, selectedVenueId]);
 
   // The platform infrastructure fee is fixed and non-negotiable.
   useEffect(() => {
@@ -4088,10 +4123,50 @@ function PricingStep({ form }: { form: any }) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  
+
   // One-day and virtual events don't have rooms - use Number of Spots instead
   const isNonRoomEvent = eventType === 'one-day' || eventType === 'virtual';
   const isMultiDayEvent = eventType === 'multi-day';
+  const venueDealContext =
+    venueType !== "catalog"
+      ? "external"
+      : selectedMarketplaceVenue?.venueType === "daytime" || eventType === "one-day"
+        ? "marketplace_day"
+        : "marketplace_retreat";
+  const venueDealOptions = useMemo(() => {
+    if (venueDealContext === "marketplace_retreat") {
+      return [
+        { value: "revenue_share", label: "Percentage Revenue Share" },
+        { value: "per_head", label: "Per-Head Package" },
+        { value: "fixed_fee", label: "Flat Rental Fee / Day Rate" },
+      ];
+    }
+    if (venueDealContext === "marketplace_day") {
+      return [
+        { value: "fixed_fee", label: "Flat Fee Offer" },
+        { value: "per_head", label: "Per Head" },
+        { value: "minimum_spend", label: "Minimum Spend Guarantee" },
+        { value: "access_only", label: "Access-Only / Pay-at-Counter" },
+      ];
+    }
+    return [];
+  }, [venueDealContext]);
+
+  useEffect(() => {
+    if (venueDealContext === "external") {
+      form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
+      form.setValue('venueFixedFee', 0, { shouldDirty: false });
+      form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });
+      form.setValue('venueMinimumSpend', 0, { shouldDirty: false });
+      form.setValue('venueRevenueSharePct', 0, { shouldDirty: false });
+      form.setValue('venueAccessFee', 0, { shouldDirty: false });
+      return;
+    }
+
+    if (!venueDealOptions.some((option) => option.value === venueCompensationModel)) {
+      form.setValue('venueCompensationModel', venueDealOptions[0]?.value || 'access_only', { shouldDirty: true });
+    }
+  }, [form, venueDealContext, venueDealOptions, venueCompensationModel]);
 
   // **1. CURRENCY CONSOLIDATION** - Unified currency that propagates to all pricing
   const handleCurrencyChange = (newCurrency: string) => {
@@ -4165,20 +4240,25 @@ function PricingStep({ form }: { form: any }) {
       });
       form.setValue('ticketSkus', newSkus, { shouldDirty: true });
     }
-    // For one-day/virtual events without rooms, generate a single "General Admission" SKU
+    // For one-day/virtual events without rooms, create the first ticket once and then preserve creator-added tickets.
     else if (isNonRoomEvent && maxParticipants > 0) {
       const existingSkus = ticketSkus || [];
-      const existingGA = existingSkus.find((s: any) => s.ticketName === 'General Admission');
-      const newSkus = [{
-        id: existingGA?.id || `sku-ga-${Date.now()}`,
-        ticketName: 'General Admission',
-        pricePerPerson: existingGA?.pricePerPerson ?? 0,
-        depositPerPerson: existingGA?.depositPerPerson ?? 0,
-        ticketCapacity: maxParticipants,
-        sourceRoomId: undefined,
-        soldCount: existingGA?.soldCount ?? 0
-      }];
-      form.setValue('ticketSkus', newSkus, { shouldDirty: true });
+      if (existingSkus.length === 0) {
+        form.setValue('ticketSkus', [{
+          id: `sku-ga-${Date.now()}`,
+          ticketName: 'General Admission',
+          pricePerPerson: pricePerPerson || 0,
+          depositPerPerson: 0,
+          ticketCapacity: maxParticipants,
+          sourceRoomId: undefined,
+          soldCount: 0
+        }], { shouldDirty: true });
+      } else if (eventTypeChanged && existingSkus.length === 1 && existingSkus[0].ticketName === 'General Admission') {
+        form.setValue('ticketSkus', [{
+          ...existingSkus[0],
+          ticketCapacity: existingSkus[0].ticketCapacity || maxParticipants,
+        }], { shouldDirty: true });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, maxParticipants, eventType, isMultiDayEvent, isNonRoomEvent, hasRooms]);
@@ -4187,7 +4267,7 @@ function PricingStep({ form }: { form: any }) {
   // Set legacy pricePerPerson to the lowest ticket price
   useEffect(() => {
     if (ticketSkus && ticketSkus.length > 0) {
-      const prices = ticketSkus.map((s: any) => s.pricePerPerson || 0).filter((p: number) => p > 0);
+      const prices = ticketSkus.map((s: any) => Number(s.pricePerPerson || 0)).filter((p: number) => Number.isFinite(p));
       if (prices.length > 0) {
         const lowestPrice = Math.min(...prices);
         form.setValue('pricePerPerson', lowestPrice, { shouldDirty: true });
@@ -4200,10 +4280,31 @@ function PricingStep({ form }: { form: any }) {
   }, [ticketSkus]);
 
   // Update a specific ticket SKU field
-  const updateTicketSku = (skuId: string, field: string, value: number) => {
+  const updateTicketSku = (skuId: string, field: string, value: string | number) => {
     const updated = ticketSkus.map((sku: any) => 
       sku.id === skuId ? { ...sku, [field]: value } : sku
     );
+    form.setValue('ticketSkus', updated, { shouldDirty: true });
+  };
+
+  const addTicketSku = () => {
+    const nextIndex = ticketSkus.length + 1;
+    form.setValue('ticketSkus', [
+      ...ticketSkus,
+      {
+        id: `sku-custom-${Date.now()}`,
+        ticketName: `Ticket ${nextIndex}`,
+        pricePerPerson: 0,
+        depositPerPerson: 0,
+        ticketCapacity: 1,
+        sourceRoomId: undefined,
+        soldCount: 0,
+      },
+    ], { shouldDirty: true });
+  };
+
+  const removeTicketSku = (skuId: string) => {
+    const updated = ticketSkus.filter((sku: any) => sku.id !== skuId);
     form.setValue('ticketSkus', updated, { shouldDirty: true });
   };
 
@@ -4211,6 +4312,12 @@ function PricingStep({ form }: { form: any }) {
   const ticketTotalCapacity = ticketSkus.reduce((total: number, sku: any) => total + (sku.ticketCapacity || 0), 0);
   const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => 
     safeAdd(total, safeMultiply(sku.pricePerPerson || 0, sku.ticketCapacity || 0)), 0);
+
+  useEffect(() => {
+    if (isNonRoomEvent && ticketTotalCapacity > 0 && ticketTotalCapacity !== maxParticipants) {
+      form.setValue('maxParticipants', ticketTotalCapacity, { shouldDirty: true });
+    }
+  }, [form, isNonRoomEvent, ticketTotalCapacity, maxParticipants]);
 
   useEffect(() => {
     form.setValue(
@@ -4227,6 +4334,7 @@ function PricingStep({ form }: { form: any }) {
   const venueRevenueShareAmount = safeMultiply(totalRevenue, venueRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
   const venueCommercialEstimate = (() => {
+    if (venueDealContext === "external") return 0;
     switch (venueCompensationModel) {
       case "fixed_fee":
         return venueFixedFee;
@@ -4355,9 +4463,23 @@ function PricingStep({ form }: { form: any }) {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-medium">Ticket Types</h4>
-                  <Badge variant="outline" data-testid="badge-ticket-count">
-                    {ticketSkus.length} ticket type{ticketSkus.length > 1 ? 's' : ''}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" data-testid="badge-ticket-count">
+                      {ticketSkus.length} ticket type{ticketSkus.length > 1 ? 's' : ''}
+                    </Badge>
+                    {isNonRoomEvent && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={addTicketSku}
+                        data-testid="button-add-ticket-sku"
+                      >
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Ticket
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 
                 {!currency && (
@@ -4379,15 +4501,49 @@ function PricingStep({ form }: { form: any }) {
                         data-testid={`ticket-sku-card-${index}`}
                       >
                         <div className="flex items-center justify-between">
-                          <h5 className="font-medium text-base" data-testid={`ticket-sku-name-${index}`}>
-                            {sku.ticketName}
-                          </h5>
-                          <Badge variant="secondary" data-testid={`ticket-sku-capacity-${index}`}>
-                            {sku.ticketCapacity} spots
-                          </Badge>
+                          <div className="flex-1 pr-3">
+                            <Label htmlFor={`sku-name-${sku.id}`}>Ticket Name *</Label>
+                            <Input
+                              id={`sku-name-${sku.id}`}
+                              value={sku.ticketName || ''}
+                              onChange={(e) => updateTicketSku(sku.id, 'ticketName', e.target.value)}
+                              placeholder="e.g., Run + Coffee Add-on"
+                              data-testid={`input-ticket-name-${index}`}
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary" data-testid={`ticket-sku-capacity-${index}`}>
+                              {sku.ticketCapacity} spots
+                            </Badge>
+                            {isNonRoomEvent && ticketSkus.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeTicketSku(sku.id)}
+                                data-testid={`button-remove-ticket-${index}`}
+                                aria-label="Remove ticket"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         
                         <div className="grid grid-cols-2 gap-4">
+                          {(isNonRoomEvent || !sku.sourceRoomId) && (
+                            <div>
+                              <Label htmlFor={`sku-capacity-${sku.id}`}>Ticket Capacity *</Label>
+                              <Input
+                                id={`sku-capacity-${sku.id}`}
+                                type="number"
+                                min="1"
+                                value={sku.ticketCapacity || ''}
+                                onChange={(e) => updateTicketSku(sku.id, 'ticketCapacity', parseInt(e.target.value) || 1)}
+                                data-testid={`input-ticket-capacity-${index}`}
+                              />
+                            </div>
+                          )}
                           <div>
                             <Label htmlFor={`sku-price-${sku.id}`}>Price Per Person *</Label>
                             <div className="flex gap-2">
@@ -4483,10 +4639,10 @@ function PricingStep({ form }: { form: any }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <DollarSign className="w-5 h-5" />
-            Marketplace Economics
+            Commercial Model
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Platform fee, venue commercial terms, and payment risk logic are stored separately for the digital handshake.
+            Platform fee, venue commercial terms, and creator earnings are estimated from your ticket setup.
           </p>
         </CardHeader>
         <CardContent>
@@ -4506,25 +4662,31 @@ function PricingStep({ form }: { form: any }) {
                 />
                 <p className="text-xs text-gray-500 mt-1">Fixed — set by platform</p>
               </div>
-              <div>
-                <Label htmlFor="venue-compensation-model">Venue Compensation</Label>
-                <Select
-                  value={venueCompensationModel}
-                  onValueChange={(value) => form.setValue('venueCompensationModel', value, { shouldDirty: true })}
-                >
-                  <SelectTrigger id="venue-compensation-model" data-testid="select-venue-compensation-model">
-                    <SelectValue placeholder="Select model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fixed_fee">Fixed Fee</SelectItem>
-                    <SelectItem value="per_head">Per-Head</SelectItem>
-                    <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
-                    <SelectItem value="revenue_share">Revenue Share</SelectItem>
-                    <SelectItem value="access_only">Access-Only</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-gray-500 mt-1">Commercial offer to the venue</p>
-              </div>
+              {venueDealContext === "external" ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
+                  External Venue Selected. You manage venue payments independently.
+                </div>
+              ) : (
+                <div>
+                  <Label htmlFor="venue-compensation-model">Venue Commercial Deal</Label>
+                  <Select
+                    value={venueCompensationModel}
+                    onValueChange={(value) => form.setValue('venueCompensationModel', value, { shouldDirty: true })}
+                  >
+                    <SelectTrigger id="venue-compensation-model" data-testid="select-venue-compensation-model">
+                      <SelectValue placeholder="Select model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {venueDealOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500 mt-1">Propose a Commercial Deal to your Venue Partner.</p>
+                </div>
+              )}
               <div>
                 <Label htmlFor="creator-pct">Creator Net Before Venue Terms (%)</Label>
                 <Input
@@ -4546,6 +4708,7 @@ function PricingStep({ form }: { form: any }) {
               </div>
             </div>
 
+            {venueDealContext !== "external" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {venueCompensationModel === "fixed_fee" && (
                 <div>
@@ -4620,29 +4783,30 @@ function PricingStep({ form }: { form: any }) {
                 </div>
               )}
             </div>
+            )}
 
             <p className="text-xs text-muted-foreground">
-              Venue compensation is negotiated separately from the 15% platform infrastructure fee.
+              {venueDealContext === "external"
+                ? "Only the fixed 15% platform infrastructure fee is applied in Great."
+                : "Venue compensation is negotiated separately from the 15% platform infrastructure fee."}
             </p>
 
-            {/* Example payout calculation — dynamic from DB fee + bounty */}
+            {/* Estimated grand total calculation */}
             <div className="bg-green-50 dark:bg-green-950 p-4 rounded-lg">
-              <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">Example Payout</h4>
+              <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">Estimated Grand Total Calculator</h4>
               <div className="text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span>Gross Revenue ({ticketTotalCapacity} spots × avg ticket price)</span>
+                  <span>Gross Ticket Price</span>
                   <span className="font-medium" data-testid="text-gross-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Platform Fee ({platformPct}%)</span>
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
-                {venueCommercialEstimate > 0 && (
-                  <div className="flex justify-between">
-                    <span>Venue Commercial Estimate</span>
-                    <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueCommercialEstimate, currency)}</span>
-                  </div>
-                )}
+                <div className="flex justify-between">
+                  <span>Venue Payout (Based on Deal)</span>
+                  <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueCommercialEstimate, currency)}</span>
+                </div>
                 {influencerPromotionEnabled && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
                     <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>
@@ -4650,7 +4814,7 @@ function PricingStep({ form }: { form: any }) {
                   </div>
                 )}
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
-                  <span>Your Payout</span>
+                  <span>Estimated Net</span>
                   <span data-testid="text-your-payout">
                     {formatPriceByCurrency(
                       Math.max(0, revenueSplit.creatorAmount - venueCommercialEstimate - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)),

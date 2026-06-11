@@ -218,7 +218,7 @@ export default function EmbeddedPricingCalculator() {
           Creator Pricing Calculator
         </CardTitle>
         <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-          Calculate earnings with role-based pricing or venue revenue splits
+          Estimate earnings across creator roles and venue commercial terms
         </p>
       </CardHeader>
       <CardContent>
@@ -233,7 +233,7 @@ export default function EmbeddedPricingCalculator() {
             </TabsTrigger>
             <TabsTrigger value="venue-splits" className="flex items-center gap-2" data-testid="tab-venue-splits">
               <Building className="w-4 h-4" />
-              Venue Splits
+              Venue Terms
             </TabsTrigger>
           </TabsList>
 
@@ -390,9 +390,9 @@ export default function EmbeddedPricingCalculator() {
                 </div>
               </div>
 
-              {/* Percentage Splits */}
+              {/* Commercial terms */}
               <div className="space-y-4">
-                <Label>Revenue Split Percentages</Label>
+                <Label>Revenue Share Terms</Label>
                 <div className="space-y-3">
                   <div className="space-y-2">
                     <Label htmlFor="venue-percent" className="text-sm flex items-center gap-1">
@@ -549,7 +549,7 @@ export default function EmbeddedPricingCalculator() {
               <strong>Role-Based Pricing:</strong> Traditional creator fee structure with platform support levels from DIY (20%) to Full Service (34%). Creators earn a percentage after platform fees.
             </div>
             <div>
-              <strong>Venue Splits:</strong> Custom revenue sharing between venue, creator, and platform. Ideal for venue partnerships where each party contributes value and shares revenue accordingly.
+              <strong>Venue Terms:</strong> Legacy revenue share estimator for marketplace partnerships. Use the event builder commercial model step for final venue offers and handshake terms.
             </div>
           </div>
         </div>

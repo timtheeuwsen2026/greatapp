@@ -325,7 +325,7 @@ export default function RevenueCalculatorDemo() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <PiggyBank className="w-5 h-5" />
-                  Pricing Strategy Tips
+                  Commercial Model Tips
                 </CardTitle>
               </CardHeader>
               <CardContent>

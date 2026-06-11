@@ -201,12 +201,7 @@ export default function CreatorProfileSetup() {
   };
 
   const handleNext = async () => {
-    const fieldsToValidate = getStepFields(currentStep);
-    const isValid = await form.trigger(fieldsToValidate);
-    
-    if (isValid) {
-      setCurrentStep(prev => Math.min(prev + 1, 3));
-    }
+    setCurrentStep(prev => Math.min(prev + 1, 3));
   };
 
   const handlePrevious = () => {

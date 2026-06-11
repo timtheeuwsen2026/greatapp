@@ -52,7 +52,9 @@ interface ExperienceCardProps {
 // DATA CONTRACT: Currency must come from experience.currency - never default to USD
 function formatCurrency(amount: number | string, currency?: string): string {
   const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-  if (!numAmount || numAmount <= 0 || isNaN(numAmount)) return 'Price TBA';
+  if (Number.isNaN(numAmount)) return 'Price TBA';
+  if (numAmount === 0) return 'Free';
+  if (numAmount < 0) return 'Price TBA';
   if (!currency) {
     console.warn('[DataContract] Currency missing - using experience.currency is required');
   }
@@ -69,7 +71,7 @@ function getDisplayPrice(experience: ExperienceCardProps['experience']): { price
   const ticketSkus = experience.ticketSkus || [];
   
   if (ticketSkus.length > 0) {
-    const prices = ticketSkus.map(s => s.pricePerPerson).filter(p => p > 0);
+    const prices = ticketSkus.map(s => Number(s.pricePerPerson)).filter(p => !Number.isNaN(p) && p >= 0);
     if (prices.length > 0) {
       const minPrice = Math.min(...prices);
       const maxPrice = Math.max(...prices);

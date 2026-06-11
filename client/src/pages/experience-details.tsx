@@ -417,7 +417,9 @@ export default function ExperienceDetails() {
   // DATA CONTRACT: Currency must come from experience.currency - never default to USD
   const formatCurrency = (amount: number | string, currency?: string | null) => {
     const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    if (!numAmount || numAmount <= 0 || isNaN(numAmount)) return 'Price TBA';
+    if (Number.isNaN(numAmount)) return 'Price TBA';
+    if (numAmount === 0) return 'Free';
+    if (numAmount < 0) return 'Price TBA';
     if (!currency) {
       console.warn('[DataContract] Currency missing - using experience.currency is required');
     }
@@ -436,7 +438,9 @@ export default function ExperienceDetails() {
   // Calculate effective price: lowest ticket price or legacy price
   const getEffectivePrice = (): { minPrice: number; maxPrice: number; hasRange: boolean } => {
     if (ticketSkus.length > 0) {
-      const prices = ticketSkus.map((s: any) => s.pricePerPerson || 0).filter((p: number) => p > 0);
+      const prices = ticketSkus
+        .map((s: any) => Number(s.pricePerPerson))
+        .filter((p: number) => !Number.isNaN(p) && p >= 0);
       if (prices.length > 0) {
         const minPrice = Math.min(...prices);
         const maxPrice = Math.max(...prices);

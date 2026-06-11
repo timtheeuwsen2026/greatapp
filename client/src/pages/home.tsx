@@ -154,7 +154,9 @@ export default function Home() {
   const formatCurrency = (amount: number | string | null | undefined, currency?: string): string => {
     if (amount === null || amount === undefined) return 'Price TBA';
     const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    if (!numAmount || numAmount <= 0 || isNaN(numAmount)) return 'Price TBA';
+    if (Number.isNaN(numAmount)) return 'Price TBA';
+    if (numAmount === 0) return 'Free';
+    if (numAmount < 0) return 'Price TBA';
     if (!currency) {
       console.warn('[DataContract] Currency missing - using experience.currency is required');
     }
@@ -416,9 +418,9 @@ export default function Home() {
                   (catalystEl || formingEl || confirmedEl)?.scrollIntoView({ behavior: 'smooth' });
                 }}
                 data-testid="button-browse-trips"
-                aria-label="Explore forming trips"
+                aria-label="Explore experiences"
               >
-                Explore Forming Trips
+                Explore experiences
                 <ArrowRight className="ml-2 h-5 w-5" aria-hidden="true" />
               </Button>
             </div>

@@ -1290,9 +1290,16 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       }
     }
     
-    // Required: pricing - experience-level pricePerPerson
-    if (!data.pricePerPerson || parseFloat(data.pricePerPerson) <= 0) {
-      errors.push("Price per person is required and must be greater than 0");
+    // Required: pricing - zero is valid for free RSVP events.
+    const ticketSkus = Array.isArray(data.ticketSkus) ? data.ticketSkus : [];
+    const hasTicketPricing = ticketSkus.some((sku: any) => {
+      const price = Number(sku?.pricePerPerson);
+      return !Number.isNaN(price) && price >= 0;
+    });
+    const basePrice = data.pricePerPerson ?? data.price;
+    const hasBasePricing = basePrice !== undefined && basePrice !== null && basePrice !== '' && Number(basePrice) >= 0;
+    if (!hasTicketPricing && !hasBasePricing) {
+      errors.push("Please set a ticket price, including 0 for free RSVP events");
     }
     
     // Required: explicit currency selection

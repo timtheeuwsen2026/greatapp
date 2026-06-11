@@ -948,7 +948,7 @@ function CreatorDashboardContent() {
 
           <TabsContent value="venues" className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold">My Venues</h2>
+              <h2 className="text-xl font-semibold">Marketplace Spaces</h2>
               <Button 
                 onClick={() => setLocation('/venue-profile-setup')}
                 className="flex items-center gap-2"
@@ -1177,12 +1177,12 @@ function CreatorDashboardContent() {
               <EmbeddedPricingCalculator />
             </div>
 
-            {/* Pricing Strategy Guide */}
+            {/* Commercial model guide */}
             <div className="space-y-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Pricing Strategy Guide</CardTitle>
-                  <CardDescription>Tips for setting competitive prices</CardDescription>
+                  <CardTitle>Commercial Model Guide</CardTitle>
+                  <CardDescription>Use the event builder calculator for final commercial terms</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">

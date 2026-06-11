@@ -780,55 +780,6 @@ export default function VenueProfileSetup() {
   };
 
   const handleNext = async () => {
-    // Validate current step fields before proceeding
-    let fieldsToValidate: (keyof VenueProfileForm)[] = [];
-    
-    if (step === 1) {
-      // Step 1: Basic Info
-      fieldsToValidate = ['name', 'city', 'description', 'capacity'];
-    } else if (step === 2) {
-      // Step 2: Media
-      fieldsToValidate = ['coverImageUrl', 'galleryImages'];
-    } else if (step === 3) {
-      // Step 3: Calendar (availability only, no required fields)
-      fieldsToValidate = [];
-    } else if (step === 4) {
-      // Step 4: Venue (location details)
-      fieldsToValidate = ['location', 'website', 'instagram'];
-    } else if (step === 5) {
-      // Step 5: Services & Amenities
-      fieldsToValidate = ['amenities', 'services', 'depositPercent', 'commissionPercent', 'paymentModel'];
-    } else if (step === 6) {
-      // Step 6: Roles (optional)
-      fieldsToValidate = [];
-    } else if (step === 7) {
-      // Step 7: Rooms (optional)
-      fieldsToValidate = [];
-    } else if (step === 8) {
-      // Step 8: Itinerary (optional)
-      fieldsToValidate = [];
-    } else if (step === 9) {
-      // Step 9: Pricing (optional)
-      fieldsToValidate = [];
-    } else if (step === 10) {
-      // Step 10: Terms (optional)
-      fieldsToValidate = [];
-    }
-    
-    // Trigger validation for current step fields (skip if none)
-    if (fieldsToValidate.length > 0) {
-      const isValid = await form.trigger(fieldsToValidate);
-      
-      if (!isValid) {
-        toast({
-          title: 'Validation Error',
-          description: 'Please fix the errors before proceeding to the next step.',
-          variant: 'destructive',
-        });
-        return;
-      }
-    }
-    
     if (step < 10) {
       // Skip Rooms & Itinerary steps for daytime spaces
       let nextStep = step + 1;

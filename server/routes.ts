@@ -2444,20 +2444,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const isDemoEvent = data.title?.toLowerCase().includes('mystic') && 
                        data.title?.toLowerCase().includes('marrakesh');
     
-    // Required: cover photo with HTTPS URL - Skip for demo events
+    const isSupportedMediaUrl = (value: string) => {
+      try {
+        const url = new URL(value);
+        return ['https:', 'http:', 'blob:', 'data:'].includes(url.protocol);
+      } catch {
+        return false;
+      }
+    };
+
+    // Required: cover photo - Skip for demo events
     if (!isDemoEvent) {
       if (!data.coverImageUrl || data.coverImageUrl.trim() === '') {
         errors.push("Please add a cover photo to showcase your experience");
-      } else if (!data.coverImageUrl.startsWith('https://')) {
-        errors.push("Cover photo must be uploaded through our secure image uploader (unsupported URL format)");
+      } else if (!isSupportedMediaUrl(data.coverImageUrl)) {
+        errors.push("Cover photo must use a supported uploaded image URL");
       }
     }
     
-    // Validate gallery images are all HTTPS URLs - Skip for demo events
+    // Validate gallery images use supported URL protocols - Skip for demo events
     if (!isDemoEvent && data.gallery && data.gallery.length > 0) {
-      const invalidGalleryUrls = data.gallery.filter((url: string) => !url || !url.startsWith('https://'));
+      const invalidGalleryUrls = data.gallery.filter((url: string) => !url || !isSupportedMediaUrl(url));
       if (invalidGalleryUrls.length > 0) {
-        errors.push("Some gallery images have invalid formats. Please use our image uploader for all photos");
+        errors.push("Some gallery images have invalid formats. Please use supported uploaded image URLs");
       }
     }
     
@@ -2494,8 +2503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!data.endTime || data.endTime.trim() === "") {
         errors.push("Please add an end time for your single-day event");
       }
-      if (!data.standingCapacity && !data.maxParticipants) {
-        errors.push("Please add standing capacity for your single-day event");
+      if (!data.standingCapacity && !data.seatedCapacity && !data.maxParticipants) {
+        errors.push("Please add capacity for your single-day event");
       }
     }
     if (experienceType === "multi-day") {
@@ -2512,18 +2521,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       errors.push("Please specify where your experience will take place (venue address or online platform)");
     }
     
-    // Required: pricing - check for direct price OR room-based pricing
-    const hasRoomPricing = Array.isArray(data.rooms) && data.rooms.length > 0 && 
-      data.rooms.some((room: any) => room.pricePerPerson && parseFloat(room.pricePerPerson) > 0);
+    // Required: pricing - zero is valid for free RSVP day events.
+    const hasRoomPricing = Array.isArray(data.rooms) && data.rooms.length > 0 &&
+      data.rooms.some((room: any) => room.pricePerPerson !== undefined && room.pricePerPerson !== null && room.pricePerPerson !== '' && parseFloat(room.pricePerPerson) >= 0);
+    const hasTicketPricing = Array.isArray(data.ticketSkus) && data.ticketSkus.length > 0 &&
+      data.ticketSkus.some((sku: any) => sku.pricePerPerson !== undefined && sku.pricePerPerson !== null && sku.pricePerPerson !== '' && parseFloat(sku.pricePerPerson) >= 0);
+    const hasBasePricing = data.price !== undefined && data.price !== null && data.price !== '' && parseFloat(data.price) >= 0;
     
-    if (hasRoomPricing) {
-      // Room-based pricing is valid - no need for separate price field
-    } else if (!data.price || data.price === '') {
-      errors.push("Please set a price for your experience");
-    } else if (parseFloat(data.price) <= 0) {
-      errors.push("Experience price must be greater than $0");
-    } else if (parseFloat(data.price) > 10000) {
-      errors.push("Experience price seems unusually high. Please contact support if this is intentional");
+    if (!(hasRoomPricing || hasTicketPricing || hasBasePricing)) {
+      errors.push("Please set a ticket price for your experience, including 0 for free RSVP events");
+    } else {
+      const allPrices = [
+        ...(Array.isArray(data.ticketSkus) ? data.ticketSkus.map((sku: any) => Number(sku.pricePerPerson)) : []),
+        ...(Array.isArray(data.rooms) ? data.rooms.map((room: any) => Number(room.pricePerPerson)) : []),
+        Number(data.price),
+      ].filter((price) => !Number.isNaN(price));
+      if (allPrices.some((price) => price > 10000)) {
+        errors.push("Experience price seems unusually high. Please contact support if this is intentional");
+      }
     }
     
     return {

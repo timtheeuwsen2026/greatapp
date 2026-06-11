@@ -96,10 +96,11 @@ export default function CommunityHub() {
     },
     onSuccess: (createdGroup) => {
       queryClient.invalidateQueries({ queryKey: ["/api/community/groups"] });
+      const group = createdGroup?.group || createdGroup;
       setNewGroupName("");
       setNewGroupDescription("");
       setNewGroupCategory("general");
-      setSelectedGroup(createdGroup?.id || null);
+      setSelectedGroup(group?.id || null);
       setActiveTab("chat");
       setCreateGroupOpen(false);
       toast({
@@ -151,8 +152,8 @@ export default function CommunityHub() {
     }
     
     createGroupMutation.mutate({
-      name: newGroupName,
-      description: newGroupDescription,
+      name: newGroupName.trim(),
+      description: newGroupDescription.trim(),
       category: newGroupCategory,
     });
   };

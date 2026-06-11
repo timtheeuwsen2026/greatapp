@@ -94,11 +94,11 @@ export default function Experiences() {
   // Currency formatting helper - handles experience currency
   // DATA CONTRACT: Currency must come from experience.currency - never default to USD
   const formatCurrency = (price: number | string | undefined | null, currency?: string | null) => {
-    const numAmount = typeof price === 'string' ? parseFloat(price) : (price || 0);
-    // Guard: Show "Price TBA" for zero or missing prices
-    if (numAmount <= 0 || isNaN(numAmount)) {
-      return 'Price TBA';
-    }
+    if (price === undefined || price === null || price === '') return 'Price TBA';
+    const numAmount = typeof price === 'string' ? parseFloat(price) : price;
+    if (Number.isNaN(numAmount)) return 'Price TBA';
+    if (numAmount === 0) return 'Free';
+    if (numAmount < 0) return 'Price TBA';
     if (!currency) {
       console.warn('[DataContract] Currency missing - using experience.currency is required');
     }
@@ -115,7 +115,9 @@ export default function Experiences() {
     const ticketSkus = experience.ticketSkus || [];
     
     if (ticketSkus.length > 0) {
-      const prices = ticketSkus.map((s: any) => s.pricePerPerson).filter((p: number) => p > 0);
+      const prices = ticketSkus
+        .map((s: any) => Number(s.pricePerPerson))
+        .filter((p: number) => !Number.isNaN(p) && p >= 0);
       if (prices.length > 0) {
         const minPrice = Math.min(...prices);
         const maxPrice = Math.max(...prices);

@@ -337,10 +337,6 @@ export default function Checkout() {
     setPaymentIntentLoading(true);
     setPaymentInitError(null);
     try {
-      if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
-        throw new Error("Stripe checkout is not configured. Add VITE_STRIPE_PUBLIC_KEY and restart the app.");
-      }
-
       const res = await apiRequest("POST", "/api/create-payment-intent", { 
         amount: experience.pricePerPerson || experience.price,
         experienceId: experienceId,
@@ -368,6 +364,9 @@ export default function Checkout() {
         });
         setClientSecret("");
         return;
+      }
+      if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
+        throw new Error("Stripe checkout is not configured. Add VITE_STRIPE_PUBLIC_KEY and restart the app.");
       }
       if (!data.clientSecret) {
         throw new Error("Payment setup did not return a client secret.");

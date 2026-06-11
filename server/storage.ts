@@ -11,6 +11,7 @@ import {
   participantRoles,
   participantRoleAssignments,
   experienceVenues,
+  venueContracts,
   experienceServices,
   experienceAmenities,
   amenities,
@@ -44,6 +45,8 @@ import {
   type InsertParticipantRoleAssignment,
   type ExperienceVenue,
   type InsertExperienceVenue,
+  type VenueContract,
+  type InsertVenueContract,
   type ExperienceService,
   type InsertExperienceService,
   type Amenity,
@@ -244,6 +247,12 @@ export interface IStorage {
   addVenueToExperience(experienceId: string, venueId: string): Promise<ExperienceVenue>;
   addServiceToExperience(experienceId: string, serviceId: string, roleDescription?: string): Promise<ExperienceService>;
   getExperienceVenues(experienceId: string): Promise<Venue[]>;
+  upsertVenueContract(contract: InsertVenueContract): Promise<VenueContract>;
+  getVenueContractsByVenueIds(venueIds: string[], status?: string): Promise<any[]>;
+  getVenueContractByExperience(experienceId: string): Promise<VenueContract | undefined>;
+  getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
+  acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract>;
+  declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract>;
   
   // Availability checking operations
   getAvailableVenues(options: { startDate?: string; endDate?: string; capacity?: number; venueType?: string }): Promise<Venue[]>;
@@ -2224,6 +2233,104 @@ export class DatabaseStorage implements IStorage {
       .where(eq(experienceVenues.experienceId, experienceId));
     
     return result.map(r => r.venue).filter(Boolean) as Venue[];
+  }
+
+  async upsertVenueContract(contract: InsertVenueContract): Promise<VenueContract> {
+    const existing = await this.getVenueContractByExperience(contract.experienceId);
+    const payload = {
+      ...contract,
+      status: contract.status || "pending",
+      updatedAt: new Date(),
+    } as any;
+
+    if (existing) {
+      const [updated] = await db
+        .update(venueContracts)
+        .set(payload)
+        .where(eq(venueContracts.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(venueContracts)
+      .values(payload)
+      .returning();
+    return created;
+  }
+
+  async getVenueContractsByVenueIds(venueIds: string[], status?: string): Promise<any[]> {
+    if (!venueIds.length) return [];
+    const rows = await db
+      .select({
+        contract: venueContracts,
+        experience: experiences,
+        venue: venues,
+      })
+      .from(venueContracts)
+      .leftJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+      .leftJoin(venues, eq(venueContracts.venueId, venues.id))
+      .where(inArray(venueContracts.venueId, venueIds))
+      .orderBy(desc(venueContracts.createdAt));
+
+    return rows
+      .filter((row) => !status || row.contract.status === status)
+      .map((row) => ({
+        ...row.experience,
+        venue: row.venue,
+        contract: row.contract,
+      }));
+  }
+
+  async getVenueContractByExperience(experienceId: string): Promise<VenueContract | undefined> {
+    const [contract] = await db
+      .select()
+      .from(venueContracts)
+      .where(eq(venueContracts.experienceId, experienceId))
+      .orderBy(desc(venueContracts.createdAt))
+      .limit(1);
+    return contract;
+  }
+
+  async getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined> {
+    const [contract] = await db
+      .select()
+      .from(venueContracts)
+      .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.status, "accepted")))
+      .orderBy(desc(venueContracts.acceptedAt))
+      .limit(1);
+    return contract;
+  }
+
+  async acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract> {
+    const [contract] = await db
+      .update(venueContracts)
+      .set({
+        status: "accepted",
+        acceptedAt: new Date(),
+        declinedAt: null,
+        declineReason: null,
+        updatedAt: new Date(),
+      } as any)
+      .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
+      .returning();
+    if (!contract) throw new Error("Contract not found");
+    return contract;
+  }
+
+  async declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract> {
+    const [contract] = await db
+      .update(venueContracts)
+      .set({
+        status: "declined",
+        declinedAt: new Date(),
+        declineReason: reason || null,
+        updatedAt: new Date(),
+      } as any)
+      .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
+      .returning();
+    if (!contract) throw new Error("Contract not found");
+    return contract;
   }
 
   // Experience draft operations

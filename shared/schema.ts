@@ -1399,6 +1399,54 @@ export const experienceVenues = pgTable("experience_venues", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Digital Handshake contract between a creator experience and marketplace venue.
+export const venueContracts = pgTable("venue_contracts", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id)
+    .notNull(),
+  venueId: varchar("venue_id")
+    .references(() => venues.id)
+    .notNull(),
+  creatorId: varchar("creator_id")
+    .references(() => users.id)
+    .notNull(),
+  model: varchar("model", { length: 50 }).notNull(),
+  terms: jsonb("terms")
+    .$type<{
+      fixedFee?: number;
+      perHeadAmount?: number;
+      minimumSpend?: number;
+      revenueSharePct?: number;
+      accessFee?: number;
+      currency?: string;
+      platformPct?: number;
+      creatorPct?: number;
+    }>()
+    .default({}),
+  risk: jsonb("risk")
+    .$type<{
+      requireMinimumParticipants?: boolean;
+      minimumParticipants?: number;
+      mvgDeadline?: string | null;
+      depositEnabled?: boolean;
+      depositAmount?: number;
+      depositPercentage?: number;
+      balanceDueDays?: number;
+      softHoldEnabled?: boolean;
+      softHoldDurationHours?: number;
+    }>()
+    .default({}),
+  status: varchar("status", { length: 20 }).default("pending"),
+  declineReason: text("decline_reason"),
+  acceptedAt: timestamp("accepted_at"),
+  declinedAt: timestamp("declined_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Amenities table - facilities and features (Wi-Fi, sauna, pool, etc.)
 export const amenities = pgTable("amenities", {
   id: varchar("id")
@@ -1461,6 +1509,7 @@ export const experiencesRelations = relations(experiences, ({ one, many }) => ({
   gallery: many(experienceGallery),
   reviews: many(reviews),
   experienceVenues: many(experienceVenues),
+  venueContracts: many(venueContracts),
   experienceServices: many(experienceServices),
   experienceAmenities: many(experienceAmenities),
   participantRoles: many(participantRoles),
@@ -1508,6 +1557,7 @@ export const venuesRelations = relations(venues, ({ one, many }) => ({
     references: [users.id],
   }),
   experienceVenues: many(experienceVenues),
+  venueContracts: many(venueContracts),
 }));
 
 // Service provider relations
@@ -1576,6 +1626,21 @@ export const experienceVenuesRelations = relations(
     }),
   }),
 );
+
+export const venueContractsRelations = relations(venueContracts, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [venueContracts.experienceId],
+    references: [experiences.id],
+  }),
+  venue: one(venues, {
+    fields: [venueContracts.venueId],
+    references: [venues.id],
+  }),
+  creator: one(users, {
+    fields: [venueContracts.creatorId],
+    references: [users.id],
+  }),
+}));
 
 // Amenities relations
 export const amenitiesRelations = relations(amenities, ({ many }) => ({
@@ -2277,6 +2342,14 @@ export const insertExperienceVenueSchema = createInsertSchema(
   createdAt: true,
 });
 
+export const insertVenueContractSchema = createInsertSchema(venueContracts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  acceptedAt: true,
+  declinedAt: true,
+});
+
 export const insertExperienceServiceSchema = createInsertSchema(
   experienceServices,
 ).omit({
@@ -2577,6 +2650,8 @@ export type ServiceProvider = typeof serviceProviders.$inferSelect;
 export type InsertServiceProvider = z.infer<typeof insertServiceProviderSchema>;
 export type ExperienceVenue = typeof experienceVenues.$inferSelect;
 export type InsertExperienceVenue = z.infer<typeof insertExperienceVenueSchema>;
+export type VenueContract = typeof venueContracts.$inferSelect;
+export type InsertVenueContract = z.infer<typeof insertVenueContractSchema>;
 export type ExperienceService = typeof experienceServices.$inferSelect;
 export type InsertExperienceService = z.infer<
   typeof insertExperienceServiceSchema

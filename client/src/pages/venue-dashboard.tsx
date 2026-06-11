@@ -300,9 +300,37 @@ function VenueDashboardContent() {
               </div>
             ) : (
               pendingOffers.map((offer: any) => {
-                const platformPct = parseFloat(offer.platformPct || offer.platformRevenuePercentage || '15');
-                const venuePct = parseFloat(offer.venueRevenuePercentage || '0');
-                const creatorPct = parseFloat(offer.creatorPct || offer.creatorRevenuePercentage || '85');
+                const contract = offer.contract || {};
+                const terms = contract.terms || {};
+                const risk = contract.risk || {};
+                const platformPct = parseFloat(terms.platformPct || offer.platformPct || offer.platformRevenuePercentage || '15');
+                const modelLabels: Record<string, string> = {
+                  fixed_fee: 'Flat Fee Offer',
+                  per_head: 'Per Head',
+                  minimum_spend: 'Minimum Spend Guarantee',
+                  revenue_share: 'Percentage Revenue Share',
+                  access_only: 'Access-Only / Pay-at-Counter',
+                };
+                const formatMoney = (value: any) => {
+                  const num = parseFloat(String(value || 0));
+                  return `${(terms.currency || offer.currency || 'EUR').toUpperCase()} ${Number.isFinite(num) ? num.toFixed(2) : '0.00'}`;
+                };
+                const venuePayoutPreview = (() => {
+                  const gross = parseFloat(offer.price || '0') * (offer.maxParticipants || 0);
+                  switch (contract.model) {
+                    case 'fixed_fee':
+                      return terms.fixedFee || 0;
+                    case 'per_head':
+                      return (terms.perHeadAmount || 0) * (offer.maxParticipants || 0);
+                    case 'minimum_spend':
+                      return terms.minimumSpend || 0;
+                    case 'revenue_share':
+                      return gross * ((terms.revenueSharePct || 0) / 100);
+                    case 'access_only':
+                    default:
+                      return terms.accessFee || 0;
+                  }
+                })();
                 return (
                   <Card key={offer.id} className="border-amber-200 dark:border-amber-800">
                     <CardContent className="p-5">
@@ -311,7 +339,7 @@ function VenueDashboardContent() {
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold text-lg">{offer.title}</h3>
                             <Badge className="bg-amber-100 text-amber-800 border-amber-300">
-                              <Clock className="w-3 h-3 mr-1" />Awaiting your decision
+                              <Clock className="w-3 h-3 mr-1" />Incoming Offer
                             </Badge>
                           </div>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -333,21 +361,25 @@ function VenueDashboardContent() {
                             </div>
                           </div>
 
-                          {/* Proposed Split */}
+                          {/* Contract Object */}
                           <div className="mt-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border">
-                            <p className="text-xs font-semibold text-gray-600 mb-2">Proposed Revenue Split</p>
-                            <div className="flex gap-4 text-sm">
-                              <span className="text-gray-500">Platform: <strong className="text-gray-900 dark:text-white">{platformPct}%</strong></span>
-                              <span className="text-green-600">Your Share: <strong>{venuePct}%</strong></span>
-                              <span className="text-gray-500">Creator: <strong>{creatorPct}%</strong></span>
+                            <p className="text-xs font-semibold text-gray-600 mb-2">Digital Handshake Contract</p>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                              <span className="text-gray-500">Model: <strong className="text-gray-900 dark:text-white">{modelLabels[contract.model] || contract.model || 'Access-Only'}</strong></span>
+                              <span className="text-gray-500">Status: <strong className="capitalize">{contract.status || 'pending'}</strong></span>
+                              <span className="text-gray-500">Platform: <strong>{platformPct}%</strong></span>
                             </div>
-                            {offer.price && offer.maxParticipants && (
-                              <p className="text-xs text-gray-500 mt-1">
-                                Est. your earnings if full: <strong className="text-green-600">
-                                  ${(parseFloat(offer.price) * (offer.maxParticipants || 0) * (venuePct / 100)).toFixed(2)}
-                                </strong>
-                              </p>
-                            )}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-500 mt-2">
+                              {contract.model === 'fixed_fee' && <span>Flat Fee: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
+                              {contract.model === 'per_head' && <span>Per Head: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
+                              {contract.model === 'minimum_spend' && <span>Minimum Spend: <strong>{formatMoney(terms.minimumSpend)}</strong></span>}
+                              {contract.model === 'revenue_share' && <span>Revenue Share: <strong>{terms.revenueSharePct || 0}%</strong></span>}
+                              {contract.model === 'access_only' && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}
+                              <span>Risk: <strong>{risk.requireMinimumParticipants ? `MVG ${risk.minimumParticipants || 0}` : 'No MVG required'}</strong></span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2">
+                              Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong>
+                            </p>
                           </div>
                         </div>
 

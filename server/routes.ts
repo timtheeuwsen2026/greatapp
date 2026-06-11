@@ -73,6 +73,58 @@ function applyMarketplaceEconomics(input: any = {}) {
   };
 }
 
+function numberOrZero(value: any): number {
+  const parsed = parseFloat(String(value ?? 0));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildVenueContractObject(input: any, experienceId: string, venueId: string, creatorId: string) {
+  const model = input.venueCompensationModel || "access_only";
+  return {
+    experienceId,
+    venueId,
+    creatorId,
+    model,
+    status: "pending",
+    terms: {
+      fixedFee: numberOrZero(input.venueFixedFee),
+      perHeadAmount: numberOrZero(input.venuePerHeadAmount),
+      minimumSpend: numberOrZero(input.venueMinimumSpend),
+      revenueSharePct: model === "revenue_share"
+        ? numberOrZero(input.venueRevenueSharePct ?? input.venueRevenuePercentage)
+        : 0,
+      accessFee: numberOrZero(input.venueAccessFee),
+      currency: input.currency || "eur",
+      platformPct: FIXED_PLATFORM_FEE_PCT,
+      creatorPct: numberOrZero(input.creatorPct ?? input.creatorRevenuePercentage ?? (100 - FIXED_PLATFORM_FEE_PCT)),
+    },
+    risk: {
+      requireMinimumParticipants: !!(input.requireMinimumParticipants ?? input.mvgEnabled),
+      minimumParticipants: Number(input.minimumParticipants ?? input.mvgMinimumSize ?? input.mvgMin ?? 0) || 0,
+      mvgDeadline: input.mvgDeadline ? new Date(input.mvgDeadline).toISOString() : null,
+      depositEnabled: !!input.depositEnabled,
+      depositAmount: numberOrZero(input.depositAmount),
+      depositPercentage: numberOrZero(input.depositPercentage),
+      balanceDueDays: Number(input.balanceDueDays ?? 0) || 0,
+      softHoldEnabled: !!input.softHoldEnabled,
+      softHoldDurationHours: Number(input.softHoldDurationHours ?? 0) || 0,
+    },
+  };
+}
+
+function getExperienceUpdatesFromAcceptedContract(contract: any) {
+  const terms = contract?.terms || {};
+  return applyMarketplaceEconomics({
+    venueCompensationModel: contract.model || "access_only",
+    venueFixedFee: terms.fixedFee ?? 0,
+    venuePerHeadAmount: terms.perHeadAmount ?? 0,
+    venueMinimumSpend: terms.minimumSpend ?? 0,
+    venueRevenueSharePct: terms.revenueSharePct ?? 0,
+    venueAccessFee: terms.accessFee ?? 0,
+    venueRevenuePercentage: terms.revenueSharePct ?? 0,
+  });
+}
+
 // ─── Lifecycle Status Helper ────────────────────────────────────────────────
 // Single source of truth: FORMING → CONFIRMED → CANCELLED
 // Uses DB fields only so it works without extra queries.
@@ -2720,9 +2772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Rooms and accommodation
         rooms: normalizedRooms,
-        ticketSkus: isSingleDayEvent
-          ? []
-          : (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0) 
+        ticketSkus: (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0)
           ? (draft as any).ticketSkus 
           : normalizedRooms.map((room: any, index: number) => ({
               id: `sku-${Date.now()}-${index}`,
@@ -2754,6 +2804,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the published experience
       const experience = await storage.createExperience(experienceData);
+
+      if ((draft as any).selectedVenueId) {
+        await storage.upsertVenueContract(buildVenueContractObject(
+          experienceData,
+          experience.id,
+          (draft as any).selectedVenueId,
+          userId
+        ));
+      }
       
       // Delete the draft since it's now published
       await storage.deleteExperienceDraft(draftId, userId);
@@ -2794,11 +2853,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         experienceType: req.body.type, // Map 'type' to 'experienceType' for database
         creatorId: userId,
         status: status as any,
+        linkedVenueId: req.body.selectedVenueId || req.body.linkedVenueId || null,
         startDate,
         endDate,
       });
 
       const experience = await storage.createExperience(experienceData);
+      const selectedVenueId = req.body.selectedVenueId || req.body.linkedVenueId;
+      if (status !== "draft" && selectedVenueId) {
+        await storage.upsertVenueContract(buildVenueContractObject(
+          experienceData,
+          experience.id,
+          selectedVenueId,
+          userId
+        ));
+      }
       res.json(experience);
     } catch (error) {
       console.error("Error creating experience:", error);
@@ -3720,6 +3789,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the experience from the draft
       const experience = await storage.createExperience(experienceData as any);
+
+      if ((existingDraft as any).selectedVenueId) {
+        await storage.upsertVenueContract(buildVenueContractObject(
+          experienceData,
+          experience.id,
+          (existingDraft as any).selectedVenueId,
+          userId
+        ));
+      }
       
       // Delete the draft
       await storage.deleteExperienceDraft(draftId, userId);
@@ -4370,6 +4448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hasDeposit = experience.depositEnabled && fixedDeposit > 0;
       
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
+      const acceptedVenueContract = await storage.getAcceptedVenueContractForExperience(experienceId);
 
       if (fullPrice === 0) {
         return res.json({
@@ -4384,6 +4463,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ticketSkuId: ticketSkuId || null,
           mvgMin: experience.mvgMin || experience.minimumParticipants,
           mvgDeadline: experience.mvgDeadline,
+          venueContractId: acceptedVenueContract?.id || null,
+          venueContractModel: acceptedVenueContract?.model || null,
           paymentMode: 'free',
           hasDeposit: false
         });
@@ -4421,6 +4502,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fullPrice: fullPrice.toString(),
           depositAmount: depositAmount.toString(),
           balanceAmount: balanceAmount.toString(),
+          venueContractId: acceptedVenueContract?.id || "",
+          venueContractModel: acceptedVenueContract?.model || "",
           mvgMin: (experience.mvgMin || experience.minimumParticipants || 0).toString(),
           mvgDeadline: experience.mvgDeadline || ""
         },
@@ -9467,12 +9550,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userVenues.length) return res.json([]);
 
       const venueIds = userVenues.map((v: any) => v.id);
-      // Linked venue submissions are stored as pending_approval because the DB enum
-      // does not include a separate pending_venue_approval state.
+      let offers = await storage.getVenueContractsByVenueIds(venueIds, "pending");
+
+      // Backfill pending contracts for older linked submissions that predate the contract table.
       const linkedPendingExperiences = await storage.getExperiencesByVenueIds(venueIds);
-      const offers = linkedPendingExperiences.filter((experience: any) =>
-        experience.status === 'pending_approval' || experience.status === 'pending'
+      const missingContractExperiences = linkedPendingExperiences.filter((experience: any) =>
+        (experience.status === 'pending_approval' || experience.status === 'pending') &&
+        !offers.some((offer: any) => offer.id === experience.id)
       );
+      for (const experience of missingContractExperiences) {
+        if (!experience.linkedVenueId) continue;
+        const contract = await storage.upsertVenueContract(buildVenueContractObject(
+          experience,
+          experience.id,
+          experience.linkedVenueId,
+          experience.creatorId
+        ));
+        offers.push({ ...experience, venue: userVenues.find((v: any) => v.id === experience.linkedVenueId), contract });
+      }
       res.json(offers);
     } catch (err: any) {
       console.error('Error fetching venue offers:', err);
@@ -9491,11 +9586,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Verify the experience is linked to one of this user's venues
       const userVenues = await storage.getVenuesByCreator(userId);
-      const linkedToMyVenue = userVenues.some((v: any) => v.id === experience.linkedVenueId);
+      const linkedVenue = userVenues.find((v: any) => v.id === experience.linkedVenueId);
+      const linkedToMyVenue = !!linkedVenue;
       if (!linkedToMyVenue) return res.status(403).json({ message: 'Access denied' });
 
+      let contract = await storage.getVenueContractByExperience(experienceId);
+      if (!contract) {
+        contract = await storage.upsertVenueContract(buildVenueContractObject(
+          experience,
+          experienceId,
+          experience.linkedVenueId,
+          experience.creatorId
+        ));
+      }
+
+      const acceptedContract = await storage.acceptVenueContract(experienceId, linkedVenue.id);
+      await storage.updateExperience(experienceId, getExperienceUpdatesFromAcceptedContract(acceptedContract) as any);
       await storage.updateExperienceStatus(experienceId, 'approved');
-      res.json({ success: true, message: 'Offer accepted — experience is now Live' });
+      res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
       res.status(500).json({ message: 'Failed to accept offer' });
@@ -9513,11 +9621,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
 
       const userVenues = await storage.getVenuesByCreator(userId);
-      const linkedToMyVenue = userVenues.some((v: any) => v.id === experience.linkedVenueId);
+      const linkedVenue = userVenues.find((v: any) => v.id === experience.linkedVenueId);
+      const linkedToMyVenue = !!linkedVenue;
       if (!linkedToMyVenue) return res.status(403).json({ message: 'Access denied' });
 
+      let contract = await storage.getVenueContractByExperience(experienceId);
+      if (!contract) {
+        contract = await storage.upsertVenueContract(buildVenueContractObject(
+          experience,
+          experienceId,
+          experience.linkedVenueId,
+          experience.creatorId
+        ));
+      }
+
+      const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
       await storage.updateExperienceStatus(experienceId, 'draft');
-      res.json({ success: true, message: 'Offer rejected — experience returned to creator' });
+      res.json({ success: true, contract: declinedContract, message: 'Offer rejected — experience returned to creator' });
     } catch (err: any) {
       console.error('Error rejecting venue offer:', err);
       res.status(500).json({ message: 'Failed to reject offer' });

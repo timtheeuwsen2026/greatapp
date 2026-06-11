@@ -81,7 +81,7 @@ export default function RoleBasedPricingDemo() {
 
   const supportOptions = {
     facilitator: [
-      { value: 'basic', label: 'DIY Support', description: 'Platform access only - you handle everything', fee: '20%' },
+      { value: 'basic', label: 'DIY Support', description: 'Platform access only - you handle everything', fee: '15%' },
       { value: 'enhanced', label: 'Enhanced Support', description: 'Venue sourcing + marketing boost', fee: '27%' },
       { value: 'full', label: 'Full Service', description: 'Complete venue, marketing, insurance, concierge', fee: '34%' }
     ],
@@ -350,7 +350,7 @@ export default function RoleBasedPricingDemo() {
                 </h4>
                 <ul className="text-sm space-y-2 text-gray-600 dark:text-gray-400">
                   <li><strong>You take full responsibility</strong> for running the experience</li>
-                  <li><strong>DIY (20%):</strong> Just platform access - you handle everything</li>
+                  <li><strong>DIY (15%):</strong> Fixed platform fee - you handle everything</li>
                   <li><strong>Enhanced (27%):</strong> We help with venues and marketing</li>
                   <li><strong>Full Service (34%):</strong> Complete support with venues, marketing, insurance, concierge</li>
                 </ul>

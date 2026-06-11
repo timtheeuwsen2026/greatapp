@@ -187,7 +187,7 @@ export default function RevenueCalculatorDemo() {
                         
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
-                            <span>Platform Fee (20%)</span>
+                            <span>Platform Fee (15%)</span>
                             <span className="text-red-600">-${(creatorManagedBreakdown.platformFeeAmount / 100).toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between">
@@ -264,32 +264,29 @@ export default function RevenueCalculatorDemo() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-orange-50 dark:bg-orange-950 rounded-lg">
-                      <h4 className="font-semibold text-orange-900 dark:text-orange-100 mb-2">
-                        Creator-Managed (20% Platform Fee)
-                      </h4>
-                      <ul className="text-sm text-orange-800 dark:text-orange-200 space-y-1">
-                        <li>• You book your own venue</li>
-                        <li>• You manage all service providers</li>
-                        <li>• Marketing platform and booking system</li>
-                        <li>• Community features and participant tools</li>
-                        <li>• 24/7 customer support</li>
-                      </ul>
-                    </div>
+                  <div className="p-4 bg-orange-50 dark:bg-orange-950 rounded-lg">
+                    <h4 className="font-semibold text-orange-900 dark:text-orange-100 mb-2">
+                      Fixed 15% Platform Fee
+                    </h4>
+                    <ul className="text-sm text-orange-800 dark:text-orange-200 space-y-1">
+                      <li>• Flat fee on every paid booking</li>
+                      <li>• Covers marketplace listing and booking tools</li>
+                      <li>• Community features and participant tools</li>
+                      <li>• 24/7 customer support</li>
+                      <li>• Free RSVPs (€0.00 tickets) are fee-free</li>
+                    </ul>
+                  </div>
 
-                    <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                      <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
-                        Great-Managed (20% Revenue Share)
-                      </h4>
-                      <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-                        <li>• Great books venues for you</li>
-                        <li>• Great manages service providers</li>
-                        <li>• Full marketing and booking platform</li>
-                        <li>• End-to-end event management</li>
-                        <li>• 24/7 support for you and participants</li>
-                      </ul>
-                    </div>
+                  <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                    <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
+                      Venue Commercial Deal (Digital Handshake)
+                    </h4>
+                    <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                      <li>• Day venues: Flat Fee, Per Head, Minimum Spend, or Access-Only</li>
+                      <li>• Retreat venues: Revenue Share, Per-Head Package, or Flat Rental</li>
+                      <li>• External venues: you manage payment independently</li>
+                      <li>• Terms locked after venue accepts your offer</li>
+                    </ul>
                   </div>
 
                   <div className="p-4 bg-gray-50 dark:bg-gray-950 rounded-lg">
@@ -307,13 +304,13 @@ export default function RevenueCalculatorDemo() {
 
                   <div className="p-4 bg-green-50 dark:bg-green-950 rounded-lg">
                     <h4 className="font-semibold text-green-900 dark:text-green-100 mb-2">
-                      Transparent Pricing Models
+                      Your Earnings
                     </h4>
                     <div className="space-y-2 text-sm text-green-800 dark:text-green-200">
-                      <div><strong>Creator-managed:</strong> Keep ~77% (higher earnings, more work)</div>
-                      <div><strong>Great-managed:</strong> Keep 20% (less earnings, zero logistics)</div>
+                      <div><strong>Gross ticket price</strong> minus 15% platform fee, minus venue deal, minus Stripe fees</div>
+                      <div><strong>External venue:</strong> you keep the remaining ~83% (before your own venue costs)</div>
                       <div className="text-xs text-green-600 mt-2">
-                        Choose based on your preference for earnings vs. convenience
+                        Use the Event Builder's Grand Total Calculator for a precise estimate per event
                       </div>
                     </div>
                   </div>

@@ -19,7 +19,7 @@ export default function HowItWorks() {
           </p>
           <Link href="/">
             <Button size="lg" className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto">
-              Explore Forming Trips
+              Explore Experiences
               <ArrowRight className="ml-2 h-5 w-5" />
             </Button>
           </Link>
@@ -126,10 +126,10 @@ export default function HowItWorks() {
       <section className="py-16 px-4 sm:px-6 lg:px-8 text-center">
         <div className="max-w-2xl mx-auto">
           <h3 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Ready to join your tribe?</h3>
-          <p className="text-gray-500 dark:text-gray-400 mb-8 text-lg">Browse trips that are forming right now and reserve your spot today.</p>
+          <p className="text-gray-500 dark:text-gray-400 mb-8 text-lg">Browse experiences forming right now and reserve your spot today.</p>
           <Link href="/">
             <Button size="lg" className="bg-primary hover:bg-primary/90 text-white font-semibold px-10 py-5 h-auto text-base">
-              See Forming Trips
+              Explore Experiences
               <ArrowRight className="ml-2 h-5 w-5" />
             </Button>
           </Link>

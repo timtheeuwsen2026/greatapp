@@ -159,7 +159,7 @@ export default function EmbeddedPricingCalculator() {
 
   const supportOptions = {
     facilitator: [
-      { value: 'basic', label: 'DIY', description: 'Platform only', fee: '20%' },
+      { value: 'basic', label: 'DIY', description: 'Platform only', fee: '15%' },
       { value: 'enhanced', label: 'Enhanced', description: 'Venue + marketing help', fee: '27%' },
       { value: 'full', label: 'Full Service', description: 'Complete support', fee: '34%' }
     ],
@@ -368,176 +368,37 @@ export default function EmbeddedPricingCalculator() {
           </TabsContent>
 
           <TabsContent value="venue-splits" className="mt-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Price Input */}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="price-venue">Experience Price</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-                    <Input
-                      id="price-venue"
-                      type="number"
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      placeholder="150"
-                      className="pl-9"
-                      min="0"
-                      step="0.01"
-                      data-testid="input-price-venue"
-                    />
-                  </div>
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Venue commercial terms are set per-event via the Digital Handshake in the Event Builder. Choose the model that fits your venue type:
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2 flex items-center gap-2">
+                    <Building className="w-4 h-4" />
+                    Day Venue Models
+                  </h4>
+                  <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                    <li>• <strong>Flat Fee</strong> — fixed amount to the venue</li>
+                    <li>• <strong>Per Head</strong> — amount × number of attendees</li>
+                    <li>• <strong>Minimum Spend</strong> — guaranteed floor spend</li>
+                    <li>• <strong>Access-Only / Pay-at-Counter</strong> — venue keeps all on-site sales, Great takes 0%</li>
+                  </ul>
+                </div>
+                <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border border-purple-200 dark:border-purple-800">
+                  <h4 className="font-semibold text-purple-900 dark:text-purple-100 mb-2 flex items-center gap-2">
+                    <Building className="w-4 h-4" />
+                    Retreat Venue Models
+                  </h4>
+                  <ul className="text-sm text-purple-800 dark:text-purple-200 space-y-1">
+                    <li>• <strong>Revenue Share</strong> — percentage of gross ticket revenue</li>
+                    <li>• <strong>Per-Head Package</strong> — fixed cost per attendee</li>
+                    <li>• <strong>Flat Rental / Day Rate</strong> — fixed hire fee</li>
+                  </ul>
                 </div>
               </div>
-
-              {/* Commercial terms */}
-              <div className="space-y-4">
-                <Label>Revenue Share Terms</Label>
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="venue-percent" className="text-sm flex items-center gap-1">
-                      <Building className="w-3 h-3" />
-                      Venue Share (%)
-                    </Label>
-                    <Input
-                      id="venue-percent"
-                      type="number"
-                      value={venuePercentage}
-                      onChange={(e) => handlePercentageChange('venue', e.target.value)}
-                      placeholder="30"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      data-testid="input-venue-percentage"
-                    />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="creator-percent" className="text-sm flex items-center gap-1">
-                      <Heart className="w-3 h-3" />
-                      Creator Share (%)
-                    </Label>
-                    <Input
-                      id="creator-percent"
-                      type="number"
-                      value={creatorPercentage}
-                      onChange={(e) => handlePercentageChange('creator', e.target.value)}
-                      placeholder="50"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      data-testid="input-creator-percentage"
-                    />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="platform-percent" className="text-sm flex items-center gap-1">
-                      <Users className="w-3 h-3" />
-                      Platform Share (%)
-                    </Label>
-                    <Input
-                      id="platform-percent"
-                      type="number"
-                      value={platformPercentage}
-                      onChange={(e) => handlePercentageChange('platform', e.target.value)}
-                      placeholder="20"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      data-testid="input-platform-percentage"
-                    />
-                  </div>
-                </div>
-                
-                {percentageError && (
-                  <div className="flex items-center gap-2 p-2 bg-red-50 dark:bg-red-950 rounded text-red-600 text-sm">
-                    <AlertCircle className="w-4 h-4" />
-                    {percentageError}
-                  </div>
-                )}
-                
-                <div className="text-xs text-gray-600 dark:text-gray-400">
-                  Total: {(parseFloat(venuePercentage) + parseFloat(creatorPercentage) + parseFloat(platformPercentage)).toFixed(1)}%
-                </div>
-              </div>
-
-              {/* Venue Split Results */}
-              <div className="space-y-4">
-                <Label>Revenue Breakdown</Label>
-                {isLoading && (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
-                  </div>
-                )}
-
-                {breakdown && isVenueSplitBreakdown(breakdown) && !isLoading && (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Revenue</span>
-                        <span className="text-lg font-bold text-blue-600" data-testid="text-total-revenue">
-                          ${(breakdown.grossAmount / 100).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <div className="text-xs text-red-600 space-y-1">
-                        <div className="flex justify-between">
-                          <span>Stripe Fee</span>
-                          <span>-${(breakdown.stripeFeeAmount / 100).toFixed(2)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="p-3 bg-purple-50 dark:bg-purple-950 rounded-lg">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium flex items-center gap-1 text-purple-900 dark:text-purple-100">
-                            <Building className="w-4 h-4" />
-                            Venue Share
-                          </span>
-                          <span className="text-lg font-bold text-purple-600" data-testid="text-venue-share">
-                            ${(breakdown.venueShareAmount / 100).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="text-xs text-purple-700 dark:text-purple-300">
-                          {breakdown.venuePercentage}% of net revenue
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-green-50 dark:bg-green-950 rounded-lg">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium flex items-center gap-1 text-green-900 dark:text-green-100">
-                            <Heart className="w-4 h-4" />
-                            Creator Share
-                          </span>
-                          <span className="text-lg font-bold text-green-600" data-testid="text-creator-share">
-                            ${(breakdown.creatorShareAmount / 100).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="text-xs text-green-700 dark:text-green-300">
-                          {breakdown.creatorPercentage}% of net revenue
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-gray-50 dark:bg-gray-950 rounded-lg">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium flex items-center gap-1 text-gray-900 dark:text-gray-100">
-                            <Users className="w-4 h-4" />
-                            Platform Share
-                          </span>
-                          <span className="text-lg font-bold text-gray-600" data-testid="text-platform-share">
-                            ${(breakdown.platformShareAmount / 100).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-700 dark:text-gray-300">
-                          {breakdown.platformPercentage}% of net revenue
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div className="p-3 bg-amber-50 dark:bg-amber-950 rounded-lg text-sm text-amber-800 dark:text-amber-200">
+                <strong>How it works:</strong> When you list an event, you propose deal terms to the venue. The venue accepts or declines. Once accepted, those terms are locked into the payment flow automatically.
               </div>
             </div>
           </TabsContent>
@@ -546,7 +407,7 @@ export default function EmbeddedPricingCalculator() {
         <div className="mt-6 p-4 bg-amber-50 dark:bg-amber-950 rounded-lg">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-amber-800 dark:text-amber-200">
             <div>
-              <strong>Role-Based Pricing:</strong> Traditional creator fee structure with platform support levels from DIY (20%) to Full Service (34%). Creators earn a percentage after platform fees.
+              <strong>Role-Based Pricing:</strong> Fixed 15% platform fee applies to all creators. Earnings shown above are after the platform fee and any Stripe processing costs.
             </div>
             <div>
               <strong>Venue Terms:</strong> Legacy revenue share estimator for marketplace partnerships. Use the event builder commercial model step for final venue offers and handshake terms.

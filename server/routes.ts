@@ -2720,10 +2720,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         creatorId: userId,
         status: "pending_approval" as const,
         submittedAt: new Date(),
-        
+
+        // Venue type and open-bidding fields
+        venueType: (draft as any).venueType || null,
+        venueOpenSpaceType: (draft as any).venueOpenSpaceType || null,
+        venueTargetDeal: (draft as any).venueTargetDeal || null,
+        // If creator selected "open to venue offers", flag venue as pending
+        venueStatus: (draft as any).venueType === "open" ? "venue_pending" : "venue_confirmed",
+
         // Venue mapping: map selectedVenueId to linkedVenueId
-        linkedVenueId: (draft as any).selectedVenueId || null,
-        venueCompensationModel: ((draft as any).selectedVenueId)
+        linkedVenueId: (draft as any).venueType === "open" ? null : ((draft as any).selectedVenueId || null),
+        venueCompensationModel: ((draft as any).selectedVenueId && (draft as any).venueType !== "open")
           ? ((draft as any).venueCompensationModel || "access_only")
           : "access_only",
         venueFixedFee: (draft as any).venueFixedFee || "0.00",

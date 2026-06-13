@@ -119,12 +119,16 @@ const eventBuilderSchema = z.object({
 
   // Step 4: Venue
   location: z.string().min(1, "Location is required").optional().or(z.literal('')),
-  venueType: z.enum(["catalog", "outdoor", "manual", "virtual"]).default("catalog"),
-  
+  venueType: z.enum(["catalog", "outdoor", "manual", "virtual", "open"]).default("catalog"),
+
+  // Open-to-Venue-Offers fields (reverse bidding)
+  venueOpenSpaceType: z.string().optional(),
+  venueTargetDeal: z.string().optional(),
+
   // Catalog venue fields
   selectedVenueId: z.string().optional(),
   venue: z.string().optional(), // Keep for backward compatibility
-  
+
   // Manual venue fields
   manualVenueName: z.string().optional(),
   manualVenueAddress: z.string().optional(),
@@ -401,6 +405,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       maxParticipants: undefined,
       location: "",
       venueType: "catalog",
+      venueOpenSpaceType: "",
+      venueTargetDeal: "",
       selectedVenueId: "",
       venue: "",
       manualVenueName: "",
@@ -1028,6 +1034,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',
+        venueOpenSpaceType: formData.venueOpenSpaceType || '',
+        venueTargetDeal: formData.venueTargetDeal || '',
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -1264,9 +1272,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       errors.push("Location is required");
     }
     
-    // Venue type specific validation - 4 distinct modes, no overlap
+    // Venue type specific validation - 5 distinct modes, no overlap
     const venueType = data.venueType || 'catalog';
-    
+
     if (venueType === 'catalog') {
       // For catalog venues: ensure a venue is selected
       if (!data.selectedVenueId || data.selectedVenueId.trim() === '') {
@@ -1274,7 +1282,6 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       }
     } else if (venueType === 'outdoor') {
       // For outdoor/public locations: only location is needed (validated above)
-      // No additional venue-specific validation required
     } else if (venueType === 'manual') {
       // For custom venues: ensure required fields are filled
       if (!data.manualVenueName || data.manualVenueName.trim() === '') {
@@ -1288,8 +1295,13 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       if (!data.virtualPlatform || data.virtualPlatform.trim() === '') {
         errors.push("Virtual platform is required");
       }
+    } else if (venueType === 'open') {
+      // For open venue offers: city/location already validated above; space type required
+      if (!data.venueOpenSpaceType || data.venueOpenSpaceType.trim() === '') {
+        errors.push("Please select the type of space you are looking for");
+      }
     }
-    
+
     // Required: pricing - zero is valid for free RSVP events.
     const ticketSkus = Array.isArray(data.ticketSkus) ? data.ticketSkus : [];
     const hasTicketPricing = ticketSkus.some((sku: any) => {
@@ -1348,9 +1360,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       errors.push("Location is required");
     }
     
-    // Venue type specific validation - 4 distinct modes, no overlap
+    // Venue type specific validation - 5 distinct modes, no overlap
     const venueType = data.venueType || 'catalog';
-    
+
     if (venueType === 'catalog') {
       // For catalog venues: ensure a venue is selected
       if (!data.selectedVenueId || data.selectedVenueId.trim() === '') {
@@ -1358,7 +1370,6 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       }
     } else if (venueType === 'outdoor') {
       // For outdoor/public locations: only location is needed (validated above)
-      // No additional venue-specific validation required
     } else if (venueType === 'manual') {
       // For custom venues: ensure required fields are filled
       if (!data.manualVenueName || data.manualVenueName.trim() === '') {
@@ -1372,8 +1383,13 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       if (!data.virtualPlatform || data.virtualPlatform.trim() === '') {
         errors.push("Virtual platform is required");
       }
+    } else if (venueType === 'open') {
+      // For open venue offers: space type required
+      if (!data.venueOpenSpaceType || data.venueOpenSpaceType.trim() === '') {
+        errors.push("Please select the type of space you are looking for");
+      }
     }
-    
+
     // Required: pricing - experience-level pricePerPerson (relaxed for draft)
     // Draft validation is more lenient - just check if some pricing info exists
     
@@ -1430,6 +1446,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',
+        venueOpenSpaceType: formData.venueOpenSpaceType || '',
+        venueTargetDeal: formData.venueTargetDeal || '',
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -2876,6 +2894,31 @@ function VenueStep({ form }: { form: any }) {
                     </div>
                   </div>
                 </div>
+
+                <div
+                  className={cn(
+                    "border-2 rounded-lg p-4 cursor-pointer transition-all hover:border-primary/50",
+                    field.value === "open" ? "border-primary bg-primary/5" : "border-gray-200 dark:border-gray-700"
+                  )}
+                  onClick={() => field.onChange("open")}
+                  data-testid="venue-type-open"
+                >
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      checked={field.value === "open"}
+                      readOnly
+                      className="text-primary"
+                    />
+                    <AlertCircle className="w-5 h-5 text-amber-500" />
+                    <div>
+                      <div className="font-semibold">Open to Venue Offers</div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Let venues bid to host your event
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </FormControl>
             <FormMessage />
@@ -3329,6 +3372,53 @@ function VenueStep({ form }: { form: any }) {
         </div>
       )}
 
+      {/* Open to Venue Offers Fields */}
+      {venueType === "open" && (
+        <div className="space-y-4 border-2 border-amber-200 dark:border-amber-800 rounded-lg p-4 bg-amber-50 dark:bg-amber-900/20">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle className="w-5 h-5 text-amber-600" />
+            <h4 className="font-semibold text-amber-900 dark:text-amber-100">Open Venue Request</h4>
+          </div>
+          <p className="text-sm text-amber-800 dark:text-amber-200">
+            Your event will publish with <strong>Venue Pending</strong> status. Venues matching your criteria can discover and bid to host your event.
+          </p>
+
+          <FormField
+            control={form.control}
+            name="venueOpenSpaceType"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Space Type Needed *</FormLabel>
+                <Select onValueChange={field.onChange} value={field.value || ""}>
+                  <FormControl>
+                    <SelectTrigger data-testid="select-venue-open-space-type">
+                      <SelectValue placeholder="Select the type of space you need" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="coffee_shop">Coffee Shop / Café</SelectItem>
+                    <SelectItem value="restaurant">Restaurant / Bar</SelectItem>
+                    <SelectItem value="fitness_studio">Fitness Studio / Gym</SelectItem>
+                    <SelectItem value="yoga_studio">Yoga / Dance Studio</SelectItem>
+                    <SelectItem value="coworking">Co-working Space</SelectItem>
+                    <SelectItem value="retail_gallery">Retail / Gallery</SelectItem>
+                    <SelectItem value="outdoor_park">Outdoor / Park</SelectItem>
+                    <SelectItem value="private_villa">Private Villa / Home</SelectItem>
+                    <SelectItem value="retreat_center">Retreat Center</SelectItem>
+                    <SelectItem value="hotel_conference">Hotel / Conference Room</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  Venues of this type in your selected city will be able to see and respond to your event.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      )}
+
       {/* Validation Summary */}
       <div className="bg-blue-50 dark:bg-blue-950 p-4 rounded-lg">
         <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Venue Requirements</h4>
@@ -3359,6 +3449,12 @@ function VenueStep({ form }: { form: any }) {
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4" />
               Virtual platform must be selected
+            </div>
+          )}
+          {venueType === "open" && (
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-500" />
+              Space type must be selected — event publishes as Venue Pending
             </div>
           )}
         </div>
@@ -4135,11 +4231,23 @@ function PricingStep({ form }: { form: any }) {
   const isNonRoomEvent = eventType === 'one-day' || eventType === 'virtual';
   const isMultiDayEvent = eventType === 'multi-day';
   const venueDealContext =
-    venueType !== "catalog"
-      ? "external"
-      : selectedMarketplaceVenue?.venueType === "daytime" || eventType === "one-day"
-        ? "marketplace_day"
-        : "marketplace_retreat";
+    venueType === "open"
+      ? "open"
+      : venueType !== "catalog"
+        ? "external"
+        : selectedMarketplaceVenue?.venueType === "daytime" || eventType === "one-day"
+          ? "marketplace_day"
+          : "marketplace_retreat";
+
+  // All available target deal options (for "open" mode where creator sets a preference)
+  const openTargetDealOptions = [
+    { value: "access_only", label: "Access-Only / Pay-at-Counter" },
+    { value: "fixed_fee", label: "Flat Fee" },
+    { value: "per_head", label: "Per Head" },
+    { value: "minimum_spend", label: "Minimum Spend Guarantee" },
+    { value: "revenue_share", label: "Percentage Revenue Share" },
+  ];
+
   const venueDealOptions = useMemo(() => {
     if (venueDealContext === "marketplace_retreat") {
       return [
@@ -4160,7 +4268,9 @@ function PricingStep({ form }: { form: any }) {
   }, [venueDealContext]);
 
   useEffect(() => {
-    if (venueDealContext === "external") {
+    if (venueDealContext === "external" || venueDealContext === "open") {
+      // For external and open modes, zero out the specific venue deal amounts —
+      // open mode uses venueTargetDeal instead of venueCompensationModel
       form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
       form.setValue('venueFixedFee', 0, { shouldDirty: false });
       form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });
@@ -4673,6 +4783,28 @@ function PricingStep({ form }: { form: any }) {
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
                   External Venue Selected. You manage venue payments independently.
                 </div>
+              ) : venueDealContext === "open" ? (
+                <div>
+                  <Label htmlFor="venue-target-deal">Target Deal (What you're looking for)</Label>
+                  <Select
+                    value={form.watch('venueTargetDeal') || ""}
+                    onValueChange={(value) => form.setValue('venueTargetDeal', value, { shouldDirty: true })}
+                  >
+                    <SelectTrigger id="venue-target-deal" data-testid="select-venue-target-deal">
+                      <SelectValue placeholder="Select preferred deal type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {openTargetDealOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-amber-600 mt-1">
+                    Venues will see this preference when they bid to host your event.
+                  </p>
+                </div>
               ) : (
                 <div>
                   <Label htmlFor="venue-compensation-model">Venue Commercial Deal</Label>
@@ -4792,10 +4924,18 @@ function PricingStep({ form }: { form: any }) {
             </div>
             )}
 
+            {venueDealContext === "open" && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 text-sm text-amber-900 dark:text-amber-100">
+                <strong>Venue Pending:</strong> Your event will publish to the platform. Venues matching your city and space type will be able to discover and bid to host it. Once a venue accepts, their deal terms are locked into the payment flow.
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
               {venueDealContext === "external"
                 ? "Only the fixed 15% platform infrastructure fee is applied in Great."
-                : "Venue compensation is negotiated separately from the 15% platform infrastructure fee."}
+                : venueDealContext === "open"
+                  ? "Actual venue payout will be determined when a venue accepts your offer."
+                  : "Venue compensation is negotiated separately from the 15% platform infrastructure fee."}
             </p>
 
             {/* Estimated grand total calculation */}

@@ -321,6 +321,10 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // Daytime Space capacity fields (for one-day events like coffeeshop collabs)
   standingCapacity: integer("standing_capacity"),
   seatedCapacity: integer("seated_capacity"),
+  // Open-to-Venue-Offers fields (reverse bidding)
+  venueOpenSpaceType: varchar("venue_open_space_type"), // e.g. "coffee_shop", "fitness_studio"
+  venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
+  venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
   // Virtual venue fields
   virtualPlatform: varchar("virtual_platform"),
   virtualMeetingUrl: varchar("virtual_meeting_url"),
@@ -765,6 +769,14 @@ export const experiences = pgTable("experiences", {
   // Daytime Space capacity fields (for one-day events like coffeeshop collabs)
   standingCapacity: integer("standing_capacity"),
   seatedCapacity: integer("seated_capacity"),
+
+  // Venue type stored on the published experience
+  venueType: varchar("venue_type"),
+
+  // Open-to-Venue-Offers fields (reverse bidding)
+  venueOpenSpaceType: varchar("venue_open_space_type"), // e.g. "coffee_shop", "fitness_studio"
+  venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
+  venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
 
   // Participant Visibility
   showParticipantList: boolean("show_participant_list").default(true), // Whether to show participant list publicly

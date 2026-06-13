@@ -2721,14 +2721,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: "pending_approval" as const,
         submittedAt: new Date(),
 
-        // Venue type and open-bidding fields
+        // ── Open-to-Venue-Offers fields ──────────────────────────────────────
+        // Stored so the venue discovery feed can match venues by city + space type.
         venueType: (draft as any).venueType || null,
         venueOpenSpaceType: (draft as any).venueOpenSpaceType || null,
+        // venueTargetDeal is a preference, not a binding contract — it tells bidding venues
+        // what commercial model the creator is hoping for.
         venueTargetDeal: (draft as any).venueTargetDeal || null,
-        // If creator selected "open to venue offers", flag venue as pending
+        // venue_pending means no venue is confirmed yet; venue_confirmed for all other modes.
         venueStatus: (draft as any).venueType === "open" ? "venue_pending" : "venue_confirmed",
 
-        // Venue mapping: map selectedVenueId to linkedVenueId
+        // Venue mapping: map selectedVenueId to linkedVenueId.
+        // For open bids, linkedVenueId stays null until a venue accepts —
+        // it gets populated when the Digital Handshake is completed.
         linkedVenueId: (draft as any).venueType === "open" ? null : ((draft as any).selectedVenueId || null),
         venueCompensationModel: ((draft as any).selectedVenueId && (draft as any).venueType !== "open")
           ? ((draft as any).venueCompensationModel || "access_only")

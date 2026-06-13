@@ -4230,6 +4230,11 @@ function PricingStep({ form }: { form: any }) {
   // One-day and virtual events don't have rooms - use Number of Spots instead
   const isNonRoomEvent = eventType === 'one-day' || eventType === 'virtual';
   const isMultiDayEvent = eventType === 'multi-day';
+  // venueDealContext drives which UI branch the Pricing step renders:
+  //   "open"              — creator is seeking venue bids; sets a target deal preference only
+  //   "external"          — non-catalog venue (manual/outdoor/virtual); creator manages venue payment themselves
+  //   "marketplace_day"   — catalog daytime space or one-day event; limited short-stay deal models
+  //   "marketplace_retreat" — catalog multi-day retreat; full revenue-share models
   const venueDealContext =
     venueType === "open"
       ? "open"
@@ -4269,8 +4274,9 @@ function PricingStep({ form }: { form: any }) {
 
   useEffect(() => {
     if (venueDealContext === "external" || venueDealContext === "open") {
-      // For external and open modes, zero out the specific venue deal amounts —
-      // open mode uses venueTargetDeal instead of venueCompensationModel
+      // Zero out venue deal amounts for external and open modes.
+      // External: creator handles venue payment independently, no platform split needed.
+      // Open: no specific venue is chosen yet — amounts are determined when a venue accepts the bid.
       form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
       form.setValue('venueFixedFee', 0, { shouldDirty: false });
       form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });

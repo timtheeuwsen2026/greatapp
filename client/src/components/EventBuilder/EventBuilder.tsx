@@ -5073,7 +5073,33 @@ function PricingStep({ form }: { form: any }) {
                       </p>
                     </div>
                   </div>
-                  
+
+                  {/* Payment Timing Model — only shown when MVG is active */}
+                  <div>
+                    <Label htmlFor="mvg-payment-timing">Payment Timing Model</Label>
+                    <select
+                      id="mvg-payment-timing"
+                      className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      value={softHoldEnabled ? "soft_hold" : "immediate"}
+                      onChange={(e) => {
+                        const isSoftHold = e.target.value === "soft_hold";
+                        form.setValue('softHoldEnabled', isSoftHold, { shouldDirty: true });
+                        if (isSoftHold) {
+                          form.setValue('softHoldDurationHours', 720, { shouldDirty: true }); // 30 days default when tied to MVG
+                        }
+                      }}
+                      data-testid="select-mvg-payment-timing"
+                    >
+                      <option value="immediate">Charge immediately on booking (refund if MVG fails)</option>
+                      <option value="soft_hold">Soft-hold — charge only when MVG is confirmed</option>
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {softHoldEnabled
+                        ? "Participants reserve their spot for free. Payment is collected once the minimum group size is confirmed."
+                        : "Participants pay in full at booking. If the minimum group is not reached by the deadline, everyone is automatically refunded."}
+                    </p>
+                  </div>
+
                   {/* MVG Progress Bar */}
                   <div className="bg-blue-50 dark:bg-blue-950 p-4 rounded-lg">
                     <div className="flex justify-between text-sm mb-2">
@@ -5089,7 +5115,8 @@ function PricingStep({ form }: { form: any }) {
               )}
             </div>
 
-            {/* Soft-Hold Settings */}
+            {/* Soft-Hold Settings — shown only when MVG is OFF (standalone soft-hold without a group threshold) */}
+            {!requireMinimumParticipants && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -5103,7 +5130,7 @@ function PricingStep({ form }: { form: any }) {
                   data-testid="switch-soft-hold-enabled"
                 />
               </div>
-              
+
               {softHoldEnabled && (
                 <div className="ml-4 border-l-2 border-gray-200 pl-4">
                   <Label htmlFor="soft-hold-duration">Hold Duration (Hours)</Label>
@@ -5122,6 +5149,7 @@ function PricingStep({ form }: { form: any }) {
                 </div>
               )}
             </div>
+            )}
           </div>
         </CardContent>
       </Card>

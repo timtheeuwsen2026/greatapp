@@ -39,6 +39,11 @@ export async function uploadDocumentToSupabase(
   mimeType: string,
   userId: string
 ): Promise<string> {
-  const ext = mimeType === "application/pdf" ? "pdf" : "bin";
+  const extMap: Record<string, string> = {
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  };
+  const ext = extMap[mimeType] ?? "bin";
   return uploadToSupabase(buffer, mimeType, `${userId}/documents/${randomUUID()}.${ext}`);
 }

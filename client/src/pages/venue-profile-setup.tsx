@@ -2464,9 +2464,9 @@ export default function VenueProfileSetup() {
                         name="termsAndConditionsUrl"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Upload Terms & Conditions (PDF) *</FormLabel>
+                            <FormLabel>Upload Terms & Conditions</FormLabel>
                             <FormDescription>
-                              Upload a PDF document containing your full terms and conditions for venue bookings.
+                              Upload a PDF or Word document (.pdf, .doc, .docx) with your venue's terms and conditions for bookings. This is shown to creators and guests.
                             </FormDescription>
                             <FormControl>
                               <div className="space-y-3">
@@ -2482,7 +2482,7 @@ export default function VenueProfileSetup() {
                                         className="text-xs text-blue-600 hover:underline truncate block"
                                         data-testid="link-view-terms-pdf"
                                       >
-                                        View uploaded PDF
+                                        View uploaded document
                                       </a>
                                     </div>
                                     <Button
@@ -2501,18 +2501,24 @@ export default function VenueProfileSetup() {
                                     <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-primary/50 transition-colors">
                                       <input
                                         type="file"
-                                        accept=".pdf,application/pdf"
+                                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                                         className="hidden"
                                         id="terms-pdf-upload"
                                         onChange={async (e) => {
                                           const file = e.target.files?.[0];
                                           if (!file) return;
-                                          
-                                          // Validate file type
-                                          if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+
+                                          const allowedTypes = [
+                                            'application/pdf',
+                                            'application/msword',
+                                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                                          ];
+                                          const allowedExts = ['.pdf', '.doc', '.docx'];
+                                          const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+                                          if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) {
                                             toast({
                                               title: 'Invalid file type',
-                                              description: 'Please upload a PDF file.',
+                                              description: 'Please upload a PDF or Word document (.pdf, .doc, .docx).',
                                               variant: 'destructive',
                                             });
                                             return;
@@ -2522,7 +2528,7 @@ export default function VenueProfileSetup() {
                                           if (file.size > 10 * 1024 * 1024) {
                                             toast({
                                               title: 'File too large',
-                                              description: 'PDF must be smaller than 10MB.',
+                                              description: 'Document must be smaller than 10MB.',
                                               variant: 'destructive',
                                             });
                                             return;
@@ -2542,13 +2548,13 @@ export default function VenueProfileSetup() {
                                             field.onChange(publicUrl);
                                             
                                             toast({
-                                              title: 'PDF uploaded successfully',
+                                              title: 'Document uploaded successfully',
                                               description: 'Your Terms & Conditions document has been uploaded.',
                                             });
                                           } catch (error) {
                                             toast({
                                               title: 'Upload failed',
-                                              description: 'Failed to upload PDF. Please try again.',
+                                              description: 'Failed to upload document. Please try again.',
                                               variant: 'destructive',
                                             });
                                           }
@@ -2564,10 +2570,10 @@ export default function VenueProfileSetup() {
                                       >
                                         <Upload className="h-8 w-8 text-gray-400" />
                                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                          Click to upload PDF
+                                          Click to upload PDF or Word document
                                         </span>
                                         <span className="text-xs text-gray-500 dark:text-gray-400">
-                                          PDF up to 10MB
+                                          PDF or Word document (up to 10MB)
                                         </span>
                                       </label>
                                     </div>
@@ -2685,6 +2691,21 @@ export default function VenueProfileSetup() {
                       />
                     </Card>
 
+                    {/* Platform T&C notice */}
+                    <Card className="p-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                      <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Platform Terms & Conditions</h4>
+                      <p className="text-sm text-blue-800 dark:text-blue-200">
+                        By listing your venue on this platform you also agree to the{' '}
+                        <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline font-medium">
+                          Great Platform Terms of Service
+                        </a>{' '}
+                        and{' '}
+                        <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline font-medium">
+                          Privacy Policy
+                        </a>. These govern the relationship between your venue and the platform.
+                      </p>
+                    </Card>
+
                     {/* Final Confirmation */}
                     <Card className="p-6 border-2 border-primary/20">
                       <h4 className="font-medium mb-4">Confirmation</h4>
@@ -2707,7 +2728,7 @@ export default function VenueProfileSetup() {
                                 I confirm these Terms & Conditions are correct
                               </FormLabel>
                               <FormDescription>
-                                By checking this box, you confirm that all information provided is accurate and you agree to abide by the platform's policies.
+                                By checking this box, you confirm that all information provided is accurate, your venue T&C document (if uploaded) is up to date, and you agree to the platform's policies.
                               </FormDescription>
                             </div>
                           </FormItem>

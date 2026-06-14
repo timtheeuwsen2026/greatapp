@@ -338,7 +338,8 @@ function normalizeEventTripFields(draft: any) {
     copy.accommodationType = null;
     copy.roomCapacity = null;
     copy.totalRooms = null;
-    copy.maxParticipants = Number(copy.standingCapacity || copy.seatedCapacity || copy.maxParticipants || 1);
+    // Use explicitly set maxParticipants; do not pull from venue capacity (that's a physical limit, not the creator's spot count)
+    copy.maxParticipants = copy.maxParticipants ? Number(copy.maxParticipants) : undefined;
     copy.selectedServices = [];
     copy.selectedAmenities = [];
     copy.selectedServiceIds = [];
@@ -1034,8 +1035,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',
-        venueOpenSpaceType: formData.venueOpenSpaceType || '',
-        venueTargetDeal: formData.venueTargetDeal || '',
+        venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
+        venueTargetDeal: formData.venueTargetDeal || undefined,
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -1045,7 +1046,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         virtualPlatform: formData.virtualPlatform || '',
         virtualMeetingUrl: formData.virtualMeetingUrl || '',
         virtualInstructions: formData.virtualInstructions || '',
-        
+
         // Room fields
         accommodationType: formData.accommodationType,
         roomCapacity: formData.roomCapacity,
@@ -1446,8 +1447,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',
-        venueOpenSpaceType: formData.venueOpenSpaceType || '',
-        venueTargetDeal: formData.venueTargetDeal || '',
+        venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
+        venueTargetDeal: formData.venueTargetDeal || undefined,
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -1457,7 +1458,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         virtualPlatform: formData.virtualPlatform || '',
         virtualMeetingUrl: formData.virtualMeetingUrl || '',
         virtualInstructions: formData.virtualInstructions || '',
-        
+
         // Room fields
         accommodationType: formData.accommodationType,
         roomCapacity: formData.roomCapacity,
@@ -1792,20 +1793,23 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                         return !!form.watch('manualVenueName')?.trim() && !!form.watch('manualVenueAddress')?.trim();
                       } else if (venueType === 'virtual') {
                         return !!form.watch('virtualPlatform')?.trim();
+                      } else if (venueType === 'open') {
+                        return !!form.watch('venueOpenSpaceType')?.trim();
                       }
                       return false;
-                    })()} 
+                    })()}
                   />
-                  <ChecklistItem 
-                    label="Currency Selection" 
-                    completed={!!form.watch('currency')} 
+                  <ChecklistItem
+                    label="Currency Selection"
+                    completed={!!form.watch('currency')}
                   />
-                  <ChecklistItem 
-                    label="Price Per Person" 
+                  <ChecklistItem
+                    label="Price Per Person"
                     completed={(() => {
                       const pricePerPerson = form.watch('pricePerPerson');
-                      return !!pricePerPerson && parseFloat(String(pricePerPerson)) > 0;
-                    })()} 
+                      const parsed = parseFloat(String(pricePerPerson));
+                      return pricePerPerson !== undefined && pricePerPerson !== null && pricePerPerson !== '' && !Number.isNaN(parsed) && parsed >= 0;
+                    })()}
                   />
                   <ChecklistItem 
                     label="Terms Accepted" 
@@ -3451,12 +3455,20 @@ function VenueStep({ form }: { form: any }) {
               Virtual platform must be selected
             </div>
           )}
-          {venueType === "open" && (
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-500" />
-              Space type must be selected — event publishes as Venue Pending
-            </div>
-          )}
+          {venueType === "open" && (() => {
+            const spaceType = form.watch('venueOpenSpaceType');
+            return spaceType ? (
+              <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                <CheckCircle className="w-4 h-4" />
+                Space type selected — event publishes as Venue Pending until matched
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+                Space type must be selected before publishing
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
@@ -4570,7 +4582,15 @@ function PricingStep({ form }: { form: any }) {
                     min="1"
                     max="1000"
                     value={maxParticipants || ''}
-                    onChange={(e) => form.setValue('maxParticipants', parseInt(e.target.value) || 0, { shouldDirty: true })}
+                    onChange={(e) => {
+                      const newVal = parseInt(e.target.value) || 0;
+                      form.setValue('maxParticipants', newVal, { shouldDirty: true });
+                      // Sync to the single ticket SKU so the reverse-sync effect doesn't override it
+                      const currentSkus = form.getValues('ticketSkus') || [];
+                      if (currentSkus.length === 1) {
+                        form.setValue('ticketSkus', [{ ...currentSkus[0], ticketCapacity: newVal }], { shouldDirty: true });
+                      }
+                    }}
                     placeholder="e.g., 20"
                     data-testid="input-number-of-spots"
                   />
@@ -4688,6 +4708,7 @@ function PricingStep({ form }: { form: any }) {
                             </div>
                           </div>
                           
+                          {requireMinimumParticipants && (
                           <div>
                             <Label htmlFor={`sku-deposit-${sku.id}`}>Deposit Per Person</Label>
                             <div className="flex gap-2">
@@ -4709,6 +4730,7 @@ function PricingStep({ form }: { form: any }) {
                             </div>
                             <p className="text-xs text-gray-500 mt-1">Fixed dollar amount (not %)</p>
                           </div>
+                          )}
                         </div>
                         
                         <div className="flex justify-between items-center pt-2 border-t text-sm">
@@ -4853,7 +4875,7 @@ function PricingStep({ form }: { form: any }) {
               </div>
             </div>
 
-            {venueDealContext !== "external" && (
+            {venueDealContext !== "external" && venueDealContext !== "open" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {venueCompensationModel === "fixed_fee" && (
                 <div>

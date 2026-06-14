@@ -1701,8 +1701,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!req.body.virtualPlatform || req.body.virtualPlatform.trim() === '') {
           errors.push("Virtual platform is required");
         }
+      } else if (venueType === 'open') {
+        if (!req.body.venueOpenSpaceType || req.body.venueOpenSpaceType.trim() === '') {
+          errors.push("Please select the type of space you are looking for");
+        }
       }
-      
+
       // Pricing validation - conditional logic based on rooms
       const rooms = req.body.rooms || [];
       const hasRooms = rooms.length > 0;
@@ -1714,9 +1718,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           errors.push("All rooms must have a price per person greater than 0");
         }
       } else {
-        // If no rooms, require base price
-        if (!req.body.price || req.body.price === '' || parseFloat(req.body.price) <= 0) {
-          errors.push("Base price is required and must be greater than 0");
+        // Require base price; 0 is allowed for free RSVP events
+        const basePrice = parseFloat(req.body.price ?? req.body.pricePerPerson);
+        if (req.body.price === undefined && req.body.pricePerPerson === undefined) {
+          errors.push("A ticket price is required (use 0 for free RSVP events)");
+        } else if (Number.isNaN(basePrice) || basePrice < 0) {
+          errors.push("Ticket price must be 0 or greater");
         }
       }
       
@@ -4420,8 +4427,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      if (file.mimetype === 'application/pdf') cb(null, true);
-      else cb(new Error('Only PDF files are allowed'));
+      const allowed = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      ];
+      if (allowed.includes(file.mimetype)) cb(null, true);
+      else cb(new Error('Only PDF or Word documents are allowed'));
     },
   });
 

@@ -9704,6 +9704,166 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Open Events Feed (Venue Bidding) ──────────────────────────────────────
+  // Returns all published experiences actively seeking a venue (venueStatus = "venue_pending").
+  // Authenticated venue owners use this to discover creators looking for a space.
+  // Optional ?city= query param narrows results by location substring match.
+  app.get('/api/venue/open-events', isAuthenticated, async (req: any, res) => {
+    try {
+      const city = typeof req.query.city === 'string' ? req.query.city : undefined;
+      const events = await storage.getOpenVenueEvents(city);
+      // Return only the fields the venue dashboard needs — avoids leaking pricing internals
+      const feed = events.map((e: any) => ({
+        id: e.id,
+        title: e.title,
+        location: e.location,
+        startDate: e.startDate,
+        endDate: e.endDate,
+        maxParticipants: e.maxParticipants,
+        venueOpenSpaceType: e.venueOpenSpaceType,
+        venueTargetDeal: e.venueTargetDeal,
+        category: e.category,
+        shortDescription: e.shortDescription,
+        experienceType: e.experienceType,
+        createdAt: e.createdAt,
+      }));
+      res.json(feed);
+    } catch (err: any) {
+      console.error('Error fetching open venue events:', err);
+      res.status(500).json({ message: 'Failed to fetch open events' });
+    }
+  });
+
+  // ── Reverse Handshake: Venue → Creator offers ─────────────────────────────
+
+  // POST /api/venue/open-events/:experienceId/offer
+  // Venue owner submits a "Offer to Host" bid with their Commercial Model terms.
+  // Stored in venueOffers; creator reviews all bids in their dashboard.
+  app.post('/api/venue/open-events/:experienceId/offer', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { experienceId } = req.params;
+      const { venueId, model, terms, message } = req.body;
+
+      if (!venueId || !model) {
+        return res.status(400).json({ message: 'venueId and model are required' });
+      }
+
+      // Verify the experience is actually open for bids
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+      if ((experience as any).venueStatus !== 'venue_pending') {
+        return res.status(400).json({ message: 'This event is not accepting venue bids' });
+      }
+
+      // Verify the venue belongs to this user
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const ownsVenue = userVenues.some((v: any) => v.id === venueId);
+      if (!ownsVenue) return res.status(403).json({ message: 'You do not own that venue' });
+
+      const offer = await storage.createVenueOffer({
+        experienceId,
+        venueId,
+        venueOwnerId: userId,
+        model,
+        terms: terms || {},
+        message,
+      });
+
+      res.status(201).json(offer);
+    } catch (err: any) {
+      console.error('Error creating venue offer:', err);
+      res.status(500).json({ message: 'Failed to submit offer' });
+    }
+  });
+
+  // GET /api/creator/venue-offers
+  // Creator retrieves all incoming venue bids for their open events.
+  app.get('/api/creator/venue-offers', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const offers = await storage.getVenueOffersForCreator(userId);
+      res.json(offers);
+    } catch (err: any) {
+      console.error('Error fetching creator venue offers:', err);
+      res.status(500).json({ message: 'Failed to fetch venue offers' });
+    }
+  });
+
+  // POST /api/creator/venue-offers/:offerId/accept
+  // Creator accepts a venue bid: links the venue to the event and marks it confirmed.
+  // All other pending bids for the same event are automatically declined.
+  app.post('/api/creator/venue-offers/:offerId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { offerId } = req.params;
+
+      const offer = await storage.getVenueOffer(offerId);
+      if (!offer) return res.status(404).json({ message: 'Offer not found' });
+
+      // Verify creator owns the experience
+      const experience = await storage.getExperience(offer.experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+      if ((experience as any).creatorId !== userId) {
+        return res.status(403).json({ message: 'Not your experience' });
+      }
+
+      // Accept this offer: link venue, flip status, copy contract terms
+      await storage.updateExperience(offer.experienceId, {
+        linkedVenueId: offer.venueId,
+        venueStatus: 'venue_confirmed',
+        venueCompensationModel: offer.model,
+        // Copy the offer's financial terms into the experience fields so Stripe split logic has them
+        venueFixedFee: offer.terms?.fixedFee?.toString() ?? '0.00',
+        venuePerHeadAmount: offer.terms?.perHeadAmount?.toString() ?? '0.00',
+        venueMinimumSpend: offer.terms?.minimumSpend?.toString() ?? '0.00',
+        venueRevenueSharePct: offer.terms?.revenueSharePct?.toString() ?? '0.00',
+        venueAccessFee: offer.terms?.accessFee?.toString() ?? '0.00',
+      } as any);
+
+      // Mark this offer accepted
+      const accepted = await storage.updateVenueOfferStatus(offerId, 'accepted');
+
+      // Decline all remaining pending offers for the same experience
+      const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
+      for (const row of otherOffers) {
+        const o = row.offer ?? row;
+        if (o.id !== offerId && o.status === 'pending') {
+          await storage.updateVenueOfferStatus(o.id, 'declined');
+        }
+      }
+
+      res.json({ accepted, message: 'Venue linked successfully' });
+    } catch (err: any) {
+      console.error('Error accepting venue offer:', err);
+      res.status(500).json({ message: 'Failed to accept offer' });
+    }
+  });
+
+  // POST /api/creator/venue-offers/:offerId/decline
+  // Creator declines a specific venue bid.
+  app.post('/api/creator/venue-offers/:offerId/decline', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { offerId } = req.params;
+
+      const offer = await storage.getVenueOffer(offerId);
+      if (!offer) return res.status(404).json({ message: 'Offer not found' });
+
+      const experience = await storage.getExperience(offer.experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+      if ((experience as any).creatorId !== userId) {
+        return res.status(403).json({ message: 'Not your experience' });
+      }
+
+      const declined = await storage.updateVenueOfferStatus(offerId, 'declined');
+      res.json(declined);
+    } catch (err: any) {
+      console.error('Error declining venue offer:', err);
+      res.status(500).json({ message: 'Failed to decline offer' });
+    }
+  });
+
   // Creator Ledger — total sales + My Share based on accepted creatorPct
   app.get('/api/creator/ledger', isAuthenticated, async (req: any, res) => {
     try {

@@ -6,12 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  Plus, 
-  MapPin, 
-  Calendar, 
-  Users, 
+import {
+  Plus,
+  MapPin,
+  Calendar,
+  Users,
   DollarSign,
   Edit,
   Eye,
@@ -19,8 +23,12 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  Building
+  Building,
+  Search,
+  AlertCircle,
+  Send,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -65,12 +73,54 @@ function VenueDashboardContent() {
     retry: false,
   }) as { data: any[], isLoading: boolean };
 
+  // City filter for the Open Events feed
+  const [openEventsCityFilter, setOpenEventsCityFilter] = useState("");
+
   // Task 4 — Venue Ledger (real sales + my share)
   const { data: ledger = { totalSales: 0, myShare: 0, bookingsCount: 0 }, isLoading: ledgerLoading } = useQuery({
     queryKey: ["/api/venue/ledger"],
     enabled: isAuthenticated,
     retry: false,
   }) as { data: any, isLoading: boolean };
+
+  // Open Events feed — experiences actively seeking a venue, optionally filtered by city
+  const { data: openEvents = [], isLoading: openEventsLoading } = useQuery({
+    queryKey: ["/api/venue/open-events", openEventsCityFilter],
+    queryFn: async () => {
+      const url = openEventsCityFilter.trim()
+        ? `/api/venue/open-events?city=${encodeURIComponent(openEventsCityFilter.trim())}`
+        : "/api/venue/open-events";
+      return apiRequest("GET", url);
+    },
+    enabled: isAuthenticated,
+    retry: false,
+  }) as { data: any[], isLoading: boolean };
+
+  // "Offer to Host" modal state
+  const [offerModal, setOfferModal] = useState<{ open: boolean; event: any | null }>({ open: false, event: null });
+  const [offerForm, setOfferForm] = useState({ venueId: "", model: "access_only", fixedFee: "", perHeadAmount: "", minimumSpend: "", revenueSharePct: "", accessFee: "", message: "" });
+
+  const submitOffer = useMutation({
+    mutationFn: async ({ experienceId, venueId, model, terms, message }: any) =>
+      apiRequest("POST", `/api/venue/open-events/${experienceId}/offer`, { venueId, model, terms, message }),
+    onSuccess: () => {
+      setOfferModal({ open: false, event: null });
+      setOfferForm({ venueId: "", model: "access_only", fixedFee: "", perHeadAmount: "", minimumSpend: "", revenueSharePct: "", accessFee: "", message: "" });
+      toast({ title: "Offer Submitted", description: "The creator will see your proposal in their dashboard." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to submit offer", variant: "destructive" }),
+  });
+
+  const handleSubmitOffer = () => {
+    if (!offerModal.event || !offerForm.venueId || !offerForm.model) return;
+    const terms: Record<string, number> = {};
+    if (offerForm.model === "fixed_fee" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
+    if (offerForm.model === "per_head" && offerForm.perHeadAmount) terms.perHeadAmount = parseFloat(offerForm.perHeadAmount);
+    if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
+    if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
+    if (offerForm.model === "access_only" && offerForm.accessFee) terms.accessFee = parseFloat(offerForm.accessFee);
+    submitOffer.mutate({ experienceId: offerModal.event.id, venueId: offerForm.venueId, model: offerForm.model, terms, message: offerForm.message });
+  };
 
   // Accept / Reject offer mutations
   const acceptOffer = useMutation({
@@ -282,10 +332,172 @@ function VenueDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="open-events" className="relative">
+              Open Events
+              {openEvents.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
+                  {openEvents.length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="bookings">Bookings</TabsTrigger>
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
+
+          {/* ── Open Events Feed Tab ── */}
+          {/* Creators who published with venueType="open" appear here so venue owners can reach out */}
+          <TabsContent value="open-events" className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <h2 className="text-xl font-semibold">Open Events — Seeking a Venue</h2>
+              {/* City filter: narrows results by the event's location field */}
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <Input
+                  className="pl-9"
+                  placeholder="Filter by city…"
+                  value={openEventsCityFilter}
+                  onChange={(e) => setOpenEventsCityFilter(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-500">
+              These creators have published their event but haven't confirmed a venue yet.
+              If your space is a good fit, express your interest and they'll receive your venue profile.
+            </p>
+
+            {openEventsLoading ? (
+              <div className="text-center py-8 text-gray-500">
+                <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3" />
+                Loading open events…
+              </div>
+            ) : openEvents.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No open events found</p>
+                <p className="text-sm mt-1">
+                  {openEventsCityFilter.trim()
+                    ? `No creators are looking for a venue in "${openEventsCityFilter}" right now. Try clearing the filter.`
+                    : "No creators are currently seeking a venue. Check back soon."}
+                </p>
+                {openEventsCityFilter.trim() && (
+                  <button
+                    className="mt-3 text-sm text-blue-600 underline"
+                    onClick={() => setOpenEventsCityFilter("")}
+                  >
+                    Clear filter
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(() => {
+                  // Label maps defined inside render so they're co-located with the card UI
+                  const spaceTypeLabels: Record<string, string> = {
+                    coffee_shop: "Coffee Shop",
+                    restaurant: "Restaurant / Bar",
+                    fitness_studio: "Fitness Studio",
+                    yoga_studio: "Yoga Studio",
+                    coworking: "Co-working Space",
+                    retail_gallery: "Retail / Gallery",
+                    outdoor_park: "Outdoor / Park",
+                    private_villa: "Private Villa",
+                    retreat_center: "Retreat Center",
+                    hotel_conference: "Hotel / Conference Room",
+                    other: "Other",
+                  };
+                  const targetDealLabels: Record<string, string> = {
+                    access_only: "Access Only / Pay-at-Counter",
+                    fixed_fee: "Flat Fee",
+                    per_head: "Per Head",
+                    minimum_spend: "Minimum Spend",
+                    revenue_share: "Revenue Share",
+                  };
+                  return openEvents.map((event: any) => (
+                    <Card key={event.id} className="border-blue-200 dark:border-blue-800">
+                      <CardContent className="p-5">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                          <div className="flex-1 space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="font-semibold text-lg">{event.title}</h3>
+                              <Badge className="bg-blue-100 text-blue-800 border-blue-300">
+                                <AlertCircle className="w-3 h-3 mr-1" />Seeking Venue
+                              </Badge>
+                              {event.venueOpenSpaceType && (
+                                <Badge variant="outline" className="text-gray-600">
+                                  {spaceTypeLabels[event.venueOpenSpaceType] ?? event.venueOpenSpaceType}
+                                </Badge>
+                              )}
+                            </div>
+
+                            {event.shortDescription && (
+                              <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+                                {event.shortDescription}
+                              </p>
+                            )}
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                              <div>
+                                <p className="text-xs text-gray-500">Location</p>
+                                <p className="font-medium flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-gray-400" />
+                                  {event.location || "—"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Start Date</p>
+                                <p className="font-medium">
+                                  {event.startDate ? new Date(event.startDate).toLocaleDateString() : "—"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">End Date</p>
+                                <p className="font-medium">
+                                  {event.endDate ? new Date(event.endDate).toLocaleDateString() : "—"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Event Size</p>
+                                <p className="font-medium flex items-center gap-1">
+                                  <Users className="w-3 h-3 text-gray-400" />
+                                  {event.maxParticipants ? `${event.maxParticipants} people` : "—"}
+                                </p>
+                              </div>
+                            </div>
+
+                            {event.venueTargetDeal && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <span className="text-gray-500">Preferred deal:</span>
+                                <Badge className="bg-green-100 text-green-800 border-green-300">
+                                  {targetDealLabels[event.venueTargetDeal] ?? event.venueTargetDeal}
+                                </Badge>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Offer to Host — opens modal for venue owner to submit Commercial Model */}
+                          <div className="shrink-0">
+                            <Button
+                              className="bg-blue-600 hover:bg-blue-700 text-white w-full md:w-auto"
+                              onClick={() => {
+                                setOfferForm(f => ({ ...f, venueId: venues[0]?.id ?? "" }));
+                                setOfferModal({ open: true, event });
+                              }}
+                              disabled={venues.length === 0}
+                            >
+                              <Send className="w-4 h-4 mr-2" />
+                              Offer to Host
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ));
+                })()}
+              </div>
+            )}
+          </TabsContent>
 
           {/* ── Pending Offers Tab ── */}
           <TabsContent value="offers" className="space-y-4">
@@ -683,6 +895,102 @@ function VenueDashboardContent() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* ── Offer to Host Modal ── */}
+      <Dialog open={offerModal.open} onOpenChange={(open) => setOfferModal(m => ({ ...m, open }))}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Offer to Host: {offerModal.event?.title}</DialogTitle>
+            <DialogDescription>
+              Submit your Commercial Model to the creator. They'll review all offers and accept one.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Venue selector — in case the owner has multiple venues */}
+            {venues.length > 1 && (
+              <div>
+                <Label>Which venue are you offering?</Label>
+                <Select value={offerForm.venueId} onValueChange={(v) => setOfferForm(f => ({ ...f, venueId: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select venue" /></SelectTrigger>
+                  <SelectContent>
+                    {venues.map((v: any) => (
+                      <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {/* Commercial Model selector */}
+            <div>
+              <Label>Commercial Model</Label>
+              <Select value={offerForm.model} onValueChange={(v) => setOfferForm(f => ({ ...f, model: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="access_only">Access Only / Pay-at-Counter</SelectItem>
+                  <SelectItem value="fixed_fee">Flat Fee</SelectItem>
+                  <SelectItem value="per_head">Per Head</SelectItem>
+                  <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
+                  <SelectItem value="revenue_share">Revenue Share (%)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Amount field — changes based on selected model */}
+            {offerForm.model === "fixed_fee" && (
+              <div>
+                <Label>Flat Fee (€)</Label>
+                <Input type="number" min="0" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "per_head" && (
+              <div>
+                <Label>Per Head Amount (€)</Label>
+                <Input type="number" min="0" placeholder="e.g. 10" value={offerForm.perHeadAmount} onChange={e => setOfferForm(f => ({ ...f, perHeadAmount: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "minimum_spend" && (
+              <div>
+                <Label>Minimum Spend (€)</Label>
+                <Input type="number" min="0" placeholder="e.g. 200" value={offerForm.minimumSpend} onChange={e => setOfferForm(f => ({ ...f, minimumSpend: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "revenue_share" && (
+              <div>
+                <Label>Revenue Share (%)</Label>
+                <Input type="number" min="0" max="100" placeholder="e.g. 20" value={offerForm.revenueSharePct} onChange={e => setOfferForm(f => ({ ...f, revenueSharePct: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "access_only" && (
+              <div>
+                <Label>Access Fee (€, optional — 0 for fully free access)</Label>
+                <Input type="number" min="0" placeholder="e.g. 0" value={offerForm.accessFee} onChange={e => setOfferForm(f => ({ ...f, accessFee: e.target.value }))} />
+              </div>
+            )}
+
+            {/* Optional message */}
+            <div>
+              <Label>Message to Creator (optional)</Label>
+              <Textarea
+                placeholder="Introduce your space and why it's a great fit for this event…"
+                rows={3}
+                value={offerForm.message}
+                onChange={e => setOfferForm(f => ({ ...f, message: e.target.value }))}
+              />
+            </div>
+
+            <Button
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSubmitOffer}
+              disabled={submitOffer.isPending || !offerForm.venueId || !offerForm.model}
+            >
+              <Send className="w-4 h-4 mr-2" />
+              {submitOffer.isPending ? "Submitting…" : "Submit Offer to Creator"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

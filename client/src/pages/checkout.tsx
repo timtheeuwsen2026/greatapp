@@ -479,11 +479,8 @@ export default function Checkout() {
     }
   }, [experience, experienceId, freeRsvpInfo?.ticketSkuId, freeRsvpSubmitting, toast]);
 
-  useEffect(() => {
-    if (freeRsvpInfo && isAuthenticated && experience && !freeRsvpError) {
-      completeFreeRsvp();
-    }
-  }, [freeRsvpInfo, isAuthenticated, experience, freeRsvpError, completeFreeRsvp]);
+  // Free RSVP: intentionally NOT auto-submitted so the user can see the bypass screen
+  // and consciously click "Confirm RSVP" before we create the booking.
 
   if (authLoading || experienceLoading) {
     return (
@@ -565,9 +562,9 @@ export default function Checkout() {
           <Card>
             <CardContent className="py-10 text-center">
               <CheckCircle className="mx-auto mb-4 h-10 w-10 text-green-600" />
-              <h2 className="mb-2 text-xl font-semibold text-gray-900">Confirming Free RSVP</h2>
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">Free Event — No Payment Required</h2>
               <p className="mb-6 text-sm text-gray-600">
-                This ticket is free, so Stripe checkout is skipped. We are saving your RSVP and unlocking the community chat.
+                This ticket is €0.00, so Stripe checkout is bypassed entirely. Click below to confirm your RSVP and unlock the community chat.
               </p>
               {freeRsvpError && (
                 <p className="mb-4 text-sm text-red-600">{freeRsvpError}</p>

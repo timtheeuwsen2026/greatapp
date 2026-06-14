@@ -8,12 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { getCoverImage, normalizeImageUrl } from "@/lib/utils";
-import { 
-  Plus, 
-  DollarSign, 
-  Users, 
-  Calendar, 
-  TrendingUp, 
+import {
+  Plus,
+  DollarSign,
+  Users,
+  Calendar,
+  TrendingUp,
   Eye,
   Edit,
   Trash2,
@@ -21,7 +21,8 @@ import {
   CheckCircle,
   XCircle,
   Building,
-  MapPin
+  MapPin,
+  AlertCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -297,6 +298,32 @@ function CreatorDashboardContent() {
     retry: false,
   });
 
+  // Incoming venue bids for open events (Reverse Handshake)
+  const { data: venueOffers = [], isLoading: venueOffersLoading } = useQuery({
+    queryKey: ["/api/creator/venue-offers"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any[], isLoading: boolean };
+
+  const acceptVenueOffer = useMutation({
+    mutationFn: (offerId: string) => apiRequest("POST", `/api/creator/venue-offers/${offerId}/accept`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
+      toast({ title: "Venue Linked!", description: "The venue has been confirmed for your event." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
+  });
+
+  const declineVenueOffer = useMutation({
+    mutationFn: (offerId: string) => apiRequest("POST", `/api/creator/venue-offers/${offerId}/decline`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
+      toast({ title: "Offer Declined", description: "The venue owner has been notified." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to decline offer", variant: "destructive" }),
+  });
+
   // Delete draft mutation
   const deleteDraft = useMutation({
     mutationFn: async (draftId: string) => {
@@ -556,6 +583,14 @@ function CreatorDashboardContent() {
           <TabsList>
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
             <TabsTrigger value="experiences">My Experiences</TabsTrigger>
+            <TabsTrigger value="venue-offers" className="relative">
+              Venue Offers
+              {venueOffers.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
+                  {venueOffers.length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="earnings">Earnings</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
@@ -1030,6 +1065,102 @@ function CreatorDashboardContent() {
                   </Card>
                 ))}
               </div>
+            )}
+          </TabsContent>
+
+          {/* ── Venue Offers Tab — Incoming Reverse Handshake bids ── */}
+          <TabsContent value="venue-offers" className="space-y-4">
+            <h2 className="text-xl font-semibold">Incoming Venue Offers</h2>
+            <p className="text-sm text-gray-500">
+              Venue owners have submitted proposals for your open events. Review their Commercial Model and accept the one that works for you.
+              Accepting an offer links the venue to your event and activates the Stripe payment split.
+            </p>
+
+            {venueOffersLoading ? (
+              <div className="text-center py-8 text-gray-500">
+                <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3" />
+                Loading offers…
+              </div>
+            ) : venueOffers.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No venue offers yet</p>
+                <p className="text-sm mt-1">Venue owners who are interested in hosting your open events will appear here.</p>
+              </div>
+            ) : (
+              venueOffers.map((row: any) => {
+                const offer = row.offer ?? row;
+                const venue = row.venue ?? {};
+                const experience = row.experience ?? {};
+                const modelLabels: Record<string, string> = {
+                  access_only: "Access Only / Pay-at-Counter",
+                  fixed_fee: "Flat Fee",
+                  per_head: "Per Head",
+                  minimum_spend: "Minimum Spend",
+                  revenue_share: "Revenue Share (%)",
+                };
+                const terms = offer.terms ?? {};
+                return (
+                  <Card key={offer.id} className="border-blue-200 dark:border-blue-800">
+                    <CardContent className="p-5">
+                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                        <div className="flex-1 space-y-3">
+                          {/* Experience + venue headline */}
+                          <div>
+                            <p className="text-xs text-gray-500 mb-1">For event: <strong>{experience.title || offer.experienceId}</strong></p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-semibold text-lg">{venue.name || "Venue"}</h3>
+                              <Badge className="bg-blue-100 text-blue-800 border-blue-300">
+                                <AlertCircle className="w-3 h-3 mr-1" />Incoming Offer
+                              </Badge>
+                            </div>
+                            {venue.city && (
+                              <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                                <MapPin className="w-3 h-3" />{venue.city}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Commercial terms */}
+                          <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border text-sm space-y-1">
+                            <p className="text-xs font-semibold text-gray-600 mb-1">Proposed Commercial Model</p>
+                            <p><span className="text-gray-500">Model:</span> <strong>{modelLabels[offer.model] ?? offer.model}</strong></p>
+                            {offer.model === "fixed_fee" && <p><span className="text-gray-500">Flat Fee:</span> <strong>€{terms.fixedFee ?? 0}</strong></p>}
+                            {offer.model === "per_head" && <p><span className="text-gray-500">Per Head:</span> <strong>€{terms.perHeadAmount ?? 0}</strong></p>}
+                            {offer.model === "minimum_spend" && <p><span className="text-gray-500">Min. Spend:</span> <strong>€{terms.minimumSpend ?? 0}</strong></p>}
+                            {offer.model === "revenue_share" && <p><span className="text-gray-500">Revenue Share:</span> <strong>{terms.revenueSharePct ?? 0}%</strong></p>}
+                            {offer.model === "access_only" && <p><span className="text-gray-500">Access Fee:</span> <strong>€{terms.accessFee ?? 0}</strong></p>}
+                          </div>
+
+                          {/* Optional message from venue owner */}
+                          {offer.message && (
+                            <p className="text-sm text-gray-600 italic border-l-2 border-blue-300 pl-3">"{offer.message}"</p>
+                          )}
+                        </div>
+
+                        {/* Accept / Decline */}
+                        <div className="flex md:flex-col gap-2 shrink-0">
+                          <Button
+                            className="bg-green-600 hover:bg-green-700 text-white flex-1 md:flex-none"
+                            onClick={() => acceptVenueOffer.mutate(offer.id)}
+                            disabled={acceptVenueOffer.isPending}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-1" />Accept
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="border-red-300 text-red-600 hover:bg-red-50 flex-1 md:flex-none"
+                            onClick={() => declineVenueOffer.mutate(offer.id)}
+                            disabled={declineVenueOffer.isPending}
+                          >
+                            <XCircle className="w-4 h-4 mr-1" />Decline
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
             )}
           </TabsContent>
 

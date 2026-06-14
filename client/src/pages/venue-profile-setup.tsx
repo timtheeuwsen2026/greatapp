@@ -2415,36 +2415,7 @@ export default function VenueProfileSetup() {
                       )}
                     </Card>
 
-                    {/* Section 3: Platform Commission */}
-                    <Card className="p-6">
-                      <h3 className="text-lg font-semibold mb-4">Platform Commission</h3>
-                      <FormField
-                        control={form.control}
-                        name="commissionPercent"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Commission Percentage (%)</FormLabel>
-                            <FormDescription>
-                              Percentage of booking revenue that goes to the platform. The remainder goes to you as the venue provider.
-                            </FormDescription>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                min="0"
-                                max="100"
-                                step="0.01"
-                                placeholder="e.g., 15"
-                                {...field}
-                                data-testid="input-commission-percent"
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </Card>
-
-                    {/* Section 4: Pricing Notes */}
+                    {/* Section 3: Pricing Notes */}
                     <Card className="p-6">
                       <h3 className="text-lg font-semibold mb-4">Pricing Notes</h3>
                       <FormField

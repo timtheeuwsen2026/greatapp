@@ -1459,6 +1459,41 @@ export const venueContracts = pgTable("venue_contracts", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Venue Offers table — Reverse Handshake bids.
+// When a creator publishes an open event (venueStatus="venue_pending"), venue owners
+// can submit an "Offer to Host" here instead of waiting for the creator to approach them.
+// The creator reviews all offers and accepts one, which triggers linking in the experiences table.
+export const venueOffers = pgTable("venue_offers", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id)
+    .notNull(),
+  venueId: varchar("venue_id")
+    .references(() => venues.id)
+    .notNull(),
+  // venueOwnerId is the user who submitted the offer — stored for auth checks on accept/decline
+  venueOwnerId: varchar("venue_owner_id")
+    .references(() => users.id)
+    .notNull(),
+  status: varchar("status", { length: 20 }).default("pending"), // "pending" | "accepted" | "declined"
+  model: varchar("model", { length: 50 }).notNull(), // same values as venueContracts.model
+  terms: jsonb("terms")
+    .$type<{
+      fixedFee?: number;
+      perHeadAmount?: number;
+      minimumSpend?: number;
+      revenueSharePct?: number;
+      accessFee?: number;
+      currency?: string;
+    }>()
+    .default({}),
+  message: text("message"), // optional note from venue owner to creator
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Amenities table - facilities and features (Wi-Fi, sauna, pool, etc.)
 export const amenities = pgTable("amenities", {
   id: varchar("id")

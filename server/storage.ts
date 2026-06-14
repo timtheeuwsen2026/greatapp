@@ -12,6 +12,7 @@ import {
   participantRoleAssignments,
   experienceVenues,
   venueContracts,
+  venueOffers,
   experienceServices,
   experienceAmenities,
   amenities,
@@ -110,6 +111,7 @@ export interface IStorage {
   getExperienceBySlug(slug: string): Promise<Experience | undefined>;
   getAllExperiences(): Promise<Experience[]>;
   getExperiences(options?: { category?: string; status?: string; limit?: number }): Promise<Experience[]>;
+  getOpenVenueEvents(city?: string): Promise<Experience[]>;
   getExperiencesWithParticipantPreview(options?: { category?: string; status?: string; limit?: number }): Promise<Array<Experience & {
     participantsPreview: Array<{
       userId: string;
@@ -253,6 +255,13 @@ export interface IStorage {
   getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
   acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract>;
   declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract>;
+
+  // Venue Offers — Reverse Handshake bids (venue owner → creator)
+  createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any>;
+  getVenueOffersForExperience(experienceId: string): Promise<any[]>;
+  getVenueOffersForCreator(creatorId: string): Promise<any[]>;
+  getVenueOffer(offerId: string): Promise<any | undefined>;
+  updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any>;
   
   // Availability checking operations
   getAvailableVenues(options: { startDate?: string; endDate?: string; capacity?: number; venueType?: string }): Promise<Venue[]>;
@@ -680,6 +689,82 @@ export class DatabaseStorage implements IStorage {
       .where(inArray((experiences as any).linkedVenueId, venueIds));
     if (status) return rows.filter((e: any) => e.status === status);
     return rows;
+  }
+
+  async getOpenVenueEvents(city?: string): Promise<Experience[]> {
+    // Returns published/approved experiences that are actively seeking a venue
+    // (venueStatus = "venue_pending"). Optionally filtered by city substring match.
+    const conditions = [
+      eq((experiences as any).venueStatus, "venue_pending"),
+    ];
+    if (city && city.trim()) {
+      conditions.push(
+        sql`lower(${(experiences as any).location}) like ${'%' + city.trim().toLowerCase() + '%'}` as any
+      );
+    }
+    return await db.select().from(experiences).where(and(...conditions));
+  }
+
+  // ── Venue Offers (Reverse Handshake) ────────────────────────────────────────
+
+  async createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any> {
+    const [offer] = await db.insert(venueOffers).values({
+      experienceId: data.experienceId,
+      venueId: data.venueId,
+      venueOwnerId: data.venueOwnerId,
+      model: data.model,
+      terms: data.terms as any,
+      message: data.message || null,
+      status: "pending",
+    }).returning();
+    return offer;
+  }
+
+  async getVenueOffersForExperience(experienceId: string): Promise<any[]> {
+    return await db.select({
+      offer: venueOffers,
+      venue: venues,
+    })
+      .from(venueOffers)
+      .leftJoin(venues, eq(venueOffers.venueId, venues.id))
+      .where(eq(venueOffers.experienceId, experienceId))
+      .orderBy(desc((venueOffers as any).createdAt));
+  }
+
+  async getVenueOffersForCreator(creatorId: string): Promise<any[]> {
+    // Returns all pending offers across all open events the creator owns
+    const creatorExperiences = await this.getExperiencesByCreator(creatorId);
+    const openIds = creatorExperiences
+      .filter((e: any) => e.venueStatus === "venue_pending")
+      .map((e: any) => e.id);
+    if (!openIds.length) return [];
+    const rows = await db.select({
+      offer: venueOffers,
+      venue: venues,
+      experience: experiences,
+    })
+      .from(venueOffers)
+      .leftJoin(venues, eq(venueOffers.venueId, venues.id))
+      .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+      .where(and(
+        inArray(venueOffers.experienceId, openIds),
+        eq((venueOffers as any).status, "pending"),
+      ))
+      .orderBy(desc((venueOffers as any).createdAt));
+    return rows;
+  }
+
+  async getVenueOffer(offerId: string): Promise<any | undefined> {
+    const rows = await db.select().from(venueOffers).where(eq(venueOffers.id, offerId));
+    return rows[0];
+  }
+
+  async updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any> {
+    const [updated] = await db.update(venueOffers)
+      .set({ status, updatedAt: new Date() } as any)
+      .where(eq(venueOffers.id, offerId))
+      .returning();
+    return updated;
   }
 
   async getBookingsByVenueIds(venueIds: string[]): Promise<any[]> {

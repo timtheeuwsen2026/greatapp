@@ -50,7 +50,8 @@ import {
   Shield,
   Briefcase,
   Ticket,
-  Rocket
+  Rocket,
+  FileText
 } from "lucide-react";
 
 type CreatorTrustProfile = {
@@ -1161,6 +1162,60 @@ export default function ExperienceDetails() {
                       </div>
                     ))}
                   </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Terms & Conditions */}
+            {(experience.termsAndConditions || experience.termsDocumentUrl) && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <FileText className="h-5 w-5 mr-2 text-primary" />
+                    Terms &amp; Conditions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {experience.termsAndConditions && (
+                    <p className="whitespace-pre-line text-sm text-gray-700">
+                      {experience.termsAndConditions}
+                    </p>
+                  )}
+                  {experience.termsDocumentUrl && (
+                    <div className="space-y-3">
+                      <a
+                        href={experience.termsDocumentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                        data-testid="link-terms-document"
+                      >
+                        <FileText className="h-4 w-4" />
+                        Open Terms &amp; Conditions document
+                      </a>
+                      {/\.pdf(\?|$)/i.test(experience.termsDocumentUrl) && (
+                        <object
+                          data={experience.termsDocumentUrl}
+                          type="application/pdf"
+                          className="w-full h-96 rounded-lg border border-gray-200"
+                          aria-label="Terms and conditions document"
+                        >
+                          <div className="p-4 text-sm text-gray-600">
+                            Preview unavailable.{" "}
+                            <a
+                              href={experience.termsDocumentUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline"
+                            >
+                              Open the document
+                            </a>{" "}
+                            instead.
+                          </div>
+                        </object>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}

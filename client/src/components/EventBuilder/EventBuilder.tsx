@@ -52,6 +52,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { SharedPhotoUpload, PhotoPreview } from "@/components/SharedPhotoUpload";
+import { getAccessToken } from "@/hooks/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
@@ -5405,6 +5406,7 @@ function PricingStep({ form }: { form: any }) {
 
 function TermsStep({ form }: { form: any }) {
   const formData = form.watch();
+  const { toast } = useToast();
 
   // Currency symbol helper
   // DATA CONTRACT: Default to EUR for display consistency
@@ -5534,96 +5536,147 @@ Example sections:
             <span className="w-full border-t border-gray-300 dark:border-gray-600" />
           </div>
           <div className="relative flex justify-center text-sm">
-            <span className="bg-background px-2 text-gray-500">OR upload a PDF document</span>
+            <span className="bg-background px-2 text-gray-500">OR upload a PDF / Word document</span>
           </div>
         </div>
-        
+
         {/* PDF Upload */}
         <FormField
           control={form.control}
           name="termsDocumentUrl"
-          render={({ field }) => (
+          render={({ field }) => {
+            const isPdf = !!field.value && /\.pdf(\?|$)/i.test(field.value);
+            return (
             <FormItem>
               <FormControl>
                 <div className="space-y-3">
                   {field.value ? (
-                    <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <FileText className="w-8 h-8 text-green-600 dark:text-green-400" />
-                        <div>
-                          <p className="font-medium text-green-800 dark:text-green-200">Terms Document Uploaded</p>
-                          <a 
-                            href={field.value} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-sm text-green-600 dark:text-green-400 hover:underline"
-                          >
-                            View PDF Document
-                          </a>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <FileText className="w-8 h-8 text-green-600 dark:text-green-400" />
+                          <div>
+                            <p className="font-medium text-green-800 dark:text-green-200">Terms Document Uploaded</p>
+                            <a
+                              href={field.value}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-green-600 dark:text-green-400 hover:underline"
+                            >
+                              Open document in new tab
+                            </a>
+                          </div>
                         </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => field.onChange('')}
+                          className="text-red-600 hover:text-red-700"
+                          data-testid="button-remove-terms-pdf"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => field.onChange('')}
-                        className="text-red-600 hover:text-red-700"
-                        data-testid="button-remove-terms-pdf"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      {/* Inline preview so the creator can see the uploaded document */}
+                      {isPdf ? (
+                        <object
+                          data={field.value}
+                          type="application/pdf"
+                          className="w-full h-96 rounded-lg border border-gray-200 dark:border-gray-700"
+                          aria-label="Terms document preview"
+                        >
+                          <div className="p-4 text-sm text-gray-600 dark:text-gray-400">
+                            Preview unavailable.{" "}
+                            <a href={field.value} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                              Open the document
+                            </a>{" "}
+                            instead.
+                          </div>
+                        </object>
+                      ) : (
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Word documents can&apos;t be previewed inline — use the link above to open it.
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-primary/50 transition-colors">
                       <input
                         type="file"
-                        accept=".pdf,application/pdf"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         className="hidden"
                         id="experience-terms-pdf-upload"
                         onChange={async (e) => {
                           const file = e.target.files?.[0];
                           if (!file) return;
-                          
-                          if (file.size > 10 * 1024 * 1024) {
+
+                          const allowedExts = ['.pdf', '.doc', '.docx'];
+                          const ext = '.' + (file.name.split('.').pop()?.toLowerCase() || '');
+                          if (!allowedExts.includes(ext)) {
+                            toast({
+                              title: 'Invalid file type',
+                              description: 'Please upload a PDF or Word document (.pdf, .doc, .docx).',
+                              variant: 'destructive',
+                            });
+                            e.target.value = '';
                             return;
                           }
-                          
-                          try {
-                            const response = await apiRequest('POST', '/api/objects/upload');
-                            if (!response.ok) throw new Error('Failed to get upload URL');
-                            const { uploadURL } = await response.json();
-                            
-                            const uploadResponse = await fetch(uploadURL, {
-                              method: 'PUT',
-                              body: file,
-                              headers: {
-                                'Content-Type': 'application/pdf'
-                              }
+
+                          if (file.size > 10 * 1024 * 1024) {
+                            toast({
+                              title: 'File too large',
+                              description: 'Document must be smaller than 10MB.',
+                              variant: 'destructive',
                             });
-                            
+                            e.target.value = '';
+                            return;
+                          }
+
+                          try {
+                            const formData = new FormData();
+                            formData.append('file', file);
+                            const token = getAccessToken();
+                            const uploadResponse = await fetch('/api/uploads/documents', {
+                              method: 'POST',
+                              headers: token ? { Authorization: `Bearer ${token}` } : {},
+                              body: formData,
+                            });
+
                             if (!uploadResponse.ok) {
                               throw new Error('Upload failed');
                             }
-                            
-                            const publicUrl = uploadURL.split('?')[0];
+
+                            const { url: publicUrl } = await uploadResponse.json();
                             field.onChange(publicUrl);
+
+                            toast({
+                              title: 'Document uploaded',
+                              description: 'Your Terms & Conditions document has been uploaded.',
+                              duration: 2000,
+                            });
                           } catch (error) {
-                            console.error('PDF upload error:', error);
+                            console.error('Terms document upload error:', error);
+                            toast({
+                              title: 'Upload failed',
+                              description: 'Failed to upload document. Please try again.',
+                              variant: 'destructive',
+                            });
                           }
                           e.target.value = '';
                         }}
                         data-testid="input-experience-terms-pdf-upload"
                       />
-                      <label 
-                        htmlFor="experience-terms-pdf-upload" 
+                      <label
+                        htmlFor="experience-terms-pdf-upload"
                         className="cursor-pointer flex flex-col items-center gap-2"
                       >
                         <Upload className="h-8 w-8 text-gray-400" />
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Click to upload PDF
+                          Click to upload PDF or Word document
                         </span>
                         <span className="text-xs text-gray-500">
-                          PDF files only, max 10MB
+                          PDF or Word document, max 10MB
                         </span>
                       </label>
                     </div>
@@ -5632,7 +5685,8 @@ Example sections:
               </FormControl>
               <FormMessage />
             </FormItem>
-          )}
+            );
+          }}
         />
       </div>
 

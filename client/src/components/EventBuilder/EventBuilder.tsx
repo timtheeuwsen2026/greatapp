@@ -1127,12 +1127,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       let method;
       
       if (currentDraftId) {
-        // Update existing draft
-        endpoint = `/api/events/updateDraft/${currentDraftId}`;
+        endpoint = `/api/experience-drafts/${currentDraftId}`;
         method = "PUT";
       } else {
-        // Create new draft
-        endpoint = "/api/events/saveDraft";
+        endpoint = "/api/experience-drafts";
         method = "POST";
       }
       
@@ -1141,27 +1139,21 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
       if (response.ok) {
         const result = await response.json();
-        
-        if (result.success) {
-          setLastSaved(new Date());
-          setSaveError(null); // Clear any previous errors
-          
-          // If this was a new draft, capture the ID
-          if (!currentDraftId && result.draft?.id) {
-            setCurrentDraftId(result.draft.id);
-            setLocation(`/event-builder/${result.draft.id}`);
-          }
-          
-          toast({
-            title: "Draft saved",
-            description: "Your experience draft has been saved successfully.",
-            duration: 2000,
-          });
-        } else {
-          const errorMessage = result.message || 'Failed to save draft';
-          setSaveError(errorMessage);
-          throw new Error(errorMessage);
+        setLastSaved(new Date());
+        setSaveError(null);
+
+        // /api/experience-drafts returns the draft directly (not wrapped in { success, draft })
+        const draftId = result.id ?? result.draft?.id;
+        if (!currentDraftId && draftId) {
+          setCurrentDraftId(draftId);
+          setLocation(`/event-builder/${draftId}`);
         }
+
+        toast({
+          title: "Draft saved",
+          description: "Your experience draft has been saved successfully.",
+          duration: 2000,
+        });
       } else {
         const errorData = await response.json().catch(() => ({}));
         const errorMessage = errorData.message || 'Failed to save draft';

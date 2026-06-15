@@ -3226,9 +3226,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message,
         mvgResult: mvgCheckResult
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating booking:", error);
-      res.status(500).json({ message: "Failed to create booking" });
+      res.status(500).json({ message: "Failed to create booking", detail: error?.message });
     }
   });
 

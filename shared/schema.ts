@@ -2872,6 +2872,14 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     creatorPct: z.coerce.number().min(0).max(100).optional(),
     platformPct: z.coerce.number().min(0).max(100).optional(),
 
+    // Pricing decimal fields — DB stores as decimal strings; accept number or string from client
+    pricePerPerson: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venueFixedFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venuePerHeadAmount: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venueMinimumSpend: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venueRevenueSharePct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venueAccessFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+
     // Influencer/promoter commission — DB stores as decimal string; accept number or string
     influencerCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     promoterCommission: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),

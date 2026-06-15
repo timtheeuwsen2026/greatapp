@@ -2426,8 +2426,17 @@ function DatesStep({ form }: { form: any }) {
   const endDate = form.watch('endDate');
   const startTime = form.watch('startTime');
   const endTime = form.watch('endTime');
+  const maxParticipants = form.watch('maxParticipants');
+  const standingCapacity = form.watch('standingCapacity');
+  const seatedCapacity = form.watch('seatedCapacity');
   const eventType = form.watch('type');
   const isSingleDayEvent = eventType === 'one-day';
+
+  // Inline validation for single-day events — surface required-field issues right
+  // at the input instead of only at publish time.
+  const startTimeMissing = isSingleDayEvent && (!startTime || String(startTime).trim() === '');
+  const endTimeMissing = isSingleDayEvent && (!endTime || String(endTime).trim() === '');
+  const capacityMissing = isSingleDayEvent && !standingCapacity && !seatedCapacity && !maxParticipants;
 
   return (
     <div className="space-y-8">
@@ -2533,9 +2542,11 @@ function DatesStep({ form }: { form: any }) {
       <div className="space-y-6">
         <h3 className="text-lg font-semibold">Experience Times</h3>
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          Set the start and end times for your experience (optional for multi-day events)
+          {isSingleDayEvent
+            ? "Set the start and end times for your event (required)"
+            : "Set the start and end times for your experience (optional for multi-day events)"}
         </p>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Start Time */}
           <FormField
@@ -2543,19 +2554,26 @@ function DatesStep({ form }: { form: any }) {
             name="startTime"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Start Time</FormLabel>
+                <FormLabel>{isSingleDayEvent ? "Start Time *" : "Start Time"}</FormLabel>
                 <FormControl>
                   <Input
                     type="time"
                     {...field}
                     value={field.value || ''}
-                    className="w-full"
+                    className={`w-full ${startTimeMissing ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    aria-invalid={startTimeMissing}
                     data-testid="input-start-time"
                   />
                 </FormControl>
-                <FormDescription>
-                  What time does your experience begin?
-                </FormDescription>
+                {startTimeMissing ? (
+                  <p className="text-sm font-medium text-destructive">
+                    Please add a start time for your single-day event
+                  </p>
+                ) : (
+                  <FormDescription>
+                    What time does your experience begin?
+                  </FormDescription>
+                )}
                 <FormMessage />
               </FormItem>
             )}
@@ -2567,19 +2585,26 @@ function DatesStep({ form }: { form: any }) {
             name="endTime"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>End Time</FormLabel>
+                <FormLabel>{isSingleDayEvent ? "End Time *" : "End Time"}</FormLabel>
                 <FormControl>
                   <Input
                     type="time"
                     {...field}
                     value={field.value || ''}
-                    className="w-full"
+                    className={`w-full ${endTimeMissing ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    aria-invalid={endTimeMissing}
                     data-testid="input-end-time"
                   />
                 </FormControl>
-                <FormDescription>
-                  What time does your experience end?
-                </FormDescription>
+                {endTimeMissing ? (
+                  <p className="text-sm font-medium text-destructive">
+                    Please add an end time for your single-day event
+                  </p>
+                ) : (
+                  <FormDescription>
+                    What time does your experience end?
+                  </FormDescription>
+                )}
                 <FormMessage />
               </FormItem>
             )}
@@ -2605,12 +2630,20 @@ function DatesStep({ form }: { form: any }) {
                     field.onChange(value);
                     form.setValue('standingCapacity', value ?? null, { shouldDirty: true });
                   }}
+                  className={capacityMissing ? 'border-destructive focus-visible:ring-destructive' : ''}
+                  aria-invalid={capacityMissing}
                   data-testid="input-event-standing-capacity"
                 />
               </FormControl>
-              <FormDescription>
-                Total number of people who can attend this single-day event.
-              </FormDescription>
+              {capacityMissing ? (
+                <p className="text-sm font-medium text-destructive">
+                  Please add capacity for your single-day event
+                </p>
+              ) : (
+                <FormDescription>
+                  Total number of people who can attend this single-day event.
+                </FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}

@@ -2389,6 +2389,7 @@ function MediaStep({ form, isSaving, setIsSaving, autoSaveMutation }: { form: an
               maxFileSize={10485760} // 10MB
               multiple={false}
               className="min-h-[120px]"
+              showGuidelines
               data-testid="uploader-gallery-image"
             >
               <div className="p-6 text-center">
@@ -2409,20 +2410,6 @@ function MediaStep({ form, isSaving, setIsSaving, autoSaveMutation }: { form: an
           </FormItem>
         )}
       />
-
-      {/* Upload Guidelines */}
-      <div className="bg-blue-50 dark:bg-blue-950 p-4 rounded-lg">
-        <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
-          Photo Guidelines
-        </h4>
-        <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-          <li>• Use high-resolution images (at least 1200px wide)</li>
-          <li>• Show the actual experience, location, or activities</li>
-          <li>• Avoid heavily filtered or edited photos</li>
-          <li>• Include photos of the venue, activities, and participants if possible</li>
-          <li>• Ensure you have rights to use all uploaded images</li>
-        </ul>
-      </div>
     </div>
   );
 }
@@ -3275,6 +3262,7 @@ function VenueStep({ form }: { form: any }) {
                   maxFileSize={10485760} // 10MB
                   multiple={false}
                   className="min-h-[120px]"
+                  showGuidelines
                   data-testid="uploader-venue-photos"
                 >
                   <div className="p-6 text-center">

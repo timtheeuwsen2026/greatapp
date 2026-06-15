@@ -19,6 +19,36 @@ interface SharedPhotoUploadProps {
   uploadType?: 'direct' | 's3'; // s3 is deprecated — all uploads go through /api/uploads/images
   getUploadParameters?: () => Promise<{ method: 'PUT'; url: string }>; // unused, kept for compat
   isDemoEvent?: boolean;
+  showGuidelines?: boolean; // show the compact, collapsible photo guidelines below the uploader
+}
+
+// Compact, collapsible photo guidelines. Collapsed it is a single line, so it can
+// sit under every image uploader without taking much space.
+export function PhotoGuidelines({ className }: { className?: string }) {
+  return (
+    <details
+      className={cn(
+        "group mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs dark:border-blue-900 dark:bg-blue-950/40",
+        className
+      )}
+      data-testid="photo-guidelines"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 font-medium text-blue-800 dark:text-blue-200">
+        <ImageIcon className="h-3.5 w-3.5" />
+        Photo guidelines
+        <span className="ml-auto text-blue-500 group-open:hidden">Show</span>
+        <span className="ml-auto hidden text-blue-500 group-open:inline">Hide</span>
+      </summary>
+      <ul className="mt-2 space-y-1 text-blue-700 dark:text-blue-300">
+        <li>• Use high-resolution images (at least 1200px wide)</li>
+        <li>• Show the actual experience, location, or activities</li>
+        <li>• Avoid heavily filtered or edited photos</li>
+        <li>• Include photos of the venue, activities, and participants if possible</li>
+        <li>• Ensure you have rights to use all uploaded images</li>
+        <li>• JPG, PNG, or WEBP, up to 10MB each</li>
+      </ul>
+    </details>
+  );
 }
 
 export function SharedPhotoUpload({
@@ -34,6 +64,7 @@ export function SharedPhotoUpload({
   uploadType = 'direct',
   getUploadParameters,
   isDemoEvent = false,
+  showGuidelines = false,
 }: SharedPhotoUploadProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -474,6 +505,8 @@ export function SharedPhotoUpload({
           </div>
         </div>
       )}
+
+      {showGuidelines && <PhotoGuidelines />}
     </div>
   );
 }

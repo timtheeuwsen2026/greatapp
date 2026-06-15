@@ -6,6 +6,7 @@ import { useLocation } from 'wouter';
 import { z } from 'zod';
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { getAccessToken } from '@/hooks/useAuth';
 import { SharedPhotoUpload, PhotoPreview } from '@/components/SharedPhotoUpload';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1405,6 +1406,7 @@ export default function VenueProfileSetup() {
                             maxFileSize={10485760}
                             multiple={false}
                             className="min-h-[120px]"
+                            showGuidelines
                             data-testid="uploader-gallery-image"
                           >
                             <div className="p-6 text-center">

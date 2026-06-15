@@ -90,7 +90,8 @@ function VenueDashboardContent() {
       const url = openEventsCityFilter.trim()
         ? `/api/venue/open-events?city=${encodeURIComponent(openEventsCityFilter.trim())}`
         : "/api/venue/open-events";
-      return apiRequest("GET", url);
+      const res = await apiRequest("GET", url);
+      return res.json();
     },
     enabled: isAuthenticated,
     retry: false,

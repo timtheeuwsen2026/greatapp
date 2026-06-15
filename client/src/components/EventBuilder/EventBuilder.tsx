@@ -31,7 +31,7 @@ import {
   Trash2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
@@ -542,11 +542,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         if (result.id) {
           setDraftLoaded(true);
           setCurrentDraftId(result.id);
-          // Don't update URL during autosave - causes infinite render loop
-          // URL will update on manual save or navigation
         }
       }
-      // Silent autosave - no toast notification
+      // Invalidate so the creator dashboard shows this draft immediately on next visit
+      queryClient.invalidateQueries({ queryKey: ["/api/experience-drafts"] });
     },
     onError: (error: any) => {
       setIsSaving(false);
@@ -640,11 +639,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         if (result.id) {
           setDraftLoaded(true);
           setCurrentDraftId(result.id);
-          // Don't update URL during autosave - causes infinite render loop
-          // URL will update on manual save or navigation
         }
       }
-      
+
+      queryClient.invalidateQueries({ queryKey: ["/api/experience-drafts"] });
+
       toast({
         title: "Progress saved",
         description: "Your changes have been saved successfully.",
@@ -1149,6 +1148,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
           setLocation(`/event-builder/${draftId}`);
         }
 
+        queryClient.invalidateQueries({ queryKey: ["/api/experience-drafts"] });
         toast({
           title: "Draft saved",
           description: "Your experience draft has been saved successfully.",

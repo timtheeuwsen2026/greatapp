@@ -78,6 +78,39 @@ function numberOrZero(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// Numeric columns on experience_drafts. The client sends "" for these while a
+// step is still blank (e.g. price on step 1), which PostgreSQL rejects with
+// "invalid input syntax for type numeric". Convert "" (and other non-numeric
+// blanks) to null so the column falls back to its default / stays empty.
+const DRAFT_NUMERIC_FIELDS = [
+  // decimals
+  "pricePerPerson", "price", "depositPercentage", "depositAmount", "balanceAmount",
+  "expectedPayout", "platformCommission", "stripeFee", "influencerCommissionPct",
+  "promoterCommission", "creatorPct", "platformPct", "venueFixedFee", "venuePerHeadAmount",
+  "venueMinimumSpend", "venueRevenueSharePct", "venueAccessFee", "venueRevenuePercentage",
+  "creatorRevenuePercentage", "platformRevenuePercentage",
+  // integers
+  "maxParticipants", "manualVenueCapacity", "standingCapacity", "seatedCapacity",
+  "roomCapacity", "totalRooms", "mvgMinimumSize", "mvgDeadlineDays", "balanceDueDays",
+  "softHoldDurationHours", "currentStep",
+];
+
+function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
+  const out: Record<string, any> = { ...data };
+  for (const field of DRAFT_NUMERIC_FIELDS) {
+    if (!(field in out)) continue;
+    const value = out[field];
+    if (value === "" || value === null || value === undefined) {
+      out[field] = null;
+    } else if (typeof value === "string" && value.trim() === "") {
+      out[field] = null;
+    } else if (typeof value === "number" && Number.isNaN(value)) {
+      out[field] = null;
+    }
+  }
+  return out as T;
+}
+
 function buildVenueContractObject(input: any, experienceId: string, venueId: string, creatorId: string) {
   const model = input.venueCompensationModel || "access_only";
   return {
@@ -1326,7 +1359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
       }
 
-      const draftData = applyMarketplaceEconomics({ ...parsedBody, creatorId: userId });
+      const draftData = sanitizeDraftNumerics(applyMarketplaceEconomics({ ...parsedBody, creatorId: userId }));
       const draft = await storage.createExperienceDraft(draftData);
       res.json(draft);
     } catch (error: any) {
@@ -1383,7 +1416,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      const draft = await storage.updateExperienceDraft(id, userId, updateData);
+      const draft = await storage.updateExperienceDraft(id, userId, sanitizeDraftNumerics(updateData));
       res.json(draft);
     } catch (error: any) {
       console.error("Error updating experience draft:", error);

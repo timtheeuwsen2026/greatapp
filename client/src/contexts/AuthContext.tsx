@@ -17,6 +17,16 @@ function redirectToDashboard(user: User) {
   const role = user.role ?? "participant";
   const target = ROLE_DASHBOARD[role] ?? "/";
   const current = window.location.pathname;
+
+  // If the user was sent to login from somewhere specific (e.g. a booking flow),
+  // return them there instead of their dashboard. Only allow internal paths to
+  // avoid open-redirects (must start with a single "/").
+  const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+  if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+    window.location.replace(returnTo);
+    return;
+  }
+
   // Only redirect when coming from an auth/landing page AND the target is different.
   // Without the `current !== target` guard a participant on "/" would reload indefinitely
   // because Supabase fires SIGNED_IN on every session restore, not just on fresh logins.

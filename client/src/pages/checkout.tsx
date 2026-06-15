@@ -408,8 +408,10 @@ export default function Checkout() {
         description: "Please sign in to complete your booking.",
         variant: "destructive",
       });
+      // Send them to login, then bring them right back to this checkout afterwards.
+      const returnTo = window.location.pathname + window.location.search;
       setTimeout(() => {
-        window.location.href = "/api/login";
+        window.location.href = `/login?returnTo=${encodeURIComponent(returnTo)}`;
       }, 1000);
       return;
     }

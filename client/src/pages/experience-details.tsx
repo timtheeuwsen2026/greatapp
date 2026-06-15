@@ -1282,7 +1282,7 @@ export default function ExperienceDetails() {
                   )}
                   
                   {!isAuthenticated && (
-                    <a href="/api/login">
+                    <a href={`/login?returnTo=${encodeURIComponent(`/experience/${experience.id}`)}`}>
                       <Button className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-md hover:bg-primary/90 hover:text-white" size="lg" data-testid="button-login-first">
                         Sign In to Book
                       </Button>
@@ -1377,7 +1377,7 @@ export default function ExperienceDetails() {
                                     </Button>
                                   </Link>
                                 ) : (
-                                  <a href="/api/login">
+                                  <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}?ticketSkuId=${ticketId}`)}`}>
                                     <Button className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" size="lg" data-testid={`button-login-ticket-${index}`}>
                                       Sign In to Book
                                     </Button>
@@ -1590,7 +1590,7 @@ export default function ExperienceDetails() {
                   ) : (
                     <div className="text-center">
                       <p className="text-sm text-gray-600 mb-3">Sign in to book this experience</p>
-                      <a href="/api/login">
+                      <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}`)}`}>
                         <Button className="w-full btn-gradient" size="lg">
                           Sign In to Book
                         </Button>

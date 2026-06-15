@@ -74,6 +74,14 @@ export default function AuthPage() {
   }
 
   function redirectAfterAuth(userRole: string) {
+    // If we were sent here from a specific place (e.g. a booking flow), go back there.
+    // Only allow internal paths to avoid open-redirects (single leading "/").
+    const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+    if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+      navigate(returnTo);
+      return;
+    }
+
     const destinations: Record<string, string> = {
       creator: "/creator",
       venue_provider: "/venue-dashboard",

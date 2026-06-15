@@ -1334,9 +1334,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       console.log("Updating draft:", id, "for user:", userId);
       
-      // Remove fields that should not be updated by client
-      const { id: _id, creatorId: _creatorId, createdAt: _createdAt, updatedAt: _updatedAt, ...cleanBody } = req.body;
-      
+      // Remove fields that should not be updated by client.
+      // Also strip columns added to the Drizzle schema but not yet in the production DB
+      // (venueOpenSpaceType, venueTargetDeal, venueStatus) — remove after running db:push.
+      const {
+        id: _id, creatorId: _creatorId, createdAt: _createdAt, updatedAt: _updatedAt,
+        venueOpenSpaceType: _venueOpenSpaceType,
+        venueTargetDeal: _venueTargetDeal,
+        venueStatus: _venueStatus,
+        ...cleanBody
+      } = req.body;
+
       // Normalize date fields before saving (defense in depth)
       const updateData = { ...cleanBody };
       updateData.greatPillars = normalizeGreatPillarsPayload(updateData.greatPillars);
@@ -1370,9 +1378,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const draft = await storage.updateExperienceDraft(id, userId, updateData);
       res.json(draft);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating experience draft:", error);
-      res.status(500).json({ message: "Failed to update draft" });
+      res.status(500).json({ message: "Failed to update draft", detail: error?.message });
     }
   });
 

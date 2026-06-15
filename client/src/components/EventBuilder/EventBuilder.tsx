@@ -1156,7 +1156,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         });
       } else {
         const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.message || 'Failed to save draft';
+        const errorMessage = errorData.detail
+          ? `${errorData.message}: ${errorData.detail}`
+          : (errorData.message || 'Failed to save draft');
         setSaveError(errorMessage);
         throw new Error(errorMessage);
       }

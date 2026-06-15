@@ -1030,8 +1030,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Date fields - will be normalized below
         startDate: formData.startDate,
         endDate: formData.endDate,
+        // Single-day event start/end times (required for publishing one-day events)
+        startTime: formData.startTime || '',
+        endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
-        
+
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',
@@ -1437,8 +1440,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Date fields - will be normalized below
         startDate: formData.startDate,
         endDate: formData.endDate,
+        // Single-day event start/end times (required for publishing one-day events)
+        startTime: formData.startTime || '',
+        endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
-        
+
         // Venue/location fields
         location: formData.location || '',
         venueType: formData.venueType || 'catalog',

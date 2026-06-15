@@ -1300,11 +1300,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
       
-      // Normalize date fields before saving (defense in depth)
-      const parsedBody = { ...req.body };
+      // Normalize date fields before saving (defense in depth).
+      // Also strip columns added to the Drizzle schema but not yet in the production DB
+      // (venueOpenSpaceType, venueTargetDeal, venueStatus) — remove after running db:push.
+      const {
+        venueOpenSpaceType: _venueOpenSpaceType,
+        venueTargetDeal: _venueTargetDeal,
+        venueStatus: _venueStatus,
+        ...parsedBody
+      } = req.body;
       parsedBody.greatPillars = normalizeGreatPillarsPayload(parsedBody.greatPillars);
       parsedBody.monetisationMode = "creator_led";
-      
+
       // Convert date strings to valid Date objects or null if invalid
       if (parsedBody.startDate) {
         const date = new Date(parsedBody.startDate);
@@ -1318,13 +1325,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
       }
-      
+
       const draftData = applyMarketplaceEconomics({ ...parsedBody, creatorId: userId });
       const draft = await storage.createExperienceDraft(draftData);
       res.json(draft);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating experience draft:", error);
-      res.status(500).json({ message: "Failed to create draft" });
+      res.status(500).json({ message: "Failed to create draft", detail: error?.message });
     }
   });
 

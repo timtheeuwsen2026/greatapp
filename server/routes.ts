@@ -12,7 +12,7 @@ import { bookings, platformSettings } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate } from "./websocket";
-import { isAuthenticated } from "./supabaseAuth";
+import { isAuthenticated, optionalAuth } from "./supabaseAuth";
 import { notificationService } from "./notifications";
 import { registerOGRoutes } from "./og";
 import { 
@@ -385,6 +385,12 @@ async function checkIsAdmin(req: any): Promise<boolean> {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Populate req.user from the Bearer token on every API request (non-blocking).
+  // Without this, routes that read req.user.claims.sub but lack the isAuthenticated
+  // middleware crash in production with "Cannot read properties of undefined
+  // (reading 'claims')". Routes that must enforce auth still use isAuthenticated.
+  app.use("/api", optionalAuth);
+
   const resolveCurrentUserId = (req: any): string | undefined => {
     return req.user?.claims?.sub || req.user?.id || (process.env.NODE_ENV === 'development' ? "45788955" : undefined);
   };
@@ -5612,17 +5618,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         counter++;
       }
       
-      // Prepare venue data with ALL fields from request body
+      // Prepare venue data with ALL fields from request body.
+      // This endpoint always creates a DRAFT (incomplete by nature), so the NOT NULL
+      // columns get safe fallbacks and full validation is deferred to Submit for Review.
       const venuePayload = {
-        // Required fields
-        name: req.body.name,
-        city: req.body.city,
-        description: req.body.description,
+        // Required (NOT NULL) columns — fall back so a partial draft can still save
+        name: (typeof req.body.name === 'string' && req.body.name.trim()) || 'Untitled venue',
+        city: req.body.city || '',
+        description: req.body.description || '',
         venueType: req.body.venueType || 'multi_day',
-        capacity: req.body.capacity,
+        capacity: req.body.capacity != null && req.body.capacity !== '' ? Number(req.body.capacity) : 0,
         standingCapacity: req.body.standingCapacity ?? null,
         seatedCapacity: req.body.seatedCapacity ?? null,
-        location: req.body.location,
+        location: req.body.location || '',
         
         // Basic optional fields
         tagline: req.body.tagline || null,
@@ -5719,30 +5727,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         approved: false,
       };
       
-      // Validate using Zod schema
-      const validationResult = extendedInsertVenueSchema.safeParse(venuePayload);
-      
-      if (!validationResult.success) {
-        const errors = validationResult.error.issues.map(issue => {
-          const path = issue.path.join('.');
-          return `${path}: ${issue.message}`;
-        });
-        
-        console.log('Venue validation failed:', errors);
-        
-        return res.status(400).json({
-          success: false,
-          message: "Validation failed",
-          errors,
-          details: validationResult.error.issues
-        });
-      }
-      
-      // Use validated data
-      const venueData = validationResult.data;
+      // Drafts are saved leniently — never block on incomplete fields. The full
+      // extendedInsertVenueSchema is enforced client-side before Submit for Review.
+      // Coerce/strip known fields where the partial schema can, but always save.
+      const parsed = extendedInsertVenueSchema.partial().safeParse(venuePayload);
+      const venueData = (parsed.success ? { ...venuePayload, ...parsed.data } : venuePayload) as any;
 
       console.log(`Creating venue draft: ${venueData.name} (${venueData.venueType})`);
-      
+
       const venue = await storage.createVenue(venueData);
       res.json(venue);
     } catch (error) {
@@ -9095,7 +9087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Enhanced booking endpoint with revenue tracking
   app.post('/api/experiences/:id/book', async (req: any, res) => {
     try {
-      if (process.env.NODE_ENV !== 'development' && !req.isAuthenticated()) {
+      if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
@@ -9441,7 +9433,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Creator earnings endpoints
   app.get('/api/creator/earnings/:period', async (req: any, res) => {
     try {
-      if (process.env.NODE_ENV !== 'development' && !req.isAuthenticated()) {
+      if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
@@ -9508,7 +9500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Detailed earnings breakdown for dashboard
   app.get('/api/creator/revenue-analytics', async (req: any, res) => {
     try {
-      if (process.env.NODE_ENV !== 'development' && !req.isAuthenticated()) {
+      if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 

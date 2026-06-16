@@ -2901,7 +2901,7 @@ export default function VenueProfileSetup() {
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => form.handleSubmit(onSubmit)()}
+                        onClick={() => onSubmit(form.getValues())}
                         disabled={profileMutation.isPending || submitForReviewMutation.isPending}
                         data-testid="button-save-draft"
                         aria-label="Save venue as draft"

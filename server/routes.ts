@@ -1305,7 +1305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Experience draft routes
-  app.get('/api/experience-drafts', async (req: any, res) => {
+  app.get('/api/experience-drafts', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const drafts = await storage.getExperienceDraftsByCreator(userId);
@@ -1329,9 +1329,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .filter((item) => allowed.has(item));
   };
 
-  app.post('/api/experience-drafts', async (req: any, res) => {
+  app.post('/api/experience-drafts', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       
       // Normalize date fields before saving (defense in depth).
       // Also strip columns added to the Drizzle schema but not yet in the production DB
@@ -1368,9 +1368,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/experience-drafts/:id', async (req: any, res) => {
+  app.put('/api/experience-drafts/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const { id } = req.params;
       console.log("Updating draft:", id, "for user:", userId);
       
@@ -1424,9 +1424,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/experience-drafts/:id', async (req: any, res) => {
+  app.delete('/api/experience-drafts/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const { id } = req.params;
       await storage.deleteExperienceDraft(id, userId);
       res.json({ message: "Draft deleted" });
@@ -1437,9 +1437,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get latest draft for user
-  app.get('/api/experience-drafts/latest', async (req: any, res) => {
+  app.get('/api/experience-drafts/latest', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const drafts = await storage.getExperienceDraftsByCreator(userId);
       const latest = drafts.sort((a, b) => {
         const bDate = b.updatedAt || b.createdAt;
@@ -1455,9 +1455,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get specific draft by ID
-  app.get('/api/experience-drafts/:id', async (req: any, res) => {
+  app.get('/api/experience-drafts/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const { id } = req.params;
       const draft = await storage.getExperienceDraftById(id);
       
@@ -1478,9 +1478,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Delete all user drafts
-  app.delete('/api/experience-drafts', async (req: any, res) => {
+  app.delete('/api/experience-drafts', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       const drafts = await storage.getExperienceDraftsByCreator(userId);
       for (const draft of drafts) {
         await storage.deleteExperienceDraft(draft.id, userId);

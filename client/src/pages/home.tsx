@@ -567,8 +567,28 @@ export default function Home() {
                   </div>
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div>
-                      <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="featured-deposit-price">Reserve for {formatCurrency(featuredFormingTrip.depositAmount, featuredFormingTrip.currency)}</p>
-                      <p className="text-sm text-gray-500 mt-0.5" data-testid="featured-full-price">Full price {formatCurrency(featuredFormingTrip.price, featuredFormingTrip.currency)} per person</p>
+                      {/* Show deposit when configured; fall back to full price for paid events;
+                          never show "Reserve for Free" on a paid experience */}
+                      {Number(featuredFormingTrip.depositAmount ?? 0) > 0 ? (
+                        <>
+                          <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="featured-deposit-price">
+                            Reserve for {formatCurrency(featuredFormingTrip.depositAmount, featuredFormingTrip.currency)}
+                          </p>
+                          <p className="text-sm text-gray-500 mt-0.5" data-testid="featured-full-price">
+                            Full price {formatCurrency(featuredFormingTrip.price, featuredFormingTrip.currency)} per person
+                          </p>
+                        </>
+                      ) : Number(featuredFormingTrip.price ?? 0) > 0 ? (
+                        // No deposit on a paid event — show the actual price, not "Free"
+                        <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="featured-deposit-price">
+                          {formatCurrency(featuredFormingTrip.price, featuredFormingTrip.currency)} per person
+                        </p>
+                      ) : (
+                        // Genuinely free event
+                        <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="featured-deposit-price">
+                          Free RSVP
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-col gap-2 w-full sm:w-auto">
                       <Button
@@ -760,8 +780,28 @@ export default function Home() {
                                   </div>
                                 )}
                                 <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
-                                  <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">Reserve for {formatCurrency(depositAmount, experience.currency)}</p>
-                                  <p className="text-sm text-gray-500 mt-0.5" data-testid="full-price">Full price {formatCurrency(price, experience.currency)} per person</p>
+                                  {/* Show deposit when configured; fall back to full price for paid events;
+                                      never show "Reserve for Free" on a paid experience */}
+                                  {depositAmount > 0 ? (
+                                    <>
+                                      <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                        Reserve for {formatCurrency(depositAmount, experience.currency)}
+                                      </p>
+                                      <p className="text-sm text-gray-500 mt-0.5" data-testid="full-price">
+                                        Full price {formatCurrency(price, experience.currency)} per person
+                                      </p>
+                                    </>
+                                  ) : parseFloat(price) > 0 ? (
+                                    // No deposit on a paid event — show the actual price, not "Free"
+                                    <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                      {formatCurrency(price, experience.currency)} per person
+                                    </p>
+                                  ) : (
+                                    // Genuinely free event
+                                    <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                      Free RSVP
+                                    </p>
+                                  )}
                                 </div>
                               </div>
                               {daysLeft > 0 && (
@@ -904,8 +944,28 @@ export default function Home() {
                                   </div>
                                 )}
                                 <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
-                                  <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">Reserve for {formatCurrency(depositAmount, experience.currency)}</p>
-                                  <p className="text-sm text-gray-500 mt-0.5" data-testid="full-price">Full price {formatCurrency(price, experience.currency)} per person</p>
+                                  {/* Show deposit when configured; fall back to full price for paid events;
+                                      never show "Reserve for Free" on a paid experience */}
+                                  {depositAmount > 0 ? (
+                                    <>
+                                      <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                        Reserve for {formatCurrency(depositAmount, experience.currency)}
+                                      </p>
+                                      <p className="text-sm text-gray-500 mt-0.5" data-testid="full-price">
+                                        Full price {formatCurrency(price, experience.currency)} per person
+                                      </p>
+                                    </>
+                                  ) : parseFloat(price) > 0 ? (
+                                    // No deposit on a paid event — show the actual price, not "Free"
+                                    <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                      {formatCurrency(price, experience.currency)} per person
+                                    </p>
+                                  ) : (
+                                    // Genuinely free event
+                                    <p className="text-xl font-bold text-gray-900 dark:text-white" data-testid="deposit-price">
+                                      Free RSVP
+                                    </p>
+                                  )}
                                 </div>
                               </div>
                               {daysLeft > 0 && (

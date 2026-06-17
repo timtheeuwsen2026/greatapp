@@ -324,6 +324,7 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // Open-to-Venue-Offers fields (reverse bidding)
   venueOpenSpaceType: varchar("venue_open_space_type"), // e.g. "coffee_shop", "fitness_studio"
   venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
+  venueTargetDealValue: decimal("venue_target_deal_value", { precision: 10, scale: 2 }), // target amount (€) or % for the deal type
   venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
   // Virtual venue fields
   virtualPlatform: varchar("virtual_platform"),
@@ -776,6 +777,7 @@ export const experiences = pgTable("experiences", {
   // Open-to-Venue-Offers fields (reverse bidding)
   venueOpenSpaceType: varchar("venue_open_space_type"), // e.g. "coffee_shop", "fitness_studio"
   venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
+  venueTargetDealValue: decimal("venue_target_deal_value", { precision: 10, scale: 2 }), // target amount (€) or % for the deal type
   venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
 
   // Participant Visibility

@@ -305,10 +305,18 @@ function CreatorDashboardContent() {
     retry: false,
   }) as { data: any[], isLoading: boolean };
 
+  // Accepted/confirmed venue deals
+  const { data: acceptedVenueDeals = [] } = useQuery({
+    queryKey: ["/api/creator/venue-offers/accepted"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any[] };
+
   const acceptVenueOffer = useMutation({
     mutationFn: (offerId: string) => apiRequest("POST", `/api/creator/venue-offers/${offerId}/accept`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers/accepted"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
       toast({ title: "Venue Linked!", description: "The venue has been confirmed for your event." });
     },
@@ -1161,6 +1169,54 @@ function CreatorDashboardContent() {
                   </Card>
                 );
               })
+            )}
+
+            {/* Confirmed Venue Deals */}
+            {acceptedVenueDeals.length > 0 && (
+              <div className="mt-8 space-y-3">
+                <h3 className="font-semibold text-base flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-600" />Confirmed Venue Deals
+                </h3>
+                {acceptedVenueDeals.map((row: any) => {
+                  const offer = row.offer ?? row;
+                  const venue = row.venue ?? {};
+                  const exp = row.experience ?? {};
+                  const modelLabels: Record<string, string> = {
+                    access_only: "Access Only",
+                    fixed_fee: "Flat Fee",
+                    per_head: "Per Head",
+                    minimum_spend: "Minimum Spend",
+                    revenue_share: "Revenue Share (%)",
+                  };
+                  const terms = offer.terms ?? {};
+                  return (
+                    <Card key={offer.id} className="border-green-200 dark:border-green-800 bg-green-50/30 dark:bg-green-900/10">
+                      <CardContent className="p-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <div>
+                            <p className="text-xs text-gray-500 mb-0.5">Event: <strong>{exp.title || offer.experienceId}</strong></p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold">{venue.name || "Venue"}</span>
+                              {venue.city && <span className="text-sm text-gray-500">· {venue.city}</span>}
+                              <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+                                <CheckCircle className="w-3 h-3 mr-1" />Confirmed
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="text-sm text-right shrink-0">
+                            <span className="text-gray-500">Deal: </span>
+                            <strong>{modelLabels[offer.model] ?? offer.model}</strong>
+                            {offer.model === "fixed_fee" && <span className="ml-1 text-gray-600">— €{terms.fixedFee ?? 0}</span>}
+                            {offer.model === "per_head" && <span className="ml-1 text-gray-600">— €{terms.perHeadAmount ?? 0}/head</span>}
+                            {offer.model === "minimum_spend" && <span className="ml-1 text-gray-600">— €{terms.minimumSpend ?? 0} min</span>}
+                            {offer.model === "revenue_share" && <span className="ml-1 text-gray-600">— {terms.revenueSharePct ?? 0}%</span>}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </TabsContent>
 

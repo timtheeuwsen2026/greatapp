@@ -125,6 +125,9 @@ const eventBuilderSchema = z.object({
   // Open-to-Venue-Offers fields (reverse bidding)
   venueOpenSpaceType: z.string().optional(),
   venueTargetDeal: z.string().optional(),
+  // Numeric target for the chosen deal type: a % for revenue_share, a € amount for everything else.
+  // Only shown/required when venueTargetDeal is one of the value-bearing types (not access_only).
+  venueTargetDealValue: z.number().optional(),
 
   // Catalog venue fields
   selectedVenueId: z.string().optional(),
@@ -409,6 +412,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueType: "catalog",
       venueOpenSpaceType: "",
       venueTargetDeal: "",
+      venueTargetDealValue: undefined,
       selectedVenueId: "",
       venue: "",
       manualVenueName: "",
@@ -1040,6 +1044,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
+        venueTargetDealValue: formData.venueTargetDealValue || undefined,
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -1450,6 +1455,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
+        venueTargetDealValue: formData.venueTargetDealValue || undefined,
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
@@ -4854,6 +4860,27 @@ function PricingStep({ form }: { form: any }) {
                   <p className="text-xs text-amber-600 mt-1">
                     Venues will see this preference when they bid to host your event.
                   </p>
+                  {/* Value input: only shown for deal types that carry a number.
+                      access_only has no target amount, so it is excluded from the list.
+                      Label and constraints differ by type: % for revenue_share, € for the rest. */}
+                  {(['fixed_fee', 'per_head', 'minimum_spend', 'revenue_share'].includes(form.watch('venueTargetDeal') || '')) && (
+                    <div className="mt-3">
+                      <Label htmlFor="venue-target-deal-value">
+                        {form.watch('venueTargetDeal') === 'revenue_share' ? 'Target Share (%)' : 'Target Amount (€)'}
+                      </Label>
+                      <Input
+                        id="venue-target-deal-value"
+                        type="number"
+                        min="0"
+                        max={form.watch('venueTargetDeal') === 'revenue_share' ? 100 : undefined}
+                        step={form.watch('venueTargetDeal') === 'revenue_share' ? 1 : 0.01}
+                        placeholder={form.watch('venueTargetDeal') === 'revenue_share' ? 'e.g. 20' : 'e.g. 500'}
+                        value={form.watch('venueTargetDealValue') ?? ''}
+                        onChange={(e) => form.setValue('venueTargetDealValue', e.target.value ? parseFloat(e.target.value) : undefined, { shouldDirty: true })}
+                        data-testid="input-venue-target-deal-value"
+                      />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div>

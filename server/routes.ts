@@ -1341,10 +1341,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Normalize date fields before saving (defense in depth).
       // Also strip columns added to the Drizzle schema but not yet in the production DB
-      // (venueOpenSpaceType, venueTargetDeal, venueStatus) — remove after running db:push.
+      // (venueOpenSpaceType, venueTargetDeal, venueTargetDealValue, venueStatus) — remove after running db:push.
       const {
         venueOpenSpaceType: _venueOpenSpaceType,
         venueTargetDeal: _venueTargetDeal,
+        venueTargetDealValue: _venueTargetDealValue,
         venueStatus: _venueStatus,
         ...parsedBody
       } = req.body;
@@ -1382,11 +1383,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Remove fields that should not be updated by client.
       // Also strip columns added to the Drizzle schema but not yet in the production DB
-      // (venueOpenSpaceType, venueTargetDeal, venueStatus) — remove after running db:push.
+      // (venueOpenSpaceType, venueTargetDeal, venueTargetDealValue, venueStatus) — remove after running db:push.
       const {
         id: _id, creatorId: _creatorId, createdAt: _createdAt, updatedAt: _updatedAt,
         venueOpenSpaceType: _venueOpenSpaceType,
         venueTargetDeal: _venueTargetDeal,
+        venueTargetDealValue: _venueTargetDealValue,
         venueStatus: _venueStatus,
         ...cleanBody
       } = req.body;
@@ -2789,6 +2791,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // venueTargetDeal is a preference, not a binding contract — it tells bidding venues
         // what commercial model the creator is hoping for.
         venueTargetDeal: (draft as any).venueTargetDeal || null,
+        venueTargetDealValue: (draft as any).venueTargetDealValue || null,
         // venue_pending means no venue is confirmed yet; venue_confirmed for all other modes.
         venueStatus: (draft as any).venueType === "open" ? "venue_pending" : "venue_confirmed",
 
@@ -9842,6 +9845,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/creator/venue-offers/accepted
+  // Creator retrieves all accepted (confirmed) venue deals — shows deal terms after acceptance.
+  app.get('/api/creator/venue-offers/accepted', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const deals = await storage.getAcceptedVenueOffersForCreator(userId);
+      res.json(deals);
+    } catch (err: any) {
+      console.error('Error fetching accepted venue deals:', err);
+      res.status(500).json({ message: 'Failed to fetch accepted deals' });
+    }
+  });
+
   // POST /api/creator/venue-offers/:offerId/accept
   // Creator accepts a venue bid: links the venue to the event and marks it confirmed.
   // All other pending bids for the same event are automatically declined.
@@ -9860,10 +9876,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Not your experience' });
       }
 
-      // Accept this offer: link venue, flip status, copy contract terms
+      // Fetch the venue so we can copy its address onto the experience
+      const venue = await storage.getVenue(offer.venueId);
+
+      // Accept this offer: link venue, flip status, copy location + contract terms
       await storage.updateExperience(offer.experienceId, {
         linkedVenueId: offer.venueId,
         venueStatus: 'venue_confirmed',
+        // Switch venueType away from "open" so the event leaves the reverse-bidding pool
+        // and behaves like a normal catalog-linked event going forward.
+        venueType: 'catalog',
+        // Copy the venue's address so the event location reflects the accepted space
+        location: venue?.location ?? (experience as any).location,
         venueCompensationModel: offer.model,
         // Copy the offer's financial terms into the experience fields so Stripe split logic has them
         venueFixedFee: offer.terms?.fixedFee?.toString() ?? '0.00',

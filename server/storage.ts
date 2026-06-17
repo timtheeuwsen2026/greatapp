@@ -260,6 +260,7 @@ export interface IStorage {
   createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any>;
   getVenueOffersForExperience(experienceId: string): Promise<any[]>;
   getVenueOffersForCreator(creatorId: string): Promise<any[]>;
+  getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]>;
   getVenueOffer(offerId: string): Promise<any | undefined>;
   updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any>;
   
@@ -749,6 +750,27 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         inArray(venueOffers.experienceId, openIds),
         eq((venueOffers as any).status, "pending"),
+      ))
+      .orderBy(desc((venueOffers as any).createdAt));
+    return rows;
+  }
+
+  async getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]> {
+    // Returns all accepted offers for experiences the creator owns — used to show confirmed venue deals
+    const creatorExperiences = await this.getExperiencesByCreator(creatorId);
+    const allIds = creatorExperiences.map((e: any) => e.id);
+    if (!allIds.length) return [];
+    const rows = await db.select({
+      offer: venueOffers,
+      venue: venues,
+      experience: experiences,
+    })
+      .from(venueOffers)
+      .leftJoin(venues, eq(venueOffers.venueId, venues.id))
+      .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+      .where(and(
+        inArray(venueOffers.experienceId, allIds),
+        eq((venueOffers as any).status, "accepted"),
       ))
       .orderBy(desc((venueOffers as any).createdAt));
     return rows;

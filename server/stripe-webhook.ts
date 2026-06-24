@@ -1,0 +1,403 @@
+/**
+ * Comprehensive Stripe webhook handler.
+ *
+ * Covers all four checkout modes:
+ *  A – Standard paid ticket     → payment_intent.succeeded (immediate capture)
+ *  B – Deposit / MVG model      → payment_intent.amount_capturable_updated + setup_intent.succeeded
+ *  C – Free RSVP                → no Stripe event (booking created at $0, no card)
+ *  D – Mixed / Combi checkout   → payment_intent.succeeded for the add-on amount
+ *  E – Venue-Sponsored deal     → checkout.session.completed (type=venue_sponsorship)
+ *
+ * Payout events (Stripe Connect transfers fired by payout-scheduler.ts):
+ *  transfer.created / transfer.reversed
+ *
+ * Connect account lifecycle:
+ *  account.updated  → sync KYC verification status into creator profile
+ */
+
+import Stripe from "stripe";
+import { storage } from "./storage";
+import { db } from "./db";
+import {
+  bookings,
+  creatorProfiles,
+} from "@shared/schema";
+import { eq } from "drizzle-orm";
+import { scheduleExperiencePayout } from "./payout-scheduler";
+
+// ─── Type helpers ────────────────────────────────────────────────────────────
+
+type BookingStatus =
+  | "pending"
+  | "deposit_authorized"
+  | "deposit_paid"
+  | "confirmed"
+  | "fully_paid"
+  | "cancelled"
+  | "refunded"
+  | "failed";
+
+// ─── Main dispatcher ─────────────────────────────────────────────────────────
+
+export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): Promise<void> {
+  switch (event.type) {
+
+    // ── Venue-Sponsored deal: venue pays via Checkout Session ────────────
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      console.log(`[Webhook] checkout.session.completed ${session.id}`);
+      if (session.metadata?.type === 'venue_sponsorship') {
+        await handleVenueSponsorship(session);
+      }
+      break;
+    }
+
+    // ── Mode A / Mode D: immediate full capture ──────────────────────────
+    case "payment_intent.succeeded": {
+      const pi = event.data.object as Stripe.PaymentIntent;
+      console.log(`[Webhook] payment_intent.succeeded ${pi.id}`);
+      // Venue sponsorship: also handled by checkout.session.completed (belt-and-suspenders)
+      if (pi.metadata?.type === 'venue_sponsorship') {
+        // Already processed by checkout.session.completed — skip to avoid double-processing
+        break;
+      }
+      await handlePaymentIntentSucceeded(pi);
+      break;
+    }
+
+    // ── Mode B: deposit authorized (capture_method=manual), card on file ─
+    case "payment_intent.amount_capturable_updated": {
+      const pi = event.data.object as Stripe.PaymentIntent;
+      console.log(`[Webhook] payment_intent.amount_capturable_updated ${pi.id}`);
+      await handleDepositAuthorized(pi);
+      break;
+    }
+
+    // ── Mode B: card saved via SetupIntent for off-session balance charge ─
+    case "setup_intent.succeeded": {
+      const si = event.data.object as Stripe.SetupIntent;
+      console.log(`[Webhook] setup_intent.succeeded ${si.id}`);
+      await handleSetupIntentSucceeded(si);
+      break;
+    }
+
+    // ── All modes: payment failure ────────────────────────────────────────
+    case "payment_intent.payment_failed": {
+      const pi = event.data.object as Stripe.PaymentIntent;
+      console.log(`[Webhook] payment_intent.payment_failed ${pi.id} — ${pi.last_payment_error?.message}`);
+      await handlePaymentFailed(pi);
+      break;
+    }
+
+    // ── All modes: refund (MVG failure or manual) ─────────────────────────
+    case "charge.refunded": {
+      const charge = event.data.object as Stripe.Charge;
+      console.log(`[Webhook] charge.refunded ${charge.id}`);
+      await handleChargeRefunded(charge);
+      break;
+    }
+
+    // ── Dispute opened — log, flag booking ───────────────────────────────
+    case "charge.dispute.created": {
+      const dispute = event.data.object as Stripe.Dispute;
+      console.log(`[Webhook] charge.dispute.created ${dispute.id} for charge ${dispute.charge}`);
+      await handleDisputeCreated(dispute);
+      break;
+    }
+
+    // ── Stripe Connect: KYC / verification status change ─────────────────
+    case "account.updated": {
+      const account = event.data.object as Stripe.Account;
+      console.log(`[Webhook] account.updated ${account.id}`);
+      await handleAccountUpdated(account);
+      break;
+    }
+
+    // ── Payout transfer created (Stripe Connect) ─────────────────────────
+    // Note: transfer failures are synchronous SDK errors — no async event exists.
+    case "transfer.created": {
+      const transfer = event.data.object as Stripe.Transfer;
+      console.log(`[Webhook] transfer.created ${transfer.id} → ${transfer.destination}`);
+      await handleTransferCreated(transfer);
+      break;
+    }
+
+    // ── Transfer reversed (e.g. dispute resolution) ───────────────────────
+    case "transfer.reversed": {
+      const transfer = event.data.object as Stripe.Transfer;
+      console.warn(`[Webhook] transfer.reversed ${transfer.id}`);
+      await handleTransferReversed(transfer);
+      break;
+    }
+
+    default:
+      console.log(`[Webhook] Unhandled event type: ${event.type}`);
+  }
+}
+
+// ─── Handlers ────────────────────────────────────────────────────────────────
+
+/**
+ * Mode A / D: PaymentIntent captured immediately (capture_method=automatic).
+ * Mark booking as fully_paid. If it was a balance payment, mark balance paid.
+ */
+async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<void> {
+  const booking = await storage.getBookingByPaymentIntent(pi.id);
+
+  if (!booking) {
+    // Could be a balance payment intent stored on balancePaymentIntentId
+    const byBalance = await getBookingByBalancePaymentIntent(pi.id);
+    if (byBalance) {
+      await storage.updateBookingBalancePaid(byBalance.id, true);
+      console.log(`[Webhook] Balance paid for booking ${byBalance.id}`);
+    } else {
+      console.warn(`[Webhook] payment_intent.succeeded: no booking found for PI ${pi.id}`);
+    }
+    return;
+  }
+
+  const isBalancePayment = pi.metadata?.isBalancePayment === "true";
+
+  if (isBalancePayment) {
+    await storage.updateBookingBalancePaid(booking.id, true);
+    console.log(`[Webhook] Balance payment confirmed for booking ${booking.id}`);
+  } else {
+    // Full payment captured — confirm booking
+    await storage.updateBookingStatus(booking.id, "fully_paid");
+    console.log(`[Webhook] Full payment confirmed for booking ${booking.id}`);
+  }
+}
+
+/**
+ * Mode B: Deposit authorized (capture_method=manual → requires_capture).
+ * Card is on file (setup_future_usage was set). Mark booking as deposit_authorized.
+ * The MVG scheduler will capture when threshold is met.
+ */
+async function handleDepositAuthorized(pi: Stripe.PaymentIntent): Promise<void> {
+  const booking = await storage.getBookingByPaymentIntent(pi.id);
+  if (!booking) {
+    console.warn(`[Webhook] amount_capturable_updated: no booking for PI ${pi.id}`);
+    return;
+  }
+
+  if (booking.status === "pending") {
+    await storage.updateBookingStatus(booking.id, "deposit_authorized");
+    console.log(`[Webhook] Deposit authorized for booking ${booking.id} (PI ${pi.id})`);
+  }
+}
+
+/**
+ * Mode B: SetupIntent succeeded — card is now saved against the Stripe customer.
+ * Store the payment method on the booking for future off-session balance charge.
+ */
+async function handleSetupIntentSucceeded(si: Stripe.SetupIntent): Promise<void> {
+  const bookingId = si.metadata?.bookingId;
+  if (!bookingId) {
+    console.warn(`[Webhook] setup_intent.succeeded: no bookingId in metadata for SI ${si.id}`);
+    return;
+  }
+
+  const booking = await storage.getBooking(bookingId);
+  if (!booking) return;
+
+  // Record that the card is saved for off-session use
+  await db
+    .update(bookings)
+    .set({
+      // Reuse balancePaymentIntentId column to store the setup intent for reference
+      balancePaymentIntentId: si.id,
+    })
+    .where(eq(bookings.id, bookingId));
+
+  console.log(`[Webhook] Card saved (SetupIntent ${si.id}) for booking ${bookingId}`);
+}
+
+/**
+ * All modes: PaymentIntent failed. Mark booking as failed.
+ */
+async function handlePaymentFailed(pi: Stripe.PaymentIntent): Promise<void> {
+  const booking = await storage.getBookingByPaymentIntent(pi.id);
+  if (!booking) {
+    console.warn(`[Webhook] payment_failed: no booking for PI ${pi.id}`);
+    return;
+  }
+
+  await storage.updateBookingStatus(booking.id, "failed");
+  console.log(`[Webhook] Booking ${booking.id} marked failed (PI ${pi.id})`);
+}
+
+/**
+ * Charge refunded — mark booking as refunded.
+ * Fired both by the MVG failure path and by manual admin refunds.
+ */
+async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
+  const piId =
+    typeof charge.payment_intent === "string"
+      ? charge.payment_intent
+      : charge.payment_intent?.id;
+
+  if (!piId) return;
+
+  const booking = await storage.getBookingByPaymentIntent(piId);
+  if (!booking) return;
+
+  if (booking.status !== "refunded" && booking.status !== "cancelled") {
+    await storage.updateBookingStatus(booking.id, "refunded");
+    console.log(`[Webhook] Booking ${booking.id} marked refunded (charge ${charge.id})`);
+  }
+}
+
+/**
+ * Dispute opened on a charge. Log it and note on the booking for manual review.
+ */
+async function handleDisputeCreated(dispute: Stripe.Dispute): Promise<void> {
+  const chargeId =
+    typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
+
+  console.error(
+    `[Webhook] ⚠️  DISPUTE opened — charge: ${chargeId}, reason: ${dispute.reason}, amount: ${dispute.amount / 100}`
+  );
+  // Future: create a DisputeRecord or notify admin via email/webhook.
+}
+
+/**
+ * Stripe Connect account updated — sync KYC/verification status into the
+ * creator_profiles table so the dashboard shows the correct badge.
+ */
+async function handleAccountUpdated(account: Stripe.Account): Promise<void> {
+  const chargesEnabled = account.charges_enabled;
+  const payoutsEnabled = account.payouts_enabled;
+  const detailsSubmitted = account.details_submitted;
+
+  let verificationStatus: string;
+  if (chargesEnabled && payoutsEnabled) {
+    verificationStatus = "verified";
+  } else if (detailsSubmitted) {
+    verificationStatus = "pending";
+  } else {
+    verificationStatus = "unverified";
+  }
+
+  // Find the creator profile with this Stripe account ID
+  const [profile] = await db
+    .select()
+    .from(creatorProfiles)
+    .where(eq(creatorProfiles.stripeAccountId, account.id));
+
+  if (profile) {
+    await db
+      .update(creatorProfiles)
+      .set({ stripeVerificationStatus: verificationStatus, updatedAt: new Date() })
+      .where(eq(creatorProfiles.id, profile.id));
+
+    console.log(
+      `[Webhook] Creator profile ${profile.id} Stripe status → ${verificationStatus}`
+    );
+  } else {
+    console.warn(`[Webhook] account.updated: no creator profile for Stripe account ${account.id}`);
+  }
+}
+
+/**
+ * Transfer created successfully — update scheduled_payouts to record the transfer ID.
+ */
+async function handleTransferCreated(transfer: Stripe.Transfer): Promise<void> {
+  const experienceId = transfer.metadata?.experienceId;
+  const recipientType = transfer.metadata?.recipientType;
+  if (!experienceId || !recipientType) return;
+
+  const payout = await storage.getScheduledPayoutByExperience(experienceId);
+  if (!payout) return;
+
+  const updatedTransferIds = {
+    ...(payout.stripeTransferIds as Record<string, string> || {}),
+    [recipientType]: transfer.id,
+  };
+
+  await storage.updateScheduledPayout(payout.id, {
+    stripeTransferIds: updatedTransferIds,
+  });
+
+  console.log(`[Webhook] Transfer ${transfer.id} recorded for ${recipientType} on experience ${experienceId}`);
+}
+
+/**
+ * Transfer reversed (e.g. due to dispute resolution).
+ * Mark the scheduled payout as failed so the admin is aware.
+ */
+async function handleTransferReversed(transfer: Stripe.Transfer): Promise<void> {
+  const experienceId = transfer.metadata?.experienceId;
+  if (!experienceId) return;
+
+  const payout = await storage.getScheduledPayoutByExperience(experienceId);
+  if (!payout) return;
+
+  await storage.updateScheduledPayout(payout.id, {
+    status: "failed",
+    errorMessage: `Transfer ${transfer.id} was reversed`,
+  });
+
+  console.error(`[Webhook] Transfer reversed for experience ${experienceId}: ${transfer.id}`);
+}
+
+/**
+ * Venue-Sponsored deal: venue has paid the flat sponsorship fee.
+ * 1. Mark the contract as paid.
+ * 2. Accept the contract and approve the experience (now goes Live).
+ * 3. Schedule the 7-day post-event payout to the creator.
+ */
+async function handleVenueSponsorship(session: Stripe.Checkout.Session): Promise<void> {
+  const { contractId, experienceId, venueId, sponsorshipAmountCents } = session.metadata ?? {};
+  const piId = typeof session.payment_intent === 'string'
+    ? session.payment_intent
+    : session.payment_intent?.id;
+
+  if (!contractId || !experienceId || !venueId) {
+    console.warn(`[Webhook] venue_sponsorship: missing metadata on session ${session.id}`);
+    return;
+  }
+
+  const contract = await storage.getVenueContractById(contractId);
+  if (!contract) {
+    console.warn(`[Webhook] venue_sponsorship: contract ${contractId} not found`);
+    return;
+  }
+
+  // Idempotency — already processed
+  if ((contract as any).sponsorshipPaymentStatus === 'paid') {
+    console.log(`[Webhook] venue_sponsorship: contract ${contractId} already paid — skipping`);
+    return;
+  }
+
+  // 1. Mark contract as paid
+  await storage.updateVenueContractSponsorshipStatus(contractId, 'paid', piId);
+
+  // 2. Accept contract → go Live
+  // Financial terms (venueFixedFee, venueCompensationModel, etc.) were already copied to the
+  // experience row when the creator accepted the venue's offer. We just need to lock the
+  // contract and set the experience status to approved.
+  await storage.acceptVenueContract(experienceId, venueId);
+  const experience = await storage.getExperience(experienceId);
+  if (!experience) return;
+
+  await storage.updateExperienceStatus(experienceId, 'approved');
+  console.log(`[Webhook] Venue-sponsored experience ${experienceId} is now Live`);
+
+  // 3. Schedule creator payout 7 days after event end
+  const grossCents = parseInt(sponsorshipAmountCents || '0', 10);
+  if (grossCents > 0 && experience.endDate) {
+    scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents).catch(err =>
+      console.error(`[Webhook] Failed to schedule sponsorship payout for ${experienceId}:`, err.message)
+    );
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function getBookingByBalancePaymentIntent(piId: string) {
+  const [booking] = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.balancePaymentIntentId, piId));
+  return booking;
+}

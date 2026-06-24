@@ -478,6 +478,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
             <TabsTrigger value="applications">Tribe Applications</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
+            <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
             <TabsTrigger value="services">Services</TabsTrigger>
             <TabsTrigger value="venue-calendars">Venue Calendars</TabsTrigger>
           </TabsList>
@@ -1232,6 +1233,8 @@ export default function AdminDashboard() {
             )}
           </TabsContent>
 
+          <AdminVenueOffersTab />
+
           <TabsContent value="services" className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-semibold">Service Approvals</h2>
@@ -1329,5 +1332,117 @@ export default function AdminDashboard() {
         </Tabs>
       </div>
     </div>
+  );
+}
+
+function AdminVenueOffersTab() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/venue-offers"],
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: (offerId: string) => apiRequest("POST", `/api/admin/venue-offers/${offerId}/approve`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/venue-offers"] });
+      toast({ title: "Offer approved", description: "The creator can now see and respond to this offer." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to approve offer.", variant: "destructive" }),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: (offerId: string) => apiRequest("POST", `/api/admin/venue-offers/${offerId}/reject`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/venue-offers"] });
+      toast({ title: "Offer declined", description: "The offer has been declined." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to decline offer.", variant: "destructive" }),
+  });
+
+  return (
+    <TabsContent value="venue-offers" className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold">Venue Offer Approvals</h2>
+        <Badge variant="secondary">{rows.length} pending</Badge>
+      </div>
+
+      {isLoading ? (
+        <div className="text-center py-8">
+          <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto" />
+        </div>
+      ) : rows.length === 0 ? (
+        <Card>
+          <CardContent className="text-center py-12">
+            <CheckCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-600 dark:text-gray-400">No venue offers awaiting review.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {rows.map((row: any) => {
+            const offer = row.offer ?? row;
+            const venue = row.venue;
+            const experience = row.experience;
+            const terms = offer.terms ?? {};
+            return (
+              <Card key={offer.id}>
+                <CardContent className="p-6">
+                  <div className="flex flex-col md:flex-row md:items-start gap-4">
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold">{venue?.name ?? "Unknown Venue"}</span>
+                        <Badge variant="outline" className="text-xs">{offer.model?.replace(/_/g, " ")}</Badge>
+                        <Badge variant="secondary" className="text-xs">Awaiting Review</Badge>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        Bidding on: <span className="font-medium text-gray-700 dark:text-gray-300">{experience?.title ?? offer.experienceId}</span>
+                      </p>
+                      {venue?.location && (
+                        <p className="text-sm text-gray-500">{venue.location}</p>
+                      )}
+                      {Object.keys(terms).length > 0 && (
+                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                          Terms:{" "}
+                          {terms.fixedFee != null && `€${terms.fixedFee} flat fee`}
+                          {terms.perHeadAmount != null && `€${terms.perHeadAmount} / head`}
+                          {terms.minimumSpend != null && `min spend €${terms.minimumSpend}`}
+                          {terms.revenueSharePct != null && `${terms.revenueSharePct}% revenue share`}
+                          {terms.accessFee != null && `access fee €${terms.accessFee}`}
+                        </p>
+                      )}
+                      {offer.message && (
+                        <p className="text-sm italic text-gray-500">"{offer.message}"</p>
+                      )}
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                        disabled={approveMutation.isPending || rejectMutation.isPending}
+                        onClick={() => approveMutation.mutate(offer.id)}
+                      >
+                        <CheckCircle className="w-4 h-4 mr-1" />
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={approveMutation.isPending || rejectMutation.isPending}
+                        onClick={() => rejectMutation.mutate(offer.id)}
+                      >
+                        <XCircle className="w-4 h-4 mr-1" />
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </TabsContent>
   );
 }

@@ -790,6 +790,7 @@ export const experiences = pgTable("experiences", {
   reviewedBy: varchar("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at"),
   reviewNotes: text("review_notes"),
+  rejectionCount: integer("rejection_count").default(0),
 
   // Cancellation tracking
   cancellationReason: varchar("cancellation_reason"), // Track why trip was cancelled (e.g., "MVG Not Reached")
@@ -1151,6 +1152,11 @@ export const venues = pgTable("venues", {
   reviewedBy: varchar("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at"),
   reviewNotes: text("review_notes"),
+  rejectionCount: integer("rejection_count").default(0),
+
+  // Stripe — for charging venue owners on Venue-Sponsored deals
+  stripeCustomerId: varchar("stripe_customer_id"), // Stripe Customer ID for the venue owner
+  stripePaymentMethodId: varchar("stripe_payment_method_id"), // Default saved card
 
   // Meta fields
   createdBy: varchar("created_by")
@@ -1457,6 +1463,11 @@ export const venueContracts = pgTable("venue_contracts", {
   declineReason: text("decline_reason"),
   acceptedAt: timestamp("accepted_at"),
   declinedAt: timestamp("declined_at"),
+  // Venue-Sponsored deal: track the charge against the venue
+  stripeSponsorshipPaymentIntentId: varchar("stripe_sponsorship_payment_intent_id"),
+  sponsorshipPaymentStatus: varchar("sponsorship_payment_status", { length: 20 }).default("not_applicable"),
+  // not_applicable | unpaid | paid | failed
+  sponsorshipPaidAt: timestamp("sponsorship_paid_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1479,7 +1490,7 @@ export const venueOffers = pgTable("venue_offers", {
   venueOwnerId: varchar("venue_owner_id")
     .references(() => users.id)
     .notNull(),
-  status: varchar("status", { length: 20 }).default("pending"), // "pending" | "accepted" | "declined"
+  status: varchar("status", { length: 20 }).default("admin_review"), // "admin_review" | "pending" | "accepted" | "declined"
   model: varchar("model", { length: 50 }).notNull(), // same values as venueContracts.model
   terms: jsonb("terms")
     .$type<{
@@ -2933,7 +2944,12 @@ export const roomSchema = z.object({
 export const ticketSkuSchema = z.object({
   id: z.string(),
   ticketName: z.string().min(1, "Ticket name is required"),
+  // pricingMode: 'fixed' = standard price, 'pwyw' = Pay-What-You-Want
+  pricingMode: z.enum(["fixed", "pwyw"]).default("fixed"),
   pricePerPerson: z.number().min(0, "Price cannot be negative"),
+  // PWYW fields (ignored when pricingMode === 'fixed')
+  suggestedPrice: z.number().min(0).optional(), // pre-filled default shown to buyer
+  minPrice: z.number().min(0).default(0),       // floor — buyer cannot go below this
   depositPerPerson: z.number().min(0, "Deposit cannot be negative"),
   ticketCapacity: z.number().int().min(1, "Capacity must be at least 1"),
   // Optional: link to source room for multi-day events
@@ -3122,3 +3138,76 @@ export const insertBookingEmailEventSchema = createInsertSchema(
 export type InsertBookingEmailEvent = z.infer<
   typeof insertBookingEmailEventSchema
 >;
+
+// ============================================================================
+// PAYMENT ENGINE — MULTI-PARTY SPLITS & SCHEDULED PAYOUTS
+// ============================================================================
+
+export const splitRecipientTypeEnum = pgEnum("split_recipient_type", [
+  "creator",
+  "venue",
+  "promoter",
+  "service_provider",
+  "platform",
+]);
+
+export const splitModeEnum = pgEnum("split_mode", [
+  "percentage",
+  "flat_fee",
+]);
+
+// Per-experience payout routing. One row per payee. Supports unlimited recipients,
+// so adding a Promoter or Service Provider never requires a schema change.
+export const splitRecipients = pgTable("split_recipients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .notNull()
+    .references(() => experiences.id, { onDelete: "cascade" }),
+  recipientType: splitRecipientTypeEnum("recipient_type").notNull(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  stripeAccountId: varchar("stripe_account_id"), // Stripe Connect account for transfer
+  splitMode: splitModeEnum("split_mode").notNull().default("percentage"),
+  // percentage: 0–100 (e.g. 85.00 for creator). flat_fee: EUR/USD amount.
+  splitValue: decimal("split_value", { precision: 10, scale: 4 }).notNull(),
+  currency: varchar("currency", { length: 3 }).default("eur"),
+  priority: integer("priority").default(0), // lower = paid first (platform=0, creator=1, venue=2, promoter=3)
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type SplitRecipient = typeof splitRecipients.$inferSelect;
+export type InsertSplitRecipient = typeof splitRecipients.$inferInsert;
+
+export const scheduledPayoutStatusEnum = pgEnum("scheduled_payout_status", [
+  "pending",     // waiting for the 7-day window to open
+  "processing",  // transfers in flight
+  "completed",   // all transfers succeeded
+  "failed",      // one or more transfers failed
+  "cancelled",   // experience cancelled/refunded before payout
+]);
+
+// One row per experience. Tracks the single 7-day post-event payout job.
+export const scheduledPayouts = pgTable("scheduled_payouts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .notNull()
+    .references(() => experiences.id),
+  // Fire at: experience.endDate + 7 calendar days
+  scheduledFor: timestamp("scheduled_for").notNull(),
+  status: scheduledPayoutStatusEnum("status").default("pending"),
+  // Gross revenue collected from all confirmed bookings (in cents)
+  totalGrossAmountCents: integer("total_gross_amount_cents").default(0),
+  platformFeeAmountCents: integer("platform_fee_amount_cents").default(0),
+  // Map of recipientType → stripeTransferId
+  stripeTransferIds: jsonb("stripe_transfer_ids")
+    .$type<Record<string, string>>()
+    .default({}),
+  processedAt: timestamp("processed_at"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type ScheduledPayout = typeof scheduledPayouts.$inferSelect;
+export type InsertScheduledPayout = typeof scheduledPayouts.$inferInsert;

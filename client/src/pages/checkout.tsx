@@ -7,6 +7,8 @@ import Navigation from "@/components/navigation";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
@@ -14,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle, CheckCircle } from "lucide-react";
+import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle, CheckCircle, Heart } from "lucide-react";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 
@@ -56,8 +58,8 @@ const stripePromise = import.meta.env.VITE_STRIPE_PUBLIC_KEY
   ? loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY)
   : Promise.resolve(null);
 
-const CheckoutForm = ({ experience, paymentInfo, paymentMode }: { 
-  experience: Experience; 
+const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
+  experience: Experience;
   paymentMode: 'deposit' | 'full';
   paymentInfo: {
     isMVGExperience: boolean;
@@ -70,6 +72,9 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
     ticketSkuId?: string;
     ticketName?: string;
     hasDeposit?: boolean;
+    pricingMode?: 'fixed' | 'pwyw';
+    suggestedPrice?: number | null;
+    minPrice?: number;
   } | null;
 }) => {
   const stripe = useStripe();
@@ -311,7 +316,17 @@ export default function Checkout() {
     ticketSkuId?: string;
     ticketName?: string;
     hasDeposit?: boolean;
+    pricingMode?: 'fixed' | 'pwyw';
+    suggestedPrice?: number | null;
+    minPrice?: number;
   } | null>(null);
+
+  // ── PWYW state ─────────────────────────────────────────────────────────
+  // pwywReady: ticket is PWYW and experience data loaded; show price input
+  const [pwywReady, setPwywReady] = useState(false);
+  const [pwywPrice, setPwywPrice] = useState<number>(0);
+  const [pwywMin, setPwywMin] = useState<number>(0);
+  const [pwywSubmitted, setPwywSubmitted] = useState(false);
   const experienceId = params?.id;
   
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
@@ -331,18 +346,21 @@ export default function Checkout() {
     refetchInterval: 30000,
   });
 
-  const createPaymentIntent = useCallback(async (mode: 'deposit' | 'full') => {
+  const createPaymentIntent = useCallback(async (mode: 'deposit' | 'full', userPrice?: number) => {
     if (!experience || !experienceId) return;
-    
+
     setPaymentIntentLoading(true);
     setPaymentInitError(null);
     try {
-      const res = await apiRequest("POST", "/api/create-payment-intent", { 
+      const body: Record<string, any> = {
         amount: experience.pricePerPerson || experience.price,
         experienceId: experienceId,
         ticketSkuId: ticketSkuId || undefined,
-        paymentMode: mode
-      });
+        paymentMode: mode,
+      };
+      if (userPrice !== undefined) body.userPrice = userPrice;
+
+      const res = await apiRequest("POST", "/api/create-payment-intent", body);
       const data = await res.json();
       if (data.freeRsvp) {
         setFreeRsvpInfo({
@@ -360,7 +378,10 @@ export default function Checkout() {
           mvgDeadline: data.mvgDeadline,
           ticketSkuId: ticketSkuId || undefined,
           ticketName: data.ticketName,
-          hasDeposit: false
+          hasDeposit: false,
+          pricingMode: data.pricingMode || 'fixed',
+          suggestedPrice: data.suggestedPrice ?? null,
+          minPrice: data.minPrice ?? 0,
         });
         setClientSecret("");
         return;
@@ -382,9 +403,12 @@ export default function Checkout() {
         mvgDeadline: data.mvgDeadline,
         ticketSkuId: ticketSkuId || undefined,
         ticketName: data.ticketName,
-        hasDeposit: data.hasDeposit || false
+        hasDeposit: data.hasDeposit || false,
+        pricingMode: data.pricingMode || 'fixed',
+        suggestedPrice: data.suggestedPrice ?? null,
+        minPrice: data.minPrice ?? 0,
       });
-      
+
       if (data.hasDeposit === false && mode === 'deposit') {
         setPaymentMode('full');
       }
@@ -416,10 +440,31 @@ export default function Checkout() {
       return;
     }
 
-    if (experience && experienceId && !clientSecret) {
-      createPaymentIntent(paymentMode);
+    if (experience && experienceId && !clientSecret && !pwywReady) {
+      // Check if the selected ticket is PWYW before auto-creating the PaymentIntent
+      const ticketSkus: any[] = (experience as any).ticketSkus || [];
+      const selectedTicket = ticketSkuId
+        ? ticketSkus.find((t: any, i: number) => (t.id || t.sourceRoomId || `ticket-${i}`) === ticketSkuId)
+        : null;
+
+      if (selectedTicket?.pricingMode === 'pwyw') {
+        const suggested = parseFloat(selectedTicket.suggestedPrice ?? selectedTicket.pricePerPerson ?? 0) || 0;
+        const min = parseFloat(selectedTicket.minPrice ?? 0) || 0;
+        setPwywMin(min);
+        setPwywPrice(suggested);
+        setPwywReady(true); // Show the price input UI — don't auto-create PI yet
+      } else {
+        createPaymentIntent(paymentMode);
+      }
     }
-  }, [experience, experienceId, isAuthenticated, authLoading, toast]);
+  }, [experience, experienceId, isAuthenticated, authLoading, toast, pwywReady, pwywSubmitted]);
+
+  // Once PWYW user has submitted their price, create the PaymentIntent with it
+  useEffect(() => {
+    if (pwywSubmitted && experience && experienceId && !clientSecret) {
+      createPaymentIntent(paymentMode, pwywPrice);
+    }
+  }, [pwywSubmitted]);
 
   const handlePaymentModeChange = useCallback(async (newMode: 'deposit' | 'full') => {
     if (newMode === paymentMode) return;
@@ -579,6 +624,93 @@ export default function Checkout() {
                 }}
               >
                 {freeRsvpSubmitting ? "Confirming..." : freeRsvpError ? "Try Again" : "Confirm RSVP"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // ── PWYW price input screen ───────────────────────────────────────────
+  if (pwywReady && !pwywSubmitted) {
+    const currency = (experience as any).currency || 'EUR';
+    const handlePwywSubmit = () => {
+      if (pwywPrice < pwywMin) {
+        toast({
+          title: "Price too low",
+          description: `Minimum contribution is ${formatCurrency(pwywMin, currency)}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setPwywSubmitted(true);
+    };
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navigation />
+        <div className="max-w-lg mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Heart className="h-5 w-5 text-pink-500" />
+                <CardTitle>Set Your Contribution</CardTitle>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">
+                {(experience as any).title} — pay what feels right to you.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="pwyw-price">Your price ({currency.toUpperCase()})</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium select-none">
+                    {currency.toUpperCase() === 'EUR' ? '€' : currency.toUpperCase() === 'GBP' ? '£' : '$'}
+                  </span>
+                  <Input
+                    id="pwyw-price"
+                    type="number"
+                    min={pwywMin}
+                    step="0.50"
+                    value={pwywPrice}
+                    onChange={(e) => setPwywPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                    className="pl-8 text-lg font-semibold"
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  />
+                </div>
+                {pwywMin > 0 && (
+                  <p className="text-xs text-gray-500">
+                    Minimum contribution: {formatCurrency(pwywMin, currency)}
+                  </p>
+                )}
+                {pwywMin === 0 && (
+                  <p className="text-xs text-gray-500">
+                    You can enter €0 for free — any contribution helps the creator!
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2 flex-wrap">
+                {[0, pwywMin, ...(pwywMin > 0 ? [pwywMin * 2] : [3, 5, 10])].filter((v, i, a) => a.indexOf(v) === i).map(v => (
+                  <Button
+                    key={v}
+                    variant={pwywPrice === v ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setPwywPrice(v)}
+                  >
+                    {v === 0 ? 'Free' : formatCurrency(v, currency)}
+                  </Button>
+                ))}
+              </div>
+
+              <Button
+                className="w-full"
+                onClick={handlePwywSubmit}
+                disabled={pwywPrice < pwywMin}
+              >
+                {pwywPrice === 0 && pwywMin === 0
+                  ? 'Confirm Free RSVP'
+                  : `Continue — Pay ${formatCurrency(pwywPrice, currency)}`}
               </Button>
             </CardContent>
           </Card>

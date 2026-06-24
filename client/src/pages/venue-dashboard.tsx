@@ -26,6 +26,8 @@ import {
   Building,
   Search,
   AlertCircle,
+  AlertTriangle,
+  RefreshCw,
   Send,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -107,7 +109,7 @@ function VenueDashboardContent() {
     onSuccess: () => {
       setOfferModal({ open: false, event: null });
       setOfferForm({ venueId: "", model: "access_only", fixedFee: "", perHeadAmount: "", minimumSpend: "", revenueSharePct: "", accessFee: "", message: "" });
-      toast({ title: "Offer Submitted", description: "The creator will see your proposal in their dashboard." });
+      toast({ title: "Offer Submitted", description: "Your offer is awaiting admin approval. Once approved, the creator will be able to see and respond to it." });
     },
     onError: () => toast({ title: "Error", description: "Failed to submit offer", variant: "destructive" }),
   });
@@ -120,13 +122,24 @@ function VenueDashboardContent() {
     if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
     if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
     if (offerForm.model === "access_only" && offerForm.accessFee) terms.accessFee = parseFloat(offerForm.accessFee);
+    // venue_sponsored: venue pays creator a flat fee — stored as fixedFee
+    if (offerForm.model === "venue_sponsored" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     submitOffer.mutate({ experienceId: offerModal.event.id, venueId: offerForm.venueId, model: offerForm.model, terms, message: offerForm.message });
   };
 
   // Accept / Reject offer mutations
   const acceptOffer = useMutation({
-    mutationFn: (experienceId: string) => apiRequest("POST", `/api/venue/offers/${experienceId}/accept`, {}),
-    onSuccess: () => {
+    mutationFn: async (experienceId: string) => {
+      const res = await apiRequest("POST", `/api/venue/offers/${experienceId}/accept`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data.requiresPayment && data.checkoutUrl) {
+        // Venue-Sponsored deal: redirect to Stripe Checkout to pay the sponsorship fee
+        toast({ title: "Sponsorship Payment Required", description: data.message || "Complete payment to activate the event." });
+        window.location.href = data.checkoutUrl;
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
       toast({ title: "Offer Accepted", description: "The experience is now Live!" });
     },
@@ -170,6 +183,19 @@ function VenueDashboardContent() {
         description: "Failed to submit venue for review. Please try again.",
         variant: "destructive",
       });
+    },
+  });
+
+  const resubmitVenue = useMutation({
+    mutationFn: async (venueId: string) => {
+      return await apiRequest("PATCH", `/api/venues/${venueId}/resubmit`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/user/venues"] });
+      toast({ title: "Submitted for review", description: "Your venue has been sent back to the admin for review." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Resubmit failed", description: error?.message || "Something went wrong.", variant: "destructive" });
     },
   });
 
@@ -478,19 +504,29 @@ function VenueDashboardContent() {
                           </div>
 
                           {/* Offer to Host — opens modal for venue owner to submit Commercial Model */}
-                          <div className="shrink-0">
-                            <Button
-                              className="bg-blue-600 hover:bg-blue-700 text-white w-full md:w-auto"
-                              onClick={() => {
-                                setOfferForm(f => ({ ...f, venueId: venues[0]?.id ?? "" }));
-                                setOfferModal({ open: true, event });
-                              }}
-                              disabled={venues.length === 0}
-                            >
-                              <Send className="w-4 h-4 mr-2" />
-                              Offer to Host
-                            </Button>
-                          </div>
+                          {(() => {
+                            const approvedVenues = venues.filter((v: any) => v.status === 'approved');
+                            const hasApproved = approvedVenues.length > 0;
+                            return (
+                              <div className="shrink-0">
+                                <Button
+                                  className="bg-blue-600 hover:bg-blue-700 text-white w-full md:w-auto disabled:opacity-60"
+                                  onClick={() => {
+                                    setOfferForm(f => ({ ...f, venueId: approvedVenues[0]?.id ?? "" }));
+                                    setOfferModal({ open: true, event });
+                                  }}
+                                  disabled={!hasApproved}
+                                  title={!hasApproved ? "Your venue must be approved by admin before you can submit offers" : undefined}
+                                >
+                                  <Send className="w-4 h-4 mr-2" />
+                                  Offer to Host
+                                </Button>
+                                {!hasApproved && venues.length > 0 && (
+                                  <p className="text-xs text-amber-600 mt-1">Venue pending admin approval</p>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </CardContent>
                     </Card>
@@ -523,6 +559,7 @@ function VenueDashboardContent() {
                   minimum_spend: 'Minimum Spend Guarantee',
                   revenue_share: 'Percentage Revenue Share',
                   access_only: 'Access-Only / Pay-at-Counter',
+                  venue_sponsored: 'Venue-Sponsored (You Pay Creator)',
                 };
                 const formatMoney = (value: any) => {
                   const num = parseFloat(String(value || 0));
@@ -539,6 +576,8 @@ function VenueDashboardContent() {
                       return terms.minimumSpend || 0;
                     case 'revenue_share':
                       return gross * ((terms.revenueSharePct || 0) / 100);
+                    case 'venue_sponsored':
+                      return -(terms.fixedFee || 0); // negative — venue pays out
                     case 'access_only':
                     default:
                       return terms.accessFee || 0;
@@ -588,10 +627,14 @@ function VenueDashboardContent() {
                               {contract.model === 'minimum_spend' && <span>Minimum Spend: <strong>{formatMoney(terms.minimumSpend)}</strong></span>}
                               {contract.model === 'revenue_share' && <span>Revenue Share: <strong>{terms.revenueSharePct || 0}%</strong></span>}
                               {contract.model === 'access_only' && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}
+                              {contract.model === 'venue_sponsored' && <span>Sponsorship Fee (you pay): <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></span>}
                               <span>Risk: <strong>{risk.requireMinimumParticipants ? `MVG ${risk.minimumParticipants || 0}` : 'No MVG required'}</strong></span>
                             </div>
                             <p className="text-xs text-gray-500 mt-2">
-                              Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong>
+                              {contract.model === 'venue_sponsored'
+                                ? <>Sponsorship cost to you: <strong className="text-orange-600">{formatMoney(terms.fixedFee || 0)}</strong></>
+                                : <>Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong></>
+                              }
                             </p>
                           </div>
                         </div>
@@ -695,6 +738,53 @@ function VenueDashboardContent() {
                           Submit for Review
                         </Button>
                       )}
+
+                      {venue.status === 'rejected' && (() => {
+                        const count = venue.rejectionCount ?? 0;
+                        const locked = count >= 3;
+                        return (
+                          <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-3 space-y-2">
+                            <div className="flex items-start gap-2">
+                              <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-red-700">Rejected by admin</p>
+                                {venue.reviewNotes && (
+                                  <p className="text-xs text-red-600 mt-0.5">{venue.reviewNotes}</p>
+                                )}
+                              </div>
+                              <span className="text-xs text-red-400 shrink-0">{count}/3</span>
+                            </div>
+                            {!locked && count >= 1 && (
+                              <div className="flex items-start gap-1 rounded bg-amber-50 border border-amber-200 px-2 py-1.5">
+                                <AlertTriangle className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                                <p className="text-xs text-amber-700">
+                                  {count === 2
+                                    ? "Warning: if rejected again you must create a new listing."
+                                    : "If this offer is rejected 3 times, you will need to create a new offer."}
+                                </p>
+                              </div>
+                            )}
+                            {locked && (
+                              <div className="flex items-start gap-1 rounded bg-red-100 border border-red-300 px-2 py-1.5">
+                                <AlertTriangle className="h-3 w-3 text-red-600 mt-0.5 shrink-0" />
+                                <p className="text-xs text-red-700 font-medium">Rejected 3 times. Please create a new listing.</p>
+                              </div>
+                            )}
+                            {!locked && (
+                              <Button
+                                className="w-full bg-blue-600 hover:bg-blue-700"
+                                size="sm"
+                                onClick={() => resubmitVenue.mutate(venue.id)}
+                                disabled={resubmitVenue.isPending}
+                                data-testid="button-resubmit-venue"
+                              >
+                                <RefreshCw className="w-3 h-3 mr-1" />
+                                Submit Again
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div className="flex gap-2">
                         <Button
                           size="sm"
@@ -908,14 +998,14 @@ function VenueDashboardContent() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Venue selector — in case the owner has multiple venues */}
-            {venues.length > 1 && (
+            {/* Venue selector — only approved venues can be offered */}
+            {venues.filter((v: any) => v.status === 'approved').length > 1 && (
               <div>
                 <Label>Which venue are you offering?</Label>
                 <Select value={offerForm.venueId} onValueChange={(v) => setOfferForm(f => ({ ...f, venueId: v }))}>
                   <SelectTrigger><SelectValue placeholder="Select venue" /></SelectTrigger>
                   <SelectContent>
-                    {venues.map((v: any) => (
+                    {venues.filter((v: any) => v.status === 'approved').map((v: any) => (
                       <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
                     ))}
                   </SelectContent>
@@ -930,10 +1020,11 @@ function VenueDashboardContent() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="access_only">Access Only / Pay-at-Counter</SelectItem>
-                  <SelectItem value="fixed_fee">Flat Fee</SelectItem>
+                  <SelectItem value="fixed_fee">Flat Fee (Creator pays Venue)</SelectItem>
                   <SelectItem value="per_head">Per Head</SelectItem>
                   <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
                   <SelectItem value="revenue_share">Revenue Share (%)</SelectItem>
+                  <SelectItem value="venue_sponsored">Venue-Sponsored (Venue pays Creator)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -967,6 +1058,13 @@ function VenueDashboardContent() {
               <div>
                 <Label>Access Fee (€, optional — 0 for fully free access)</Label>
                 <Input type="number" min="0" placeholder="e.g. 0" value={offerForm.accessFee} onChange={e => setOfferForm(f => ({ ...f, accessFee: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "venue_sponsored" && (
+              <div>
+                <Label>Sponsorship Fee (€) — amount you pay to the creator</Label>
+                <Input type="number" min="1" placeholder="e.g. 200" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
+                <p className="text-xs text-gray-500 mt-1">You will be charged this amount via Stripe when you accept. Paid to the creator 7 days after the event.</p>
               </div>
             )}
 

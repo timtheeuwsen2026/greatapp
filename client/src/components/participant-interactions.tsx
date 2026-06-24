@@ -94,19 +94,24 @@ interface Reaction {
 interface ParticipantProfile {
   id: string;
   userId: string;
-  bio?: string;
+  displayName?: string;
+  bio?: string | null;
+  avatarUrl?: string | null;
+  location?: string | null;
   interests?: string[];
-  travelStyle?: string;
+  travelStyle?: string[];
   languages?: string[];
-  experienceLevel?: string;
-  socialMediaLinks?: any;
-  preferredContactMethod?: string;
-  isVisible: boolean;
+  experienceLevel?: string | null;
+  fitnessLevel?: string | null;
+  occupation?: string | null;
+  skills?: string[];
+  rolePreferences?: string[];
+  profileVisibility?: string;
   user?: {
     id: string;
     firstName: string;
     lastName: string;
-    profileImageUrl: string;
+    profileImageUrl: string | null;
   };
 }
 
@@ -132,6 +137,7 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
   const [newMessage, setNewMessage] = useState("");
   const [newAnnouncement, setNewAnnouncement] = useState({ title: "", content: "", priority: "medium" });
   const [activeTab, setActiveTab] = useState("chat");
+  const [selectedParticipant, setSelectedParticipant] = useState<ParticipantProfile | null>(null);
 
   // Fetch messages
   const { data: messages = [], isLoading: messagesLoading } = useQuery<Message[]>({
@@ -392,73 +398,185 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
               <div className="flex items-center justify-center h-32">
                 <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
               </div>
+            ) : participants.length === 0 ? (
+              <div className="text-center text-gray-500 py-8">
+                <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No participants yet.</p>
+              </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {participants.map((participant) => (
-                  <Card key={participant.id} className="p-4">
-                    <div className="flex items-start space-x-3">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={participant.user?.profileImageUrl} />
-                        <AvatarFallback>
-                          {participant.user?.firstName?.[0]}{participant.user?.lastName?.[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-sm font-medium">
-                            {participant.user?.firstName} {participant.user?.lastName}
-                          </h4>
-                          <span className="text-lg">
-                            {getTravelStyleIcon(participant.travelStyle)}
-                          </span>
-                        </div>
-                        
-                        {participant.bio && (
-                          <p className="text-xs text-gray-600 mt-1 line-clamp-2">
-                            {participant.bio}
-                          </p>
-                        )}
-                        
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {participant.experienceLevel && (
-                            <Badge variant="outline" className="text-xs">
-                              {participant.experienceLevel}
-                            </Badge>
+                {participants.map((participant) => {
+                  const name = participant.displayName ||
+                    `${participant.user?.firstName ?? ''} ${participant.user?.lastName ?? ''}`.trim() ||
+                    'Explorer';
+                  const avatar = participant.avatarUrl || participant.user?.profileImageUrl;
+                  const initials = [participant.user?.firstName?.[0], participant.user?.lastName?.[0]].filter(Boolean).join('') || name[0]?.toUpperCase();
+                  return (
+                    <Card
+                      key={participant.id}
+                      className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => setSelectedParticipant(participant)}
+                    >
+                      <div className="flex items-start space-x-3">
+                        <Avatar className="h-10 w-10 shrink-0">
+                          <AvatarImage src={avatar ?? undefined} />
+                          <AvatarFallback>{initials}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-medium truncate">{name}</h4>
+                            {(participant.travelStyle ?? []).length > 0 && (
+                              <span className="text-lg ml-2 shrink-0">
+                                {getTravelStyleIcon((participant.travelStyle ?? [])[0])}
+                              </span>
+                            )}
+                          </div>
+
+                          {participant.location && (
+                            <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                              <MapPin className="h-3 w-3" />{participant.location}
+                            </p>
                           )}
-                          {participant.languages?.slice(0, 2).map((language) => (
-                            <Badge key={language} variant="secondary" className="text-xs">
-                              <Globe className="h-3 w-3 mr-1" />
-                              {language}
+
+                          {participant.bio && (
+                            <p className="text-xs text-gray-600 mt-1 line-clamp-2">{participant.bio}</p>
+                          )}
+
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {participant.experienceLevel && (
+                              <Badge variant="outline" className="text-xs">{participant.experienceLevel}</Badge>
+                            )}
+                            {(participant.languages ?? []).slice(0, 2).map((lang) => (
+                              <Badge key={lang} variant="secondary" className="text-xs">
+                                <Globe className="h-3 w-3 mr-1" />{lang}
+                              </Badge>
+                            ))}
+                          </div>
+
+                          {(participant.interests ?? []).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {(participant.interests ?? []).slice(0, 3).map((interest) => (
+                                <span key={interest} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                  {interest}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          <p className="text-xs text-primary mt-2">Tap to view full profile →</p>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Profile detail dialog */}
+            <Dialog open={!!selectedParticipant} onOpenChange={(open) => !open && setSelectedParticipant(null)}>
+              <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+                {selectedParticipant && (() => {
+                  const p = selectedParticipant;
+                  const name = p.displayName || `${p.user?.firstName ?? ''} ${p.user?.lastName ?? ''}`.trim() || 'Explorer';
+                  const avatar = p.avatarUrl || p.user?.profileImageUrl;
+                  const initials = [p.user?.firstName?.[0], p.user?.lastName?.[0]].filter(Boolean).join('') || name[0]?.toUpperCase();
+                  return (
+                    <>
+                      <DialogHeader>
+                        <div className="flex items-center gap-4">
+                          <Avatar className="h-16 w-16">
+                            <AvatarImage src={avatar ?? undefined} />
+                            <AvatarFallback className="text-lg">{initials}</AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <DialogTitle className="text-xl">{name}</DialogTitle>
+                            {p.location && (
+                              <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                                <MapPin className="h-3 w-3" />{p.location}
+                              </p>
+                            )}
+                            {p.occupation && (
+                              <p className="text-sm text-gray-600 mt-0.5">{p.occupation}</p>
+                            )}
+                          </div>
+                        </div>
+                      </DialogHeader>
+
+                      <div className="space-y-4 mt-2">
+                        {p.bio && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">About</p>
+                            <p className="text-sm text-gray-700">{p.bio}</p>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                          {p.experienceLevel && (
+                            <Badge variant="outline">{p.experienceLevel}</Badge>
+                          )}
+                          {p.fitnessLevel && (
+                            <Badge variant="outline">{p.fitnessLevel}</Badge>
+                          )}
+                          {(p.travelStyle ?? []).map((s) => (
+                            <Badge key={s} variant="secondary">
+                              {getTravelStyleIcon(s)} {s}
                             </Badge>
                           ))}
                         </div>
 
-                        {participant.interests && participant.interests.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {participant.interests.slice(0, 3).map((interest) => (
-                              <span key={interest} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                {interest}
-                              </span>
-                            ))}
+                        {(p.interests ?? []).length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Interests</p>
+                            <div className="flex flex-wrap gap-1">
+                              {(p.interests ?? []).map((interest) => (
+                                <span key={interest} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                  {interest}
+                                </span>
+                              ))}
+                            </div>
                           </div>
                         )}
 
-                        <div className="flex space-x-2 mt-3">
-                          <Button size="sm" variant="outline" className="text-xs">
-                            <MessageCircle className="h-3 w-3 mr-1" />
-                            Message
-                          </Button>
-                          <Button size="sm" variant="outline" className="text-xs">
-                            <UserPlus className="h-3 w-3 mr-1" />
-                            Connect
-                          </Button>
-                        </div>
+                        {(p.skills ?? []).length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Skills</p>
+                            <div className="flex flex-wrap gap-1">
+                              {(p.skills ?? []).map((skill) => (
+                                <Badge key={skill} variant="secondary" className="text-xs">{skill}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {(p.languages ?? []).length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Languages</p>
+                            <div className="flex flex-wrap gap-1">
+                              {(p.languages ?? []).map((lang) => (
+                                <Badge key={lang} variant="outline" className="text-xs">
+                                  <Globe className="h-3 w-3 mr-1" />{lang}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {(p.rolePreferences ?? []).length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Open To Roles</p>
+                            <div className="flex flex-wrap gap-1">
+                              {(p.rolePreferences ?? []).map((r) => (
+                                <Badge key={r} className="text-xs">{r}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            )}
+                    </>
+                  );
+                })()}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           <TabsContent value="announcements" className="space-y-4">

@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Calendar, MapPin, Users, Settings, Plus, Eye, EyeOff } from "lucide-react";
+import { Calendar, MapPin, Users, Settings, Plus, Eye, EyeOff, AlertTriangle, RefreshCw, XCircle } from "lucide-react";
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
 import { apiRequest } from "@/lib/queryClient";
@@ -58,6 +58,19 @@ export default function MyExperiences() {
       showParticipantList: !currentValue
     });
   };
+
+  const resubmitExperience = useMutation({
+    mutationFn: async (experienceId: string) => {
+      return await apiRequest("POST", `/api/experiences/${experienceId}/resubmit`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
+      toast({ title: "Submitted for review", description: "Your experience has been sent back to the admin for review." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Resubmit failed", description: error?.message || "Something went wrong.", variant: "destructive" });
+    },
+  });
 
   console.log("My Experiences page loaded for user:", user?.email);
   console.log("Creator experiences data:", experiences);
@@ -193,6 +206,44 @@ export default function MyExperiences() {
                           </p>
                         )}
 
+                        {/* Rejection details */}
+                        {experience.status === "rejected" && (() => {
+                          const count = experience.rejectionCount ?? 0;
+                          const locked = count >= 3;
+                          return (
+                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 space-y-2">
+                              <div className="flex items-start gap-2">
+                                <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                                <div className="flex-1">
+                                  <p className="text-sm font-medium text-red-700">Rejected by admin</p>
+                                  {experience.reviewNotes && (
+                                    <p className="text-sm text-red-600 mt-0.5">{experience.reviewNotes}</p>
+                                  )}
+                                </div>
+                                <span className="text-xs text-red-400 shrink-0">Rejection {count}/3</span>
+                              </div>
+                              {!locked && count >= 1 && (
+                                <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2">
+                                  <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+                                  <p className="text-xs text-amber-700">
+                                    {count === 2
+                                      ? "Warning: if this is rejected again you will need to create a new experience."
+                                      : "If this offer is rejected 3 times, you will need to create a new offer."}
+                                  </p>
+                                </div>
+                              )}
+                              {locked && (
+                                <div className="flex items-start gap-2 rounded-md bg-red-100 border border-red-300 px-3 py-2">
+                                  <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+                                  <p className="text-xs text-red-700 font-medium">
+                                    This experience has been rejected 3 times. Please create a new one.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* Participant Visibility Control */}
                         <div className="mt-4 p-3 bg-gray-50 rounded-lg border">
                           <div className="flex items-center justify-between">
@@ -226,18 +277,32 @@ export default function MyExperiences() {
                         </div>
                       </div>
                       
-                      <div className="flex flex-col gap-2 lg:min-w-[140px]">
+                      <div className="flex flex-col gap-2 lg:min-w-[160px]">
                         <Button asChild size="sm" data-testid={`button-view-experience-${experience.id}`}>
                           <Link href={`/experience/${experience.id}`}>
                             View Experience
                           </Link>
                         </Button>
-                        <Button asChild variant="outline" size="sm" data-testid={`button-edit-experience-${experience.id}`}>
-                          <Link href={`/journey-builder?edit=${experience.id}`}>
-                            <Settings className="h-4 w-4 mr-1" />
-                            Edit
-                          </Link>
-                        </Button>
+                        {(experience.rejectionCount ?? 0) < 3 && (
+                          <Button asChild variant="outline" size="sm" data-testid={`button-edit-experience-${experience.id}`}>
+                            <Link href={`/journey-builder?edit=${experience.id}`}>
+                              <Settings className="h-4 w-4 mr-1" />
+                              Edit
+                            </Link>
+                          </Button>
+                        )}
+                        {experience.status === "rejected" && (experience.rejectionCount ?? 0) < 3 && (
+                          <Button
+                            size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white"
+                            disabled={resubmitExperience.isPending}
+                            onClick={() => resubmitExperience.mutate(experience.id)}
+                            data-testid={`button-resubmit-experience-${experience.id}`}
+                          >
+                            <RefreshCw className="h-4 w-4 mr-1" />
+                            Submit Again
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </CardContent>

@@ -89,6 +89,12 @@ import {
   type InsertReservation,
   referralClicks,
   experienceMessages,
+  splitRecipients,
+  type SplitRecipient,
+  type InsertSplitRecipient,
+  scheduledPayouts,
+  type ScheduledPayout,
+  type InsertScheduledPayout,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull } from "drizzle-orm";
@@ -252,9 +258,11 @@ export interface IStorage {
   upsertVenueContract(contract: InsertVenueContract): Promise<VenueContract>;
   getVenueContractsByVenueIds(venueIds: string[], status?: string): Promise<any[]>;
   getVenueContractByExperience(experienceId: string): Promise<VenueContract | undefined>;
+  getVenueContractById(contractId: string): Promise<VenueContract | undefined>;
   getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
   acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract>;
   declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract>;
+  updateVenueContractSponsorshipStatus(contractId: string, status: string, paymentIntentId?: string): Promise<VenueContract>;
 
   // Venue Offers — Reverse Handshake bids (venue owner → creator)
   createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any>;
@@ -355,6 +363,17 @@ export interface IStorage {
     experience: Experience;
     participant: User | undefined;
   }>>;
+
+  // Split recipients (multi-party payout routing per experience)
+  createSplitRecipients(recipients: InsertSplitRecipient[]): Promise<SplitRecipient[]>;
+  getSplitRecipientsByExperience(experienceId: string): Promise<SplitRecipient[]>;
+  deleteSplitRecipientsByExperience(experienceId: string): Promise<void>;
+
+  // Scheduled payouts (7-day post-event payout jobs)
+  upsertScheduledPayout(experienceId: string, scheduledFor: Date, totalGrossCents: number): Promise<ScheduledPayout>;
+  getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined>;
+  updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout>;
+  getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -716,7 +735,7 @@ export class DatabaseStorage implements IStorage {
       model: data.model,
       terms: data.terms as any,
       message: data.message || null,
-      status: "pending",
+      status: "admin_review",
     }).returning();
     return offer;
   }
@@ -750,6 +769,7 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         inArray(venueOffers.experienceId, openIds),
         eq((venueOffers as any).status, "pending"),
+        eq((venues as any).status, "approved"),
       ))
       .orderBy(desc((venueOffers as any).createdAt));
     return rows;
@@ -784,6 +804,35 @@ export class DatabaseStorage implements IStorage {
   async updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any> {
     const [updated] = await db.update(venueOffers)
       .set({ status, updatedAt: new Date() } as any)
+      .where(eq(venueOffers.id, offerId))
+      .returning();
+    return updated;
+  }
+
+  async getVenueOffersForAdmin(): Promise<any[]> {
+    return await db.select({
+      offer: venueOffers,
+      venue: venues,
+      experience: experiences,
+    })
+      .from(venueOffers)
+      .leftJoin(venues, eq(venueOffers.venueId, venues.id))
+      .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+      .where(eq((venueOffers as any).status, "admin_review"))
+      .orderBy(desc((venueOffers as any).createdAt));
+  }
+
+  async approveVenueOffer(offerId: string): Promise<any> {
+    const [updated] = await db.update(venueOffers)
+      .set({ status: "pending", updatedAt: new Date() } as any)
+      .where(eq(venueOffers.id, offerId))
+      .returning();
+    return updated;
+  }
+
+  async rejectVenueOfferByAdmin(offerId: string): Promise<any> {
+    const [updated] = await db.update(venueOffers)
+      .set({ status: "declined", updatedAt: new Date() } as any)
       .where(eq(venueOffers.id, offerId))
       .returning();
     return updated;
@@ -924,12 +973,28 @@ export class DatabaseStorage implements IStorage {
   async rejectExperience(id: string, reviewedBy: string, reviewNotes?: string): Promise<Experience> {
     const [experience] = await db
       .update(experiences)
-      .set({ 
-        status: "rejected", 
+      .set({
+        status: "rejected",
         reviewedBy,
         reviewedAt: new Date(),
         reviewNotes: reviewNotes || null,
-        updatedAt: new Date() 
+        rejectionCount: sql`COALESCE(${experiences.rejectionCount}, 0) + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(experiences.id, id))
+      .returning();
+    return experience;
+  }
+
+  async resubmitExperience(id: string): Promise<Experience> {
+    const [experience] = await db
+      .update(experiences)
+      .set({
+        status: "pending_approval",
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNotes: null,
+        updatedAt: new Date(),
       })
       .where(eq(experiences.id, id))
       .returning();
@@ -1828,13 +1893,30 @@ export class DatabaseStorage implements IStorage {
   async rejectVenue(id: string, reviewedBy: string, reviewNotes?: string): Promise<Venue> {
     const [venue] = await db
       .update(venues)
-      .set({ 
-        approved: false, 
-        status: 'rejected', 
+      .set({
+        approved: false,
+        status: 'rejected',
         reviewedBy,
         reviewedAt: new Date(),
         reviewNotes: reviewNotes || null,
-        updatedAt: new Date() 
+        rejectionCount: sql`COALESCE(${venues.rejectionCount}, 0) + 1`,
+        updatedAt: new Date()
+      })
+      .where(eq(venues.id, id))
+      .returning();
+    return venue;
+  }
+
+  async resubmitVenue(id: string): Promise<Venue> {
+    const [venue] = await db
+      .update(venues)
+      .set({
+        status: 'pending',
+        approved: false,
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNotes: null,
+        updatedAt: new Date(),
       })
       .where(eq(venues.id, id))
       .returning();
@@ -2073,45 +2155,93 @@ export class DatabaseStorage implements IStorage {
     return profile;
   }
 
-  async getProfilesByExperience(experienceId: string, requestingUserId?: string): Promise<ParticipantProfile[]> {
+  async getProfilesByExperience(experienceId: string, requestingUserId?: string): Promise<any[]> {
     try {
-      // Check if participant list should be shown and if user is authorized
       if (requestingUserId) {
         const [experience] = await db
-          .select({ 
+          .select({
             showParticipantList: experiences.showParticipantList,
-            creatorId: experiences.creatorId 
+            creatorId: experiences.creatorId,
           })
           .from(experiences)
           .where(eq(experiences.id, experienceId));
 
-        if (!experience) {
-          throw new Error("Experience not found");
-        }
+        if (!experience) throw new Error("Experience not found");
 
-        // If participant list is private and user is not the creator, throw authorization error
         if (!experience.showParticipantList && experience.creatorId !== requestingUserId) {
           throw new Error("UNAUTHORIZED_PRIVATE_PARTICIPANT_LIST");
         }
       }
 
-      // Get participants from bookings and then their profiles
+      // Include all active booking statuses — not just "confirmed"
+      const activeStatuses = [
+        'pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid',
+      ] as const;
+
+      // Join bookings with users to always have name + avatar
       const bookingUsers = await db
-        .select({ userId: bookings.userId })
+        .select({
+          userId: bookings.userId,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        })
         .from(bookings)
+        .innerJoin(users, eq(bookings.userId, users.id))
         .where(
           and(
             eq(bookings.experienceId, experienceId),
-            eq(bookings.status, "confirmed")
+            inArray(bookings.status, activeStatuses),
           )
         );
-      
+
       if (bookingUsers.length === 0) return [];
-      
-      const userIds = bookingUsers.map(b => b.userId);
-      return await db.select().from(participantProfiles).where(
-        inArray(participantProfiles.userId, userIds)
-      );
+
+      // Deduplicate (a user may have multiple bookings for different ticket types)
+      const seen = new Set<string>();
+      const uniqueUsers = bookingUsers.filter(bu => {
+        if (seen.has(bu.userId)) return false;
+        seen.add(bu.userId);
+        return true;
+      });
+
+      const userIds = uniqueUsers.map(bu => bu.userId);
+
+      // Fetch participant profiles if they have one set up
+      const profiles = await db
+        .select()
+        .from(participantProfiles)
+        .where(inArray(participantProfiles.userId, userIds));
+
+      const profileMap = new Map(profiles.map(p => [p.userId, p]));
+
+      // Every booking holder appears; profile fields are optional extras
+      return uniqueUsers.map(bu => {
+        const profile = profileMap.get(bu.userId);
+        return {
+          id: profile?.id ?? bu.userId,
+          userId: bu.userId,
+          displayName: profile?.displayName ?? ([bu.firstName, bu.lastName].filter(Boolean).join(' ') || 'Explorer'),
+          bio: profile?.bio ?? null,
+          avatarUrl: profile?.avatarUrl ?? bu.profileImageUrl,
+          location: profile?.location ?? null,
+          interests: profile?.interests ?? [],
+          travelStyle: profile?.travelStyle ?? [],
+          languages: profile?.languages ?? [],
+          experienceLevel: profile?.experienceLevel ?? null,
+          fitnessLevel: profile?.fitnessLevel ?? null,
+          occupation: profile?.occupation ?? null,
+          skills: profile?.skills ?? [],
+          rolePreferences: profile?.rolePreferences ?? [],
+          profileVisibility: profile?.profileVisibility ?? 'Public',
+          user: {
+            id: bu.userId,
+            firstName: bu.firstName ?? '',
+            lastName: bu.lastName ?? '',
+            profileImageUrl: bu.profileImageUrl ?? null,
+          },
+        };
+      });
     } catch (error) {
       console.error("Error fetching participant profiles by experience:", error);
       throw error;
@@ -2437,6 +2567,35 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
       .returning();
     if (!contract) throw new Error("Contract not found");
+    return contract;
+  }
+
+  async getVenueContractById(contractId: string): Promise<VenueContract | undefined> {
+    const [contract] = await db
+      .select()
+      .from(venueContracts)
+      .where(eq(venueContracts.id, contractId));
+    return contract;
+  }
+
+  async updateVenueContractSponsorshipStatus(
+    contractId: string,
+    status: string,
+    paymentIntentId?: string,
+  ): Promise<VenueContract> {
+    const updates: Record<string, any> = {
+      sponsorshipPaymentStatus: status,
+      updatedAt: new Date(),
+    };
+    if (paymentIntentId) updates.stripeSponsorshipPaymentIntentId = paymentIntentId;
+    if (status === 'paid') updates.sponsorshipPaidAt = new Date();
+
+    const [contract] = await db
+      .update(venueContracts)
+      .set(updates as any)
+      .where(eq(venueContracts.id, contractId))
+      .returning();
+    if (!contract) throw new Error(`Contract ${contractId} not found`);
     return contract;
   }
 
@@ -3133,6 +3292,75 @@ export class DatabaseStorage implements IStorage {
     }
     
     return result;
+  }
+
+  // ── Split Recipients ─────────────────────────────────────────────────────
+
+  async createSplitRecipients(recipients: InsertSplitRecipient[]): Promise<SplitRecipient[]> {
+    if (recipients.length === 0) return [];
+    return db.insert(splitRecipients).values(recipients).returning();
+  }
+
+  async getSplitRecipientsByExperience(experienceId: string): Promise<SplitRecipient[]> {
+    return db
+      .select()
+      .from(splitRecipients)
+      .where(and(eq(splitRecipients.experienceId, experienceId), eq(splitRecipients.isActive, true)))
+      .orderBy(asc(splitRecipients.priority));
+  }
+
+  async deleteSplitRecipientsByExperience(experienceId: string): Promise<void> {
+    await db.delete(splitRecipients).where(eq(splitRecipients.experienceId, experienceId));
+  }
+
+  // ── Scheduled Payouts ────────────────────────────────────────────────────
+
+  async upsertScheduledPayout(experienceId: string, scheduledFor: Date, totalGrossCents: number): Promise<ScheduledPayout> {
+    const existing = await this.getScheduledPayoutByExperience(experienceId);
+    if (existing) {
+      const [updated] = await db
+        .update(scheduledPayouts)
+        .set({ scheduledFor, totalGrossAmountCents: totalGrossCents, updatedAt: new Date() })
+        .where(eq(scheduledPayouts.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(scheduledPayouts)
+      .values({ experienceId, scheduledFor, totalGrossAmountCents: totalGrossCents })
+      .returning();
+    return created;
+  }
+
+  async getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined> {
+    const [payout] = await db
+      .select()
+      .from(scheduledPayouts)
+      .where(eq(scheduledPayouts.experienceId, experienceId));
+    return payout;
+  }
+
+  async updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout> {
+    const [updated] = await db
+      .update(scheduledPayouts)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(scheduledPayouts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string }[]> {
+    const now = new Date();
+    const rows = await db
+      .select({ experienceId: scheduledPayouts.experienceId, scheduledPayoutId: scheduledPayouts.id })
+      .from(scheduledPayouts)
+      .where(
+        and(
+          eq(scheduledPayouts.status, "pending"),
+          sql`${scheduledPayouts.scheduledFor} <= ${now}`
+        )
+      );
+    return rows;
   }
 }
 

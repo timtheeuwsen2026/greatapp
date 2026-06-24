@@ -92,61 +92,6 @@ export default function AuthPage() {
     navigate(destinations[userRole] ?? "/");
   }
 
-  async function handleExistingUser(token: string) {
-    const res = await fetch("/api/auth/user", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const dbUser = res.ok ? await res.json() : null;
-
-    const existingRoles: string[] = Array.isArray(dbUser?.userRoles)
-      ? dbUser.userRoles as string[]
-      : [];
-
-    // Role already exists on this account — block with a clear error
-    if (dbUser?.role === role || existingRoles.includes(role)) {
-      toast({
-        title: "Account already exists",
-        description: `An account with this email already has the ${getRoleLabel(role)} role. Please log in instead.`,
-        variant: "destructive",
-      });
-      setMode("login");
-      return;
-    }
-
-    // Role is new — add it to userRoles without changing the active role
-    const addRes = await fetch("/api/auth/add-role", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ role }),
-    });
-
-    if (!addRes.ok) {
-      const data = await addRes.json().catch(() => ({}));
-      toast({
-        title: addRes.status === 409 ? "Account already exists" : "Failed to add role",
-        description:
-          data?.message ||
-          (addRes.status === 409
-            ? `An account with this email already has the ${getRoleLabel(role)} role. Please log in instead.`
-            : "Something went wrong. Please try again."),
-        variant: "destructive",
-      });
-      return;
-    }
-
-    toast({
-      title: `${getRoleLabel(role)} role added!`,
-      description:
-        "You can switch between your roles anytime using the menu in the top-right corner.",
-    });
-
-    // Stay on their current active role's dashboard
-    redirectAfterAuth(dbUser?.role ?? role);
-  }
-
   function showEmailExistsError() {
     toast({
       title: "Email already exists",

@@ -1,7 +1,8 @@
 import { type ReactNode, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
+  Briefcase,
   Building2,
   Calendar,
   ExternalLink,
@@ -9,9 +10,12 @@ import {
   EyeOff,
   Heart,
   Lock,
+  MapPin,
   Megaphone,
   Pencil,
   Settings,
+  Sparkles,
+  Ticket,
   User,
   Users,
   Wrench,
@@ -26,6 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useRoleSwitch } from "@/hooks/useRoleSwitch";
 
 type ParticipantProfileStatus = {
   hasProfile: boolean;
@@ -148,6 +154,14 @@ function EmptyRoleProfile({
   );
 }
 
+const ALL_ROLES = [
+  { value: "participant", label: "Participant", description: "Discover and join experiences", icon: Users },
+  { value: "creator", label: "Creator / Organiser", description: "Create and host experiences", icon: Sparkles },
+  { value: "venue_provider", label: "Venue Provider", description: "List your space for events", icon: MapPin },
+  { value: "service_provider", label: "Service Provider", description: "Offer photography, catering, or wellness", icon: Briefcase },
+  { value: "promoter", label: "Promoter", description: "Promote trips and earn commission", icon: Ticket },
+] as const;
+
 export default function Profile() {
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/user"] });
   const { data: participantProfileStatus } = useQuery<ParticipantProfileStatus>({ queryKey: ["/api/participant-profile/status"], retry: false });
@@ -162,6 +176,10 @@ export default function Profile() {
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
+  const [addingRole, setAddingRole] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { switchRole, isLoading: isSwitching } = useRoleSwitch();
 
   const role = user?.role as string | undefined;
   const participantProfile = participantProfileStatus?.profile || null;
@@ -182,6 +200,42 @@ export default function Profile() {
     promoter: "Promoter",
     admin: "Admin",
   };
+
+  async function handleAddRole(newRole: string) {
+    setAddingRole(newRole);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+      const roleLabel = ALL_ROLES.find(r => r.value === newRole)?.label ?? newRole;
+      const res = await fetch("/api/auth/add-role", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ role: newRole }),
+      });
+      const resData = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({
+          title: "Failed to add role",
+          description: resData?.message || "Something went wrong. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      toast({
+        title: "Role added!",
+        description: `${roleLabel} role has been added. Switch to it anytime from the account menu.`,
+      });
+      setRoleDialogOpen(false);
+    } catch (err: any) {
+      toast({ title: "Failed to add role", description: err.message, variant: "destructive" });
+    } finally {
+      setAddingRole(null);
+    }
+  }
 
   async function handlePasswordChange(event: React.FormEvent) {
     event.preventDefault();
@@ -233,6 +287,7 @@ export default function Profile() {
   }
 
   return (
+    <>
     <div className="min-h-screen bg-gray-50">
       <Navigation />
       <div className="container mx-auto px-4 py-8">
@@ -242,11 +297,9 @@ export default function Profile() {
               <h1 className="text-3xl font-bold text-gray-900">My Account</h1>
               <p className="text-gray-600">Manage your account and role profile details</p>
             </div>
-            <Button variant="outline" asChild>
-              <Link href="/profile-setup">
-                <Settings className="mr-2 h-4 w-4" />
-                Add or Switch Role
-              </Link>
+            <Button variant="outline" onClick={() => setRoleDialogOpen(true)}>
+              <Settings className="mr-2 h-4 w-4" />
+              Add or Switch Role
             </Button>
           </div>
 
@@ -685,5 +738,82 @@ export default function Profile() {
         </div>
       </div>
     </div>
+
+    <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Switch or Add Role</DialogTitle>
+          <DialogDescription>
+            Switch to a role you already have, or add a new one to your account.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-2">
+          {/* Existing roles — switch active */}
+          {allRoles.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Your Roles</p>
+              {ALL_ROLES.filter(r => allRoles.includes(r.value)).map(({ value, label, description, icon: Icon }) => {
+                const isActive = role === value;
+                return (
+                  <div
+                    key={value}
+                    className={`flex items-center justify-between rounded-lg border p-3 ${isActive ? "bg-primary/5 border-primary/20" : ""}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-5 w-5 text-gray-500 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium">{label}</p>
+                        <p className="text-xs text-gray-500">{description}</p>
+                      </div>
+                    </div>
+                    {isActive ? (
+                      <Badge variant="secondary" className="text-xs shrink-0">Active</Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        disabled={isSwitching || addingRole !== null}
+                        onClick={() => { setRoleDialogOpen(false); switchRole(value as any); }}
+                      >
+                        Switch
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Roles not yet added */}
+          {ALL_ROLES.filter(r => !allRoles.includes(r.value)).length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Add a New Role</p>
+              {ALL_ROLES.filter(r => !allRoles.includes(r.value)).map(({ value, label, description, icon: Icon }) => (
+                <div key={value} className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="flex items-center gap-3">
+                    <Icon className="h-5 w-5 text-gray-500 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">{label}</p>
+                      <p className="text-xs text-gray-500">{description}</p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    disabled={addingRole !== null || isSwitching}
+                    onClick={() => handleAddRole(value)}
+                  >
+                    {addingRole === value ? "Adding…" : "Add"}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

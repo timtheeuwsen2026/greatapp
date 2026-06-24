@@ -32,6 +32,8 @@ import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
+import { handleStripeWebhook } from "./stripe-webhook";
+import { scheduleExperiencePayout } from "./payout-scheduler";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -480,69 +482,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Handle the event
+    // Dispatch to the comprehensive webhook handler
     try {
-      switch (event.type) {
-        case 'payment_intent.succeeded': {
-          const paymentIntent = event.data.object as Stripe.PaymentIntent;
-          console.log(`PaymentIntent ${paymentIntent.id} succeeded`);
-          
-          // Find booking by payment intent ID
-          const booking = await storage.getBookingByPaymentIntent(paymentIntent.id);
-          if (booking) {
-            // Check if this is a deposit payment or balance payment
-            const isBalancePayment = paymentIntent.metadata?.isBalancePayment === 'true';
-            
-            if (isBalancePayment) {
-              // Balance payment succeeded - mark balance as paid
-              await storage.updateBookingBalancePaid(booking.id, true);
-              console.log(`Balance payment succeeded for booking ${booking.id}`);
-            } else {
-              // Initial deposit/full payment succeeded - already handled in checkout flow
-              console.log(`Deposit/full payment succeeded for booking ${booking.id}`);
-            }
-          }
-          break;
-        }
-
-        case 'payment_intent.payment_failed': {
-          const paymentIntent = event.data.object as Stripe.PaymentIntent;
-          console.log(`PaymentIntent ${paymentIntent.id} failed`);
-          
-          // Find booking and mark as failed
-          const booking = await storage.getBookingByPaymentIntent(paymentIntent.id);
-          if (booking) {
-            await storage.updateBookingStatus(booking.id, 'failed');
-            console.log(`Marked booking ${booking.id} as failed due to payment failure`);
-          }
-          break;
-        }
-
-        case 'charge.refunded': {
-          const charge = event.data.object as Stripe.Charge;
-          console.log(`Charge ${charge.id} refunded`);
-          
-          // Find booking by payment intent and mark as refunded
-          if (charge.payment_intent) {
-            const paymentIntentId = typeof charge.payment_intent === 'string' 
-              ? charge.payment_intent 
-              : charge.payment_intent.id;
-            const booking = await storage.getBookingByPaymentIntent(paymentIntentId);
-            if (booking && booking.status !== 'refunded') {
-              await storage.updateBookingStatus(booking.id, 'refunded');
-              console.log(`Marked booking ${booking.id} as refunded`);
-            }
-          }
-          break;
-        }
-
-        default:
-          console.log(`Unhandled event type: ${event.type}`);
-      }
-
+      await handleStripeWebhook(event, stripe);
       res.json({ received: true });
     } catch (error: any) {
-      console.error(`Error handling webhook event ${event.type}:`, error);
+      console.error(`[Webhook] Error handling ${event.type}:`, error);
       res.status(500).json({ error: 'Webhook handler failed' });
     }
   });
@@ -719,8 +664,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (role === 'admin' && !await checkIsAdmin(req)) {
         return res.status(403).json({ message: 'Only admins can assign the admin role' });
       }
-
-      return res.status(409).json({ message: 'This email already exists' });
 
       const user = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
       const currentRoles: string[] = (user?.userRoles as unknown as string[]) || [];
@@ -2970,7 +2913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const experience = await storage.getExperience(req.params.id);
-      
+
       if (!experience || experience.creatorId !== userId) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -2980,6 +2923,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating experience:", error);
       res.status(500).json({ message: "Failed to update experience" });
+    }
+  });
+
+  // Resubmit a rejected experience for admin review
+  app.post("/api/experiences/:id/resubmit", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience || experience.creatorId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      if (experience.status !== "rejected") {
+        return res.status(400).json({ message: "Only rejected experiences can be resubmitted" });
+      }
+      const rejectionCount = (experience.rejectionCount ?? 0) as number;
+      if (rejectionCount >= 3) {
+        return res.status(400).json({ message: "This experience has been rejected 3 times. Please create a new one." });
+      }
+      const updated = await storage.resubmitExperience(req.params.id);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error resubmitting experience:", error);
+      res.status(500).json({ message: "Failed to resubmit experience" });
     }
   });
 
@@ -3049,21 +3015,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let balanceDueDate = null;
 
       const ticketSkus = experience.ticketSkus as any[] || [];
-      
+
       let selectedTicket: any = null;
       if (bookingTicketSkuId && ticketSkus.length > 0) {
-        selectedTicket = ticketSkus.find((t: any, i: number) => 
+        selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === bookingTicketSkuId
         );
       }
 
-      const resolvedFullPrice = selectedTicket && selectedTicket.pricePerPerson !== undefined && selectedTicket.pricePerPerson !== null
-        ? parseFloat(selectedTicket.pricePerPerson.toString())
-        : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
-          ? parseFloat((experience as any).pricePerPerson.toString())
-          : (experience.price ? parseFloat(experience.price.toString()) : fullPrice));
+      // PWYW: the client sends amount = buyer-chosen price; validate against minPrice
+      if (selectedTicket?.pricingMode === 'pwyw') {
+        const minPrice = parseFloat(selectedTicket.minPrice ?? 0);
+        const chosenPrice = parseFloat((amount || 0).toString());
+        if (!Number.isFinite(chosenPrice) || chosenPrice < minPrice) {
+          return res.status(400).json({ message: `Minimum price for this ticket is ${minPrice}`, minPrice });
+        }
+        fullPrice = chosenPrice;
+      } else {
+        const resolvedFullPrice = selectedTicket && selectedTicket.pricePerPerson !== undefined && selectedTicket.pricePerPerson !== null
+          ? parseFloat(selectedTicket.pricePerPerson.toString())
+          : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
+            ? parseFloat((experience as any).pricePerPerson.toString())
+            : (experience.price ? parseFloat(experience.price.toString()) : fullPrice));
 
-      fullPrice = Number.isFinite(resolvedFullPrice) ? resolvedFullPrice : 0;
+        fullPrice = Number.isFinite(resolvedFullPrice) ? resolvedFullPrice : 0;
+      }
 
       if (fullPrice < 0) {
         return res.status(400).json({ message: "Unable to determine booking price for this experience" });
@@ -4511,8 +4487,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Stripe payment routes
   app.post("/api/create-payment-intent", async (req, res) => {
     try {
-      const { amount, experienceId, ticketSkuId, paymentMode } = req.body;
-      
+      // userPrice: buyer-entered amount for PWYW tickets (optional)
+      const { amount, experienceId, ticketSkuId, paymentMode, userPrice } = req.body;
+
       const experience = await storage.getExperience(experienceId);
       if (!experience) {
         return res.status(404).json({ message: "Experience not found" });
@@ -4520,32 +4497,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const isMVGExperience = experience.requireMinimumParticipants;
       const ticketSkus = experience.ticketSkus as any[] || [];
-      
+
       let selectedTicket: any = null;
       if (ticketSkuId && ticketSkus.length > 0) {
-        selectedTicket = ticketSkus.find((t: any, i: number) => 
+        selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === ticketSkuId
         );
       }
-      
-      const fullPrice = selectedTicket 
-        ? parseFloat(selectedTicket.pricePerPerson || 0)
-        : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
-          ? parseFloat((experience as any).pricePerPerson.toString())
-          : (experience.price ? parseFloat(experience.price.toString()) : parseFloat((amount || 0).toString())));
+
+      // ── PWYW handling ────────────────────────────────────────────────────
+      const isPWYW = selectedTicket?.pricingMode === 'pwyw';
+      let fullPrice: number;
+
+      if (isPWYW) {
+        const minPrice = parseFloat(selectedTicket.minPrice ?? 0);
+        const parsed = parseFloat(String(userPrice ?? selectedTicket.suggestedPrice ?? selectedTicket.pricePerPerson ?? 0));
+        if (!Number.isFinite(parsed) || parsed < minPrice) {
+          return res.status(400).json({
+            message: `Minimum price for this ticket is ${minPrice}`,
+            minPrice,
+          });
+        }
+        fullPrice = parsed;
+      } else {
+        fullPrice = selectedTicket
+          ? parseFloat(selectedTicket.pricePerPerson || 0)
+          : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
+            ? parseFloat((experience as any).pricePerPerson.toString())
+            : (experience.price ? parseFloat(experience.price.toString()) : parseFloat((amount || 0).toString())));
+      }
 
       if (!Number.isFinite(fullPrice) || fullPrice < 0) {
         return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
       }
-      
+
       const fixedDeposit = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
       const hasDeposit = experience.depositEnabled && fixedDeposit > 0;
-      
+
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
       const acceptedVenueContract = await storage.getAcceptedVenueContractForExperience(experienceId);
 
+      // Mode C: free RSVP (including PWYW where user chose €0 and minPrice is 0)
       if (fullPrice === 0) {
         return res.json({
           freeRsvp: true,
@@ -4557,6 +4551,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fullPrice: 0,
           ticketName,
           ticketSkuId: ticketSkuId || null,
+          pricingMode: selectedTicket?.pricingMode || 'fixed',
+          suggestedPrice: selectedTicket?.suggestedPrice ?? null,
+          minPrice: selectedTicket?.minPrice ?? 0,
           mvgMin: experience.mvgMin || experience.minimumParticipants,
           mvgDeadline: experience.mvgDeadline,
           venueContractId: acceptedVenueContract?.id || null,
@@ -4590,9 +4587,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           enabled: true,
         },
         metadata: { 
-          experienceId, 
+          experienceId,
           ticketSkuId: ticketSkuId || "",
           ticketName: ticketName || "",
+          pricingMode: isPWYW ? "pwyw" : "fixed",
           isMVGExperience: isMVGExperience?.toString() || "false",
           isDepositPayment: isDepositPayment.toString(),
           fullPrice: fullPrice.toString(),
@@ -4613,7 +4611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
-      res.json({ 
+      res.json({
         clientSecret: paymentIntent.client_secret,
         isMVGExperience,
         isDepositPayment,
@@ -4622,6 +4620,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fullPrice,
         ticketName,
         ticketSkuId: ticketSkuId || null,
+        pricingMode: isPWYW ? "pwyw" : "fixed",
+        suggestedPrice: selectedTicket?.suggestedPrice ?? null,
+        minPrice: selectedTicket?.minPrice ?? 0,
         mvgMin: experience.mvgMin || experience.minimumParticipants,
         mvgDeadline: experience.mvgDeadline,
         paymentMode: isDepositPayment ? 'deposit' : 'full',
@@ -5429,6 +5430,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // PAYMENT ENGINE — SPLIT RECIPIENTS & PAYOUT MANAGEMENT
+  // ============================================================================
+
+  // GET /api/experiences/:id/split-recipients — read payout routing for an experience
+  app.get("/api/experiences/:id/split-recipients", isAuthenticated, async (req: any, res) => {
+    try {
+      const recipients = await storage.getSplitRecipientsByExperience(req.params.id);
+      res.json(recipients);
+    } catch (error) {
+      console.error("Error fetching split recipients:", error);
+      res.status(500).json({ message: "Failed to fetch split recipients" });
+    }
+  });
+
+  // PUT /api/experiences/:id/split-recipients — set/replace all payout routing rows
+  // Body: Array<{ recipientType, userId?, stripeAccountId?, splitMode, splitValue, currency?, priority? }>
+  app.put("/api/experiences/:id/split-recipients", isAuthenticated, async (req: any, res) => {
+    try {
+      const isAdmin = await checkIsAdmin(req);
+      const experienceId = req.params.id;
+
+      // Allow creator or admin
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+
+      const userId = req.user.claims.sub;
+      if (!isAdmin && experience.creatorId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const recipientsInput: any[] = Array.isArray(req.body) ? req.body : [];
+      await storage.deleteSplitRecipientsByExperience(experienceId);
+
+      if (recipientsInput.length > 0) {
+        await storage.createSplitRecipients(
+          recipientsInput.map((r) => ({ ...r, experienceId }))
+        );
+      }
+
+      const saved = await storage.getSplitRecipientsByExperience(experienceId);
+      res.json(saved);
+    } catch (error) {
+      console.error("Error saving split recipients:", error);
+      res.status(500).json({ message: "Failed to save split recipients" });
+    }
+  });
+
+  // GET /api/experiences/:id/scheduled-payout — read the 7-day payout record
+  app.get("/api/experiences/:id/scheduled-payout", isAuthenticated, async (req: any, res) => {
+    try {
+      const payout = await storage.getScheduledPayoutByExperience(req.params.id);
+      res.json(payout ?? null);
+    } catch (error) {
+      console.error("Error fetching scheduled payout:", error);
+      res.status(500).json({ message: "Failed to fetch scheduled payout" });
+    }
+  });
+
+  // POST /api/experiences/:id/scheduled-payout/retry — admin can reset a failed payout
+  app.post("/api/experiences/:id/scheduled-payout/retry", isAuthenticated, async (req: any, res) => {
+    try {
+      const isAdmin = await checkIsAdmin(req);
+      if (!isAdmin) return res.status(403).json({ message: "Admin only" });
+
+      const payout = await storage.getScheduledPayoutByExperience(req.params.id);
+      if (!payout) return res.status(404).json({ message: "No scheduled payout found" });
+
+      const updated = await storage.updateScheduledPayout(payout.id, {
+        status: "pending",
+        errorMessage: null,
+        processedAt: null,
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error resetting payout:", error);
+      res.status(500).json({ message: "Failed to reset payout" });
+    }
+  });
+
+  // ============================================================================
   // VENUE ROUTES
   // ============================================================================
 
@@ -6013,11 +6095,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Resubmit a rejected venue for admin review
+  app.patch("/api/venues/:id/resubmit", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const venue = await storage.getVenue(req.params.id);
+      if (!venue) return res.status(404).json({ message: "Venue not found" });
+      if (venue.createdBy !== userId) return res.status(403).json({ message: "Unauthorized" });
+      if (venue.status !== "rejected") {
+        return res.status(400).json({ message: "Only rejected venues can be resubmitted" });
+      }
+      const rejectionCount = (venue.rejectionCount ?? 0) as number;
+      if (rejectionCount >= 3) {
+        return res.status(400).json({ message: "This venue has been rejected 3 times. Please create a new listing." });
+      }
+      const updated = await storage.resubmitVenue(req.params.id);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error resubmitting venue:", error);
+      res.status(500).json({ message: "Failed to resubmit venue" });
+    }
+  });
+
   app.delete("/api/venues/:id", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
       const isAdmin = await checkIsAdmin(req);
-      
+
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
@@ -9658,6 +9764,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Accept an offer → experience goes Live (status = 'approved')
+  // For venue_sponsored model, creates a Stripe Checkout Session for the sponsorship fee first.
+  // The experience goes live only after the venue pays (webhook: payment_intent.succeeded w/ type=venue_sponsorship).
   app.post('/api/venue/offers/:experienceId/accept', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -9682,6 +9790,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
       }
 
+      // ── Venue-Sponsored deal: charge the venue before going live ─────────
+      const isVenueSponsored = (experience as any).venueCompensationModel === 'venue_sponsored'
+        || contract.model === 'venue_sponsored';
+
+      if (isVenueSponsored) {
+        const sponsorshipAmount = parseFloat((experience as any).venueFixedFee || contract.terms?.fixedFee || 0);
+        const currency = ((experience as any).currency || 'eur').toLowerCase();
+
+        if (sponsorshipAmount <= 0) {
+          return res.status(400).json({ message: 'Venue-sponsored deal requires a non-zero fixedFee as the sponsorship amount' });
+        }
+
+        // Persist the contract with status 'pending_payment' (venue hasn't paid yet)
+        const updatedContract = await storage.updateVenueContractSponsorshipStatus(
+          contract.id, 'unpaid'
+        );
+
+        // Create Stripe Checkout Session — venue owner pays the sponsorship fee
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const sponsorshipMeta = {
+          type: 'venue_sponsorship',
+          contractId: contract.id,
+          experienceId,
+          creatorId: (experience as any).creatorId || '',
+          venueId: linkedVenue.id,
+          sponsorshipAmountCents: Math.round(sponsorshipAmount * 100).toString(),
+        };
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          mode: 'payment',
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency,
+                unit_amount: Math.round(sponsorshipAmount * 100),
+                product_data: {
+                  name: `Venue Sponsorship — ${(experience as any).title || 'Event'}`,
+                  description: `Flat sponsorship fee to creator for hosting the event.`,
+                },
+              },
+            },
+          ],
+          metadata: sponsorshipMeta,
+          // Copy metadata to the underlying PaymentIntent so payment_intent.succeeded can also route it
+          payment_intent_data: { metadata: sponsorshipMeta },
+          success_url: `${baseUrl}/venue-dashboard?sponsorship=success&experience=${experienceId}`,
+          cancel_url: `${baseUrl}/venue-dashboard?sponsorship=cancelled&experience=${experienceId}`,
+        });
+
+        return res.json({
+          requiresPayment: true,
+          checkoutUrl: session.url,
+          contract: updatedContract,
+          message: 'Complete sponsorship payment to activate the event',
+        });
+      }
+
+      // ── Standard deal: accept immediately ────────────────────────────────
       const acceptedContract = await storage.acceptVenueContract(experienceId, linkedVenue.id);
       await storage.updateExperience(experienceId, getExperienceUpdatesFromAcceptedContract(acceptedContract) as any);
       await storage.updateExperienceStatus(experienceId, 'approved');
@@ -9813,8 +9980,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Verify the venue belongs to this user
       const userVenues = await storage.getVenuesByCreator(userId);
-      const ownsVenue = userVenues.some((v: any) => v.id === venueId);
-      if (!ownsVenue) return res.status(403).json({ message: 'You do not own that venue' });
+      const ownedVenue = userVenues.find((v: any) => v.id === venueId);
+      if (!ownedVenue) return res.status(403).json({ message: 'You do not own that venue' });
+
+      // Venue must be admin-approved before it can submit offers
+      if ((ownedVenue as any).status !== 'approved') {
+        return res.status(403).json({ message: 'Your venue must be approved by admin before you can submit offers' });
+      }
 
       const offer = await storage.createVenueOffer({
         experienceId,
@@ -9829,6 +10001,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) {
       console.error('Error creating venue offer:', err);
       res.status(500).json({ message: 'Failed to submit offer' });
+    }
+  });
+
+  // GET /api/admin/venue-offers — list all offers awaiting admin review
+  app.get('/api/admin/venue-offers', isAuthenticated, async (req: any, res) => {
+    try {
+      const isAdmin = await checkIsAdmin(req);
+      if (!isAdmin) return res.status(403).json({ message: 'Admin access required' });
+      const rows = await storage.getVenueOffersForAdmin();
+      res.json(rows);
+    } catch (err: any) {
+      console.error('Error fetching admin venue offers:', err);
+      res.status(500).json({ message: 'Failed to fetch venue offers' });
+    }
+  });
+
+  // POST /api/admin/venue-offers/:offerId/approve — admin approves, makes offer visible to creator
+  app.post('/api/admin/venue-offers/:offerId/approve', isAuthenticated, async (req: any, res) => {
+    try {
+      const isAdmin = await checkIsAdmin(req);
+      if (!isAdmin) return res.status(403).json({ message: 'Admin access required' });
+      const offer = await storage.getVenueOffer(req.params.offerId);
+      if (!offer) return res.status(404).json({ message: 'Offer not found' });
+      const updated = await storage.approveVenueOffer(req.params.offerId);
+      res.json(updated);
+    } catch (err: any) {
+      console.error('Error approving venue offer:', err);
+      res.status(500).json({ message: 'Failed to approve offer' });
+    }
+  });
+
+  // POST /api/admin/venue-offers/:offerId/reject — admin rejects, declines the offer
+  app.post('/api/admin/venue-offers/:offerId/reject', isAuthenticated, async (req: any, res) => {
+    try {
+      const isAdmin = await checkIsAdmin(req);
+      if (!isAdmin) return res.status(403).json({ message: 'Admin access required' });
+      const offer = await storage.getVenueOffer(req.params.offerId);
+      if (!offer) return res.status(404).json({ message: 'Offer not found' });
+      const updated = await storage.rejectVenueOfferByAdmin(req.params.offerId);
+      res.json(updated);
+    } catch (err: any) {
+      console.error('Error rejecting venue offer:', err);
+      res.status(500).json({ message: 'Failed to reject offer' });
     }
   });
 

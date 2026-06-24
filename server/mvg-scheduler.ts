@@ -6,6 +6,7 @@ import Stripe from 'stripe';
 import { notificationService } from './notifications';
 import { broadcastMVGUpdate } from './websocket';
 import { storage } from './storage';
+import { scheduleExperiencePayout } from './payout-scheduler';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-07-30.basil',
@@ -144,10 +145,10 @@ async function processMVGSuccess(experienceId: string) {
   if (experience) {
     // Get all confirmed bookings for notification
     const confirmedBookings = await storage.getConfirmedBookings(experienceId);
-    
+
     // Send MVG confirmed notifications to all participants
     await notificationService.sendMVGConfirmedNotification(experience, confirmedBookings);
-    
+
     const mvgProgress = await storage.getMVGProgress(experienceId);
     broadcastMVGUpdate({
       trip_id: experienceId,
@@ -156,6 +157,16 @@ async function processMVGSuccess(experienceId: string) {
       funded_percent: 100,
       participants: []
     });
+
+    // Schedule the 7-day post-event payout
+    if (experience.endDate) {
+      const grossCents = confirmedBookings.reduce((sum, b) => {
+        return sum + Math.round(parseFloat(b.amount?.toString() ?? '0') * 100);
+      }, 0);
+      scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents).catch(err =>
+        console.error(`[MVG Scheduler] Failed to schedule payout for ${experienceId}:`, err.message)
+      );
+    }
   }
 }
 

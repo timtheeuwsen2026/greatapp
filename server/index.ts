@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startMVGDeadlineScheduler } from "./mvg-scheduler";
+import { startPayoutScheduler } from "./payout-scheduler";
 
 const app = express();
 // Trust Replit's reverse proxy so req.protocol and X-Forwarded-* headers are correct
@@ -69,5 +70,7 @@ app.use((req, res, next) => {
     
     // Start MVG deadline scheduler
     startMVGDeadlineScheduler();
+    // Start 7-day post-event payout scheduler
+    startPayoutScheduler();
   });
 })();

@@ -169,6 +169,11 @@ export default function Navigation() {
                   )}
                   {user?.role === 'participant' && (
                     <DropdownMenuItem asChild>
+                      <Link href="/user-dashboard">My Dashboard</Link>
+                    </DropdownMenuItem>
+                  )}
+                  {user?.role === 'participant' && (
+                    <DropdownMenuItem asChild>
                       <Link href="/my-bookings">My Bookings</Link>
                     </DropdownMenuItem>
                   )}
@@ -322,6 +327,11 @@ export default function Navigation() {
                   {user?.role === 'creator' && (
                     <Link href="/creator" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
                       Creator Dashboard
+                    </Link>
+                  )}
+                  {user?.role === 'participant' && (
+                    <Link href="/user-dashboard" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      My Dashboard
                     </Link>
                   )}
                   {user?.role === 'participant' && (

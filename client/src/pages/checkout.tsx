@@ -234,7 +234,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       <Button
         type="submit"
         disabled={isSubmitting}
-        className="w-full btn-gradient disabled:opacity-100"
+        className="w-full bg-gradient-to-br from-blue-600 to-purple-600 text-white font-semibold hover:from-blue-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-300 disabled:text-gray-500 disabled:opacity-100 transition-all shadow-md hover:shadow-lg"
         size="lg"
         data-testid="button-complete-booking"
       >

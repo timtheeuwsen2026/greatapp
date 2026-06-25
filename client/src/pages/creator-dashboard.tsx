@@ -313,8 +313,17 @@ function CreatorDashboardContent() {
   }) as { data: any[] };
 
   const acceptVenueOffer = useMutation({
-    mutationFn: (offerId: string) => apiRequest("POST", `/api/creator/venue-offers/${offerId}/accept`, {}),
-    onSuccess: () => {
+    mutationFn: async (offerId: string) => {
+      const res = await apiRequest("POST", `/api/creator/venue-offers/${offerId}/accept`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data.requiresPayment && data.checkoutUrl) {
+        // Upfront Rental: redirect creator to Stripe to pay the venue rental fee
+        toast({ title: "Rental Payment Required", description: data.message || "Complete payment to activate the event." });
+        window.location.href = data.checkoutUrl;
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers/accepted"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
@@ -1106,6 +1115,8 @@ function CreatorDashboardContent() {
                   per_head: "Per Head",
                   minimum_spend: "Minimum Spend",
                   revenue_share: "Revenue Share (%)",
+                  venue_sponsored: "Venue-Sponsored (Venue pays You)",
+                  upfront_rental: "Upfront Rental (You pay Venue)",
                 };
                 const terms = offer.terms ?? {};
                 return (
@@ -1138,6 +1149,12 @@ function CreatorDashboardContent() {
                             {offer.model === "minimum_spend" && <p><span className="text-gray-500">Min. Spend:</span> <strong>€{terms.minimumSpend ?? 0}</strong></p>}
                             {offer.model === "revenue_share" && <p><span className="text-gray-500">Revenue Share:</span> <strong>{terms.revenueSharePct ?? 0}%</strong></p>}
                             {offer.model === "access_only" && <p><span className="text-gray-500">Access Fee:</span> <strong>€{terms.accessFee ?? 0}</strong></p>}
+                            {offer.model === "venue_sponsored" && <p><span className="text-gray-500">Sponsorship (venue pays you):</span> <strong className="text-green-600">+€{terms.fixedFee ?? 0}</strong></p>}
+                            {offer.model === "upfront_rental" && (
+                              <p><span className="text-gray-500">Rental fee (you pay upfront):</span> <strong className="text-orange-600">−€{terms.fixedFee ?? 0}</strong>
+                                <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Charged on Accept</span>
+                              </p>
+                            )}
                           </div>
 
                           {/* Optional message from venue owner */}
@@ -1187,6 +1204,8 @@ function CreatorDashboardContent() {
                     per_head: "Per Head",
                     minimum_spend: "Minimum Spend",
                     revenue_share: "Revenue Share (%)",
+                    venue_sponsored: "Venue-Sponsored",
+                    upfront_rental: "Upfront Rental",
                   };
                   const terms = offer.terms ?? {};
                   return (

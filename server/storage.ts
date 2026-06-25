@@ -373,7 +373,7 @@ export interface IStorage {
   upsertScheduledPayout(experienceId: string, scheduledFor: Date, totalGrossCents: number): Promise<ScheduledPayout>;
   getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined>;
   updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout>;
-  getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string }[]>;
+  getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3349,10 +3349,14 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string }[]> {
+  async getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number }[]> {
     const now = new Date();
     const rows = await db
-      .select({ experienceId: scheduledPayouts.experienceId, scheduledPayoutId: scheduledPayouts.id })
+      .select({
+        experienceId: scheduledPayouts.experienceId,
+        scheduledPayoutId: scheduledPayouts.id,
+        presetGrossCents: scheduledPayouts.totalGrossAmountCents,
+      })
       .from(scheduledPayouts)
       .where(
         and(
@@ -3360,7 +3364,7 @@ export class DatabaseStorage implements IStorage {
           sql`${scheduledPayouts.scheduledFor} <= ${now}`
         )
       );
-    return rows;
+    return rows.map(r => ({ ...r, presetGrossCents: r.presetGrossCents ?? 0 }));
   }
 }
 

@@ -10075,7 +10075,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // POST /api/creator/venue-offers/:offerId/accept
   // Creator accepts a venue bid: links the venue to the event and marks it confirmed.
-  // All other pending bids for the same event are automatically declined.
+  // For upfront_rental model: creator's card is charged first via Stripe Checkout.
+  // All other pending bids for the same experience are automatically declined.
   app.post('/api/creator/venue-offers/:offerId/accept', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -10094,17 +10095,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Fetch the venue so we can copy its address onto the experience
       const venue = await storage.getVenue(offer.venueId);
 
-      // Accept this offer: link venue, flip status, copy location + contract terms
+      // Copy offer terms onto the experience (needed before any Stripe charge so
+      // the webhook can read them when it completes the deal)
       await storage.updateExperience(offer.experienceId, {
         linkedVenueId: offer.venueId,
         venueStatus: 'venue_confirmed',
-        // Switch venueType away from "open" so the event leaves the reverse-bidding pool
-        // and behaves like a normal catalog-linked event going forward.
         venueType: 'catalog',
-        // Copy the venue's address so the event location reflects the accepted space
         location: venue?.location ?? (experience as any).location,
         venueCompensationModel: offer.model,
-        // Copy the offer's financial terms into the experience fields so Stripe split logic has them
         venueFixedFee: offer.terms?.fixedFee?.toString() ?? '0.00',
         venuePerHeadAmount: offer.terms?.perHeadAmount?.toString() ?? '0.00',
         venueMinimumSpend: offer.terms?.minimumSpend?.toString() ?? '0.00',
@@ -10112,10 +10110,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
         venueAccessFee: offer.terms?.accessFee?.toString() ?? '0.00',
       } as any);
 
-      // Mark this offer accepted
+      // ── Upfront Rental: charge the creator before going live ─────────────
+      if (offer.model === 'upfront_rental') {
+        const rentalAmount = parseFloat(String(offer.terms?.fixedFee ?? 0));
+        const currency = ((experience as any).currency || 'eur').toLowerCase();
+
+        if (rentalAmount <= 0) {
+          return res.status(400).json({ message: 'Upfront rental offer requires a non-zero fixedFee as the rental amount' });
+        }
+
+        // Upsert the venue contract in pending_payment state so the webhook can find it
+        let contract = await storage.getVenueContractByExperience(offer.experienceId);
+        if (!contract) {
+          contract = await storage.upsertVenueContract(buildVenueContractObject(
+            experience,
+            offer.experienceId,
+            offer.venueId,
+            userId,
+          ));
+        }
+        await storage.updateVenueContractSponsorshipStatus(contract.id, 'unpaid');
+
+        // Mark this offer as accepted & decline competing offers now (before payment)
+        await storage.updateVenueOfferStatus(offerId, 'accepted');
+        const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
+        for (const row of otherOffers) {
+          const o = row.offer ?? row;
+          if (o.id !== offerId && o.status === 'pending') {
+            await storage.updateVenueOfferStatus(o.id, 'declined');
+          }
+        }
+
+        // Create Stripe Checkout Session — creator pays the venue rental fee
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const rentalMeta = {
+          type: 'upfront_rental',
+          contractId: contract.id,
+          experienceId: offer.experienceId,
+          creatorId: userId,
+          venueId: offer.venueId,
+          rentalAmountCents: Math.round(rentalAmount * 100).toString(),
+        };
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          mode: 'payment',
+          line_items: [{
+            quantity: 1,
+            price_data: {
+              currency,
+              unit_amount: Math.round(rentalAmount * 100),
+              product_data: {
+                name: `Venue Rental — ${venue?.name ?? 'Venue'}`,
+                description: `Upfront rental fee for ${(experience as any).title || 'your event'}.`,
+              },
+            },
+          }],
+          metadata: rentalMeta,
+          payment_intent_data: { metadata: rentalMeta },
+          success_url: `${baseUrl}/creator-dashboard?rental=success&experience=${offer.experienceId}`,
+          cancel_url: `${baseUrl}/creator-dashboard?rental=cancelled&experience=${offer.experienceId}`,
+        });
+
+        return res.json({
+          requiresPayment: true,
+          checkoutUrl: session.url,
+          message: `Complete rental payment of ${rentalAmount} ${currency.toUpperCase()} to activate the event`,
+        });
+      }
+
+      // ── Standard deals: accept immediately → event goes Live ─────────────
       const accepted = await storage.updateVenueOfferStatus(offerId, 'accepted');
 
-      // Decline all remaining pending offers for the same experience
       const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
       for (const row of otherOffers) {
         const o = row.offer ?? row;

@@ -122,8 +122,10 @@ function VenueDashboardContent() {
     if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
     if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
     if (offerForm.model === "access_only" && offerForm.accessFee) terms.accessFee = parseFloat(offerForm.accessFee);
-    // venue_sponsored: venue pays creator a flat fee — stored as fixedFee
+    // venue_sponsored: venue pays creator flat fee — stored as fixedFee
     if (offerForm.model === "venue_sponsored" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
+    // upfront_rental: creator pays venue flat fee — also stored as fixedFee
+    if (offerForm.model === "upfront_rental" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     submitOffer.mutate({ experienceId: offerModal.event.id, venueId: offerForm.venueId, model: offerForm.model, terms, message: offerForm.message });
   };
 
@@ -560,6 +562,7 @@ function VenueDashboardContent() {
                   revenue_share: 'Percentage Revenue Share',
                   access_only: 'Access-Only / Pay-at-Counter',
                   venue_sponsored: 'Venue-Sponsored (You Pay Creator)',
+                  upfront_rental: 'Upfront Rental (Creator Pays You)',
                 };
                 const formatMoney = (value: any) => {
                   const num = parseFloat(String(value || 0));
@@ -578,6 +581,8 @@ function VenueDashboardContent() {
                       return gross * ((terms.revenueSharePct || 0) / 100);
                     case 'venue_sponsored':
                       return -(terms.fixedFee || 0); // negative — venue pays out
+                    case 'upfront_rental':
+                      return terms.fixedFee || 0; // positive — venue receives rental fee
                     case 'access_only':
                     default:
                       return terms.accessFee || 0;
@@ -628,12 +633,15 @@ function VenueDashboardContent() {
                               {contract.model === 'revenue_share' && <span>Revenue Share: <strong>{terms.revenueSharePct || 0}%</strong></span>}
                               {contract.model === 'access_only' && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}
                               {contract.model === 'venue_sponsored' && <span>Sponsorship Fee (you pay): <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></span>}
+                              {contract.model === 'upfront_rental' && <span>Rental Fee (creator pays you): <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></span>}
                               <span>Risk: <strong>{risk.requireMinimumParticipants ? `MVG ${risk.minimumParticipants || 0}` : 'No MVG required'}</strong></span>
                             </div>
                             <p className="text-xs text-gray-500 mt-2">
                               {contract.model === 'venue_sponsored'
                                 ? <>Sponsorship cost to you: <strong className="text-orange-600">{formatMoney(terms.fixedFee || 0)}</strong></>
-                                : <>Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong></>
+                                : contract.model === 'upfront_rental'
+                                  ? <>Rental income from creator: <strong className="text-green-600">{formatMoney(terms.fixedFee || 0)}</strong></>
+                                  : <>Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong></>
                               }
                             </p>
                           </div>
@@ -1025,6 +1033,7 @@ function VenueDashboardContent() {
                   <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
                   <SelectItem value="revenue_share">Revenue Share (%)</SelectItem>
                   <SelectItem value="venue_sponsored">Venue-Sponsored (Venue pays Creator)</SelectItem>
+                  <SelectItem value="upfront_rental">Upfront Rental (Creator pays Venue)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1065,6 +1074,13 @@ function VenueDashboardContent() {
                 <Label>Sponsorship Fee (€) — amount you pay to the creator</Label>
                 <Input type="number" min="1" placeholder="e.g. 200" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
                 <p className="text-xs text-gray-500 mt-1">You will be charged this amount via Stripe when you accept. Paid to the creator 7 days after the event.</p>
+              </div>
+            )}
+            {offerForm.model === "upfront_rental" && (
+              <div>
+                <Label>Rental Fee (€) — amount the creator pays you upfront</Label>
+                <Input type="number" min="1" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
+                <p className="text-xs text-gray-500 mt-1">The creator will be charged this rental fee via Stripe the moment they accept. You receive payment 7 days after the event.</p>
               </div>
             )}
 

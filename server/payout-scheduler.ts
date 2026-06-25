@@ -62,10 +62,10 @@ export async function processReadyPayouts(): Promise<{
     const ready = await storage.getExperiencesReadyForPayout();
     console.log(`[Payout Scheduler] ${ready.length} payout(s) due`);
 
-    for (const { experienceId, scheduledPayoutId } of ready) {
+    for (const { experienceId, scheduledPayoutId, presetGrossCents } of ready) {
       results.processed++;
       try {
-        await executeExperiencePayout(experienceId, scheduledPayoutId);
+        await executeExperiencePayout(experienceId, scheduledPayoutId, presetGrossCents);
         results.succeeded++;
       } catch (err: any) {
         console.error(`[Payout Scheduler] Failed for experience ${experienceId}:`, err.message);
@@ -94,7 +94,8 @@ export async function processReadyPayouts(): Promise<{
 
 async function executeExperiencePayout(
   experienceId: string,
-  scheduledPayoutId: string
+  scheduledPayoutId: string,
+  presetGrossCents = 0,
 ): Promise<void> {
   // Mark as processing to prevent double-execution
   await storage.updateScheduledPayout(scheduledPayoutId, { status: "processing" });
@@ -127,12 +128,16 @@ async function executeExperiencePayout(
       )
     );
 
-  const grossAmountCents = confirmedBookings.reduce((sum, b) => {
+  const bookingGrossCents = confirmedBookings.reduce((sum, b) => {
     return sum + Math.round(parseFloat(b.amount?.toString() ?? "0") * 100);
   }, 0);
 
+  // For B2B upfront deals (venue_sponsored, upfront_rental) there are no attendee
+  // bookings — use the preset amount stored when the deal payment was confirmed.
+  const grossAmountCents = bookingGrossCents > 0 ? bookingGrossCents : presetGrossCents;
+
   if (grossAmountCents === 0) {
-    console.log(`[Payout Scheduler] ${experienceId}: gross revenue = 0, skipping`);
+    console.log(`[Payout Scheduler] ${experienceId}: gross = 0, skipping`);
     await storage.updateScheduledPayout(scheduledPayoutId, {
       status: "completed",
       totalGrossAmountCents: 0,

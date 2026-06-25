@@ -21,6 +21,7 @@ import { db } from "./db";
 import {
   bookings,
   creatorProfiles,
+  platformSettings,
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
@@ -42,12 +43,14 @@ type BookingStatus =
 export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): Promise<void> {
   switch (event.type) {
 
-    // ── Venue-Sponsored deal: venue pays via Checkout Session ────────────
+    // ── B2B Upfront Deals: venue_sponsored and upfront_rental ────────────
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
-      console.log(`[Webhook] checkout.session.completed ${session.id}`);
+      console.log(`[Webhook] checkout.session.completed ${session.id} type=${session.metadata?.type}`);
       if (session.metadata?.type === 'venue_sponsorship') {
         await handleVenueSponsorship(session);
+      } else if (session.metadata?.type === 'upfront_rental') {
+        await handleUpfrontRental(session);
       }
       break;
     }
@@ -319,6 +322,94 @@ async function handleTransferCreated(transfer: Stripe.Transfer): Promise<void> {
   });
 
   console.log(`[Webhook] Transfer ${transfer.id} recorded for ${recipientType} on experience ${experienceId}`);
+}
+
+/**
+ * Upfront Rental: creator has paid the flat rental fee to the platform.
+ * 1. Mark the contract as paid.
+ * 2. Accept the contract and approve the experience (now goes Live).
+ * 3. Set up split_recipients routing the fee to the venue.
+ * 4. Schedule the 7-day post-event payout to the venue.
+ */
+async function handleUpfrontRental(session: Stripe.Checkout.Session): Promise<void> {
+  const { contractId, experienceId, creatorId, venueId, rentalAmountCents } = session.metadata ?? {};
+  const piId = typeof session.payment_intent === 'string'
+    ? session.payment_intent
+    : session.payment_intent?.id;
+
+  if (!contractId || !experienceId || !venueId) {
+    console.warn(`[Webhook] upfront_rental: missing metadata on session ${session.id}`);
+    return;
+  }
+
+  const contract = await storage.getVenueContractById(contractId);
+  if (!contract) {
+    console.warn(`[Webhook] upfront_rental: contract ${contractId} not found`);
+    return;
+  }
+
+  // Idempotency — already processed
+  if ((contract as any).sponsorshipPaymentStatus === 'paid') {
+    console.log(`[Webhook] upfront_rental: contract ${contractId} already paid — skipping`);
+    return;
+  }
+
+  // 1. Mark contract as paid
+  await storage.updateVenueContractSponsorshipStatus(contractId, 'paid', piId);
+
+  // 2. Accept contract → go Live
+  await storage.acceptVenueContract(experienceId, venueId);
+  const experience = await storage.getExperience(experienceId);
+  if (!experience) return;
+
+  await storage.updateExperienceStatus(experienceId, 'approved');
+  console.log(`[Webhook] Upfront-rental experience ${experienceId} is now Live`);
+
+  // 3. Set up split_recipients so the payout goes to the venue, not the creator.
+  //    Venue receives (grossAmount - platformFee). Platform retains its fee.
+  const grossCents = parseInt(rentalAmountCents || '0', 10);
+  if (grossCents > 0 && experience.endDate) {
+    // Read platform fee from DB (never hardcode per project policy)
+    const [settings] = await db.select().from(platformSettings).limit(1);
+    const platformFeePct = parseFloat(settings?.platformFeePercentage?.toString() ?? '15');
+    const venuePct = Math.max(0, 100 - platformFeePct);
+
+    // Look up venue owner's Stripe Connect account for the payout transfer
+    const venue = await storage.getVenue(venueId);
+    const venueOwnerProfile = venue?.createdBy
+      ? await storage.getCreatorProfile(venue.createdBy)
+      : undefined;
+
+    if (!venueOwnerProfile?.stripeAccountId) {
+      console.warn(`[Webhook] upfront_rental: venue owner (${venue?.createdBy}) has no Stripe Connect account — payout will fail at execution`);
+    }
+
+    // Replace any previous split recipients for this experience
+    await storage.deleteSplitRecipientsByExperience(experienceId);
+    await storage.createSplitRecipients([
+      {
+        experienceId,
+        recipientType: 'platform' as const,
+        splitMode: 'percentage' as const,
+        splitValue: String(platformFeePct),
+        priority: 0,
+        isActive: true,
+      },
+      {
+        experienceId,
+        recipientType: 'venue' as const,
+        userId: venue?.createdBy ?? null,
+        stripeAccountId: venueOwnerProfile?.stripeAccountId ?? null,
+        splitMode: 'percentage' as const,
+        splitValue: String(venuePct),
+        priority: 1,
+        isActive: true,
+      },
+    ]);
+
+    // 4. Schedule 7-day post-event payout
+    await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
+  }
 }
 
 /**

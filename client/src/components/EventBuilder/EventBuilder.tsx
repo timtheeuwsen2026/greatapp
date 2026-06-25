@@ -37,7 +37,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -78,6 +78,8 @@ const VENUE_COMPENSATION_MODELS = [
   "minimum_spend",
   "revenue_share",
   "access_only",
+  "venue_sponsored",
+  "upfront_rental",
 ] as const;
 
 function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES[number]> {
@@ -203,7 +205,12 @@ const eventBuilderSchema = z.object({
   ticketSkus: z.array(z.object({
     id: z.string(),
     ticketName: z.string().min(1, "Ticket name is required"),
+    pricingMode: z.enum(["fixed", "free_rsvp", "pwyw", "combi"]).default("fixed"),
     pricePerPerson: z.number().min(0, "Price cannot be negative"),
+    minPrice: z.number().min(0).default(0),
+    suggestedPrice: z.number().min(0).optional(),
+    addonName: z.string().optional(),
+    addonPrice: z.number().min(0).optional(),
     depositPerPerson: z.number().min(0, "Deposit cannot be negative"),
     ticketCapacity: z.number().int().min(1, "Capacity must be at least 1"),
     sourceRoomId: z.string().optional(),
@@ -4284,33 +4291,32 @@ function PricingStep({ form }: { form: any }) {
           ? "marketplace_day"
           : "marketplace_retreat";
 
-  // All available target deal options (for "open" mode where creator sets a preference)
-  const openTargetDealOptions = [
-    { value: "access_only", label: "Access-Only / Pay-at-Counter" },
-    { value: "fixed_fee", label: "Flat Fee" },
-    { value: "per_head", label: "Per Head" },
-    { value: "minimum_spend", label: "Minimum Spend Guarantee" },
-    { value: "revenue_share", label: "Percentage Revenue Share" },
-  ];
+  // All available target deal options grouped by flow (for "open" bidding mode)
+  const openTargetDealOptions = {
+    flowA: [
+      { value: "revenue_share", label: "Revenue Split — Venue % of ticket sales" },
+      { value: "fixed_fee", label: "Ticket Deduction — flat amount per ticket sale" },
+      { value: "access_only", label: "Access-Only — venue keeps F&B, no ticket split" },
+    ],
+    flowB: [
+      { value: "venue_sponsored", label: "Venue Sponsorship — venue pays you a flat fee" },
+      { value: "upfront_rental", label: "Upfront Rental — you pay venue a flat fee" },
+    ],
+  };
 
-  const venueDealOptions = useMemo(() => {
-    if (venueDealContext === "marketplace_retreat") {
-      return [
-        { value: "revenue_share", label: "Percentage Revenue Share" },
-        { value: "per_head", label: "Per-Head Package" },
-        { value: "fixed_fee", label: "Flat Rental Fee / Day Rate" },
-      ];
-    }
-    if (venueDealContext === "marketplace_day") {
-      return [
-        { value: "fixed_fee", label: "Flat Fee Offer" },
-        { value: "per_head", label: "Per Head" },
-        { value: "minimum_spend", label: "Minimum Spend Guarantee" },
-        { value: "access_only", label: "Access-Only / Pay-at-Counter" },
-      ];
-    }
-    return [];
-  }, [venueDealContext]);
+  // Flow A = Attendee-Funded (platform collects tickets, splits on payout)
+  // Flow B = B2B Upfront (Stripe charges the business immediately on Accept)
+  const venueDealOptions = useMemo(() => ({
+    flowA: [
+      { value: "revenue_share", label: "Revenue Split" },
+      { value: "fixed_fee", label: "Ticket Deduction" },
+      { value: "access_only", label: "Access-Only" },
+    ],
+    flowB: [
+      { value: "venue_sponsored", label: "Venue Sponsorship" },
+      { value: "upfront_rental", label: "Upfront Rental" },
+    ],
+  }), []);
 
   useEffect(() => {
     if (venueDealContext === "external" || venueDealContext === "open") {
@@ -4326,8 +4332,9 @@ function PricingStep({ form }: { form: any }) {
       return;
     }
 
-    if (!venueDealOptions.some((option) => option.value === venueCompensationModel)) {
-      form.setValue('venueCompensationModel', venueDealOptions[0]?.value || 'access_only', { shouldDirty: true });
+    const allOptions = [...venueDealOptions.flowA, ...venueDealOptions.flowB];
+    if (!allOptions.some((option) => option.value === venueCompensationModel)) {
+      form.setValue('venueCompensationModel', 'access_only', { shouldDirty: true });
     }
   }, [form, venueDealContext, venueDealOptions, venueCompensationModel]);
 
@@ -4457,7 +4464,12 @@ function PricingStep({ form }: { form: any }) {
       {
         id: `sku-custom-${Date.now()}`,
         ticketName: `Ticket ${nextIndex}`,
+        pricingMode: 'fixed' as const,
         pricePerPerson: 0,
+        minPrice: 0,
+        suggestedPrice: undefined,
+        addonName: undefined,
+        addonPrice: undefined,
         depositPerPerson: 0,
         ticketCapacity: 1,
         sourceRoomId: undefined,
@@ -4473,8 +4485,16 @@ function PricingStep({ form }: { form: any }) {
 
   // Calculate totals from ticket SKUs
   const ticketTotalCapacity = ticketSkus.reduce((total: number, sku: any) => total + (sku.ticketCapacity || 0), 0);
-  const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => 
-    safeAdd(total, safeMultiply(sku.pricePerPerson || 0, sku.ticketCapacity || 0)), 0);
+  const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => {
+    let effectivePrice: number;
+    switch (sku.pricingMode) {
+      case 'free_rsvp': effectivePrice = 0; break;
+      case 'pwyw': effectivePrice = sku.suggestedPrice ?? sku.minPrice ?? 0; break;
+      case 'combi': effectivePrice = (sku.pricePerPerson || 0) + (sku.addonPrice || 0); break;
+      default: effectivePrice = sku.pricePerPerson || 0;
+    }
+    return safeAdd(total, safeMultiply(effectivePrice, sku.ticketCapacity || 0));
+  }, 0);
 
   useEffect(() => {
     if (isNonRoomEvent && ticketTotalCapacity > 0 && ticketTotalCapacity !== maxParticipants) {
@@ -4499,19 +4519,18 @@ function PricingStep({ form }: { form: any }) {
   const venueCommercialEstimate = (() => {
     if (venueDealContext === "external") return 0;
     switch (venueCompensationModel) {
-      case "fixed_fee":
-        return venueFixedFee;
-      case "per_head":
-        return venuePerHeadEstimate;
-      case "minimum_spend":
-        return venueMinimumSpend;
-      case "revenue_share":
-        return venueRevenueShareAmount;
+      case "fixed_fee": return venueFixedFee;
+      case "per_head": return venuePerHeadEstimate;
+      case "minimum_spend": return venueMinimumSpend;
+      case "revenue_share": return venueRevenueShareAmount;
+      case "upfront_rental": return venueFixedFee; // cost to creator — show as deduction
+      case "venue_sponsored": return 0; // income for creator — handled separately
       case "access_only":
-      default:
-        return venueAccessFee;
+      default: return venueAccessFee;
     }
   })();
+  // Venue Sponsorship income: venue pays creator a flat fee (Flow B positive)
+  const venueSponsorshipIncome = venueCompensationModel === 'venue_sponsored' ? (venueFixedFee || 0) : 0;
 
   // **4. MVG PROGRESS** - Using pricing service computation
   const mvgProgress = computeMVGProgress(0, minimumParticipants); // 0 current bookings in draft mode
@@ -4701,20 +4720,46 @@ function PricingStep({ form }: { form: any }) {
                           </div>
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
-                          {(isNonRoomEvent || !sku.sourceRoomId) && (
-                            <div>
-                              <Label htmlFor={`sku-capacity-${sku.id}`}>Ticket Capacity *</Label>
-                              <Input
-                                id={`sku-capacity-${sku.id}`}
-                                type="number"
-                                min="1"
-                                value={sku.ticketCapacity || ''}
-                                onChange={(e) => updateTicketSku(sku.id, 'ticketCapacity', parseInt(e.target.value) || 1)}
-                                data-testid={`input-ticket-capacity-${index}`}
-                              />
-                            </div>
-                          )}
+                        {/* Ticket Capacity (always visible) */}
+                        {(isNonRoomEvent || !sku.sourceRoomId) && (
+                          <div>
+                            <Label htmlFor={`sku-capacity-${sku.id}`}>Ticket Capacity *</Label>
+                            <Input
+                              id={`sku-capacity-${sku.id}`}
+                              type="number"
+                              min="1"
+                              value={sku.ticketCapacity || ''}
+                              onChange={(e) => updateTicketSku(sku.id, 'ticketCapacity', parseInt(e.target.value) || 1)}
+                              data-testid={`input-ticket-capacity-${index}`}
+                            />
+                          </div>
+                        )}
+
+                        {/* Ticket Format selector */}
+                        <div>
+                          <Label htmlFor={`sku-format-${sku.id}`}>Ticket Format</Label>
+                          <Select
+                            value={sku.pricingMode || 'fixed'}
+                            onValueChange={(val) => {
+                              updateTicketSku(sku.id, 'pricingMode', val);
+                              // Reset price fields when switching format
+                              if (val === 'free_rsvp') updateTicketSku(sku.id, 'pricePerPerson', 0);
+                            }}
+                          >
+                            <SelectTrigger id={`sku-format-${sku.id}`} data-testid={`select-ticket-format-${index}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="fixed">Paid Ticket</SelectItem>
+                              <SelectItem value="free_rsvp">Free RSVP</SelectItem>
+                              <SelectItem value="pwyw">Pay-What-You-Want</SelectItem>
+                              <SelectItem value="combi">Combi-Ticket (Free entry + paid add-on)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Paid Ticket: single price */}
+                        {(!sku.pricingMode || sku.pricingMode === 'fixed') && (
                           <div>
                             <Label htmlFor={`sku-price-${sku.id}`}>Price Per Person *</Label>
                             <div className="flex gap-2">
@@ -4723,9 +4768,7 @@ function PricingStep({ form }: { form: any }) {
                               </span>
                               <Input
                                 id={`sku-price-${sku.id}`}
-                                type="number"
-                                min="0"
-                                step="0.01"
+                                type="number" min="0" step="0.01"
                                 value={sku.pricePerPerson || ''}
                                 onChange={(e) => updateTicketSku(sku.id, 'pricePerPerson', parseFloat(e.target.value) || 0)}
                                 placeholder="0.00"
@@ -4735,8 +4778,104 @@ function PricingStep({ form }: { form: any }) {
                               />
                             </div>
                           </div>
-                          
-                          {requireMinimumParticipants && (
+                        )}
+
+                        {/* Free RSVP: price locked at $0 */}
+                        {sku.pricingMode === 'free_rsvp' && (
+                          <div className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-md">
+                            <span className="text-sm text-gray-500">Price locked at</span>
+                            <span className="font-semibold">
+                              {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}0.00
+                            </span>
+                            <span className="text-xs text-gray-400">(free admission)</span>
+                          </div>
+                        )}
+
+                        {/* PWYW: minimum + suggested price */}
+                        {sku.pricingMode === 'pwyw' && (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <Label htmlFor={`sku-minprice-${sku.id}`}>Minimum Price</Label>
+                              <div className="flex gap-2">
+                                <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                </span>
+                                <Input
+                                  id={`sku-minprice-${sku.id}`}
+                                  type="number" min="0" step="0.01"
+                                  value={sku.minPrice ?? ''}
+                                  onChange={(e) => updateTicketSku(sku.id, 'minPrice', parseFloat(e.target.value) || 0)}
+                                  placeholder="0.00"
+                                  disabled={!currency}
+                                  data-testid={`input-ticket-minprice-${index}`}
+                                  className="flex-1"
+                                />
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">Buyer cannot go below this</p>
+                            </div>
+                            <div>
+                              <Label htmlFor={`sku-suggested-${sku.id}`}>Suggested Price</Label>
+                              <div className="flex gap-2">
+                                <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                </span>
+                                <Input
+                                  id={`sku-suggested-${sku.id}`}
+                                  type="number" min="0" step="0.01"
+                                  value={sku.suggestedPrice ?? ''}
+                                  onChange={(e) => updateTicketSku(sku.id, 'suggestedPrice', parseFloat(e.target.value) || 0)}
+                                  placeholder="0.00"
+                                  disabled={!currency}
+                                  data-testid={`input-ticket-suggested-${index}`}
+                                  className="flex-1"
+                                />
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">Pre-filled default for buyer</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Combi-Ticket: free entry + paid add-on */}
+                        {sku.pricingMode === 'combi' && (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-950 rounded-md text-sm text-blue-800 dark:text-blue-200">
+                              Free entry + optional paid add-on at checkout
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label htmlFor={`sku-addon-name-${sku.id}`}>Add-on Name</Label>
+                                <Input
+                                  id={`sku-addon-name-${sku.id}`}
+                                  value={sku.addonName || ''}
+                                  onChange={(e) => updateTicketSku(sku.id, 'addonName', e.target.value)}
+                                  placeholder="e.g., VIP Dinner"
+                                  data-testid={`input-ticket-addon-name-${index}`}
+                                />
+                              </div>
+                              <div>
+                                <Label htmlFor={`sku-addon-price-${sku.id}`}>Add-on Price</Label>
+                                <div className="flex gap-2">
+                                  <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                                    {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                  </span>
+                                  <Input
+                                    id={`sku-addon-price-${sku.id}`}
+                                    type="number" min="0" step="0.01"
+                                    value={sku.addonPrice ?? ''}
+                                    onChange={(e) => updateTicketSku(sku.id, 'addonPrice', parseFloat(e.target.value) || 0)}
+                                    placeholder="0.00"
+                                    disabled={!currency}
+                                    data-testid={`input-ticket-addon-price-${index}`}
+                                    className="flex-1"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Deposit (only when MVG is ON and ticket is not free) */}
+                        {requireMinimumParticipants && sku.pricingMode !== 'free_rsvp' && (
                           <div>
                             <Label htmlFor={`sku-deposit-${sku.id}`}>Deposit Per Person</Label>
                             <div className="flex gap-2">
@@ -4745,9 +4884,7 @@ function PricingStep({ form }: { form: any }) {
                               </span>
                               <Input
                                 id={`sku-deposit-${sku.id}`}
-                                type="number"
-                                min="0"
-                                step="0.01"
+                                type="number" min="0" step="0.01"
                                 value={sku.depositPerPerson || ''}
                                 onChange={(e) => updateTicketSku(sku.id, 'depositPerPerson', parseFloat(e.target.value) || 0)}
                                 placeholder="0.00"
@@ -4756,10 +4893,9 @@ function PricingStep({ form }: { form: any }) {
                                 className="flex-1"
                               />
                             </div>
-                            <p className="text-xs text-gray-500 mt-1">Fixed dollar amount (not %)</p>
+                            <p className="text-xs text-gray-500 mt-1">Fixed amount captured upfront (not %)</p>
                           </div>
-                          )}
-                        </div>
+                        )}
                         
                         <div className="flex justify-between items-center pt-2 border-t text-sm">
                           <span className="text-gray-600 dark:text-gray-400">Subtotal Revenue</span>
@@ -4850,11 +4986,23 @@ function PricingStep({ form }: { form: any }) {
                       <SelectValue placeholder="Select preferred deal type" />
                     </SelectTrigger>
                     <SelectContent>
-                      {openTargetDealOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectLabel className="text-xs font-bold text-blue-600 uppercase tracking-wide">
+                          Flow A — Attendee-Funded
+                        </SelectLabel>
+                        {openTargetDealOptions.flowA.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel className="text-xs font-bold text-purple-600 uppercase tracking-wide">
+                          Flow B — B2B Upfront
+                        </SelectLabel>
+                        {openTargetDealOptions.flowB.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-amber-600 mt-1">
@@ -4863,10 +5011,13 @@ function PricingStep({ form }: { form: any }) {
                   {/* Value input: only shown for deal types that carry a number.
                       access_only has no target amount, so it is excluded from the list.
                       Label and constraints differ by type: % for revenue_share, € for the rest. */}
-                  {(['fixed_fee', 'per_head', 'minimum_spend', 'revenue_share'].includes(form.watch('venueTargetDeal') || '')) && (
+                  {(['fixed_fee', 'per_head', 'minimum_spend', 'revenue_share', 'venue_sponsored', 'upfront_rental'].includes(form.watch('venueTargetDeal') || '')) && (
                     <div className="mt-3">
                       <Label htmlFor="venue-target-deal-value">
-                        {form.watch('venueTargetDeal') === 'revenue_share' ? 'Target Share (%)' : 'Target Amount (€)'}
+                        {form.watch('venueTargetDeal') === 'revenue_share' ? 'Target Share (%)' :
+                         form.watch('venueTargetDeal') === 'venue_sponsored' ? 'Sponsorship Amount (Venue pays you)' :
+                         form.watch('venueTargetDeal') === 'upfront_rental' ? 'Rental Amount (you pay venue)' :
+                         'Target Amount'}
                       </Label>
                       <Input
                         id="venue-target-deal-value"
@@ -4893,14 +5044,26 @@ function PricingStep({ form }: { form: any }) {
                       <SelectValue placeholder="Select model" />
                     </SelectTrigger>
                     <SelectContent>
-                      {venueDealOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectLabel className="text-xs font-bold text-blue-600 uppercase tracking-wide">
+                          Flow A — Attendee-Funded Deals
+                        </SelectLabel>
+                        {venueDealOptions.flowA.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel className="text-xs font-bold text-purple-600 uppercase tracking-wide">
+                          Flow B — B2B Upfront Deals
+                        </SelectLabel>
+                        {venueDealOptions.flowB.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-gray-500 mt-1">Propose a Commercial Deal to your Venue Partner.</p>
+                  <p className="text-xs text-gray-500 mt-1">Propose a commercial deal to your venue partner.</p>
                 </div>
               )}
               <div>
@@ -4998,6 +5161,52 @@ function PricingStep({ form }: { form: any }) {
                   <p className="text-xs text-gray-500 mt-1">Venue keeps its own food and beverage sales.</p>
                 </div>
               )}
+              {venueCompensationModel === "venue_sponsored" && (
+                <div>
+                  <Label htmlFor="venue-sponsorship-amount">Amount Venue Pays You ({currency?.toUpperCase()})</Label>
+                  <div className="flex gap-2">
+                    <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                    </span>
+                    <Input
+                      id="venue-sponsorship-amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={venueFixedFee || ''}
+                      onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      placeholder="e.g. 200.00"
+                      disabled={!currency}
+                      data-testid="input-venue-sponsorship-amount"
+                      className="flex-1"
+                    />
+                  </div>
+                  <p className="text-xs text-green-600 mt-1">Venue is charged this amount when they accept. You receive it 7 days after your event.</p>
+                </div>
+              )}
+              {venueCompensationModel === "upfront_rental" && (
+                <div>
+                  <Label htmlFor="venue-rental-amount">Amount You Pay the Venue ({currency?.toUpperCase()})</Label>
+                  <div className="flex gap-2">
+                    <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                    </span>
+                    <Input
+                      id="venue-rental-amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={venueFixedFee || ''}
+                      onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      placeholder="e.g. 500.00"
+                      disabled={!currency}
+                      data-testid="input-venue-rental-amount"
+                      className="flex-1"
+                    />
+                  </div>
+                  <p className="text-xs text-orange-600 mt-1">You will be charged this rental fee via Stripe when you accept the venue's offer.</p>
+                </div>
+              )}
             </div>
             )}
 
@@ -5020,17 +5229,36 @@ function PricingStep({ form }: { form: any }) {
               <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">Estimated Grand Total Calculator</h4>
               <div className="text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span>Gross Ticket Price</span>
+                  <span>Gross Ticket Revenue</span>
                   <span className="font-medium" data-testid="text-gross-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Platform Fee ({platformPct}%)</span>
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Venue Payout (Based on Deal)</span>
-                  <span className="text-blue-600" data-testid="text-venue-share">-{formatPriceByCurrency(venueCommercialEstimate, currency)}</span>
-                </div>
+
+                {/* Flow A: venue is paid FROM ticket revenue */}
+                {venueCommercialEstimate > 0 && venueCompensationModel !== 'venue_sponsored' && (
+                  <div className="flex justify-between">
+                    <span>
+                      {venueCompensationModel === 'upfront_rental' ? 'Venue Rental (you pay upfront)' : 'Venue Payout (Based on Deal)'}
+                    </span>
+                    <span className={venueCompensationModel === 'upfront_rental' ? 'text-orange-600' : 'text-blue-600'} data-testid="text-venue-share">
+                      -{formatPriceByCurrency(venueCommercialEstimate, currency)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Flow B: Venue Sponsorship — income for creator */}
+                {venueCompensationModel === 'venue_sponsored' && venueSponsorshipIncome > 0 && (
+                  <div className="flex justify-between">
+                    <span>Venue Sponsorship Income</span>
+                    <span className="text-green-600 font-medium" data-testid="text-venue-share">
+                      +{formatPriceByCurrency(venueSponsorshipIncome, currency)}
+                    </span>
+                  </div>
+                )}
+
                 {influencerPromotionEnabled && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
                     <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>
@@ -5038,10 +5266,15 @@ function PricingStep({ form }: { form: any }) {
                   </div>
                 )}
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
-                  <span>Estimated Net</span>
+                  <span>Estimated Net to You</span>
                   <span data-testid="text-your-payout">
                     {formatPriceByCurrency(
-                      Math.max(0, revenueSplit.creatorAmount - venueCommercialEstimate - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)),
+                      Math.max(0,
+                        revenueSplit.creatorAmount
+                        - venueCommercialEstimate
+                        + venueSponsorshipIncome
+                        - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)
+                      ),
                       currency
                     )}
                   </span>

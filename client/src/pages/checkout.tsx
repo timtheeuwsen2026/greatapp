@@ -231,18 +231,26 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
         </div>
       )}
       
-      <Button 
-        type="submit" 
-        disabled={!stripe || isSubmitting} 
-        className="w-full btn-gradient" 
+      <Button
+        type="submit"
+        disabled={isSubmitting}
+        className="w-full btn-gradient disabled:opacity-100"
         size="lg"
         data-testid="button-complete-booking"
       >
-        {isSubmitting
-          ? "Processing..."
-          : isDeposit
-          ? `Pay Deposit - ${formatCurrency(chargeAmount, experience.currency)}`
-          : `Complete Booking - ${formatCurrency(chargeAmount, experience.currency)}`
+        {isSubmitting ? (
+          <span className="flex items-center justify-center gap-2">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            Processing...
+          </span>
+        ) : !stripe ? (
+          <span className="flex items-center justify-center gap-2">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            Loading payment...
+          </span>
+        ) : isDeposit
+          ? `Pay Deposit — ${formatCurrency(chargeAmount, experience.currency)}`
+          : `Complete Booking — ${formatCurrency(chargeAmount, experience.currency)}`
         }
       </Button>
       

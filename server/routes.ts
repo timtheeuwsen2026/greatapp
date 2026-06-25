@@ -4604,8 +4604,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       if (isMVGExperience && !hasDeposit) {
+        // manual capture holds the payment until MVG deadline; automatic_payment_methods
+        // (already set in base object) covers confirmation — confirmation_method must not
+        // be set alongside automatic_payment_methods or Stripe rejects the call.
         paymentIntentData.capture_method = "manual";
-        paymentIntentData.confirmation_method = "automatic";
       } else if (isMVGExperience && hasDeposit) {
         paymentIntentData.setup_future_usage = "off_session";
       }

@@ -138,6 +138,9 @@ const eventBuilderSchema = z.object({
   // Manual venue fields
   manualVenueName: z.string().optional(),
   manualVenueAddress: z.string().optional(),
+  manualVenueContactName: z.string().optional(),
+  manualVenueEmail: z.string().email("Enter a valid venue email address").optional().or(z.literal('')),
+  manualVenuePropertyUrl: z.string().url("Enter a valid property link").optional().or(z.literal('')),
   manualVenueDescription: z.string().optional(),
   manualVenueCapacity: z.coerce.number().min(1).optional().nullable(),
   manualVenuePhotos: z.array(z.string()).default([]), // Allow any string
@@ -342,6 +345,11 @@ function normalizeEventTripFields(draft: any) {
   const type = copy.type || 'one-day';
   copy.greatPillars = normalizeGreatPillars(copy.greatPillars);
   copy.monetisationMode = 'creator_led';
+  copy.ticketSkus = Array.isArray(copy.ticketSkus)
+    ? copy.ticketSkus.map((sku: any) => sku?.pricingMode === 'free_rsvp'
+      ? { ...sku, pricePerPerson: 0, minPrice: 0, suggestedPrice: undefined }
+      : sku)
+    : [];
 
   if (type === 'one-day') {
     copy.endDate = copy.startDate || copy.endDate;
@@ -424,6 +432,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venue: "",
       manualVenueName: "",
       manualVenueAddress: "",
+      manualVenueContactName: "",
+      manualVenueEmail: "",
+      manualVenuePropertyUrl: "",
       manualVenueDescription: "",
       manualVenueCapacity: undefined,
       manualVenuePhotos: [],
@@ -1055,6 +1066,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
+        manualVenueContactName: formData.manualVenueContactName || '',
+        manualVenueEmail: formData.manualVenueEmail || '',
+        manualVenuePropertyUrl: formData.manualVenuePropertyUrl || '',
         manualVenueDescription: formData.manualVenueDescription || '',
         manualVenueCapacity: formData.manualVenueCapacity,
         manualVenuePhotos: formData.manualVenuePhotos || [],
@@ -1071,6 +1085,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Pricing and deposit fields
         price: formData.price || formData.pricePerPerson || '',
         pricePerPerson: formData.pricePerPerson || formData.price || 0,
+        ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
         depositEnabled: formData.depositEnabled || false,
@@ -1301,6 +1316,12 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       if (!data.manualVenueAddress || data.manualVenueAddress.trim() === '') {
         errors.push("Custom venue address is required");
       }
+      if (!data.manualVenueEmail || !z.string().email().safeParse(data.manualVenueEmail).success) {
+        errors.push("A valid venue email address is required");
+      }
+      if (!data.manualVenuePropertyUrl || !z.string().url().safeParse(data.manualVenuePropertyUrl).success) {
+        errors.push("A valid property link is required");
+      }
     } else if (venueType === 'virtual') {
       // For virtual events: ensure platform is selected
       if (!data.virtualPlatform || data.virtualPlatform.trim() === '') {
@@ -1466,6 +1487,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         selectedVenueId: formData.selectedVenueId || '',
         manualVenueName: formData.manualVenueName || '',
         manualVenueAddress: formData.manualVenueAddress || '',
+        manualVenueContactName: formData.manualVenueContactName || '',
+        manualVenueEmail: formData.manualVenueEmail || '',
+        manualVenuePropertyUrl: formData.manualVenuePropertyUrl || '',
         manualVenueDescription: formData.manualVenueDescription || '',
         manualVenueCapacity: formData.manualVenueCapacity,
         manualVenuePhotos: formData.manualVenuePhotos || [],
@@ -1482,6 +1506,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Pricing and deposit fields
         price: formData.price || formData.pricePerPerson || '',
         pricePerPerson: formData.pricePerPerson || formData.price || 0,
+        ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
         depositEnabled: formData.depositEnabled || false,
@@ -1804,7 +1829,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                         // Outdoor venues only need location (already validated separately)
                         return !!form.watch('location')?.trim();
                       } else if (venueType === 'manual') {
-                        return !!form.watch('manualVenueName')?.trim() && !!form.watch('manualVenueAddress')?.trim();
+                        return !!form.watch('manualVenueName')?.trim()
+                          && !!form.watch('manualVenueAddress')?.trim()
+                          && z.string().email().safeParse(form.watch('manualVenueEmail')).success
+                          && z.string().url().safeParse(form.watch('manualVenuePropertyUrl')).success;
                       } else if (venueType === 'virtual') {
                         return !!form.watch('virtualPlatform')?.trim();
                       } else if (venueType === 'open') {
@@ -2900,9 +2928,9 @@ function VenueStep({ form }: { form: any }) {
                     />
                     <Plus className="w-5 h-5" />
                     <div>
-                      <div className="font-semibold">Custom Venue</div>
+                      <div className="font-semibold">Invite External Venue</div>
                       <div className="text-sm text-gray-600 dark:text-gray-400">
-                        Private venue not in catalog
+                        Invite an Airbnb, cafe, or other unlisted property
                       </div>
                     </div>
                   </div>
@@ -3158,7 +3186,7 @@ function VenueStep({ form }: { form: any }) {
       {/* Manual Venue Fields */}
       {venueType === "manual" && (
         <div className="space-y-4 border rounded-lg p-4 bg-gray-50 dark:bg-gray-800">
-          <h4 className="font-semibold text-lg">Custom Venue Details</h4>
+          <h4 className="font-semibold text-lg">Invite External Venue</h4>
           
           <FormField
             control={form.control}
@@ -3189,6 +3217,63 @@ function VenueStep({ form }: { form: any }) {
                     placeholder="Full address or specific location details"
                     {...field}
                     data-testid="input-manual-venue-address"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="manualVenueContactName"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Point of Contact / Host Name (Optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="e.g., Alex Morgan"
+                    {...field}
+                    data-testid="input-manual-venue-contact-name"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="manualVenueEmail"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Venue Email Address *</FormLabel>
+                <FormControl>
+                  <Input
+                    type="email"
+                    placeholder="host@example.com"
+                    {...field}
+                    data-testid="input-manual-venue-email"
+                  />
+                </FormControl>
+                <FormDescription>The deal proposal will be sent here when you publish.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="manualVenuePropertyUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Property Link (Airbnb, Booking, Website) *</FormLabel>
+                <FormControl>
+                  <Input
+                    type="url"
+                    placeholder="https://www.airbnb.com/rooms/..."
+                    {...field}
+                    data-testid="input-manual-venue-property-url"
                   />
                 </FormControl>
                 <FormMessage />
@@ -4215,6 +4300,8 @@ function PricingStep({ form }: { form: any }) {
   const venueMinimumSpend = form.watch('venueMinimumSpend') || 0;
   const venueRevenueSharePct = form.watch('venueRevenueSharePct') || 0;
   const venueAccessFee = form.watch('venueAccessFee') || 0;
+  const venueTargetDeal = form.watch('venueTargetDeal') || "access_only";
+  const venueTargetDealValue = Number(form.watch('venueTargetDealValue') || 0);
   const requireMinimumParticipants = form.watch('requireMinimumParticipants');
   const minimumParticipants = form.watch('minimumParticipants') || 6;
   const softHoldEnabled = form.watch('softHoldEnabled');
@@ -4457,6 +4544,16 @@ function PricingStep({ form }: { form: any }) {
     form.setValue('ticketSkus', updated, { shouldDirty: true });
   };
 
+  const updateTicketFormat = (skuId: string, pricingMode: string) => {
+    const updated = ticketSkus.map((sku: any) => {
+      if (sku.id !== skuId) return sku;
+      return pricingMode === 'free_rsvp'
+        ? { ...sku, pricingMode, pricePerPerson: 0, minPrice: 0, suggestedPrice: undefined }
+        : { ...sku, pricingMode };
+    });
+    form.setValue('ticketSkus', updated, { shouldDirty: true, shouldValidate: true });
+  };
+
   const addTicketSku = () => {
     const nextIndex = ticketSkus.length + 1;
     form.setValue('ticketSkus', [
@@ -4514,23 +4611,34 @@ function PricingStep({ form }: { form: any }) {
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
   const totalRevenue = ticketTotalRevenue > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
   const revenueSplit = computeRevenueSplit(totalRevenue, creatorPct, platformPct);
-  const venueRevenueShareAmount = safeMultiply(totalRevenue, venueRevenueSharePct / 100);
+  const activeVenueDeal = venueDealContext === "open"
+    ? venueTargetDeal
+    : venueDealContext === "external"
+      ? "access_only"
+      : venueCompensationModel;
+  const activeRevenueSharePct = venueDealContext === "open" ? venueTargetDealValue : venueRevenueSharePct;
+  const activeFlatVenueAmount = venueDealContext === "open" ? venueTargetDealValue : venueFixedFee;
+  const venueRevenueShareAmount = safeMultiply(totalRevenue, activeRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
   const venueCommercialEstimate = (() => {
-    if (venueDealContext === "external") return 0;
-    switch (venueCompensationModel) {
-      case "fixed_fee": return venueFixedFee;
+    switch (activeVenueDeal) {
+      case "fixed_fee": return activeFlatVenueAmount;
       case "per_head": return venuePerHeadEstimate;
       case "minimum_spend": return venueMinimumSpend;
       case "revenue_share": return venueRevenueShareAmount;
       case "upfront_rental": return venueFixedFee; // cost to creator — show as deduction
       case "venue_sponsored": return 0; // income for creator — handled separately
       case "access_only":
-      default: return venueAccessFee;
+      default: return 0;
     }
   })();
-  // Venue Sponsorship income: venue pays creator a flat fee (Flow B positive)
-  const venueSponsorshipIncome = venueCompensationModel === 'venue_sponsored' ? (venueFixedFee || 0) : 0;
+  const venuePayout = activeVenueDeal === 'venue_sponsored'
+    ? activeFlatVenueAmount
+    : activeVenueDeal === 'fixed_fee' || activeVenueDeal === 'upfront_rental'
+      ? -activeFlatVenueAmount
+      : -venueCommercialEstimate;
+  const promoterBounty = influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0;
+  const estimatedCreatorNet = revenueSplit.creatorAmount + venuePayout - promoterBounty;
 
   // **4. MVG PROGRESS** - Using pricing service computation
   const mvgProgress = computeMVGProgress(0, minimumParticipants); // 0 current bookings in draft mode
@@ -4740,11 +4848,7 @@ function PricingStep({ form }: { form: any }) {
                           <Label htmlFor={`sku-format-${sku.id}`}>Ticket Format</Label>
                           <Select
                             value={sku.pricingMode || 'fixed'}
-                            onValueChange={(val) => {
-                              updateTicketSku(sku.id, 'pricingMode', val);
-                              // Reset price fields when switching format
-                              if (val === 'free_rsvp') updateTicketSku(sku.id, 'pricePerPerson', 0);
-                            }}
+                            onValueChange={(val) => updateTicketFormat(sku.id, val)}
                           >
                             <SelectTrigger id={`sku-format-${sku.id}`} data-testid={`select-ticket-format-${index}`}>
                               <SelectValue />
@@ -5237,46 +5341,27 @@ function PricingStep({ form }: { form: any }) {
                   <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
                 </div>
 
-                {/* Flow A: venue is paid FROM ticket revenue */}
-                {venueCommercialEstimate > 0 && venueCompensationModel !== 'venue_sponsored' && (
-                  <div className="flex justify-between">
-                    <span>
-                      {venueCompensationModel === 'upfront_rental' ? 'Venue Rental (you pay upfront)' : 'Venue Payout (Based on Deal)'}
-                    </span>
-                    <span className={venueCompensationModel === 'upfront_rental' ? 'text-orange-600' : 'text-blue-600'} data-testid="text-venue-share">
-                      -{formatPriceByCurrency(venueCommercialEstimate, currency)}
-                    </span>
-                  </div>
-                )}
-
-                {/* Flow B: Venue Sponsorship — income for creator */}
-                {venueCompensationModel === 'venue_sponsored' && venueSponsorshipIncome > 0 && (
-                  <div className="flex justify-between">
-                    <span>Venue Sponsorship Income</span>
-                    <span className="text-green-600 font-medium" data-testid="text-venue-share">
-                      +{formatPriceByCurrency(venueSponsorshipIncome, currency)}
-                    </span>
-                  </div>
-                )}
+                {/* Signed venue amount: costs are negative; sponsorship income is positive. */}
+                <div className="flex justify-between">
+                  <span>Venue Payout</span>
+                  <span
+                    className={venuePayout > 0 ? 'text-green-600 font-medium' : venuePayout < 0 ? 'text-red-600' : ''}
+                    data-testid="text-venue-payout"
+                  >
+                    {venuePayout > 0 ? '+' : venuePayout < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(venuePayout), currency)}
+                  </span>
+                </div>
 
                 {influencerPromotionEnabled && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
                     <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>
-                    <span className="text-amber-600">-{formatPriceByCurrency(totalRevenue * influencerCommissionPct / 100, currency)}</span>
+                    <span className="text-amber-600">-{formatPriceByCurrency(promoterBounty, currency)}</span>
                   </div>
                 )}
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
                   <span>Estimated Net to You</span>
                   <span data-testid="text-your-payout">
-                    {formatPriceByCurrency(
-                      Math.max(0,
-                        revenueSplit.creatorAmount
-                        - venueCommercialEstimate
-                        + venueSponsorshipIncome
-                        - (influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0)
-                      ),
-                      currency
-                    )}
+                    {estimatedCreatorNet < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(estimatedCreatorNet), currency)}
                   </span>
                 </div>
               </div>

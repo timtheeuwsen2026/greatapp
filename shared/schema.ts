@@ -315,6 +315,9 @@ export const experienceDrafts = pgTable("experience_drafts", {
   venueType: varchar("venue_type"), // "catalog", "manual", "virtual"
   manualVenueName: varchar("manual_venue_name"),
   manualVenueAddress: varchar("manual_venue_address"),
+  manualVenueContactName: varchar("manual_venue_contact_name"),
+  manualVenueEmail: varchar("manual_venue_email"),
+  manualVenuePropertyUrl: text("manual_venue_property_url"),
   manualVenueDescription: text("manual_venue_description"),
   manualVenueCapacity: integer("manual_venue_capacity"),
   manualVenuePhotos: jsonb("manual_venue_photos").default([]),
@@ -347,7 +350,12 @@ export const experienceDrafts = pgTable("experience_drafts", {
       Array<{
         id: string;
         ticketName: string;
+        pricingMode?: "fixed" | "free_rsvp" | "pwyw" | "combi";
         pricePerPerson: number;
+        minPrice?: number;
+        suggestedPrice?: number;
+        addonName?: string;
+        addonPrice?: number;
         depositPerPerson: number;
         ticketCapacity: number;
         sourceRoomId?: string;
@@ -548,6 +556,12 @@ export const experiences = pgTable("experiences", {
   gallery: jsonb("gallery").$type<string[]>().default([]),
   location: varchar("location").notNull(),
   venue: varchar("venue"),
+  manualVenueName: varchar("manual_venue_name"),
+  manualVenueAddress: varchar("manual_venue_address"),
+  manualVenueContactName: varchar("manual_venue_contact_name"),
+  manualVenueEmail: varchar("manual_venue_email"),
+  manualVenuePropertyUrl: text("manual_venue_property_url"),
+  manualVenueDescription: text("manual_venue_description"),
   // Virtual event fields
   virtualMeetingUrl: varchar("virtual_meeting_url"),
   virtualMeetingPassword: varchar("virtual_meeting_password"),
@@ -579,7 +593,12 @@ export const experiences = pgTable("experiences", {
       Array<{
         id: string;
         ticketName: string;
+        pricingMode?: "fixed" | "free_rsvp" | "pwyw" | "combi";
         pricePerPerson: number;
+        minPrice?: number;
+        suggestedPrice?: number;
+        addonName?: string;
+        addonPrice?: number;
         depositPerPerson: number;
         ticketCapacity: number;
         sourceRoomId?: string;

@@ -418,6 +418,60 @@ The Great. Team
     }
   }
 
+  async sendExternalVenueInvitation(event: {
+    title?: string | null;
+    startDate?: Date | string | null;
+    location?: string | null;
+    manualVenueName?: string | null;
+    manualVenueAddress?: string | null;
+    manualVenueContactName?: string | null;
+    manualVenueEmail?: string | null;
+    manualVenuePropertyUrl?: string | null;
+    venueTargetDeal?: string | null;
+    venueTargetDealValue?: string | number | null;
+    currency?: string | null;
+  }): Promise<void> {
+    if (!event.manualVenueEmail) return;
+
+    const contact = event.manualVenueContactName?.trim() || 'there';
+    const dealLabels: Record<string, string> = {
+      revenue_share: 'Revenue Split',
+      fixed_fee: 'Ticket Deduction',
+      access_only: 'Access-Only',
+      venue_sponsored: 'Venue Sponsorship',
+      upfront_rental: 'Upfront Rental',
+    };
+    const deal = event.venueTargetDeal
+      ? dealLabels[event.venueTargetDeal] || event.venueTargetDeal
+      : 'To be agreed';
+    const value = event.venueTargetDealValue
+      ? event.venueTargetDeal === 'revenue_share'
+        ? `${event.venueTargetDealValue}%`
+        : `${String(event.currency || 'eur').toUpperCase()} ${event.venueTargetDealValue}`
+      : '';
+
+    const subject = `Venue proposal: ${event.title || 'A Great. experience'}`;
+    const textContent = `
+Hi ${contact},
+
+A creator would like to host "${event.title || 'an experience'}" at ${event.manualVenueName || 'your property'}.
+
+Date: ${formatDate(event.startDate)}
+Location: ${event.location || event.manualVenueAddress || 'TBD'}
+Property: ${event.manualVenuePropertyUrl || 'Not provided'}
+Proposed deal: ${deal}${value ? ` (${value})` : ''}
+
+Reply to this email to continue with the deal proposal.
+
+The Great. Team
+    `.trim();
+
+    const result = await sendEmail(event.manualVenueEmail, subject, textContent);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send external venue invitation');
+    }
+  }
+
   private logNotification(payload: NotificationPayload) {
     this.logs.push(payload);
     if (this.logs.length > 100) {

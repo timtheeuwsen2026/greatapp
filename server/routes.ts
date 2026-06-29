@@ -80,6 +80,13 @@ function numberOrZero(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeTicketSkus(ticketSkus: any): any[] {
+  if (!Array.isArray(ticketSkus)) return [];
+  return ticketSkus.map((sku: any) => sku?.pricingMode === "free_rsvp"
+    ? { ...sku, pricePerPerson: 0, minPrice: 0, suggestedPrice: null }
+    : sku);
+}
+
 // Numeric columns on experience_drafts. The client sends "" for these while a
 // step is still blank (e.g. price on step 1), which PostgreSQL rejects with
 // "invalid input syntax for type numeric". Convert "" (and other non-numeric
@@ -1294,6 +1301,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } = req.body;
       parsedBody.greatPillars = normalizeGreatPillarsPayload(parsedBody.greatPillars);
       parsedBody.monetisationMode = "creator_led";
+      parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
 
       // Convert date strings to valid Date objects or null if invalid
       if (parsedBody.startDate) {
@@ -1340,6 +1348,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updateData = { ...cleanBody };
       updateData.greatPillars = normalizeGreatPillarsPayload(updateData.greatPillars);
       updateData.monetisationMode = "creator_led";
+      if (updateData.ticketSkus !== undefined) {
+        updateData.ticketSkus = normalizeTicketSkus(updateData.ticketSkus);
+      }
       
       // Convert date strings to valid Date objects or null if invalid
       if (updateData.startDate !== undefined) {
@@ -1696,6 +1707,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!req.body.manualVenueAddress || req.body.manualVenueAddress.trim() === '') {
           errors.push("Manual venue address is required");
         }
+        if (!req.body.manualVenueEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.manualVenueEmail)) {
+          errors.push("A valid venue email address is required");
+        }
+        try {
+          const propertyUrl = new URL(req.body.manualVenuePropertyUrl);
+          if (!['http:', 'https:'].includes(propertyUrl.protocol)) throw new Error('Invalid protocol');
+        } catch {
+          errors.push("A valid property link is required");
+        }
       } else if (venueType === 'virtual') {
         if (!req.body.virtualPlatform || req.body.virtualPlatform.trim() === '') {
           errors.push("Virtual platform is required");
@@ -1742,6 +1762,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Normalize date fields before saving (defense in depth)
       const parsedBody = { ...req.body };
+      parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
       
       // Convert date strings to valid Date objects or null if invalid
       if (parsedBody.startDate) {
@@ -1775,11 +1796,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update draft to pending status (finalizes it)
       const result = await storage.updateExperienceDraft(draftId, userId, eventData);
+
+      let externalVenueInvitationSent = false;
+      let externalVenueInvitationWarning: string | undefined;
+      if (venueType === 'manual' && existingDraft.status !== 'pending_approval') {
+        try {
+          await notificationService.sendExternalVenueInvitation(eventData);
+          externalVenueInvitationSent = true;
+        } catch (error: any) {
+          externalVenueInvitationWarning = error?.message || 'The venue invitation could not be sent';
+          console.error('External venue invitation failed:', error);
+        }
+      }
       
       res.json({ 
         success: true, 
         message: "Event published successfully - pending review",
-        event: result 
+        event: result,
+        externalVenueInvitationSent,
+        ...(externalVenueInvitationWarning ? { warning: externalVenueInvitationWarning } : {}),
       });
     } catch (error: any) {
       console.error("Error publishing event:", error);
@@ -2730,6 +2765,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // ── Open-to-Venue-Offers fields ──────────────────────────────────────
         // Stored so the venue discovery feed can match venues by city + space type.
         venueType: (draft as any).venueType || null,
+        manualVenueName: (draft as any).manualVenueName || null,
+        manualVenueAddress: (draft as any).manualVenueAddress || null,
+        manualVenueContactName: (draft as any).manualVenueContactName || null,
+        manualVenueEmail: (draft as any).manualVenueEmail || null,
+        manualVenuePropertyUrl: (draft as any).manualVenuePropertyUrl || null,
+        manualVenueDescription: (draft as any).manualVenueDescription || null,
         venueOpenSpaceType: (draft as any).venueOpenSpaceType || null,
         // venueTargetDeal is a preference, not a binding contract — it tells bidding venues
         // what commercial model the creator is hoping for.
@@ -2807,7 +2848,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Rooms and accommodation
         rooms: normalizedRooms,
         ticketSkus: (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0)
-          ? (draft as any).ticketSkus 
+          ? normalizeTicketSkus((draft as any).ticketSkus)
           : normalizedRooms.map((room: any, index: number) => ({
               id: `sku-${Date.now()}-${index}`,
               sourceRoomId: room.id || `room-${index}`,

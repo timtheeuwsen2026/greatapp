@@ -220,7 +220,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
               <span className="font-medium">{formatCurrency(paymentInfo.fullPrice, experience.currency)}</span>
             </div>
             <div className="flex justify-between text-blue-700 dark:text-blue-300">
-              <span>Deposit (Today):</span>
+              <span>Deposit Due Today:</span>
               <span className="font-bold">{formatCurrency(paymentInfo.depositAmount, experience.currency)}</span>
             </div>
             <div className="flex justify-between">
@@ -249,7 +249,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             Loading payment...
           </span>
         ) : isDeposit
-          ? `Pay Deposit — ${formatCurrency(chargeAmount, experience.currency)}`
+          ? `Deposit Due Today: ${formatCurrency(chargeAmount, experience.currency)}`
           : `Complete Booking — ${formatCurrency(chargeAmount, experience.currency)}`
         }
       </Button>
@@ -829,7 +829,7 @@ export default function Checkout() {
                   {depositAvailable && (
                     <>
                       <div className="flex justify-between items-center text-blue-700 dark:text-blue-300">
-                        <span className="text-sm font-medium">Deposit Amount</span>
+                        <span className="text-sm font-medium">Deposit Due Today</span>
                         <span className="font-bold">{formatCurrency(paymentInfo!.depositAmount, experience.currency)}</span>
                       </div>
                       <div className="flex justify-between items-center">

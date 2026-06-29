@@ -541,6 +541,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         rooms: Array.isArray(normalizedData.rooms) ? normalizedData.rooms : [],
         roles: Array.isArray((normalizedData as any).roles) ? (normalizedData as any).roles : [],
         ticketSkus: Array.isArray(normalizedData.ticketSkus) ? normalizedData.ticketSkus : [],
+        depositEnabled: Array.isArray(normalizedData.ticketSkus)
+          ? normalizedData.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0)
+          : !!normalizedData.depositEnabled,
       };
       
       const draftData = {
@@ -638,6 +641,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         rooms: Array.isArray(data.rooms) ? data.rooms : [],
         roles: Array.isArray((data as any).roles) ? (data as any).roles : [],
         ticketSkus: Array.isArray(data.ticketSkus) ? data.ticketSkus : [],
+        depositEnabled: Array.isArray(data.ticketSkus)
+          ? data.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0)
+          : !!data.depositEnabled,
       };
       
       const draftData = {
@@ -1088,7 +1094,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
-        depositEnabled: formData.depositEnabled || false,
+        depositEnabled: formData.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
@@ -1345,6 +1351,22 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     if (!hasTicketPricing && !hasBasePricing) {
       errors.push("Please set a ticket price, including 0 for free RSVP events");
     }
+
+    const totalTicketCapacity = ticketSkus.reduce(
+      (total: number, sku: any) => total + Number(sku?.ticketCapacity || 0),
+      0,
+    );
+    if (data.requireMinimumParticipants && totalTicketCapacity > 0
+      && Number(data.minimumParticipants || 0) > totalTicketCapacity) {
+      errors.push(`Minimum participants cannot exceed total ticket capacity (${totalTicketCapacity})`);
+    }
+    const invalidDepositTicket = ticketSkus.find((sku: any) =>
+      sku?.pricingMode !== 'free_rsvp'
+      && Number(sku?.depositPerPerson || 0) > Number(sku?.pricePerPerson || 0)
+    );
+    if (invalidDepositTicket) {
+      errors.push(`Deposit cannot exceed the full price for ${invalidDepositTicket.ticketName || 'a ticket'}`);
+    }
     
     // Required: explicit currency selection
     if (!data.currency || data.currency === '') {
@@ -1509,7 +1531,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
-        depositEnabled: formData.depositEnabled || false,
+        depositEnabled: formData.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
@@ -4582,6 +4604,9 @@ function PricingStep({ form }: { form: any }) {
 
   // Calculate totals from ticket SKUs
   const ticketTotalCapacity = ticketSkus.reduce((total: number, sku: any) => total + (sku.ticketCapacity || 0), 0);
+  const mvgExceedsTicketCapacity = requireMinimumParticipants
+    && ticketTotalCapacity > 0
+    && minimumParticipants > ticketTotalCapacity;
   const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => {
     let effectivePrice: number;
     switch (sku.pricingMode) {
@@ -5410,11 +5435,17 @@ function PricingStep({ form }: { form: any }) {
                         id="minimum-participants"
                         type="number"
                         min="2"
-                        max="50"
+                        max={ticketTotalCapacity > 0 ? ticketTotalCapacity : 50}
                         value={minimumParticipants}
-                        onChange={(e) => form.setValue('minimumParticipants', parseInt(e.target.value) || 6, { shouldDirty: true })}
+                        onChange={(e) => form.setValue('minimumParticipants', parseInt(e.target.value) || 2, { shouldDirty: true, shouldValidate: true })}
+                        aria-invalid={mvgExceedsTicketCapacity}
                         data-testid="input-minimum-participants"
                       />
+                      {mvgExceedsTicketCapacity && (
+                        <p className="text-xs text-red-600 mt-1" data-testid="error-mvg-capacity">
+                          MVG cannot exceed the total ticket capacity of {ticketTotalCapacity}.
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label htmlFor="mvg-deadline-days">Deadline (Days Before Start)</Label>

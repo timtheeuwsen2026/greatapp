@@ -48,7 +48,7 @@ export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): 
       const session = event.data.object as Stripe.Checkout.Session;
       console.log(`[Webhook] checkout.session.completed ${session.id} type=${session.metadata?.type}`);
       if (session.metadata?.type === 'venue_sponsorship') {
-        await handleVenueSponsorship(session);
+        await finalizeVenueSponsorshipSession(session);
       } else if (session.metadata?.type === 'upfront_rental') {
         await handleUpfrontRental(session);
       }
@@ -359,6 +359,10 @@ async function handleUpfrontRental(session: Stripe.Checkout.Session): Promise<vo
 
   // 2. Accept contract → go Live
   await storage.acceptVenueContract(experienceId, venueId);
+  await storage.updateExperience(experienceId, {
+    linkedVenueId: venueId,
+    venueStatus: 'venue_confirmed',
+  } as any);
   const experience = await storage.getExperience(experienceId);
   if (!experience) return;
 
@@ -437,7 +441,7 @@ async function handleTransferReversed(transfer: Stripe.Transfer): Promise<void> 
  * 2. Accept the contract and approve the experience (now goes Live).
  * 3. Schedule the 7-day post-event payout to the creator.
  */
-async function handleVenueSponsorship(session: Stripe.Checkout.Session): Promise<void> {
+export async function finalizeVenueSponsorshipSession(session: Stripe.Checkout.Session): Promise<void> {
   const { contractId, experienceId, venueId, sponsorshipAmountCents } = session.metadata ?? {};
   const piId = typeof session.payment_intent === 'string'
     ? session.payment_intent
@@ -455,8 +459,13 @@ async function handleVenueSponsorship(session: Stripe.Checkout.Session): Promise
   }
 
   // Idempotency — already processed
-  if ((contract as any).sponsorshipPaymentStatus === 'paid') {
-    console.log(`[Webhook] venue_sponsorship: contract ${contractId} already paid — skipping`);
+  if ((contract as any).sponsorshipPaymentStatus === 'paid' && contract.status === 'accepted') {
+    await storage.updateExperience(experienceId, {
+      linkedVenueId: venueId,
+      venueStatus: 'venue_confirmed',
+      status: 'approved',
+    } as any);
+    console.log(`[Webhook] venue_sponsorship: contract ${contractId} already paid — state reconciled`);
     return;
   }
 
@@ -468,6 +477,10 @@ async function handleVenueSponsorship(session: Stripe.Checkout.Session): Promise
   // experience row when the creator accepted the venue's offer. We just need to lock the
   // contract and set the experience status to approved.
   await storage.acceptVenueContract(experienceId, venueId);
+  await storage.updateExperience(experienceId, {
+    linkedVenueId: venueId,
+    venueStatus: 'venue_confirmed',
+  } as any);
   const experience = await storage.getExperience(experienceId);
   if (!experience) return;
 

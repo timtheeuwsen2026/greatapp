@@ -31,7 +31,7 @@ import {
   Send,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -46,6 +46,34 @@ function VenueDashboardContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const breadcrumbs = useBreadcrumbs();
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    if (params.get('sponsorship') !== 'success' || !sessionId) return;
+
+    let cancelled = false;
+    apiRequest('POST', '/api/venue/sponsorship/confirm', { sessionId })
+      .then(() => {
+        if (cancelled) return;
+        queryClient.invalidateQueries({ queryKey: ['/api/venue/pending-offers'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/venue/open-events'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/venue/analytics'] });
+        toast({ title: 'Sponsorship Paid', description: 'The deal is confirmed and the event is now live.' });
+        window.history.replaceState({}, '', '/venue-dashboard');
+      })
+      .catch((error: any) => {
+        if (cancelled) return;
+        toast({
+          title: 'Payment Confirmation Pending',
+          description: error?.message || 'Refresh in a moment to confirm the sponsorship payment.',
+          variant: 'destructive',
+        });
+      });
+
+    return () => { cancelled = true; };
+  }, [isAuthenticated, queryClient, toast]);
 
   // Venue listings query - uses correct endpoint for user's own venues
   const { data: venues = [], isLoading: venuesLoading } = useQuery({
@@ -118,10 +146,7 @@ function VenueDashboardContent() {
     if (!offerModal.event || !offerForm.venueId || !offerForm.model) return;
     const terms: Record<string, number> = {};
     if (offerForm.model === "fixed_fee" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
-    if (offerForm.model === "per_head" && offerForm.perHeadAmount) terms.perHeadAmount = parseFloat(offerForm.perHeadAmount);
-    if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
     if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
-    if (offerForm.model === "access_only" && offerForm.accessFee) terms.accessFee = parseFloat(offerForm.accessFee);
     // venue_sponsored: venue pays creator flat fee — stored as fixedFee
     if (offerForm.model === "venue_sponsored" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     // upfront_rental: creator pays venue flat fee — also stored as fixedFee
@@ -378,7 +403,7 @@ function VenueDashboardContent() {
           {/* Creators who published with venueType="open" appear here so venue owners can reach out */}
           <TabsContent value="open-events" className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <h2 className="text-xl font-semibold">Open Events — Seeking a Venue</h2>
+              <h2 className="text-xl font-semibold">Open & Confirmed Events</h2>
               {/* City filter: narrows results by the event's location field */}
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -392,8 +417,7 @@ function VenueDashboardContent() {
             </div>
 
             <p className="text-sm text-gray-500">
-              These creators have published their event but haven't confirmed a venue yet.
-              If your space is a good fit, express your interest and they'll receive your venue profile.
+              Discover events seeking a venue and track events already confirmed with your venue.
             </p>
 
             {openEventsLoading ? (
@@ -437,11 +461,11 @@ function VenueDashboardContent() {
                     other: "Other",
                   };
                   const targetDealLabels: Record<string, string> = {
-                    access_only: "Access Only / Pay-at-Counter",
-                    fixed_fee: "Flat Fee",
-                    per_head: "Per Head",
-                    minimum_spend: "Minimum Spend",
-                    revenue_share: "Revenue Share",
+                    revenue_share: "Revenue Split",
+                    fixed_fee: "Ticket Deduction",
+                    access_only: "Access-Only",
+                    venue_sponsored: "Venue Sponsorship",
+                    upfront_rental: "Upfront Rental",
                   };
                   return openEvents.map((event: any) => (
                     <Card key={event.id} className="border-blue-200 dark:border-blue-800">
@@ -450,9 +474,15 @@ function VenueDashboardContent() {
                           <div className="flex-1 space-y-3">
                             <div className="flex flex-wrap items-center gap-2">
                               <h3 className="font-semibold text-lg">{event.title}</h3>
-                              <Badge className="bg-blue-100 text-blue-800 border-blue-300">
-                                <AlertCircle className="w-3 h-3 mr-1" />Seeking Venue
-                              </Badge>
+                              {event.venueRelationshipStatus === 'confirmed' ? (
+                                <Badge className="bg-green-100 text-green-800 border-green-300">
+                                  <CheckCircle className="w-3 h-3 mr-1" />Paid / Confirmed
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-blue-100 text-blue-800 border-blue-300">
+                                  <AlertCircle className="w-3 h-3 mr-1" />Seeking Venue
+                                </Badge>
+                              )}
                               {event.venueOpenSpaceType && (
                                 <Badge variant="outline" className="text-gray-600">
                                   {spaceTypeLabels[event.venueOpenSpaceType] ?? event.venueOpenSpaceType}
@@ -506,7 +536,7 @@ function VenueDashboardContent() {
                           </div>
 
                           {/* Offer to Host — opens modal for venue owner to submit Commercial Model */}
-                          {(() => {
+                          {event.venueRelationshipStatus !== 'confirmed' && (() => {
                             const approvedVenues = venues.filter((v: any) => v.status === 'approved');
                             const hasApproved = approvedVenues.length > 0;
                             return (
@@ -1027,13 +1057,11 @@ function VenueDashboardContent() {
               <Select value={offerForm.model} onValueChange={(v) => setOfferForm(f => ({ ...f, model: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="access_only">Access Only / Pay-at-Counter</SelectItem>
-                  <SelectItem value="fixed_fee">Flat Fee (Creator pays Venue)</SelectItem>
-                  <SelectItem value="per_head">Per Head</SelectItem>
-                  <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
-                  <SelectItem value="revenue_share">Revenue Share (%)</SelectItem>
-                  <SelectItem value="venue_sponsored">Venue-Sponsored (Venue pays Creator)</SelectItem>
-                  <SelectItem value="upfront_rental">Upfront Rental (Creator pays Venue)</SelectItem>
+                  <SelectItem value="revenue_share">Revenue Split</SelectItem>
+                  <SelectItem value="fixed_fee">Ticket Deduction</SelectItem>
+                  <SelectItem value="access_only">Access-Only</SelectItem>
+                  <SelectItem value="venue_sponsored">Venue Sponsorship</SelectItem>
+                  <SelectItem value="upfront_rental">Upfront Rental</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1041,32 +1069,14 @@ function VenueDashboardContent() {
             {/* Amount field — changes based on selected model */}
             {offerForm.model === "fixed_fee" && (
               <div>
-                <Label>Flat Fee (€)</Label>
+                <Label>Ticket Deduction Amount (€)</Label>
                 <Input type="number" min="0" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "per_head" && (
-              <div>
-                <Label>Per Head Amount (€)</Label>
-                <Input type="number" min="0" placeholder="e.g. 10" value={offerForm.perHeadAmount} onChange={e => setOfferForm(f => ({ ...f, perHeadAmount: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "minimum_spend" && (
-              <div>
-                <Label>Minimum Spend (€)</Label>
-                <Input type="number" min="0" placeholder="e.g. 200" value={offerForm.minimumSpend} onChange={e => setOfferForm(f => ({ ...f, minimumSpend: e.target.value }))} />
               </div>
             )}
             {offerForm.model === "revenue_share" && (
               <div>
                 <Label>Revenue Share (%)</Label>
                 <Input type="number" min="0" max="100" placeholder="e.g. 20" value={offerForm.revenueSharePct} onChange={e => setOfferForm(f => ({ ...f, revenueSharePct: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "access_only" && (
-              <div>
-                <Label>Access Fee (€, optional — 0 for fully free access)</Label>
-                <Input type="number" min="0" placeholder="e.g. 0" value={offerForm.accessFee} onChange={e => setOfferForm(f => ({ ...f, accessFee: e.target.value }))} />
               </div>
             )}
             {offerForm.model === "venue_sponsored" && (

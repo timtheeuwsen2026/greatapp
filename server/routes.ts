@@ -32,7 +32,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
-import { handleStripeWebhook } from "./stripe-webhook";
+import { handleStripeWebhook, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -52,6 +52,13 @@ function getAppBaseUrl(req: any): string {
 }
 
 const FIXED_PLATFORM_FEE_PCT = 15;
+const UNIFIED_VENUE_DEAL_MODELS = new Set([
+  'revenue_share',
+  'fixed_fee',
+  'access_only',
+  'venue_sponsored',
+  'upfront_rental',
+]);
 
 function applyMarketplaceEconomics(input: any = {}) {
   const model = input.venueCompensationModel || "access_only";
@@ -1745,6 +1752,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           errors.push("Ticket price must be 0 or greater");
         }
       }
+
+      const publishTicketSkus = normalizeTicketSkus(req.body.ticketSkus);
+      const publishTicketCapacity = publishTicketSkus.reduce(
+        (total: number, sku: any) => total + numberOrZero(sku?.ticketCapacity),
+        0,
+      );
+      const publishMvgMinimum = numberOrZero(req.body.minimumParticipants ?? req.body.mvgMinimumSize);
+      if ((req.body.requireMinimumParticipants ?? req.body.mvgEnabled)
+        && publishTicketCapacity > 0
+        && publishMvgMinimum > publishTicketCapacity) {
+        errors.push(`Minimum participants cannot exceed total ticket capacity (${publishTicketCapacity})`);
+      }
       
       // Required: Terms acceptance
       if (!req.body.termsAccepted) {
@@ -2754,7 +2773,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         price: resolvedPrice.toString(),
         pricePerPerson: resolvedPrice.toString(),
         currency: draft.currency || 'usd',
-        depositEnabled: draft.depositEnabled || false,
+        depositEnabled: !!draft.depositEnabled || (Array.isArray((draft as any).ticketSkus)
+          && (draft as any).ticketSkus.some((sku: any) => numberOrZero(sku?.depositPerPerson) > 0)),
         depositPercentage: draft.depositPercentage,
         depositAmount: (draft as any).depositAmount || null,
         balanceDueDays: draft.balanceDueDays || 14,
@@ -3062,6 +3082,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === bookingTicketSkuId
         );
+      } else if (ticketSkus.length === 1) {
+        selectedTicket = ticketSkus[0];
       }
 
       // PWYW: the client sends amount = buyer-chosen price; validate against minPrice
@@ -3090,11 +3112,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
 
+      if (fixedDeposit > fullPrice) {
+        return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
+      }
+
       if (paymentType === 'full') {
         isDepositOnly = false;
         depositAmount = 0;
         balanceAmount = 0;
-      } else if (experience.depositEnabled && fixedDeposit > 0) {
+      } else if (fixedDeposit > 0) {
         isDepositOnly = true;
         depositAmount = fixedDeposit;
         balanceAmount = fullPrice - depositAmount;
@@ -4544,6 +4570,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === ticketSkuId
         );
+      } else if (ticketSkus.length === 1) {
+        selectedTicket = ticketSkus[0];
       }
 
       // ── PWYW handling ────────────────────────────────────────────────────
@@ -4575,7 +4603,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fixedDeposit = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
-      const hasDeposit = experience.depositEnabled && fixedDeposit > 0;
+      if (fixedDeposit > fullPrice) {
+        return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
+      }
+      // A per-ticket fixed deposit is the source of truth. Older builder payloads
+      // did not always set the legacy experience-level depositEnabled flag.
+      const hasDeposit = fixedDeposit > 0;
 
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
       const acceptedVenueContract = await storage.getAcceptedVenueContractForExperience(experienceId);
@@ -9845,6 +9878,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: 'Venue-sponsored deal requires a non-zero fixedFee as the sponsorship amount' });
         }
 
+        if ((contract as any).sponsorshipPaymentStatus === 'paid' || contract.status === 'accepted') {
+          return res.json({
+            success: true,
+            requiresPayment: false,
+            contract,
+            message: 'Sponsorship payment is already confirmed',
+          });
+        }
+
         // Persist the contract with status 'pending_payment' (venue hasn't paid yet)
         const updatedContract = await storage.updateVenueContractSponsorshipStatus(
           contract.id, 'unpaid'
@@ -9879,7 +9921,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           metadata: sponsorshipMeta,
           // Copy metadata to the underlying PaymentIntent so payment_intent.succeeded can also route it
           payment_intent_data: { metadata: sponsorshipMeta },
-          success_url: `${baseUrl}/venue-dashboard?sponsorship=success&experience=${experienceId}`,
+          success_url: `${baseUrl}/venue-dashboard?sponsorship=success&experience=${experienceId}&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${baseUrl}/venue-dashboard?sponsorship=cancelled&experience=${experienceId}`,
         });
 
@@ -9893,12 +9935,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // ── Standard deal: accept immediately ────────────────────────────────
       const acceptedContract = await storage.acceptVenueContract(experienceId, linkedVenue.id);
-      await storage.updateExperience(experienceId, getExperienceUpdatesFromAcceptedContract(acceptedContract) as any);
+      await storage.updateExperience(experienceId, {
+        ...getExperienceUpdatesFromAcceptedContract(acceptedContract),
+        venueStatus: 'venue_confirmed',
+        linkedVenueId: linkedVenue.id,
+      } as any);
       await storage.updateExperienceStatus(experienceId, 'approved');
       res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
       res.status(500).json({ message: 'Failed to accept offer' });
+    }
+  });
+
+  // Stripe redirects here after a successful Venue Sponsorship checkout. This
+  // closes the UI loop immediately even when webhook delivery is delayed.
+  app.post('/api/venue/sponsorship/confirm', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const sessionId = String(req.body?.sessionId || '');
+      if (!sessionId.startsWith('cs_')) {
+        return res.status(400).json({ message: 'A valid Stripe Checkout session is required' });
+      }
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.metadata?.type !== 'venue_sponsorship' || session.payment_status !== 'paid') {
+        return res.status(409).json({ message: 'Sponsorship payment is not complete' });
+      }
+
+      const venueId = session.metadata?.venueId;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!venueId || !userVenues.some((venue: any) => venue.id === venueId)) {
+        return res.status(403).json({ message: 'This sponsorship payment does not belong to your venue' });
+      }
+
+      await finalizeVenueSponsorshipSession(session);
+      const contract = session.metadata?.contractId
+        ? await storage.getVenueContractById(session.metadata.contractId)
+        : undefined;
+      res.json({ success: true, contract, message: 'Sponsorship paid and deal confirmed' });
+    } catch (err: any) {
+      console.error('Error confirming venue sponsorship:', err);
+      res.status(500).json({ message: 'Failed to confirm sponsorship payment' });
     }
   });
 
@@ -9975,8 +10053,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Optional ?city= query param narrows results by location substring match.
   app.get('/api/venue/open-events', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
       const city = typeof req.query.city === 'string' ? req.query.city : undefined;
-      const events = await storage.getOpenVenueEvents(city);
+      const seekingEvents = await storage.getOpenVenueEvents(city);
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const confirmedEvents = userVenues.length
+        ? (await storage.getExperiencesByVenueIds(userVenues.map((venue: any) => venue.id)))
+          .filter((event: any) => event.status === 'approved' || event.status === 'published')
+          .filter((event: any) => !city || String(event.location || '').toLowerCase().includes(city.toLowerCase()))
+        : [];
+      const events = [
+        ...confirmedEvents.map((event: any) => ({ ...event, venueRelationshipStatus: 'confirmed' })),
+        ...seekingEvents
+          .filter((event: any) => !confirmedEvents.some((confirmed: any) => confirmed.id === event.id))
+          .map((event: any) => ({ ...event, venueRelationshipStatus: 'seeking' })),
+      ];
       // Return only the fields the venue dashboard needs — avoids leaking pricing internals
       const feed = events.map((e: any) => ({
         id: e.id,
@@ -9987,6 +10078,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         maxParticipants: e.maxParticipants,
         venueOpenSpaceType: e.venueOpenSpaceType,
         venueTargetDeal: e.venueTargetDeal,
+        venueTargetDealValue: e.venueTargetDealValue,
+        venueRelationshipStatus: e.venueRelationshipStatus,
+        linkedVenueId: e.linkedVenueId,
         category: e.category,
         shortDescription: e.shortDescription,
         experienceType: e.experienceType,
@@ -10013,6 +10107,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!venueId || !model) {
         return res.status(400).json({ message: 'venueId and model are required' });
       }
+      if (!UNIFIED_VENUE_DEAL_MODELS.has(model)) {
+        return res.status(400).json({ message: 'Unsupported venue deal model' });
+      }
 
       // Verify the experience is actually open for bids
       const experience = await storage.getExperience(experienceId);
@@ -10031,12 +10128,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Your venue must be approved by admin before you can submit offers' });
       }
 
+      const normalizedTerms = model === 'revenue_share'
+        ? { revenueSharePct: numberOrZero(terms?.revenueSharePct) }
+        : model === 'access_only'
+          ? {}
+          : { fixedFee: numberOrZero(terms?.fixedFee) };
+
       const offer = await storage.createVenueOffer({
         experienceId,
         venueId,
         venueOwnerId: userId,
         model,
-        terms: terms || {},
+        terms: normalizedTerms,
         message,
       });
 

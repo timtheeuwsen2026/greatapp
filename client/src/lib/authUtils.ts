@@ -3,12 +3,11 @@ export function isUnauthorizedError(error: Error): boolean {
 }
 
 // Returns true if the user has admin privileges.
-// Checks DB role fields; falls back to the bootstrap email.
+// Checks the DB role; falls back to the bootstrap email.
 export function isAdminUser(user: any): boolean {
   if (!user) return false;
   return (
     user.role === 'admin' ||
-    (user.userRoles || []).includes('admin') ||
     user.email === 'timtheeuwsen@gmail.com'
   );
 }

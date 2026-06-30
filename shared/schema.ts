@@ -49,10 +49,6 @@ export const users = pgTable("users", {
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   role: userRoleEnum("role").default("participant"),
-  // Multi-role support: stores all roles a user has (e.g., ["creator", "promoter"])
-  userRoles: text("user_roles")
-    .array()
-    .default(sql`'{}'::text[]`),
   // Promoter referral system
   promoterCode: varchar("promoter_code").unique(), // Unique code for promoter referral links
   referredByPromoterId: varchar("referred_by_promoter_id").references(

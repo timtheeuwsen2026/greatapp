@@ -12,9 +12,7 @@ export function useRoleAuth(requiredRole: UserRole) {
 
   const hasRequiredRole =
     user?.role === requiredRole ||
-    user?.role === 'admin' ||
-    (user?.userRoles || []).includes(requiredRole) ||
-    (user?.userRoles || []).includes('admin');
+    user?.role === 'admin';
   const isAuthorized = isAuthenticated && hasRequiredRole;
 
   useEffect(() => {

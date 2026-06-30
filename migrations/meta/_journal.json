@@ -15,6 +15,13 @@
       "when": 1782249062623,
       "tag": "0001_mean_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782812285896,
+      "tag": "0002_classy_baron_zemo",
+      "breakpoints": true
     }
   ]
 }

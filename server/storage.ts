@@ -106,7 +106,6 @@ export interface IStorage {
   getUserByPromoterCode(code: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUserRole(id: string, role: string): Promise<User>;
-  addUserRole(id: string, role: string): Promise<User>;
   updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User>;
   setUserReferrer(userId: string, promoterId: string): Promise<User>;
   ensureUserReferralCode(userId: string): Promise<string>;
@@ -411,32 +410,10 @@ export class DatabaseStorage implements IStorage {
   async updateUserRole(id: string, role: "participant" | "creator" | "venue_provider" | "service_provider" | "admin" | "promoter"): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ role, userRoles: [role], updatedAt: new Date() })
+      .set({ role, updatedAt: new Date() })
       .where(eq(users.id, id))
       .returning();
     return user;
-  }
-
-  async addUserRole(id: string, role: string): Promise<User> {
-    // Add role to userRoles array if not already present (multi-role support)
-    const currentUser = await this.getUser(id);
-    if (!currentUser) {
-      throw new Error("User not found");
-    }
-    
-    const currentRoles = currentUser.userRoles || [];
-    if (!currentRoles.includes(role)) {
-      const [user] = await db
-        .update(users)
-        .set({ 
-          userRoles: [...currentRoles, role],
-          updatedAt: new Date() 
-        })
-        .where(eq(users.id, id))
-        .returning();
-      return user;
-    }
-    return currentUser;
   }
 
   async updateUserStripeInfo(userId: string, customerId: string, subscriptionId?: string): Promise<User> {
@@ -3253,12 +3230,7 @@ export class DatabaseStorage implements IStorage {
 
   // Admin Promoter Management Methods
   async getAllPromoters(): Promise<User[]> {
-    // Get all users who have 'promoter' in their userRoles array
-    const allUsers = await db.select().from(users);
-    return allUsers.filter(user => {
-      const roles = user.userRoles || [];
-      return roles.includes('promoter');
-    });
+    return db.select().from(users).where(eq(users.role, 'promoter'));
   }
 
   async getPromoterBookingsWithDetails(promoterId: string): Promise<Array<{

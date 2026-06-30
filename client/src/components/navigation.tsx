@@ -41,15 +41,8 @@ export default function Navigation() {
   const [pathname, navigate] = useLocation();
   const queryClient = useQueryClient();
 
-  // Build available roles from the user object already in AuthContext.
-  // user.userRoles holds every role this account has ever been assigned.
-  // We always include 'participant' as a baseline and deduplicate.
-  const userRolesArray: string[] = Array.isArray(user?.userRoles)
-    ? (user!.userRoles as unknown as string[])
-    : [];
-  const availableRoles: string[] = Array.from(
-    new Set(["participant", user?.role, ...userRolesArray].filter(Boolean) as string[])
-  );
+  // A user has one active role. Role changes are available from My Account.
+  const availableRoles: string[] = user?.role ? [user.role] : [];
 
   // "Explore experiences" - scroll on homepage, navigate + scroll flag on other pages
   const handleExploreTrips = () => {

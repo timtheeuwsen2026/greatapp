@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   Briefcase,
@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Navigation from "@/components/navigation";
 import { useToast } from "@/hooks/use-toast";
+import { isAdminUser } from "@/lib/authUtils";
 import { supabase } from "@/lib/supabase";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -177,14 +178,13 @@ export default function Profile() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [roleDialogOpen, setRoleDialogOpen] = useState(false);
-  const [addingRole, setAddingRole] = useState<string | null>(null);
-  const queryClient = useQueryClient();
   const { switchRole, isLoading: isSwitching } = useRoleSwitch();
 
   const role = user?.role as string | undefined;
+  const isAdmin = isAdminUser(user);
   const participantProfile = participantProfileStatus?.profile || null;
-  const allRoles = Array.from(new Set([...(Array.isArray(user?.userRoles) ? user.userRoles : []), role].filter(Boolean))) as string[];
-  const hasRole = (value: string) => role === value || allRoles.includes(value);
+  const allRoles = role ? [role] : [];
+  const hasRole = (value: string) => role === value;
 
   const showParticipant = hasRole("participant") || !!participantProfile;
   const showCreator = hasRole("creator") || !!creatorProfile;
@@ -200,42 +200,6 @@ export default function Profile() {
     promoter: "Promoter",
     admin: "Admin",
   };
-
-  async function handleAddRole(newRole: string) {
-    setAddingRole(newRole);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-      const roleLabel = ALL_ROLES.find(r => r.value === newRole)?.label ?? newRole;
-      const res = await fetch("/api/auth/add-role", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ role: newRole }),
-      });
-      const resData = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        toast({
-          title: "Failed to add role",
-          description: resData?.message || "Something went wrong. Please try again.",
-          variant: "destructive",
-        });
-        return;
-      }
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      toast({
-        title: "Role added!",
-        description: `${roleLabel} role has been added. Switch to it anytime from the account menu.`,
-      });
-      setRoleDialogOpen(false);
-    } catch (err: any) {
-      toast({ title: "Failed to add role", description: err.message, variant: "destructive" });
-    } finally {
-      setAddingRole(null);
-    }
-  }
 
   async function handlePasswordChange(event: React.FormEvent) {
     event.preventDefault();
@@ -297,10 +261,12 @@ export default function Profile() {
               <h1 className="text-3xl font-bold text-gray-900">My Account</h1>
               <p className="text-gray-600">Manage your account and role profile details</p>
             </div>
-            <Button variant="outline" onClick={() => setRoleDialogOpen(true)}>
-              <Settings className="mr-2 h-4 w-4" />
-              Add or Switch Role
-            </Button>
+            {!isAdmin && (
+              <Button variant="outline" onClick={() => setRoleDialogOpen(true)}>
+                <Settings className="mr-2 h-4 w-4" />
+                Switch Role
+              </Button>
+            )}
           </div>
 
           <Tabs defaultValue="overview" className="space-y-6">
@@ -327,11 +293,9 @@ export default function Profile() {
                     <DetailItem label="Name" value={`${user.firstName || ""} ${user.lastName || ""}`.trim() || "Not set"} />
                     <DetailItem label="Email" value={user.email} />
                     <div>
-                      <span className="text-sm font-medium text-gray-500">Roles</span>
+                      <span className="text-sm font-medium text-gray-500">Role</span>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {(allRoles.length ? allRoles : [role || "participant"]).map((item) => (
-                          <Badge key={item}>{roleBadgeLabel[item] || item}</Badge>
-                        ))}
+                        <Badge>{roleBadgeLabel[role || "participant"] || role}</Badge>
                       </div>
                     </div>
                   </CardContent>
@@ -739,57 +703,58 @@ export default function Profile() {
       </div>
     </div>
 
-    <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Switch or Add Role</DialogTitle>
-          <DialogDescription>
-            Switch to a role you already have, or add a new one to your account.
-          </DialogDescription>
-        </DialogHeader>
+    {!isAdmin && (
+      <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Switch Role</DialogTitle>
+            <DialogDescription>
+              Choose the single role you want to use for this account.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="space-y-4 pt-2">
-          {/* Existing roles — switch active */}
-          {allRoles.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">Your Roles</p>
-              {ALL_ROLES.filter(r => allRoles.includes(r.value)).map(({ value, label, description, icon: Icon }) => {
-                const isActive = role === value;
-                return (
-                  <div
-                    key={value}
-                    className={`flex items-center justify-between rounded-lg border p-3 ${isActive ? "bg-primary/5 border-primary/20" : ""}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Icon className="h-5 w-5 text-gray-500 shrink-0" />
-                      <div>
-                        <p className="text-sm font-medium">{label}</p>
-                        <p className="text-xs text-gray-500">{description}</p>
+          <div className="space-y-4 pt-2">
+            {/* Current role */}
+            {allRoles.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">Current Role</p>
+                {ALL_ROLES.filter(r => allRoles.includes(r.value)).map(({ value, label, description, icon: Icon }) => {
+                  const isActive = role === value;
+                  return (
+                    <div
+                      key={value}
+                      className={`flex items-center justify-between rounded-lg border p-3 ${isActive ? "bg-primary/5 border-primary/20" : ""}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className="h-5 w-5 text-gray-500 shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium">{label}</p>
+                          <p className="text-xs text-gray-500">{description}</p>
+                        </div>
                       </div>
+                      {isActive ? (
+                        <Badge variant="secondary" className="text-xs shrink-0">Active</Badge>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0"
+                          disabled={isSwitching}
+                          onClick={() => { setRoleDialogOpen(false); switchRole(value as any); }}
+                        >
+                          Switch
+                        </Button>
+                      )}
                     </div>
-                    {isActive ? (
-                      <Badge variant="secondary" className="text-xs shrink-0">Active</Badge>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="shrink-0"
-                        disabled={isSwitching || addingRole !== null}
-                        onClick={() => { setRoleDialogOpen(false); switchRole(value as any); }}
-                      >
-                        Switch
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
 
-          {/* Roles not yet added */}
+          {/* Alternative roles */}
           {ALL_ROLES.filter(r => !allRoles.includes(r.value)).length > 0 && (
             <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">Add a New Role</p>
+              <p className="text-sm font-medium text-gray-700">Switch to Another Role</p>
               {ALL_ROLES.filter(r => !allRoles.includes(r.value)).map(({ value, label, description, icon: Icon }) => (
                 <div key={value} className="flex items-center justify-between rounded-lg border p-3">
                   <div className="flex items-center gap-3">
@@ -802,18 +767,19 @@ export default function Profile() {
                   <Button
                     size="sm"
                     className="shrink-0"
-                    disabled={addingRole !== null || isSwitching}
-                    onClick={() => handleAddRole(value)}
+                    disabled={isSwitching}
+                    onClick={() => { setRoleDialogOpen(false); switchRole(value as any); }}
                   >
-                    {addingRole === value ? "Adding…" : "Add"}
+                    Switch
                   </Button>
                 </div>
               ))}
             </div>
           )}
-        </div>
-      </DialogContent>
-    </Dialog>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
     </>
   );
 }

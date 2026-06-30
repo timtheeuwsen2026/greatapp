@@ -395,7 +395,7 @@ async function checkIsAdmin(req: any): Promise<boolean> {
   if (userId) {
     const dbUser = await storage.getUser(userId);
     if (!dbUser) return false;
-    return dbUser.role === 'admin' || (dbUser.userRoles || []).includes('admin');
+    return dbUser.role === 'admin';
   }
   return false;
 }
@@ -549,7 +549,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lastName: null,
           profileImageUrl: null,
           role: initialRole as any,
-          userRoles: [initialRole],
         });
       }
 
@@ -635,18 +634,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lastName: null,
           profileImageUrl: null,
           role: role as any,
-          userRoles: [role],
         });
       }
 
-      // Update active role and ensure it's in the userRoles array
+      // The role column is the single source of truth for authorization.
       const updatedUser = await storage.updateUserRole(userId, role);
-
-      // Add selected role to userRoles if not already present (multi-role support)
-      const currentRoles = updatedUser.userRoles || [];
-      if (!currentRoles.includes(role)) {
-        await storage.addUserRole(userId, role);
-      }
 
       // Participants automatically get the promoter role so they can
       // share referral links and earn commission from day one.
@@ -661,10 +653,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Add a role to the user's userRoles array WITHOUT changing their active role.
-  // Used when a user signs up a second time with the same email but a different role —
-  // their current active role is preserved; the new role is simply added to their
-  // collection so they can switch to it via the role switcher in the nav menu.
+  // Backward-compatible endpoint: "adding" a role now switches the account's
+  // single role, matching /api/auth/assign-role.
   app.post('/api/auth/add-role', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -680,7 +670,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
-      const currentRoles: string[] = (user?.userRoles as unknown as string[]) || [];
 
       if (!user) {
         const newUser = await storage.upsertUser({
@@ -690,26 +679,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lastName: null,
           profileImageUrl: null,
           role,
-          userRoles: [role],
         });
-        return res.json({ message: 'Role added successfully', user: newUser });
+        return res.json({ message: 'Role updated successfully', user: newUser });
       }
 
-      if (user.role === role || currentRoles.includes(role)) {
-        // Already has this role — nothing to do
-        return res.status(409).json({ message: 'User with that role already exists', user });
+      if (user.role === role) {
+        return res.json({ message: 'Role already active', user });
       }
 
-      // Only add to userRoles — do NOT touch the active role field
-      await storage.addUserRole(user.id, role);
+      const updatedUser = await storage.updateUserRole(user.id, role);
 
       // Auto-generate a referral code when promoter role is added
       if (role === 'promoter' || role === 'participant') {
         await storage.ensureUserReferralCode(user.id);
       }
 
-      const updatedUser = await storage.getUser(user.id);
-      res.json({ message: 'Role added successfully', user: updatedUser });
+      res.json({ message: 'Role updated successfully', user: updatedUser });
     } catch (error) {
       console.error('Error adding role:', error);
       res.status(500).json({ message: 'Failed to add role' });
@@ -728,10 +713,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid role" });
       }
       const updatedUser = await storage.updateUserRole(userId, role);
-      const currentRoles = updatedUser.userRoles || [];
-      if (!currentRoles.includes(role)) {
-        await storage.addUserRole(userId, role);
-      }
       res.json({ message: "Role assigned successfully", user: updatedUser });
     } catch (error) {
       console.error("Error assigning role:", error);
@@ -749,12 +730,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
       
-      // Return both active role and all available roles
       res.json({
         activeRole: user.role,
-        userRoles: user.userRoles || [],
-        // All users can switch to participant; other roles depend on what they've enabled
-        availableRoles: ['participant', ...(user.userRoles || []).filter((r: string) => r !== 'participant')]
+        availableRoles: user.role ? [user.role] : []
       });
     } catch (error) {
       console.error("Error fetching user roles:", error);
@@ -991,10 +969,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
     if (!userId) { res.status(401).json({ message: 'Not authenticated' }); return null; }
     const user = await storage.getUser(userId);
-    // All participants automatically have promoter in userRoles — accept both
-    const ok = user?.role === 'promoter' || user?.role === 'participant' ||
-                (user?.userRoles || []).includes('promoter') ||
-                (user?.userRoles || []).includes('participant');
+    // Participants retain referral access, but authorization uses only role.
+    const ok = user?.role === 'promoter' || user?.role === 'participant';
     if (!ok) { res.status(403).json({ message: 'Access denied' }); return null; }
     return userId;
   };

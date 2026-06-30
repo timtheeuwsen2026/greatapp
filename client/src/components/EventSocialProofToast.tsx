@@ -1,0 +1,4 @@
+import { useEffect,useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+type Proof={participants:Array<{firstName?:string|null}>;totalCount:number};
+export function EventSocialProofToast({experienceId}:{experienceId:string}){const {data}=useQuery<Proof>({queryKey:["/api/experiences",experienceId,"social-proof"]});const [show,setShow]=useState(false);useEffect(()=>{if(!data?.totalCount)return;const start=setTimeout(()=>setShow(true),7000);const end=setTimeout(()=>setShow(false),13000);return()=>{clearTimeout(start);clearTimeout(end)}},[data?.totalCount]);if(!show||!data)return null;const name=data.participants.find(p=>p.firstName)?.firstName;return <div className="fixed bottom-5 left-5 z-40 max-w-xs rounded-xl border bg-white px-4 py-3 text-sm shadow-xl" role="status">{name?`⚡ ${name} reserved a spot for this experience`:`🔥 ${data.totalCount} people have joined this experience`}</div>}

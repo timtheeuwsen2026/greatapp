@@ -47,6 +47,12 @@ interface VenueWithOwner extends Venue {
   ownerName: string | null;
   ownerEmail: string | null;
 }
+interface PaginatedExperiences {
+  items: Experience[];
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+  stats: { total: number; published: number; approved: number; pending: number };
+}
+interface PaginatedList<T> { items: T[]; pagination: { page:number; pageSize:number; total:number; totalPages:number }; stats?: Record<string, number> }
 
 // Helper to format currency with proper symbol
 // DATA CONTRACT: Currency must come from experience.currency - never default to USD
@@ -73,6 +79,13 @@ export default function AdminDashboard() {
   const [reviewNotes, setReviewNotes] = useState("");
   const [, setLocation] = useLocation();
   const [expandedExperiences, setExpandedExperiences] = useState<Set<string>>(new Set());
+  const [experienceStatusFilter, setExperienceStatusFilter] = useState<string>("all");
+  const [experiencePage, setExperiencePage] = useState(1);
+  const [applicationPage, setApplicationPage] = useState(1);
+  const [venuePage, setVenuePage] = useState(1);
+  const [servicePage, setServicePage] = useState(1);
+  const [venueStatusFilter, setVenueStatusFilter] = useState<string>("all");
+  const experiencePageSize = 10;
 
   const toggleExperienceDetails = (id: string) => {
     setExpandedExperiences(prev => {
@@ -102,38 +115,51 @@ export default function AdminDashboard() {
   }, [isAuthenticated, isLoading, user, toast]);
 
   // All experiences query (for full visibility)
-  const { data: allExperiences = [], isLoading: experiencesLoading } = useQuery<Experience[]>({
-    queryKey: ["/api/admin/experiences"],
+  const { data: experienceResponse, isLoading: experiencesLoading } = useQuery<PaginatedExperiences>({
+    queryKey: ["/api/admin/experiences", experiencePage, experienceStatusFilter, searchTerm],
+    queryFn: async () => {
+      const params = new URLSearchParams({ page: String(experiencePage), pageSize: String(experiencePageSize), status: experienceStatusFilter });
+      if (searchTerm.trim()) params.set("search", searchTerm.trim());
+      const response = await apiRequest("GET", `/api/admin/experiences?${params}`);
+      return response.json();
+    },
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
+  const allExperiences = experienceResponse?.items ?? [];
+  const experiencePagination = experienceResponse?.pagination;
+  const experienceStats = experienceResponse?.stats;
 
-  // Experience status filter state - PHASE 7 FIX: Default to "all" for full visibility
-  const [experienceStatusFilter, setExperienceStatusFilter] = useState<string>("all");
+  useEffect(() => { setExperiencePage(1); }, [experienceStatusFilter, searchTerm]);
 
   // Community applications query
-  const { data: communityApplications = [], isLoading: applicationsLoading } = useQuery<any[]>({
-    queryKey: ["/api/admin/community-applications"],
+  const { data: applicationResponse, isLoading: applicationsLoading } = useQuery<PaginatedList<any>>({
+    queryKey: ["/api/admin/community-applications", applicationPage, searchTerm],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/community-applications?page=${applicationPage}&pageSize=10&search=${encodeURIComponent(searchTerm)}`)).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
+  const communityApplications = applicationResponse?.items ?? [];
 
   // All venues query (not just pending)
-  const { data: allVenues = [], isLoading: venuesLoading } = useQuery<VenueWithOwner[]>({
-    queryKey: ["/api/admin/venues"],
+  const { data: venueResponse, isLoading: venuesLoading } = useQuery<PaginatedList<VenueWithOwner>>({
+    queryKey: ["/api/admin/venues", venuePage, venueStatusFilter, searchTerm],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/venues?page=${venuePage}&pageSize=10&status=${venueStatusFilter}&search=${encodeURIComponent(searchTerm)}`)).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
-
-  // Venue status filter state
-  const [venueStatusFilter, setVenueStatusFilter] = useState<string>("all");
+  const allVenues = venueResponse?.items ?? [];
 
   // Pending services query
-  const { data: pendingServices = [], isLoading: servicesLoading} = useQuery<ServiceProvider[]>({
-    queryKey: ["/api/admin/services"],
+  const { data: serviceResponse, isLoading: servicesLoading} = useQuery<PaginatedList<ServiceProvider>>({
+    queryKey: ["/api/admin/services", servicePage, searchTerm],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/services?page=${servicePage}&pageSize=10&search=${encodeURIComponent(searchTerm)}`)).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
+  const pendingServices = serviceResponse?.items ?? [];
+  useEffect(() => { setApplicationPage(1); setVenuePage(1); setServicePage(1); }, [searchTerm]);
+  useEffect(() => { setVenuePage(1); }, [venueStatusFilter]);
 
   // Platform stats query
   const { data: stats = {}, isLoading: statsLoading } = useQuery({
@@ -386,18 +412,18 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Experiences</p>
-                  <p className="text-2xl font-bold" data-testid="text-experience-total">{allExperiences.length}</p>
+                  <p className="text-2xl font-bold" data-testid="text-experience-total">{experienceStats?.total ?? 0}</p>
                   <div className="mt-2 text-xs text-muted-foreground">
                     <span className="text-blue-600 dark:text-blue-400" data-testid="text-experience-published">
-                      {allExperiences.filter((e: any) => e.status === 'published').length} published
+                      {experienceStats?.published ?? 0} published
                     </span>
                     {" • "}
                     <span className="text-green-600 dark:text-green-400" data-testid="text-experience-approved">
-                      {allExperiences.filter((e: any) => e.status === 'approved').length} approved
+                      {experienceStats?.approved ?? 0} approved
                     </span>
                     {" • "}
                     <span className="text-yellow-600 dark:text-yellow-400" data-testid="text-experience-pending">
-                      {allExperiences.filter((e: any) => e.status === 'pending' || e.status === 'pending_approval').length} pending
+                      {experienceStats?.pending ?? 0} pending
                     </span>
                   </div>
                 </div>
@@ -411,7 +437,7 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Applications</p>
-                  <p className="text-2xl font-bold">{communityApplications.filter((a: any) => a.status === 'pending').length}</p>
+                  <p className="text-2xl font-bold">{applicationResponse?.stats?.pending ?? 0}</p>
                 </div>
                 <Users className="w-8 h-8 text-green-500" />
               </div>
@@ -423,14 +449,14 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Venues</p>
-                  <p className="text-2xl font-bold" data-testid="text-venue-total">{allVenues.length}</p>
+                  <p className="text-2xl font-bold" data-testid="text-venue-total">{venueResponse?.stats?.total ?? 0}</p>
                   <div className="mt-2 text-xs text-muted-foreground">
                     <span className="text-green-600 dark:text-green-400" data-testid="text-venue-approved">
-                      {allVenues.filter((v: any) => v.status === 'approved').length} approved
+                      {venueResponse?.stats?.approved ?? 0} approved
                     </span>
                     {" • "}
                     <span className="text-yellow-600 dark:text-yellow-400" data-testid="text-venue-pending">
-                      {allVenues.filter((v: any) => v.status === 'pending').length} pending
+                      {venueResponse?.stats?.pending ?? 0} pending
                     </span>
                   </div>
                 </div>
@@ -444,7 +470,7 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Services</p>
-                  <p className="text-2xl font-bold">{pendingServices.filter((s: any) => s.status === 'pending').length}</p>
+                  <p className="text-2xl font-bold">{serviceResponse?.stats?.pending ?? 0}</p>
                 </div>
                 <Settings className="w-8 h-8 text-orange-500" />
               </div>
@@ -510,26 +536,7 @@ export default function AdminDashboard() {
                 <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto" />
               </div>
             ) : (() => {
-              const filteredExperiences = allExperiences.filter((experience: any) => {
-                // Apply status filter
-                if (experienceStatusFilter !== "all") {
-                  if (experienceStatusFilter === "pending") {
-                    if (experience.status !== "pending" && experience.status !== "pending_approval") return false;
-                  } else {
-                    if (experience.status !== experienceStatusFilter) return false;
-                  }
-                }
-                // Apply search filter
-                if (searchTerm !== "") {
-                  const lowerSearch = searchTerm.toLowerCase();
-                  return (
-                    experience.title?.toLowerCase().includes(lowerSearch) ||
-                    experience.description?.toLowerCase().includes(lowerSearch) ||
-                    experience.location?.toLowerCase().includes(lowerSearch)
-                  );
-                }
-                return true;
-              });
+              const filteredExperiences = allExperiences;
 
               return filteredExperiences.length === 0 ? (
               <Card>
@@ -947,6 +954,15 @@ export default function AdminDashboard() {
                     </CardContent>
                   </Card>
                 ))}
+                {experiencePagination && experiencePagination.totalPages > 1 && (
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-4" aria-label="Experience pages">
+                    <Button variant="outline" size="sm" disabled={experiencePage === 1} onClick={() => setExperiencePage(page => page - 1)}>Previous</Button>
+                    {Array.from({ length: experiencePagination.totalPages }, (_, index) => index + 1).map(page => (
+                      <Button key={page} size="sm" variant={page === experiencePage ? "default" : "outline"} onClick={() => setExperiencePage(page)}>{page}</Button>
+                    ))}
+                    <Button variant="outline" size="sm" disabled={experiencePage === experiencePagination.totalPages} onClick={() => setExperiencePage(page => page + 1)}>Next</Button>
+                  </div>
+                )}
               </div>
             );
             })()}
@@ -1067,6 +1083,7 @@ export default function AdminDashboard() {
                 ))}
               </div>
             )}
+            <PageControls pagination={applicationResponse?.pagination} page={applicationPage} onPage={setApplicationPage} />
           </TabsContent>
 
           <TabsContent value="venues" className="space-y-6">
@@ -1231,6 +1248,7 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             )}
+            <PageControls pagination={venueResponse?.pagination} page={venuePage} onPage={setVenuePage} />
           </TabsContent>
 
           <AdminVenueOffersTab />
@@ -1321,6 +1339,7 @@ export default function AdminDashboard() {
                 ))}
               </div>
             )}
+            <PageControls pagination={serviceResponse?.pagination} page={servicePage} onPage={setServicePage} />
           </TabsContent>
 
           <TabsContent value="venue-calendars" className="space-y-6">
@@ -1335,13 +1354,22 @@ export default function AdminDashboard() {
   );
 }
 
+function PageControls({ pagination, page, onPage }: { pagination?: { totalPages:number }; page:number; onPage:(page:number)=>void }) {
+  if (!pagination || pagination.totalPages <= 1) return null;
+  const pages = Array.from({ length: pagination.totalPages }, (_, index) => index + 1).filter(value => value === 1 || value === pagination.totalPages || Math.abs(value - page) <= 2);
+  return <div className="flex flex-wrap items-center justify-center gap-2 pt-4"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => onPage(page - 1)}>Previous</Button>{pages.map(value => <Button key={value} size="sm" variant={value === page ? "default" : "outline"} onClick={() => onPage(value)}>{value}</Button>)}<Button size="sm" variant="outline" disabled={page === pagination.totalPages} onClick={() => onPage(page + 1)}>Next</Button></div>;
+}
+
 function AdminVenueOffersTab() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [page, setPage] = useState(1);
 
-  const { data: rows = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/admin/venue-offers"],
+  const { data: response, isLoading } = useQuery<PaginatedList<any>>({
+    queryKey: ["/api/admin/venue-offers", page],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/venue-offers?page=${page}&pageSize=10`)).json(),
   });
+  const rows = response?.items ?? [];
 
   const approveMutation = useMutation({
     mutationFn: (offerId: string) => apiRequest("POST", `/api/admin/venue-offers/${offerId}/approve`),
@@ -1365,7 +1393,7 @@ function AdminVenueOffersTab() {
     <TabsContent value="venue-offers" className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">Venue Offer Approvals</h2>
-        <Badge variant="secondary">{rows.length} pending</Badge>
+        <Badge variant="secondary">{response?.pagination.total ?? 0} pending</Badge>
       </div>
 
       {isLoading ? (
@@ -1443,6 +1471,7 @@ function AdminVenueOffersTab() {
           })}
         </div>
       )}
+      <PageControls pagination={response?.pagination} page={page} onPage={setPage} />
     </TabsContent>
   );
 }

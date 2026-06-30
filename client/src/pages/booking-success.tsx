@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { CheckCircle, Calendar, MapPin, Users, ArrowLeft, CreditCard, Clock, Ticket, Loader2, XCircle } from "lucide-react";
+import { CheckCircle, Calendar, MapPin, Users, ArrowLeft, CreditCard, Clock, Ticket, Loader2, XCircle, Share2 } from "lucide-react";
 import { normalizeImageUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -416,6 +416,10 @@ export default function BookingSuccess() {
           </div>
 
           <div className="space-y-6">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader><CardTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-primary"/>Help your squad reach the minimum</CardTitle></CardHeader>
+              <CardContent><p className="mb-4 text-sm text-gray-600">Invite friends with your personal referral link and get the group confirmed faster.</p><Link href={`/recruit?experience=${experience.id}${bookingId ? `&booking=${bookingId}` : ""}`}><Button className="w-full">Invite the Squad</Button></Link></CardContent>
+            </Card>
             <Card data-testid="payment-summary" className="border-green-200 bg-green-50/30">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">

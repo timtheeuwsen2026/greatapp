@@ -9,10 +9,10 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Crown, LayoutGrid, Megaphone, Menu, User, X } from "lucide-react";
+import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, User, X } from "lucide-react";
 import { useAuth, getAccessToken } from "@/hooks/useAuth";
 import { isAdminUser } from "@/lib/authUtils";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import logoImage from "@assets/output-onlinepngtools (2)_1754407209260.png";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
@@ -40,6 +40,9 @@ export default function Navigation() {
   const { user, isAuthenticated, isLoading } = useAuth();
   const [pathname, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const { data: inbox } = useQuery<{ unreadCount: number }>({
+    queryKey: ["/api/messages/inbox"], enabled: isAuthenticated, refetchInterval: 15000,
+  });
 
   // A user has one active role. Role changes are available from My Account.
   const availableRoles: string[] = user?.role ? [user.role] : [];
@@ -129,7 +132,7 @@ export default function Navigation() {
                 <Skeleton className="h-8 w-8 rounded-full" />
               </div>
             ) : isAuthenticated ? (
-              <DropdownMenu>
+              <><Link href="/messages" className="relative text-gray-700 hover:text-primary" aria-label="Messages" data-testid="nav-messages"><MessageCircle className="h-6 w-6" />{!!inbox?.unreadCount&&<span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-red-600 px-1 text-center text-xs font-bold text-white">{inbox.unreadCount>99?"99+":inbox.unreadCount}</span>}</Link><DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Avatar className="cursor-pointer" data-testid="user-avatar">
                     <AvatarImage src={user?.profileImageUrl || ""} />
@@ -231,7 +234,7 @@ export default function Navigation() {
                     Logout
                   </DropdownMenuItem>
                 </DropdownMenuContent>
-              </DropdownMenu>
+              </DropdownMenu></>
             ) : (
               <div className="flex items-center gap-3">
                 <Link href="/login" className="text-gray-700 hover:text-primary transition-colors font-medium">
@@ -315,6 +318,7 @@ export default function Navigation() {
                   >
                     My Account
                   </Link>
+                  <Link href="/messages" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary" onClick={() => setMobileMenuOpen(false)}><MessageCircle className="h-4 w-4"/>Messages{!!inbox?.unreadCount&&<span className="rounded-full bg-red-600 px-2 text-xs text-white">{inbox.unreadCount}</span>}</Link>
 
                   {/* Role dashboard shortcut */}
                   {user?.role === 'creator' && (

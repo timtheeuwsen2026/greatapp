@@ -193,6 +193,20 @@ export class WebSocketManager {
     console.log(`[WebSocket] Broadcast MVG update for trip ${update.trip_id} to ${sentCount} clients`);
   }
 
+  // Broadcast only an invalidation signal. Message content remains behind the
+  // authenticated HTTP endpoint so anonymous websocket clients cannot read it.
+  public broadcastChatUpdate(experienceId: string) {
+    const message = JSON.stringify({
+      type: 'chat_updated',
+      payload: { experienceId },
+    });
+    this.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN && client.subscriptions.has(experienceId)) {
+        client.send(message);
+      }
+    });
+  }
+
   private startHeartbeat() {
     this.heartbeatInterval = setInterval(() => {
       this.clients.forEach((ws) => {
@@ -242,4 +256,8 @@ export function broadcastMVGUpdate(update: MVGUpdatePayload) {
   } else {
     console.warn('[WebSocket] Attempted to broadcast without initialized WebSocket manager');
   }
+}
+
+export function broadcastChatMessage(experienceId: string, _message?: unknown) {
+  wsManager?.broadcastChatUpdate(experienceId);
 }

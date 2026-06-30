@@ -27,6 +27,8 @@ import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
+import { ChatTeaser } from "@/components/ChatTeaser";
+import { EventSocialProofToast } from "@/components/EventSocialProofToast";
 
 interface PublicEventData {
   id: string;
@@ -514,6 +516,8 @@ export default function PublicEventPage() {
       </div>
 
       {/* Quick Facts Section */}
+      <ChatTeaser experienceId={event.id} />
+      <EventSocialProofToast experienceId={event.id} />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-8 relative z-10">
         <Card className="shadow-lg">
           <CardContent className="p-6">

@@ -62,6 +62,8 @@ import AdminPromotersPage from "@/pages/admin-promoters";
 import AdminPromoterDetailPage from "@/pages/admin-promoter-detail";
 import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 import Navigation from "@/components/navigation";
+import Messages from "@/pages/messages";
+import { PersistentChatDrawer } from "@/components/PersistentChatDrawer";
 
 const VenueProfileSetup = lazy(() => import("@/pages/venue-profile-setup"));
 
@@ -244,6 +246,7 @@ function Router() {
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/creator-dashboard" component={CreatorDashboard} />
       <Route path="/community-hub" component={CommunityHub} />
+      <Route path="/messages" component={Messages} />
       <Route path="/venue-dashboard" component={VenueDashboard} />
       <Route path="/service-provider-dashboard" component={ServiceProviderDashboard} />
       <Route path="/promoter" component={PromoterDashboard} />
@@ -336,6 +339,7 @@ function App() {
           <TooltipProvider>
             <Toaster />
             <Router />
+            <PersistentChatDrawer />
           </TooltipProvider>
         </AuthProvider>
       </QueryClientProvider>

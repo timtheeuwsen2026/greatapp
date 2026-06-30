@@ -1793,6 +1793,31 @@ export const experienceMessages = pgTable("experience_messages", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// One row per user/event conversation. This is the source of truth for inbox
+// unread counts; opening an event chat advances lastReadAt.
+export const experienceChatReads = pgTable(
+  "experience_chat_reads",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    experienceId: varchar("experience_id")
+      .references(() => experiences.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: varchar("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    lastReadAt: timestamp("last_read_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    unique("experience_chat_reads_experience_user_unique").on(
+      table.experienceId,
+      table.userId,
+    ),
+    index("experience_chat_reads_user_idx").on(table.userId),
+  ],
+);
+
 // ─── Referral Click Tracking ─────────────────────────────────────────────────
 // One row per click on a promoter referral link, before any purchase happens.
 // Used to calculate click-through rates and conversion funnels.

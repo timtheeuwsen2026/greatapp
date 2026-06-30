@@ -20,7 +20,9 @@ export const pool = new Pool({
   password: decodeURIComponent(databaseUrl.password),
   database: databaseUrl.pathname.replace(/^\//, ""),
   ssl: { rejectUnauthorized: false },
-  max: 10, // Maximum number of connections in the pool
+  // Hosted Postgres allows 15 session-mode clients. Leave capacity for other
+  // API processes and operational commands instead of monopolizing the pool.
+  max: 5,
   idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
   connectionTimeoutMillis: 10000, // Connection timeout
   allowExitOnIdle: true, // Allow the process to exit when all connections are idle

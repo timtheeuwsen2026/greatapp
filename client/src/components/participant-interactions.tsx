@@ -140,10 +140,13 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
   const [selectedParticipant, setSelectedParticipant] = useState<ParticipantProfile | null>(null);
 
   // Fetch messages
-  const { data: messages = [], isLoading: messagesLoading } = useQuery<Message[]>({
+  const { data: messages = [], isLoading: messagesLoading, error: messagesError } = useQuery<Message[]>({
     queryKey: ["/api/experiences", experienceId, "messages"],
     enabled: !!experienceId,
   });
+  const chatRequiresBooking =
+    messagesError instanceof Error &&
+    (messagesError.message.includes("403") || messagesError.message.includes("valid booking"));
 
   // Fetch participants
   const { data: participants = [], isLoading: participantsLoading } = useQuery<ParticipantProfile[]>({
@@ -313,6 +316,17 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
                 <div className="flex items-center justify-center h-32">
                   <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
                 </div>
+              ) : chatRequiresBooking ? (
+                <div className="flex h-72 flex-col items-center justify-center px-6 text-center text-gray-600">
+                  <MessageCircle className="h-12 w-12 mx-auto mb-4 text-primary opacity-70" />
+                  <p className="font-semibold text-gray-900">Join this experience to view the chat</p>
+                  <p className="mt-2 max-w-sm text-sm">
+                    The community conversation is private to confirmed participants. Reserve your spot to meet the squad and start chatting.
+                  </p>
+                  <Button className="mt-5" onClick={() => { window.location.href = `/checkout/${experienceId}`; }}>
+                    Join the Experience
+                  </Button>
+                </div>
               ) : messages.length === 0 ? (
                 <div className="text-center text-gray-500 py-8">
                   <MessageCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -376,7 +390,7 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
             </ScrollArea>
 
             {/* Message input */}
-            <div className="flex space-x-2">
+            {!chatRequiresBooking && <div className="flex space-x-2">
               <Input
                 placeholder="Type your message..."
                 value={newMessage}
@@ -390,7 +404,7 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
               >
                 <Send className="h-4 w-4" />
               </Button>
-            </div>
+            </div>}
           </TabsContent>
 
           <TabsContent value="participants" className="space-y-4">

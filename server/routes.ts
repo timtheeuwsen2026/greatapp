@@ -8,10 +8,10 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
+import { eq, and, or, desc, inArray, gt, sql, ilike } from "drizzle-orm";
 import { paymentService } from "./payments";
-import { initializeWebSocket, broadcastMVGUpdate } from "./websocket";
+import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { isAuthenticated, optionalAuth } from "./supabaseAuth";
 import { notificationService } from "./notifications";
 import { registerOGRoutes } from "./og";
@@ -428,6 +428,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     return userId;
+  };
+
+  const activeChatBookingStatuses = [
+    "pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid",
+  ] as const;
+  const paginationFrom = (query: any) => {
+    const page = Math.max(1, Number.parseInt(String(query.page || "1"), 10) || 1);
+    const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(query.pageSize || "10"), 10) || 10));
+    return { page, pageSize, offset: (page - 1) * pageSize };
+  };
+
+  const canAccessExperienceChat = async (userId: string, experienceId: string) => {
+    const [user, experience, booking] = await Promise.all([
+      storage.getUser(userId),
+      storage.getExperience(experienceId),
+      storage.getBookingByUserAndExperience(userId, experienceId),
+    ]);
+    if (!experience) return false;
+    if (user?.role === "admin" || experience.creatorId === userId) return true;
+    return !!booking && activeChatBookingStatuses.includes(booking.status as any);
   };
   // Auth — Supabase JWT-based (stateless, no sessions)
   app.get("/api/login", (_req, res) => {
@@ -3686,7 +3706,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Admin access required" });
       }
       
-      const allExperiences = await storage.getAllExperiences();
+      const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+      const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(req.query.pageSize || "10"), 10) || 10));
+      const status = String(req.query.status || "all");
+      const search = String(req.query.search || "").trim();
+      const filters: any[] = [];
+      if (status === "pending") {
+        filters.push(or(eq(experiences.status, "pending"), eq(experiences.status, "pending_approval")));
+      } else if (status !== "all") {
+        filters.push(eq(experiences.status, status as any));
+      }
+      if (search) {
+        filters.push(or(
+          ilike(experiences.title, `%${search}%`),
+          ilike(experiences.description, `%${search}%`),
+          ilike(experiences.location, `%${search}%`),
+        ));
+      }
+      const where = filters.length ? and(...filters) : undefined;
+      const [allExperiences, totalRows, statusRows] = await Promise.all([
+        db.select().from(experiences).where(where).orderBy(desc(experiences.createdAt)).limit(pageSize).offset((page - 1) * pageSize),
+        db.select({ count: sql<number>`count(*)::int` }).from(experiences).where(where),
+        db.select({ status: experiences.status, count: sql<number>`count(*)::int` }).from(experiences).groupBy(experiences.status),
+      ]);
       // Enrich with MVG progress from single source of truth
       const enrichedExperiences = await Promise.all(
         allExperiences.map(async (exp) => {
@@ -3703,7 +3745,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         })
       );
-      res.json(enrichedExperiences);
+      const statusCounts = Object.fromEntries(statusRows.map((row) => [row.status || "unknown", Number(row.count)]));
+      const total = Number(totalRows[0]?.count || 0);
+      res.json({
+        items: enrichedExperiences,
+        pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+        stats: {
+          total: Object.values(statusCounts).reduce((sum, value) => sum + Number(value), 0),
+          published: statusCounts.published || 0,
+          approved: statusCounts.approved || 0,
+          pending: (statusCounts.pending || 0) + (statusCounts.pending_approval || 0),
+        },
+      });
     } catch (error) {
       console.error("Error fetching all experiences:", error);
       res.status(500).json({ message: "Failed to fetch experiences" });
@@ -6658,13 +6711,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Messaging routes
   app.post("/api/experiences/:id/messages", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = await requireParticipantProfileForCommunity(req, res);
-      if (!userId) return;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      if (!(await canAccessExperienceChat(userId, req.params.id))) {
+        return res.status(403).json({ message: "A valid booking is required to access this event chat" });
+      }
+      const body = String(req.body.message ?? req.body.content ?? "").trim();
+      if (!body || body.length > 2000) {
+        return res.status(400).json({ message: "Message must be between 1 and 2000 characters" });
+      }
+      const recipientId = req.body.recipientId ? String(req.body.recipientId) : null;
+      if (recipientId && !(await canAccessExperienceChat(recipientId, req.params.id))) {
+        return res.status(400).json({ message: "Recipient is not a member of this event chat" });
+      }
       const message = await storage.createMessage({
-        ...req.body,
         experienceId: req.params.id,
         userId,
+        message: body,
+        messageType: req.body.messageType || "text",
+        isPrivate: !!recipientId,
+        recipientId,
       });
+      broadcastChatMessage(req.params.id, message);
       res.json(message);
     } catch (error) {
       console.error("Error creating message:", error);
@@ -6674,12 +6742,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/experiences/:id/messages", isAuthenticated, async (req: any, res) => {
     try {
-      const { isPrivate } = req.query;
-      const messages = await storage.getExperienceMessages(req.params.id);
-      res.json(messages);
+      const userId = resolveCurrentUserId(req);
+      if (!userId || !(await canAccessExperienceChat(userId, req.params.id))) {
+        return res.status(403).json({ message: "A valid booking is required to access this event chat" });
+      }
+      const messages = await storage.getMessages(req.params.id);
+      res.json(messages.filter((message: any) =>
+        !message.isPrivate || message.userId === userId || message.recipientId === userId
+      ).reverse());
     } catch (error) {
       console.error("Error fetching messages:", error);
       res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+
+  app.get("/api/experiences/:id/messages/preview", async (req, res) => {
+    try {
+      const preview = await db
+        .select({
+          id: experienceMessages.id,
+          message: experienceMessages.message,
+          createdAt: experienceMessages.createdAt,
+          firstName: users.firstName,
+          profileImageUrl: users.profileImageUrl,
+        })
+        .from(experienceMessages)
+        .leftJoin(users, eq(experienceMessages.userId, users.id))
+        .where(and(eq(experienceMessages.experienceId, req.params.id), eq(experienceMessages.isPrivate, false)))
+        .orderBy(desc(experienceMessages.createdAt))
+        .limit(3);
+      res.json(preview.reverse());
+    } catch (error) {
+      console.error("Error fetching chat preview:", error);
+      res.status(500).json({ message: "Failed to fetch chat preview" });
+    }
+  });
+
+  app.post("/api/experiences/:id/messages/read", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId || !(await canAccessExperienceChat(userId, req.params.id))) {
+        return res.status(403).json({ message: "Chat access denied" });
+      }
+      const now = new Date();
+      await db.insert(experienceChatReads).values({ experienceId: req.params.id, userId, lastReadAt: now })
+        .onConflictDoUpdate({
+          target: [experienceChatReads.experienceId, experienceChatReads.userId],
+          set: { lastReadAt: now, updatedAt: now },
+        });
+      res.json({ success: true, lastReadAt: now });
+    } catch (error) {
+      console.error("Error marking chat read:", error);
+      res.status(500).json({ message: "Failed to mark chat read" });
+    }
+  });
+
+  app.get("/api/messages/inbox", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+      const user = await storage.getUser(userId);
+      const userBookings = await storage.getUserBookings(userId);
+      const eventIds = new Set(
+        userBookings.filter((b) => activeChatBookingStatuses.includes(b.status as any)).map((b) => b.experienceId)
+      );
+      if (user?.role === "creator") {
+        const owned = await storage.getExperiencesByCreator(userId);
+        owned.forEach((experience) => eventIds.add(experience.id));
+      }
+      const ids = Array.from(eventIds);
+      const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+      const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(req.query.pageSize || "10"), 10) || 10));
+      if (!ids.length) return res.json({ conversations: [], unreadCount: 0, pagination: { page, pageSize, total: 0, totalPages: 1 } });
+
+      const [eventRows, messages, reads] = await Promise.all([
+        db.select().from(experiences).where(inArray(experiences.id, ids)),
+        db.select().from(experienceMessages).where(inArray(experienceMessages.experienceId, ids)).orderBy(desc(experienceMessages.createdAt)),
+        db.select().from(experienceChatReads).where(and(eq(experienceChatReads.userId, userId), inArray(experienceChatReads.experienceId, ids))),
+      ]);
+      const readMap = new Map(reads.map((read) => [read.experienceId, read.lastReadAt]));
+      const conversations = eventRows.map((experience: any) => {
+        const visible = messages.filter((message) => message.experienceId === experience.id &&
+          (!message.isPrivate || message.userId === userId || message.recipientId === userId));
+        const lastReadAt = readMap.get(experience.id);
+        const unreadCount = visible.filter((message) => message.userId !== userId &&
+          (!lastReadAt || (message.createdAt && message.createdAt > lastReadAt))).length;
+        return {
+          experienceId: experience.id,
+          title: experience.title,
+          coverImageUrl: experience.coverImageUrl,
+          location: experience.location,
+          lastMessage: visible[0]?.message ?? null,
+          lastMessageAt: visible[0]?.createdAt ?? null,
+          unreadCount,
+        };
+      }).sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
+      const total = conversations.length;
+      res.json({
+        conversations: conversations.slice((page - 1) * pageSize, page * pageSize),
+        unreadCount: conversations.reduce((sum, item) => sum + item.unreadCount, 0),
+        pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+      });
+    } catch (error) {
+      console.error("Error fetching inbox:", error);
+      res.status(500).json({ message: "Failed to fetch inbox" });
     }
   });
 
@@ -7766,35 +7932,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/experiences/:id/messages", async (req, res) => {
-    try {
-      const messages = await storage.getMessages(req.params.id);
-      res.json(messages);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      res.status(500).json({ message: "Failed to fetch messages" });
-    }
-  });
-
-  app.post("/api/experiences/:id/messages", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = await requireParticipantProfileForCommunity(req, res);
-      if (!userId) return;
-      const messageData = {
-        experienceId: req.params.id,
-        userId: userId,
-        message: req.body.content,
-        messageType: "text" as const
-      };
-      
-      const message = await storage.createMessage(messageData);
-      res.status(201).json(message);
-    } catch (error) {
-      console.error("Error creating message:", error);
-      res.status(500).json({ message: "Failed to send message" });
-    }
-  });
-
   app.get("/api/experiences/:id/announcements", async (req, res) => {
     try {
       const announcements = await storage.getAnnouncements(req.params.id);
@@ -7839,8 +7976,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
       
-      const applications = await storage.getCommunityApplications();
-      res.json(applications);
+      const { page, pageSize, offset } = paginationFrom(req.query);
+      const search = String(req.query.search || "").trim();
+      const where = search ? or(
+        ilike(users.firstName, `%${search}%`),
+        ilike(users.lastName, `%${search}%`),
+        ilike(users.email, `%${search}%`),
+      ) : undefined;
+      const [items, totals, pendingRows] = await Promise.all([
+        db.select({ application: communityApplications, firstName: users.firstName, lastName: users.lastName, email: users.email, experienceTitle: experiences.title }).from(communityApplications).leftJoin(users, eq(communityApplications.userId, users.id)).leftJoin(experiences, eq(communityApplications.experienceId, experiences.id)).where(where).orderBy(desc(communityApplications.createdAt)).limit(pageSize).offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(communityApplications).leftJoin(users, eq(communityApplications.userId, users.id)).where(where),
+        db.select({ count: sql<number>`count(*)::int` }).from(communityApplications).where(eq(communityApplications.status, "pending")),
+      ]);
+      const total = Number(totals[0]?.count || 0);
+      res.json({ items: items.map(row => ({ ...row.application, firstName: row.firstName || "", lastName: row.lastName || "", email: row.email || "", experienceTitle: row.experienceTitle })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { pending: Number(pendingRows[0]?.count || 0) } });
     } catch (error) {
       console.error("Error fetching community applications:", error);
       res.status(500).json({ message: "Failed to fetch applications" });
@@ -8246,8 +8395,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const venues = await storage.getVenuesWithCreators();
-      res.json(venues);
+      const { page, pageSize, offset } = paginationFrom(req.query);
+      const venueStatus = String(req.query.status || "all");
+      const venueSearch = String(req.query.search || "").trim();
+      const venueFilters: any[] = [];
+      if (venueStatus !== "all") venueFilters.push(eq(venues.status, venueStatus as any));
+      if (venueSearch) venueFilters.push(or(ilike(venues.name, `%${venueSearch}%`), ilike(venues.location, `%${venueSearch}%`), ilike(venues.city, `%${venueSearch}%`)));
+      const venueWhere = venueFilters.length ? and(...venueFilters) : undefined;
+      const [items, totals, statuses] = await Promise.all([
+        db.select({ venue: venues, ownerName: users.name, ownerEmail: users.email }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere).orderBy(desc(venues.createdAt)).limit(pageSize).offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(venues).where(venueWhere),
+        db.select({ status: venues.status, count: sql<number>`count(*)::int` }).from(venues).groupBy(venues.status),
+      ]);
+      const total = Number(totals[0]?.count || 0);
+      const statusCounts = Object.fromEntries(statuses.map(row => [row.status || "unknown", Number(row.count)]));
+      res.json({ items: items.map(row => ({ ...row.venue, ownerName: row.ownerName, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
     } catch (error) {
       console.error("Error fetching admin venues:", error);
       res.status(500).json({ message: "Failed to fetch admin venues" });
@@ -8295,8 +8457,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const services = await storage.getServiceProviders({});
-      res.json(services);
+      const { page, pageSize, offset } = paginationFrom(req.query);
+      const serviceSearch = String(req.query.search || "").trim();
+      const serviceWhere = serviceSearch ? or(ilike(serviceProviders.name, `%${serviceSearch}%`), ilike(serviceProviders.description, `%${serviceSearch}%`), ilike(serviceProviders.location, `%${serviceSearch}%`)) : undefined;
+      const [items, totals, pending] = await Promise.all([
+        db.select({ service: serviceProviders, providerName: users.name }).from(serviceProviders).leftJoin(users, eq(serviceProviders.createdBy, users.id)).where(serviceWhere).orderBy(desc(serviceProviders.createdAt)).limit(pageSize).offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(serviceProviders).where(serviceWhere),
+        db.select({ count: sql<number>`count(*)::int` }).from(serviceProviders).where(eq(serviceProviders.approved, false)),
+      ]);
+      const total = Number(totals[0]?.count || 0);
+      res.json({ items: items.map(row => ({ ...row.service, status: row.service.approved ? "approved" : "pending", providerName: row.providerName })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, pending: Number(pending[0]?.count || 0) } });
     } catch (error) {
       console.error("Error fetching admin services:", error);
       res.status(500).json({ message: "Failed to fetch admin services" });
@@ -10131,8 +10301,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const isAdmin = await checkIsAdmin(req);
       if (!isAdmin) return res.status(403).json({ message: 'Admin access required' });
-      const rows = await storage.getVenueOffersForAdmin();
-      res.json(rows);
+      const { page, pageSize, offset } = paginationFrom(req.query);
+      const where = eq((venueOffers as any).status, "admin_review");
+      const [items, totals] = await Promise.all([
+        db.select({ offer: venueOffers, venue: venues, experience: experiences }).from(venueOffers).leftJoin(venues, eq(venueOffers.venueId, venues.id)).leftJoin(experiences, eq(venueOffers.experienceId, experiences.id)).where(where).orderBy(desc((venueOffers as any).createdAt)).limit(pageSize).offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(venueOffers).where(where),
+      ]);
+      const total = Number(totals[0]?.count || 0);
+      res.json({ items, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } });
     } catch (err: any) {
       console.error('Error fetching admin venue offers:', err);
       res.status(500).json({ message: 'Failed to fetch venue offers' });

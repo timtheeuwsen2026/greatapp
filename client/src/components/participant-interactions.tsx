@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { ChatTeaser } from "@/components/ChatTeaser";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -317,16 +318,7 @@ export function ParticipantInteractions({ experienceId, isCreator = false }: Par
                   <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
                 </div>
               ) : chatRequiresBooking ? (
-                <div className="flex h-72 flex-col items-center justify-center px-6 text-center text-gray-600">
-                  <MessageCircle className="h-12 w-12 mx-auto mb-4 text-primary opacity-70" />
-                  <p className="font-semibold text-gray-900">Join this experience to view the chat</p>
-                  <p className="mt-2 max-w-sm text-sm">
-                    The community conversation is private to confirmed participants. Reserve your spot to meet the squad and start chatting.
-                  </p>
-                  <Button className="mt-5" onClick={() => { window.location.href = `/checkout/${experienceId}`; }}>
-                    Join the Experience
-                  </Button>
-                </div>
+                <ChatTeaser experienceId={experienceId} embedded />
               ) : messages.length === 0 ? (
                 <div className="text-center text-gray-500 py-8">
                   <MessageCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />

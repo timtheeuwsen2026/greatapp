@@ -7,6 +7,7 @@ import ParticipantAvatars from "@/components/participant-avatars";
 import { SocialProofGallery } from "@/components/SocialProofGallery";
 import ParticipantList from "@/components/ParticipantList";
 import { ParticipantInteractions } from "@/components/participant-interactions";
+import { EventSocialProofToast } from "@/components/EventSocialProofToast";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
@@ -1629,6 +1630,7 @@ export default function ExperienceDetails() {
           currency: experience.currency ?? undefined,
         }}
       />
+      <EventSocialProofToast experienceId={experience.id} />
     </div>
   );
 }

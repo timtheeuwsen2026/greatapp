@@ -6,6 +6,7 @@ import { storage } from './storage';
 interface AuthenticatedWebSocket extends WebSocket {
   userId?: string;
   subscriptions: Set<string>;
+  presenceSubscriptions: Set<string>;
   isAlive: boolean;
 }
 
@@ -52,6 +53,7 @@ export class WebSocketManager {
     console.log('[WebSocket] New connection attempt');
     
     ws.subscriptions = new Set();
+    ws.presenceSubscriptions = new Set();
     ws.isAlive = true;
 
     try {
@@ -82,7 +84,9 @@ export class WebSocketManager {
 
       ws.on('close', () => {
         console.log(`[WebSocket] Client disconnected: ${ws.userId}`);
+        const subscriptions = Array.from(ws.presenceSubscriptions);
         this.clients.delete(ws);
+        subscriptions.forEach((tripId) => this.broadcastViewerCount(tripId));
       });
 
       ws.on('error', (error) => {
@@ -144,7 +148,7 @@ export class WebSocketManager {
   }
 
   private handleSubscribe(ws: AuthenticatedWebSocket, payload: any) {
-    const { tripId } = payload;
+    const { tripId, presence = false } = payload;
     
     if (!tripId || typeof tripId !== 'string') {
       ws.send(JSON.stringify({
@@ -155,6 +159,7 @@ export class WebSocketManager {
     }
 
     ws.subscriptions.add(tripId);
+    if (presence) ws.presenceSubscriptions.add(tripId);
     
     console.log(`[WebSocket] Client ${ws.userId} subscribed to ${tripId}`);
     
@@ -162,6 +167,7 @@ export class WebSocketManager {
       type: 'subscribed',
       tripId
     }));
+    this.broadcastViewerCount(tripId);
   }
 
   private handleUnsubscribe(ws: AuthenticatedWebSocket, payload: any) {
@@ -169,8 +175,20 @@ export class WebSocketManager {
     
     if (tripId) {
       ws.subscriptions.delete(tripId);
+      ws.presenceSubscriptions.delete(tripId);
       console.log(`[WebSocket] Client ${ws.userId} unsubscribed from ${tripId}`);
+      this.broadcastViewerCount(tripId);
     }
+  }
+
+  private broadcastViewerCount(tripId: string) {
+    const viewers = Array.from(this.clients).filter(client =>
+      client.readyState === WebSocket.OPEN && client.presenceSubscriptions.has(tripId)
+    ).length;
+    const message = JSON.stringify({ type: 'viewer_count', payload: { experienceId: tripId, viewers } });
+    this.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && client.presenceSubscriptions.has(tripId)) client.send(message);
+    });
   }
 
   public broadcastMVGUpdate(update: MVGUpdatePayload) {

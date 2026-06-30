@@ -8,7 +8,7 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
 import { eq, and, or, desc, inArray, gt, sql, ilike } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
@@ -6775,6 +6775,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching chat preview:", error);
       res.status(500).json({ message: "Failed to fetch chat preview" });
+    }
+  });
+
+  app.get("/api/experiences/:id/social-proof-live", async (req, res) => {
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const rows = await db.select({
+        firstName: users.firstName,
+        location: participantProfiles.location,
+        profileVisibility: participantProfiles.profileVisibility,
+        bookedAt: bookings.bookingDate,
+      }).from(bookings)
+        .leftJoin(users, eq(bookings.userId, users.id))
+        .leftJoin(participantProfiles, eq(bookings.userId, participantProfiles.userId))
+        .where(and(
+          eq(bookings.experienceId, req.params.id),
+          inArray(bookings.status, ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"]),
+          gt(bookings.bookingDate, since),
+        ))
+        .orderBy(desc(bookings.bookingDate))
+        .limit(5);
+      res.json({
+        recentReservations: rows.map(row => ({
+          firstName: row.firstName || "Someone",
+          location: row.profileVisibility === "Public" ? row.location : null,
+          bookedAt: row.bookedAt,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching live social proof:", error);
+      res.status(500).json({ message: "Failed to fetch live social proof" });
     }
   });
 

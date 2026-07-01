@@ -5,10 +5,6 @@ import { Calendar, MapPin } from "lucide-react";
 import type { Venue, VenueAvailability } from "@shared/schema";
 
 export function AdminVenueCalendar() {
-  const { data: venues = [], isLoading: venuesLoading } = useQuery<Venue[]>({
-    queryKey: ['/api/admin/venues'],
-  });
-
   const { data: allAvailability = [], isLoading: availabilityLoading } = useQuery<Array<VenueAvailability & { venue: Venue }>>({
     queryKey: ['/api/admin/venue-availability'],
   });
@@ -29,7 +25,7 @@ export function AdminVenueCalendar() {
     return <Badge variant="outline" className="bg-gray-50 dark:bg-gray-950/30">Manual</Badge>;
   };
 
-  if (venuesLoading || availabilityLoading) {
+  if (availabilityLoading) {
     return (
       <div className="text-center py-8">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto" />
@@ -44,6 +40,11 @@ export function AdminVenueCalendar() {
     venueAvailabilityMap.set(avail.venueId, [...existing, avail]);
   });
 
+  // Availability rows already include their venue. Deriving the venue list here
+  // avoids coupling this calendar to the paginated /api/admin/venues response.
+  const venues = Array.from(
+    new Map(allAvailability.map((availability) => [availability.venue.id, availability.venue])).values(),
+  );
   const venuesWithAvailability = venues.filter(v => venueAvailabilityMap.has(v.id));
 
   if (venuesWithAvailability.length === 0) {

@@ -8422,6 +8422,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Additional Admin dashboard routes for managing venues and services
   // Note: /api/admin/experiences is defined earlier with MVG enrichment
 
+  app.get("/api/admin/users", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+
+      const { page, pageSize, offset } = paginationFrom(req.query);
+      const userSearch = String(req.query.search || "").trim();
+      const userRole = String(req.query.role || "all");
+      const userFilters: any[] = [];
+      if (userRole !== "all") userFilters.push(eq(users.role, userRole as any));
+      if (userSearch) {
+        userFilters.push(or(
+          ilike(users.firstName, `%${userSearch}%`),
+          ilike(users.lastName, `%${userSearch}%`),
+          ilike(users.email, `%${userSearch}%`),
+        ));
+      }
+      const userWhere = userFilters.length ? and(...userFilters) : undefined;
+
+      const [items, totals, roles] = await Promise.all([
+        db.select({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+          role: users.role,
+          createdAt: users.createdAt,
+          updatedAt: users.updatedAt,
+          bookingCount: sql<number>`(
+            select count(*)::int from ${bookings}
+            where ${bookings.userId} = ${users.id}
+          )`,
+          activeBookingCount: sql<number>`(
+            select count(*)::int from ${bookings}
+            where ${bookings.userId} = ${users.id}
+              and ${bookings.status} in ('pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid')
+          )`,
+          lastBookingAt: sql<Date | null>`(
+            select max(${bookings.createdAt}) from ${bookings}
+            where ${bookings.userId} = ${users.id}
+          )`,
+          hasParticipantProfile: sql<boolean>`exists(
+            select 1 from ${participantProfiles}
+            where ${participantProfiles.userId} = ${users.id}
+          )`,
+        }).from(users).where(userWhere).orderBy(desc(users.createdAt)).limit(pageSize).offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(users).where(userWhere),
+        db.select({ role: users.role, count: sql<number>`count(*)::int` }).from(users).groupBy(users.role),
+      ]);
+
+      const total = Number(totals[0]?.count || 0);
+      const roleCounts = roles.reduce<Record<string, number>>((counts, row) => {
+        const role = row.role || "participant";
+        counts[role] = (counts[role] || 0) + Number(row.count);
+        return counts;
+      }, {});
+      res.json({
+        items,
+        pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+        stats: { total: Object.values(roleCounts).reduce((sum, count) => sum + Number(count), 0), ...roleCounts },
+      });
+    } catch (error) {
+      console.error("Error fetching admin users:", error);
+      res.status(500).json({ message: "Failed to fetch admin users" });
+    }
+  });
+
   app.get("/api/admin/venues", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {
@@ -8435,13 +8504,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (venueSearch) venueFilters.push(or(ilike(venues.name, `%${venueSearch}%`), ilike(venues.location, `%${venueSearch}%`), ilike(venues.city, `%${venueSearch}%`)));
       const venueWhere = venueFilters.length ? and(...venueFilters) : undefined;
       const [items, totals, statuses] = await Promise.all([
-        db.select({ venue: venues, ownerName: users.name, ownerEmail: users.email }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere).orderBy(desc(venues.createdAt)).limit(pageSize).offset(offset),
+        db.select({ venue: venues, ownerFirstName: users.firstName, ownerLastName: users.lastName, ownerEmail: users.email }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere).orderBy(desc(venues.createdAt)).limit(pageSize).offset(offset),
         db.select({ count: sql<number>`count(*)::int` }).from(venues).where(venueWhere),
         db.select({ status: venues.status, count: sql<number>`count(*)::int` }).from(venues).groupBy(venues.status),
       ]);
       const total = Number(totals[0]?.count || 0);
       const statusCounts = Object.fromEntries(statuses.map(row => [row.status || "unknown", Number(row.count)]));
-      res.json({ items: items.map(row => ({ ...row.venue, ownerName: row.ownerName, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
+      res.json({ items: items.map(row => ({ ...row.venue, ownerName: [row.ownerFirstName, row.ownerLastName].filter(Boolean).join(" ") || null, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
     } catch (error) {
       console.error("Error fetching admin venues:", error);
       res.status(500).json({ message: "Failed to fetch admin venues" });
@@ -8493,12 +8562,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const serviceSearch = String(req.query.search || "").trim();
       const serviceWhere = serviceSearch ? or(ilike(serviceProviders.name, `%${serviceSearch}%`), ilike(serviceProviders.description, `%${serviceSearch}%`), ilike(serviceProviders.location, `%${serviceSearch}%`)) : undefined;
       const [items, totals, pending] = await Promise.all([
-        db.select({ service: serviceProviders, providerName: users.name }).from(serviceProviders).leftJoin(users, eq(serviceProviders.createdBy, users.id)).where(serviceWhere).orderBy(desc(serviceProviders.createdAt)).limit(pageSize).offset(offset),
+        db.select({ service: serviceProviders, providerFirstName: users.firstName, providerLastName: users.lastName }).from(serviceProviders).leftJoin(users, eq(serviceProviders.createdBy, users.id)).where(serviceWhere).orderBy(desc(serviceProviders.createdAt)).limit(pageSize).offset(offset),
         db.select({ count: sql<number>`count(*)::int` }).from(serviceProviders).where(serviceWhere),
         db.select({ count: sql<number>`count(*)::int` }).from(serviceProviders).where(eq(serviceProviders.approved, false)),
       ]);
       const total = Number(totals[0]?.count || 0);
-      res.json({ items: items.map(row => ({ ...row.service, status: row.service.approved ? "approved" : "pending", providerName: row.providerName })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, pending: Number(pending[0]?.count || 0) } });
+      res.json({ items: items.map(row => ({ ...row.service, status: row.service.approved ? "approved" : "pending", providerName: [row.providerFirstName, row.providerLastName].filter(Boolean).join(" ") || null })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, pending: Number(pending[0]?.count || 0) } });
     } catch (error) {
       console.error("Error fetching admin services:", error);
       res.status(500).json({ message: "Failed to fetch admin services" });

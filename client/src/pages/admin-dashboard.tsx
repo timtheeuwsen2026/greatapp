@@ -53,6 +53,19 @@ interface PaginatedExperiences {
   stats: { total: number; published: number; approved: number; pending: number };
 }
 interface PaginatedList<T> { items: T[]; pagination: { page:number; pageSize:number; total:number; totalPages:number }; stats?: Record<string, number> }
+interface AdminUserInventory {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  profileImageUrl: string | null;
+  role: string | null;
+  createdAt: string | null;
+  bookingCount: number;
+  activeBookingCount: number;
+  lastBookingAt: string | null;
+  hasParticipantProfile: boolean;
+}
 
 // Helper to format currency with proper symbol
 // DATA CONTRACT: Currency must come from experience.currency - never default to USD
@@ -84,6 +97,8 @@ export default function AdminDashboard() {
   const [applicationPage, setApplicationPage] = useState(1);
   const [venuePage, setVenuePage] = useState(1);
   const [servicePage, setServicePage] = useState(1);
+  const [userPage, setUserPage] = useState(1);
+  const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [venueStatusFilter, setVenueStatusFilter] = useState<string>("all");
   const experiencePageSize = 10;
 
@@ -141,6 +156,14 @@ export default function AdminDashboard() {
   });
   const communityApplications = applicationResponse?.items ?? [];
 
+  const { data: userResponse, isLoading: usersLoading } = useQuery<PaginatedList<AdminUserInventory>>({
+    queryKey: ["/api/admin/users", userPage, userRoleFilter, searchTerm],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/users?page=${userPage}&pageSize=10&role=${userRoleFilter}&search=${encodeURIComponent(searchTerm)}`)).json(),
+    enabled: isAuthenticated && isAdminUser(user),
+    retry: false,
+  });
+  const registeredUsers = userResponse?.items ?? [];
+
   // All venues query (not just pending)
   const { data: venueResponse, isLoading: venuesLoading } = useQuery<PaginatedList<VenueWithOwner>>({
     queryKey: ["/api/admin/venues", venuePage, venueStatusFilter, searchTerm],
@@ -158,8 +181,9 @@ export default function AdminDashboard() {
     retry: false,
   });
   const pendingServices = serviceResponse?.items ?? [];
-  useEffect(() => { setApplicationPage(1); setVenuePage(1); setServicePage(1); }, [searchTerm]);
+  useEffect(() => { setApplicationPage(1); setVenuePage(1); setServicePage(1); setUserPage(1); }, [searchTerm]);
   useEffect(() => { setVenuePage(1); }, [venueStatusFilter]);
+  useEffect(() => { setUserPage(1); }, [userRoleFilter]);
 
   // Platform stats query
   const { data: stats = {}, isLoading: statsLoading } = useQuery({
@@ -226,6 +250,23 @@ export default function AdminDashboard() {
       toast({
         title: "Update Failed",
         description: "Failed to update application status.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateUserRole = useMutation({
+    mutationFn: async ({ id, role }: { id: string; role: string }) => {
+      return apiRequest("POST", `/api/admin/users/${id}/assign-role`, { role });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User Updated", description: "The account role has been updated." });
+    },
+    onError: () => {
+      toast({
+        title: "Role Update Failed",
+        description: "The account role could not be updated.",
         variant: "destructive",
       });
     },
@@ -406,7 +447,7 @@ export default function AdminDashboard() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-5">
           <Card data-testid="card-experience-stats">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -428,6 +469,21 @@ export default function AdminDashboard() {
                   </div>
                 </div>
                 <Calendar className="w-8 h-8 text-blue-500" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-user-stats">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Registered Users</p>
+                  <p className="text-2xl font-bold" data-testid="text-user-total">{userResponse?.stats?.total ?? 0}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {userResponse?.stats?.participant ?? 0} participants
+                  </p>
+                </div>
+                <Users className="h-8 w-8 text-emerald-500" />
               </div>
             </CardContent>
           </Card>
@@ -500,8 +556,9 @@ export default function AdminDashboard() {
         </div>
 
         <Tabs defaultValue="experiences" className="space-y-6">
-          <TabsList>
+          <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
+            <TabsTrigger value="users">Users / Participants</TabsTrigger>
             <TabsTrigger value="applications">Tribe Applications</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
             <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
@@ -966,6 +1023,119 @@ export default function AdminDashboard() {
               </div>
             );
             })()}
+          </TabsContent>
+
+          <TabsContent value="users" className="space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Registered Users</h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  Every platform account, including participants who purchased tickets.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="user-role-filter" className="whitespace-nowrap text-sm">Role:</Label>
+                <select
+                  id="user-role-filter"
+                  value={userRoleFilter}
+                  onChange={(event) => setUserRoleFilter(event.target.value)}
+                  className="w-full rounded-md border bg-white px-3 py-2 text-sm dark:bg-gray-800 sm:w-auto"
+                >
+                  <option value="all">All users</option>
+                  <option value="participant">Participants</option>
+                  <option value="creator">Creators</option>
+                  <option value="venue_provider">Venue providers</option>
+                  <option value="service_provider">Service providers</option>
+                  <option value="promoter">Promoters</option>
+                  <option value="admin">Admins</option>
+                </select>
+              </div>
+            </div>
+
+            {usersLoading ? (
+              <div className="py-8 text-center">
+                <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              </div>
+            ) : registeredUsers.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <Users className="mx-auto mb-4 h-12 w-12 text-gray-400" />
+                  <h3 className="mb-2 text-lg font-medium">No users found</h3>
+                  <p className="text-gray-600 dark:text-gray-400">Try another role filter or search term.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="overflow-x-auto p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>User</TableHead>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Participant Profile</TableHead>
+                        <TableHead>Tickets</TableHead>
+                        <TableHead>Last Booking</TableHead>
+                        <TableHead>Joined</TableHead>
+                        <TableHead className="text-right">Account Control</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {registeredUsers.map((account) => {
+                        const fullName = [account.firstName, account.lastName].filter(Boolean).join(" ");
+                        return (
+                          <TableRow key={account.id} data-testid={`user-row-${account.id}`}>
+                            <TableCell>
+                              <div className="min-w-48">
+                                <p className="font-medium">{fullName || account.email?.split("@")[0] || "Unnamed user"}</p>
+                                <p className="text-xs text-muted-foreground">{account.email || "No email"}</p>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">{(account.role || "participant").replaceAll("_", " ")}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              {account.hasParticipantProfile ? (
+                                <span className="inline-flex items-center text-sm text-green-700"><CheckCircle className="mr-1 h-4 w-4" />Complete</span>
+                              ) : (
+                                <span className="text-sm text-muted-foreground">Not completed</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <span className="font-medium">{account.bookingCount}</span>
+                              <span className="ml-1 text-xs text-muted-foreground">({account.activeBookingCount} active)</span>
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap">
+                              {account.lastBookingAt ? new Date(account.lastBookingAt).toLocaleDateString() : "—"}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap">
+                              {account.createdAt ? new Date(account.createdAt).toLocaleDateString() : "—"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <select
+                                aria-label={`Role for ${fullName || account.email || account.id}`}
+                                value={account.role || "participant"}
+                                onChange={(event) => updateUserRole.mutate({ id: account.id, role: event.target.value })}
+                                disabled={account.id === user?.id || updateUserRole.isPending}
+                                className="rounded-md border bg-white px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 dark:bg-gray-800"
+                                title={account.id === user?.id ? "You cannot change your own admin role here" : "Change account role"}
+                              >
+                                <option value="participant">Participant</option>
+                                <option value="creator">Creator</option>
+                                <option value="venue_provider">Venue provider</option>
+                                <option value="service_provider">Service provider</option>
+                                <option value="promoter">Promoter</option>
+                                <option value="admin">Admin</option>
+                              </select>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+            <PageControls pagination={userResponse?.pagination} page={userPage} onPage={setUserPage} />
           </TabsContent>
 
           <TabsContent value="applications" className="space-y-6">

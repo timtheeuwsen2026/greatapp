@@ -20,6 +20,7 @@ import {
   Smartphone,
   Loader2,
   Download,
+  ArrowDown,
 } from "lucide-react";
 
 type Experience = {
@@ -65,18 +66,11 @@ export default function RecruitSquad() {
       setReferralCode(data.referralCode);
       setReferralLink(data.referralLink || `${getBaseUrl()}/experience/${experienceId}?ref=${data.referralCode}`);
     },
-    onError: () => {
-      toast({
-        title: "Could not generate referral link",
-        description: "Please try refreshing the page.",
-        variant: "destructive",
-      });
-    },
   });
 
   useEffect(() => {
-    if (!referralLink) {
-      ensureCodeMutation.mutate(experienceId || "");
+    if (experienceId && !referralLink && !ensureCodeMutation.isPending) {
+      ensureCodeMutation.mutate(experienceId);
     }
   }, [experienceId]);
 
@@ -352,6 +346,14 @@ export default function RecruitSquad() {
               {experience.title}
             </Badge>
           )}
+          <a
+            href="#share-your-trip"
+            className="mx-auto mt-5 flex w-fit flex-col items-center gap-1 text-sm font-medium text-emerald-700"
+            aria-label="Scroll down to your shareable squad link and social templates"
+          >
+            <span>Your squad link and share kit are below</span>
+            <ArrowDown className="h-6 w-6 animate-bounce motion-reduce:animate-none" aria-hidden="true" />
+          </a>
         </div>
 
         {experience?.coverImageUrl && (
@@ -364,7 +366,7 @@ export default function RecruitSquad() {
           </div>
         )}
 
-        <Card className="border-emerald-200 bg-white shadow-sm">
+        <Card id="share-your-trip" className="scroll-mt-6 border-emerald-200 bg-white shadow-sm">
           <CardContent className="pt-6 space-y-4">
             <div className="flex items-center gap-2 mb-1">
               <Users className="h-4 w-4 text-emerald-600" />

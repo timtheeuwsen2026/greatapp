@@ -298,19 +298,19 @@ export default function CommunityHub() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
+          <div className="mb-4 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h1 className="text-3xl font-bold text-gray-900">Community Hub</h1>
               <p className="text-gray-600">Connect, share, and grow together</p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setLocation('/community')}>
+            <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
+              <Button className="w-full sm:w-auto" variant="outline" onClick={() => setLocation('/community')}>
                 <User className="w-4 h-4 mr-2" />
                 Browse Members
               </Button>
               <Dialog open={createGroupOpen} onOpenChange={setCreateGroupOpen}>
                 <DialogTrigger asChild>
-                  <Button>
+                  <Button className="w-full sm:w-auto">
                     <Plus className="w-4 h-4 mr-2" />
                     Create Group
                   </Button>
@@ -377,20 +377,20 @@ export default function CommunityHub() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="groups" className="flex items-center gap-2">
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
+            <TabsTrigger value="groups" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Users className="h-4 w-4" />
               Groups
             </TabsTrigger>
-            <TabsTrigger value="chat" className="flex items-center gap-2">
+            <TabsTrigger value="chat" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <MessageCircle className="h-4 w-4" />
               Group Chat
             </TabsTrigger>
-            <TabsTrigger value="events" className="flex items-center gap-2">
+            <TabsTrigger value="events" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Calendar className="h-4 w-4" />
               Events
             </TabsTrigger>
-            <TabsTrigger value="spotlight" className="flex items-center gap-2">
+            <TabsTrigger value="spotlight" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Star className="h-4 w-4" />
               Member Spotlight
             </TabsTrigger>
@@ -420,10 +420,10 @@ export default function CommunityHub() {
                 groups.map((group: any) => (
                   <Card key={group.id} className="hover:shadow-lg transition-all duration-200 cursor-pointer">
                     <CardContent className="p-6">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-2">
+                      <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
                           {getCategoryIcon(group.category)}
-                          <h3 className="font-semibold text-lg">{group.name}</h3>
+                          <h3 className="min-w-0 break-words text-lg font-semibold">{group.name}</h3>
                         </div>
                         <Badge className={getCategoryColor(group.category)}>
                           {group.category}
@@ -432,8 +432,8 @@ export default function CommunityHub() {
                       <p className="text-gray-600 text-sm mb-4 line-clamp-2">
                         {group.description}
                       </p>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
+                      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm text-gray-500">
                           <span className="flex items-center gap-1">
                             <Users className="h-3 w-3" />
                             {group.memberCount || 0} members
@@ -449,7 +449,7 @@ export default function CommunityHub() {
                             setSelectedGroup(group.id);
                             setActiveTab("chat");
                           }}
-                          className="ml-auto"
+                          className="w-full sm:ml-auto sm:w-auto"
                         >
                           Join Chat
                         </Button>
@@ -657,12 +657,12 @@ export default function CommunityHub() {
                       <h3 className="font-semibold text-lg mb-1">{member.firstName} {member.lastName}</h3>
                       <p className="text-sm text-gray-600 mb-3">{member.title}</p>
                       <p className="text-xs text-gray-500 mb-4">{member.bio}</p>
-                      <div className="flex justify-center gap-2">
-                        <Button size="sm" variant="outline">
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <Button className="min-w-0 flex-1 sm:flex-none" size="sm" variant="outline">
                           <MessageCircle className="h-3 w-3 mr-1" />
                           Message
                         </Button>
-                        <Button size="sm" variant="outline">
+                        <Button className="min-w-0 flex-1 sm:flex-none" size="sm" variant="outline">
                           <User className="h-3 w-3 mr-1" />
                           View Profile
                         </Button>

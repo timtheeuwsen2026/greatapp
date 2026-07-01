@@ -4,7 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, X, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getAccessToken } from "@/hooks/useAuth";
+import { getAccessToken } from "@/lib/authToken";
 
 interface ImageUploaderProps {
   onUploadComplete: (url: string) => void;

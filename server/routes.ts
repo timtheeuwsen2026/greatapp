@@ -393,7 +393,8 @@ async function checkIsAdmin(req: any): Promise<boolean> {
   if (!userId && !email) return false;
   if (email === BOOTSTRAP_ADMIN_EMAIL) return true;
   if (userId) {
-    const dbUser = await storage.getUser(userId);
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+    const dbUser = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
     if (!dbUser) return false;
     return dbUser.role === 'admin';
   }
@@ -545,6 +546,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth routes - get (or auto-create) user from database
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
+      res.set('Cache-Control', 'private, no-store, max-age=0');
       const userId = req.user.claims.sub;
       const email = req.user.email;
       const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
@@ -641,11 +643,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Ensure the DB row exists — on first signup the row hasn't been created yet,
       // so updateUserRole would hit zero rows and silently return undefined.
       const existingByEmail = normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined;
-      if (existingByEmail && existingByEmail.id !== userId) {
-        return res.status(409).json({ message: "This email already exists" });
-      }
-
-      const existing = await storage.getUser(userId);
+      const existing = await storage.getUser(userId) || existingByEmail;
       if (!existing) {
         await storage.upsertUser({
           id: userId,
@@ -658,12 +656,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // The role column is the single source of truth for authorization.
-      const updatedUser = await storage.updateUserRole(userId, role);
+      const accountId = existing?.id || userId;
+      const updatedUser = await storage.updateUserRole(accountId, role);
 
       // Participants automatically get the promoter role so they can
       // share referral links and earn commission from day one.
       if (role === 'participant') {
-        await storage.ensureUserReferralCode(userId);
+        await storage.ensureUserReferralCode(accountId);
       }
 
       res.json({ message: "Role updated successfully", user: updatedUser });
@@ -744,7 +743,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/auth/user-roles', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
+      const email = req.user.email || req.user.claims.email;
+      const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+      const user = await storage.getUser(userId) || (normalizedEmail ? await storage.getUserByEmail(normalizedEmail) : undefined);
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });

@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, User, X } from "lucide-react";
-import { useAuth, getAccessToken } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuth";
+import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import logoImage from "@assets/output-onlinepngtools (2)_1754407209260.png";

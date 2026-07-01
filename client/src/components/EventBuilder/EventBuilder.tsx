@@ -52,7 +52,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { SharedPhotoUpload, PhotoPreview } from "@/components/SharedPhotoUpload";
-import { getAccessToken } from "@/hooks/useAuth";
+import { getAccessToken } from "@/lib/authToken";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";

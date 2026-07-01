@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/useAuth";
 
 export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin' | 'promoter';
 
@@ -48,6 +49,7 @@ async function checkServiceProviderProfile(): Promise<boolean> {
 export function useRoleSwitch() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { refreshUser } = useAuth();
   const queryClient = useQueryClient();
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -62,26 +64,11 @@ export function useRoleSwitch() {
     },
     onSuccess: async (data, newRole) => {
       try {
-        // Invalidate auth cache to trigger re-fetch with new role
-        await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-        
-        // Wait a moment for the auth state to update
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Verify session persistence by re-fetching user data
+        // Update both caches immediately, then verify against the database-backed
+        // auth endpoint. AuthContext is the source read by navigation and guards.
+        queryClient.setQueryData(["/api/auth/user"], data.user);
         try {
-          const updatedUser: any = await queryClient.fetchQuery({ 
-            queryKey: ["/api/auth/user"],
-            staleTime: 0, // Force fresh fetch
-            queryFn: async () => {
-              const response = await apiRequest("GET", "/api/auth/user");
-              if (!response.ok) {
-                throw new Error("Failed to fetch user");
-              }
-              return response.json();
-            }
-          });
-          
+          const updatedUser = await refreshUser();
           if (updatedUser?.role !== newRole) {
             throw new Error("Role update not reflected in session");
           }

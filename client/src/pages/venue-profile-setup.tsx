@@ -6,7 +6,7 @@ import { useLocation } from 'wouter';
 import { z } from 'zod';
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
-import { getAccessToken } from '@/hooks/useAuth';
+import { getAccessToken } from '@/lib/authToken';
 import { SharedPhotoUpload, PhotoPreview } from '@/components/SharedPhotoUpload';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

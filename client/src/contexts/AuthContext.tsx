@@ -1,7 +1,8 @@
-import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useState, useEffect, useRef, type ReactNode } from "react";
 import type { User } from "@shared/schema";
 import { supabase } from "@/lib/supabase";
 import { queryClient } from "@/lib/queryClient";
+import { setAccessToken } from "@/lib/authToken";
 
 // ─── Role-based dashboard routes ─────────────────────────────────────────────
 const ROLE_DASHBOARD: Record<string, string> = {
@@ -37,16 +38,13 @@ function redirectToDashboard(user: User) {
 }
 
 // ─── Module-level token store ────────────────────────────────────────────────
-// Shared with queryClient.ts so every fetch includes the current Bearer token.
-let _accessToken: string | null = null;
-export function getAccessToken(): string | null { return _accessToken; }
-function setAccessToken(t: string | null) { _accessToken = t; }
-
 async function fetchDbUser(token: string): Promise<User | null> {
   const res = await fetch("/api/auth/user", {
     headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
   });
-  if (!res.ok) return null;
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`Unable to refresh account (${res.status})`);
   return res.json();
 }
 
@@ -55,12 +53,14 @@ interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  refreshUser: () => Promise<User | null>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
   isAuthenticated: false,
+  refreshUser: async () => null,
 });
 
 // ─── Provider — mount ONCE at the app root ───────────────────────────────────
@@ -74,22 +74,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
   };
 
+  const refreshUser = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      setAccessToken(null);
+      handledTokenRef.current = null;
+      setCurrentUser(null);
+      return null;
+    }
+
+    setAccessToken(token);
+    const dbUser = await fetchDbUser(token);
+    handledTokenRef.current = token;
+    setCurrentUser(dbUser);
+    queryClient.setQueryData(["/api/auth/user"], dbUser);
+    return dbUser;
+  }, []);
+
   useEffect(() => {
     // Hydrate from existing session on mount
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.access_token) {
-        if (handledTokenRef.current === session.access_token && currentUserRef.current) {
-          return;
-        }
-
-        setAccessToken(session.access_token);
-        handledTokenRef.current = session.access_token;
-        setCurrentUser(await fetchDbUser(session.access_token) ?? null);
-      } else {
-        setAccessToken(null);
-        handledTokenRef.current = null;
-        setCurrentUser(null);
-      }
+    refreshUser().catch((error) => {
+      console.error("Unable to load the current account:", error);
+      setCurrentUser(null);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -129,13 +136,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [refreshUser]);
+
+  useEffect(() => {
+    const syncVisibleSession = () => {
+      if (document.visibilityState === "visible" && currentUserRef.current) {
+        void refreshUser().catch((error) => console.error("Unable to sync account role:", error));
+      }
+    };
+    window.addEventListener("focus", syncVisibleSession);
+    document.addEventListener("visibilitychange", syncVisibleSession);
+    return () => {
+      window.removeEventListener("focus", syncVisibleSession);
+      document.removeEventListener("visibilitychange", syncVisibleSession);
+    };
+  }, [refreshUser]);
 
   return (
     <AuthContext.Provider value={{
       user: user ?? null,
       isLoading: user === undefined,
       isAuthenticated: !!user,
+      refreshUser,
     }}>
       {children}
     </AuthContext.Provider>

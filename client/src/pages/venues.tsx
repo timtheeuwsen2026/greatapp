@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MapPin, Users, DollarSign, Building } from "lucide-react";
+import { MapPin, Users, DollarSign, Building, ChevronLeft, ChevronRight } from "lucide-react";
 import Navigation from "@/components/navigation";
 import { Link } from "wouter";
 import { normalizeImageUrl } from "@/lib/utils";
+
+const VENUES_PER_PAGE = 9;
 
 type Venue = {
   id: string;
@@ -31,6 +34,7 @@ export default function Venues() {
   const { data: venues, isLoading } = useQuery<Venue[]>({
     queryKey: ['/api/venues'],
   });
+  const [currentPage, setCurrentPage] = useState(1);
 
   if (isLoading) {
     return (
@@ -48,6 +52,15 @@ export default function Venues() {
 
   // API now returns only approved venues for public view
   const approvedVenues = venues || [];
+  const totalPages = Math.max(1, Math.ceil(approvedVenues.length / VENUES_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStart = (safeCurrentPage - 1) * VENUES_PER_PAGE;
+  const paginatedVenues = approvedVenues.slice(pageStart, pageStart + VENUES_PER_PAGE);
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.min(Math.max(page, 1), totalPages));
+    document.getElementById("venues-results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -82,16 +95,67 @@ export default function Venues() {
             </Link>
           </div>
         ) : (
-          <div>
+          <div id="venues-results" className="scroll-mt-4">
             <h2 className="text-2xl font-semibold text-gray-900 mb-6">
               Featured Venues
               <span className="ml-2 text-base font-normal text-gray-500">({approvedVenues.length})</span>
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {approvedVenues.map((venue) => (
+              {paginatedVenues.map((venue) => (
                 <VenueCard key={venue.id} venue={venue} />
               ))}
             </div>
+
+            {totalPages > 1 && (
+              <nav className="mt-10 flex flex-col items-center gap-3" aria-label="Venues pagination" data-testid="venues-pagination">
+                <p className="text-sm text-gray-600">
+                  Showing {pageStart + 1}–{Math.min(pageStart + VENUES_PER_PAGE, approvedVenues.length)} of {approvedVenues.length} venues
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToPage(safeCurrentPage - 1)}
+                    disabled={safeCurrentPage === 1}
+                    aria-label="Previous page"
+                    data-testid="pagination-previous"
+                  >
+                    <ChevronLeft className="h-4 w-4 sm:mr-1" />
+                    <span className="hidden sm:inline">Previous</span>
+                  </Button>
+
+                  {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                    <Button
+                      key={page}
+                      type="button"
+                      variant={safeCurrentPage === page ? "default" : "outline"}
+                      size="sm"
+                      className="min-w-9"
+                      onClick={() => goToPage(page)}
+                      aria-label={`Page ${page}`}
+                      aria-current={safeCurrentPage === page ? "page" : undefined}
+                      data-testid={`pagination-page-${page}`}
+                    >
+                      {page}
+                    </Button>
+                  ))}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToPage(safeCurrentPage + 1)}
+                    disabled={safeCurrentPage === totalPages}
+                    aria-label="Next page"
+                    data-testid="pagination-next"
+                  >
+                    <span className="hidden sm:inline">Next</span>
+                    <ChevronRight className="h-4 w-4 sm:ml-1" />
+                  </Button>
+                </div>
+              </nav>
+            )}
           </div>
         )}
       </div>

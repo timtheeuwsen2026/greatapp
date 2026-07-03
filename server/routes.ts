@@ -1999,19 +1999,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         TEST_TITLE_PATTERNS.some(p => title.toLowerCase().includes(p));
 
       // Helper: enrich a list of experiences with live MVG progress (single source of truth)
+      // Real participant count is fetched from bookings for every experience, not just
+      // MVG-gated ones — the listing/card UI shows "X / Y participants" for all of them.
       const enrichWithLiveLifecycle = async (exps: any[]) => {
         return Promise.all(exps.map(async (exp) => {
+          const mvgProgress = await storage.getMVGProgress(exp.id);
+          const curr = mvgProgress.current_participants;
           if (exp.requireMinimumParticipants) {
-            const mvgProgress = await storage.getMVGProgress(exp.id);
             const mvgMet = mvgProgress.mvg_met;
             const resolvedMvgStatus = mvgMet ? 'met' : (exp.mvgStatus || 'pending');
-            const curr = mvgProgress.current_participants;
             const min = mvgProgress.minimum_participants || exp.minimumParticipants || 0;
             const fundingPercentage = min > 0 ? Math.round((curr / min) * 100) : 0;
             const participantsNeeded = Math.max(0, min - curr);
             return {
               ...exp,
               currentParticipants: curr,
+              participantCount: curr,
               minimumParticipants: min,
               fundingPercentage,
               participantsNeeded,
@@ -2019,7 +2022,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               lifecycleStatus: computeLifecycleStatus({ ...exp, mvgStatus: resolvedMvgStatus, mvgMet }),
             };
           }
-          return { ...exp, lifecycleStatus: computeLifecycleStatus(exp) };
+          return {
+            ...exp,
+            currentParticipants: curr,
+            participantCount: curr,
+            lifecycleStatus: computeLifecycleStatus(exp),
+          };
         }));
       };
 

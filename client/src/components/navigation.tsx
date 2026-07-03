@@ -118,12 +118,13 @@ export default function Navigation() {
               How It Works
             </Link>
 
-            <Link href="/event-builder">
+            <Link href="/login?returnTo=/profile-setup">
               <Button
-                className="bg-primary hover:bg-primary/90 text-white font-semibold px-5 py-2 h-auto"
-                data-testid="nav-start-a-trip"
+                variant="outline"
+                className="border-primary/30 bg-primary/5 text-primary hover:bg-primary hover:text-white font-semibold px-5 py-2 h-auto"
+                data-testid="nav-for-creators-venues"
               >
-                Start an Experience
+                For Creators &amp; Venues
               </Button>
             </Link>
 
@@ -289,9 +290,9 @@ export default function Navigation() {
             </Link>
 
             <div className="px-3 py-2">
-              <Link href="/event-builder" onClick={() => setMobileMenuOpen(false)}>
-                <Button className="w-full bg-primary hover:bg-primary/90 text-white font-semibold" data-testid="mobile-nav-start-a-trip">
-                  Start an Experience
+              <Link href="/login?returnTo=/profile-setup" onClick={() => setMobileMenuOpen(false)}>
+                <Button className="w-full bg-primary hover:bg-primary/90 text-white font-semibold" data-testid="mobile-nav-for-creators-venues">
+                  For Creators &amp; Venues
                 </Button>
               </Link>
             </div>

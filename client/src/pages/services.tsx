@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Search, MapPin, Clock, Users, DollarSign, Star, Filter } from "lucide-react";
+import { Search, MapPin, Clock, Users, DollarSign, Star, Filter, ChevronLeft, ChevronRight } from "lucide-react";
 import type { ServiceProvider } from "@shared/schema";
 import Navigation from "@/components/navigation";
+
+const SERVICES_PER_PAGE = 9;
 
 // Service categories for filtering
 const serviceCategories = [
@@ -46,6 +48,7 @@ export default function ServicesPage() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedPriceModel, setSelectedPriceModel] = useState("all");
   const [showFilters, setShowFilters] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const { data: services = [], isLoading, error } = useQuery<ServiceProvider[]>({
     queryKey: ["/api/service-providers"],
@@ -61,6 +64,16 @@ export default function ServicesPage() {
     
     return matchesSearch && matchesCategory && matchesPriceModel && service.approved;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredServices.length / SERVICES_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStart = (safeCurrentPage - 1) * SERVICES_PER_PAGE;
+  const paginatedServices = filteredServices.slice(pageStart, pageStart + SERVICES_PER_PAGE);
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.min(Math.max(page, 1), totalPages));
+    document.getElementById("services-results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const formatPrice = (price: number | null, priceModel: string, currency: string = 'EUR') => {
     if (!price) return "Contact for pricing";
@@ -135,7 +148,7 @@ export default function ServicesPage() {
             <Input
               placeholder="Search services, providers, or descriptions..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
               className="pl-10"
             />
           </div>
@@ -155,7 +168,7 @@ export default function ServicesPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="category">Service Category</Label>
-                  <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                  <Select value={selectedCategory} onValueChange={(value) => { setSelectedCategory(value); setCurrentPage(1); }}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
@@ -170,7 +183,7 @@ export default function ServicesPage() {
                 </div>
                 <div>
                   <Label htmlFor="priceModel">Price Model</Label>
-                  <Select value={selectedPriceModel} onValueChange={setSelectedPriceModel}>
+                  <Select value={selectedPriceModel} onValueChange={(value) => { setSelectedPriceModel(value); setCurrentPage(1); }}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select price model" />
                     </SelectTrigger>
@@ -207,8 +220,8 @@ export default function ServicesPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredServices.map((service) => (
+        <div id="services-results" className="scroll-mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {paginatedServices.map((service) => (
             <Card key={service.id} className="overflow-hidden hover:shadow-lg transition-shadow">
               {service.profileImageUrl && (
                 <div className="aspect-video w-full overflow-hidden">
@@ -280,6 +293,57 @@ export default function ServicesPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {totalPages > 1 && (
+        <nav className="mt-10 flex flex-col items-center gap-3" aria-label="Services pagination" data-testid="services-pagination">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            Showing {pageStart + 1}–{Math.min(pageStart + SERVICES_PER_PAGE, filteredServices.length)} of {filteredServices.length} services
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => goToPage(safeCurrentPage - 1)}
+              disabled={safeCurrentPage === 1}
+              aria-label="Previous page"
+              data-testid="pagination-previous"
+            >
+              <ChevronLeft className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">Previous</span>
+            </Button>
+
+            {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+              <Button
+                key={page}
+                type="button"
+                variant={safeCurrentPage === page ? "default" : "outline"}
+                size="sm"
+                className="min-w-9"
+                onClick={() => goToPage(page)}
+                aria-label={`Page ${page}`}
+                aria-current={safeCurrentPage === page ? "page" : undefined}
+                data-testid={`pagination-page-${page}`}
+              >
+                {page}
+              </Button>
+            ))}
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => goToPage(safeCurrentPage + 1)}
+              disabled={safeCurrentPage === totalPages}
+              aria-label="Next page"
+              data-testid="pagination-next"
+            >
+              <span className="hidden sm:inline">Next</span>
+              <ChevronRight className="h-4 w-4 sm:ml-1" />
+            </Button>
+          </div>
+        </nav>
       )}
       </div>
     </div>

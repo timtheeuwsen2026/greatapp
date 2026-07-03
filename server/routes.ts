@@ -8087,6 +8087,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/community/groups/:id/join", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
+
+      const group = await storage.getCommunityGroup(req.params.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+
+      const alreadyMember = await storage.isGroupMember(req.params.id, userId);
+      if (alreadyMember) {
+        return res.json({ alreadyMember: true });
+      }
+
+      await storage.joinGroup(req.params.id, userId);
+      res.json({ alreadyMember: false });
+    } catch (error) {
+      console.error("Error joining community group:", error);
+      res.status(500).json({ message: "Failed to join group" });
+    }
+  });
+
   app.get("/api/community/groups/:id/messages", async (req, res) => {
     try {
       const messages = await storage.getGroupMessages(req.params.id);
@@ -8294,6 +8315,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching community events:", error);
       res.status(500).json({ message: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/community/events", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
+
+      const { title, description, date, time, location, type, maxAttendees } = req.body;
+      if (!title?.trim() || !description?.trim() || !date || !time?.trim() || !location?.trim() || !type?.trim()) {
+        return res.status(400).json({ message: "Missing required event fields" });
+      }
+      const validTypes = ["virtual", "in-person", "hybrid"];
+      if (!validTypes.includes(type)) {
+        return res.status(400).json({ message: "Invalid event type" });
+      }
+
+      const event = await storage.createCommunityEvent({
+        title: title.trim(),
+        description: description.trim(),
+        date,
+        time: time.trim(),
+        location: location.trim(),
+        type,
+        organizer: userId,
+        maxAttendees: maxAttendees ? Number(maxAttendees) : null,
+      });
+      res.json(event);
+    } catch (error) {
+      console.error("Error creating community event:", error);
+      res.status(500).json({ message: "Failed to create event" });
+    }
+  });
+
+  app.post("/api/community/events/:id/join", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = await requireParticipantProfileForCommunity(req, res);
+      if (!userId) return;
+
+      const event = await storage.joinCommunityEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Event not found" });
+      res.json(event);
+    } catch (error) {
+      console.error("Error joining community event:", error);
+      res.status(500).json({ message: "Failed to join event" });
     }
   });
 

@@ -57,6 +57,16 @@ export default function CommunityHub() {
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("groups");
 
+  // Suggest-an-event form state
+  const [createEventOpen, setCreateEventOpen] = useState(false);
+  const [newEventTitle, setNewEventTitle] = useState("");
+  const [newEventDescription, setNewEventDescription] = useState("");
+  const [newEventDate, setNewEventDate] = useState("");
+  const [newEventTime, setNewEventTime] = useState("");
+  const [newEventLocation, setNewEventLocation] = useState("");
+  const [newEventType, setNewEventType] = useState("in-person");
+  const [newEventMaxAttendees, setNewEventMaxAttendees] = useState("");
+
   // Fetch community groups
   const { data: groups = [], isLoading: groupsLoading } = useQuery<any[]>({
     queryKey: ["/api/community/groups"],
@@ -140,6 +150,109 @@ export default function CommunityHub() {
       });
     },
   });
+
+  // Join group mutation — records real membership so "Join Chat" isn't just a UI-only tab switch
+  const joinGroupMutation = useMutation({
+    mutationFn: async (groupId: string) => {
+      const response = await apiRequest('POST', `/api/community/groups/${groupId}/join`);
+      if (!response.ok) throw new Error('Failed to join group');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/community/groups"] });
+    },
+    onError: (error: Error) => {
+      if (handleCommunityLockError(error)) return;
+      toast({
+        title: "Couldn't join group",
+        description: "Failed to join the group. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleJoinChat = (groupId: string) => {
+    joinGroupMutation.mutate(groupId);
+    setSelectedGroup(groupId);
+    setActiveTab("chat");
+  };
+
+  // Create event mutation
+  const createEventMutation = useMutation({
+    mutationFn: async (eventData: {
+      title: string; description: string; date: string; time: string;
+      location: string; type: string; maxAttendees?: number;
+    }) => {
+      const response = await apiRequest('POST', '/api/community/events', eventData);
+      if (!response.ok) throw new Error('Failed to create event');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/community/events"] });
+      setNewEventTitle("");
+      setNewEventDescription("");
+      setNewEventDate("");
+      setNewEventTime("");
+      setNewEventLocation("");
+      setNewEventType("in-person");
+      setNewEventMaxAttendees("");
+      setCreateEventOpen(false);
+      toast({
+        title: "Event suggested!",
+        description: "Your event has been added to the community calendar.",
+      });
+    },
+    onError: (error: Error) => {
+      if (handleCommunityLockError(error)) return;
+      toast({
+        title: "Error",
+        description: "Failed to create event. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Join event mutation
+  const joinEventMutation = useMutation({
+    mutationFn: async (eventId: string) => {
+      const response = await apiRequest('POST', `/api/community/events/${eventId}/join`);
+      if (!response.ok) throw new Error('Failed to join event');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/community/events"] });
+      toast({ title: "You're in!", description: "You've joined this event." });
+    },
+    onError: (error: Error) => {
+      if (handleCommunityLockError(error)) return;
+      toast({
+        title: "Couldn't join event",
+        description: "Failed to join the event. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleCreateEvent = () => {
+    if (!newEventTitle.trim() || !newEventDescription.trim() || !newEventDate || !newEventTime.trim() || !newEventLocation.trim()) {
+      toast({
+        title: "Missing information",
+        description: "Please fill in all required fields to suggest an event.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    createEventMutation.mutate({
+      title: newEventTitle.trim(),
+      description: newEventDescription.trim(),
+      date: newEventDate,
+      time: newEventTime.trim(),
+      location: newEventLocation.trim(),
+      type: newEventType,
+      maxAttendees: newEventMaxAttendees ? Number(newEventMaxAttendees) : undefined,
+    });
+  };
 
   const handleCreateGroup = () => {
     if (!newGroupName.trim() || !newGroupDescription.trim()) {
@@ -443,12 +556,9 @@ export default function CommunityHub() {
                             {group.messageCount || 0} messages
                           </span>
                         </div>
-                        <Button 
-                          size="sm" 
-                          onClick={() => {
-                            setSelectedGroup(group.id);
-                            setActiveTab("chat");
-                          }}
+                        <Button
+                          size="sm"
+                          onClick={() => handleJoinChat(group.id)}
                           className="w-full sm:ml-auto sm:w-auto"
                         >
                           Join Chat
@@ -482,7 +592,7 @@ export default function CommunityHub() {
                       {groups.map((group: any) => (
                         <button
                           key={group.id}
-                          onClick={() => setSelectedGroup(group.id)}
+                          onClick={() => handleJoinChat(group.id)}
                           className={`w-full text-left p-3 rounded-lg transition-all ${
                             selectedGroup === group.id ? 'bg-primary text-white' : 'hover:bg-gray-100'
                           }`}
@@ -566,6 +676,99 @@ export default function CommunityHub() {
           </TabsContent>
 
           <TabsContent value="events" className="space-y-6">
+            <div className="flex justify-end">
+              <Dialog open={createEventOpen} onOpenChange={setCreateEventOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" data-testid="button-open-suggest-event">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Suggest an Event
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Suggest a Community Event</DialogTitle>
+                    <DialogDescription>
+                      Propose a meetup for the community — virtual, in-person, or hybrid.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium">Event Title</label>
+                      <Input
+                        placeholder="e.g., Sunset Beach Run"
+                        value={newEventTitle}
+                        onChange={(e) => setNewEventTitle(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Description</label>
+                      <Textarea
+                        placeholder="What's this event about?"
+                        value={newEventDescription}
+                        onChange={(e) => setNewEventDescription(e.target.value)}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm font-medium">Date</label>
+                        <Input
+                          type="date"
+                          value={newEventDate}
+                          onChange={(e) => setNewEventDate(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Time</label>
+                        <Input
+                          placeholder="e.g., 6:00 PM"
+                          value={newEventTime}
+                          onChange={(e) => setNewEventTime(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Location</label>
+                      <Input
+                        placeholder="e.g., Barceloneta Beach or Zoom link"
+                        value={newEventLocation}
+                        onChange={(e) => setNewEventLocation(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Format</label>
+                      <select
+                        value={newEventType}
+                        onChange={(e) => setNewEventType(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg"
+                      >
+                        <option value="in-person">In-person</option>
+                        <option value="virtual">Virtual</option>
+                        <option value="hybrid">Hybrid</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Max Attendees (optional)</label>
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="e.g., 20"
+                        value={newEventMaxAttendees}
+                        onChange={(e) => setNewEventMaxAttendees(e.target.value)}
+                      />
+                    </div>
+                    <Button
+                      onClick={handleCreateEvent}
+                      disabled={createEventMutation.isPending}
+                      className="w-full"
+                      data-testid="button-submit-suggest-event"
+                    >
+                      {createEventMutation.isPending ? 'Submitting...' : 'Suggest Event'}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {eventsLoading ? (
                 Array.from({ length: 6 }).map((_, i) => (
@@ -583,43 +786,54 @@ export default function CommunityHub() {
                     <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-gray-900 mb-2">No upcoming events</h3>
                     <p className="text-gray-600 mb-4">Community events will appear here when scheduled.</p>
-                    <Button variant="outline">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Suggest an Event
-                    </Button>
                   </CardContent>
                 </Card>
               ) : (
-                events.map((event: any) => (
-                  <Card key={event.id} className="hover:shadow-lg transition-all duration-200">
-                    <CardContent className="p-6">
-                      <div className="flex items-start justify-between mb-3">
-                        <h3 className="font-semibold text-lg">{event.title}</h3>
-                        <Badge variant="outline">
-                          {event.type}
-                        </Badge>
-                      </div>
-                      <p className="text-gray-600 text-sm mb-4">{event.description}</p>
-                      <div className="space-y-2 text-sm text-gray-500">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-3 w-3" />
-                          <span>{new Date(event.date).toLocaleDateString()}</span>
+                events.map((event: any) => {
+                  const isFull = !!event.maxAttendees && (event.attendeeCount || 0) >= event.maxAttendees;
+                  return (
+                    <Card key={event.id} className="hover:shadow-lg transition-all duration-200">
+                      <CardContent className="p-6">
+                        <div className="flex items-start justify-between mb-3">
+                          <h3 className="font-semibold text-lg">{event.title}</h3>
+                          <Badge variant="outline">
+                            {event.type}
+                          </Badge>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-3 w-3" />
-                          <span>{event.time}</span>
+                        <p className="text-gray-600 text-sm mb-4">{event.description}</p>
+                        <div className="space-y-2 text-sm text-gray-500">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="h-3 w-3" />
+                            <span>{new Date(event.date).toLocaleDateString()}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-3 w-3" />
+                            <span>{event.time}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <MapPin className="h-3 w-3" />
+                            <span>{event.location}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Users className="h-3 w-3" />
+                            <span>
+                              {event.attendeeCount || 0}{event.maxAttendees ? ` / ${event.maxAttendees}` : ''} attending
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <MapPin className="h-3 w-3" />
-                          <span>{event.location}</span>
-                        </div>
-                      </div>
-                      <Button className="w-full mt-4" size="sm">
-                        Join Event
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))
+                        <Button
+                          className="w-full mt-4"
+                          size="sm"
+                          disabled={isFull || joinEventMutation.isPending}
+                          onClick={() => joinEventMutation.mutate(event.id)}
+                          data-testid={`button-join-event-${event.id}`}
+                        >
+                          {isFull ? 'Event Full' : 'Join Event'}
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })
               )}
             </div>
           </TabsContent>
@@ -651,18 +865,33 @@ export default function CommunityHub() {
                       <Avatar className="w-16 h-16 mx-auto mb-4">
                         <AvatarImage src={member.avatarUrl} />
                         <AvatarFallback>
-                          {member.firstName?.[0]}{member.lastName?.[0]}
+                          {member.displayName?.[0] || <User className="h-6 w-6" />}
                         </AvatarFallback>
                       </Avatar>
-                      <h3 className="font-semibold text-lg mb-1">{member.firstName} {member.lastName}</h3>
-                      <p className="text-sm text-gray-600 mb-3">{member.title}</p>
+                      <h3 className="font-semibold text-lg mb-1">{member.displayName}</h3>
+                      <p className="text-sm text-gray-600 mb-3">{member.occupation}</p>
                       <p className="text-xs text-gray-500 mb-4">{member.bio}</p>
                       <div className="flex flex-wrap justify-center gap-2">
-                        <Button className="min-w-0 flex-1 sm:flex-none" size="sm" variant="outline">
+                        <Button
+                          className="min-w-0 flex-1 sm:flex-none"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => toast({
+                            title: "Coming soon",
+                            description: "Direct messaging isn't available yet — view their profile for now.",
+                          })}
+                          data-testid={`button-message-member-${member.userId}`}
+                        >
                           <MessageCircle className="h-3 w-3 mr-1" />
                           Message
                         </Button>
-                        <Button className="min-w-0 flex-1 sm:flex-none" size="sm" variant="outline">
+                        <Button
+                          className="min-w-0 flex-1 sm:flex-none"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setLocation(`/community/profile/${member.userId}`)}
+                          data-testid={`button-view-profile-${member.userId}`}
+                        >
                           <User className="h-3 w-3 mr-1" />
                           View Profile
                         </Button>

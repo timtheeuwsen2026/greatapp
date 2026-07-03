@@ -81,6 +81,7 @@ import {
   type CommunityGroupMessage,
   type InsertCommunityGroupMessage,
   type CommunityEvent,
+  type InsertCommunityEvent,
   experienceDrafts,
   type ExperienceDraft,
   type InsertExperienceDraft,
@@ -331,9 +332,12 @@ export interface IStorage {
   joinGroup(groupId: string, userId: string): Promise<CommunityGroupMember>;
   leaveGroup(groupId: string, userId: string): Promise<void>;
   getGroupMembers(groupId: string): Promise<CommunityGroupMember[]>;
+  isGroupMember(groupId: string, userId: string): Promise<boolean>;
   createGroupMessage(message: InsertCommunityGroupMessage): Promise<CommunityGroupMessage>;
   getGroupMessages(groupId: string): Promise<CommunityGroupMessage[]>;
   getCommunityEvents(): Promise<CommunityEvent[]>;
+  createCommunityEvent(event: InsertCommunityEvent): Promise<CommunityEvent>;
+  joinCommunityEvent(eventId: string): Promise<CommunityEvent>;
   getFeaturedMembers(): Promise<ParticipantProfile[]>;
 
   // Promoter dashboard operations
@@ -2785,6 +2789,19 @@ export class DatabaseStorage implements IStorage {
       .orderBy(communityGroupMembers.joinedAt);
   }
 
+  async isGroupMember(groupId: string, userId: string): Promise<boolean> {
+    const [row] = await db
+      .select()
+      .from(communityGroupMembers)
+      .where(
+        and(
+          eq(communityGroupMembers.groupId, groupId),
+          eq(communityGroupMembers.userId, userId)
+        )
+      );
+    return !!row;
+  }
+
   async createGroupMessage(messageData: InsertCommunityGroupMessage): Promise<CommunityGroupMessage> {
     const [message] = await db.insert(communityGroupMessages).values(messageData).returning();
     
@@ -2827,6 +2844,23 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(communityEvents)
       .orderBy(communityEvents.date);
+  }
+
+  async createCommunityEvent(eventData: InsertCommunityEvent): Promise<CommunityEvent> {
+    const [event] = await db.insert(communityEvents).values(eventData).returning();
+    return event;
+  }
+
+  async joinCommunityEvent(eventId: string): Promise<CommunityEvent> {
+    const [event] = await db
+      .update(communityEvents)
+      .set({
+        attendeeCount: sql`${communityEvents.attendeeCount} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(communityEvents.id, eventId))
+      .returning();
+    return event;
   }
 
   async getFeaturedMembers(): Promise<ParticipantProfile[]> {

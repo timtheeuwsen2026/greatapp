@@ -19,7 +19,7 @@ interface RealParticipantAvatarsProps {
 
 function isAnonymousParticipant(p: ParticipantData): boolean {
   const combined = `${p.firstName || ''} ${p.displayName || ''}`.toLowerCase().trim();
-  if (!combined || combined.replace(/\s/g, '') === '') return true;
+  if (!combined || combined.replace(/\s/g, '') === '') return !p.avatarUrl;
   if (combined.includes('anonymous')) return true;
   if (combined.includes('???')) return true;
   if (combined.includes('test')) return true;
@@ -37,7 +37,7 @@ function getInitials(name: string | null): string {
 }
 
 function getDisplayName(participant: ParticipantData): string {
-  return participant.firstName || participant.displayName || "Traveler";
+  return participant.firstName || participant.displayName || "Member";
 }
 
 export function RealParticipantAvatars({
@@ -111,7 +111,7 @@ export function RealParticipantAvatars({
           const displayName = getDisplayName(participant);
           const isClickable = !!participant.userId;
           const isPlaceholder = !participant.firstName && !participant.displayName;
-          const tooltipText = isPlaceholder ? "Traveler" : `${displayName}${isClickable && !isPlaceholder ? " · View profile" : ""}`;
+          const tooltipText = isPlaceholder ? "Member" : `${displayName}${isClickable && !isPlaceholder ? " · View profile" : ""}`;
 
           if (isClickable) {
             return (
@@ -147,7 +147,7 @@ export function RealParticipantAvatars({
 
       {remaining > 0 && !showChattingLabel && (
         <div
-          title={`${remaining} more ${remaining === 1 ? 'traveler' : 'travelers'}`}
+          title={`${remaining} more ${remaining === 1 ? 'member' : 'members'}`}
           className={`${sizeClasses[size]} rounded-full ${
             showBorder ? 'border-[3px] border-white dark:border-gray-800' : ''
           } shadow-lg flex-shrink-0 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-300 font-semibold cursor-default transition-transform hover:scale-110 hover:z-10`}

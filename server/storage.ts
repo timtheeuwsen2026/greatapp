@@ -568,7 +568,8 @@ export class DatabaseStorage implements IStorage {
       }));
     }
 
-    // Batch-load participant profiles with user avatar URLs and names
+    // Batch-load member identity data. Keep booked users even when they have not
+    // completed the optional participant profile yet, so social proof does not vanish.
     const participantProfilesData = await db
       .select({
         userId: users.id,
@@ -577,9 +578,9 @@ export class DatabaseStorage implements IStorage {
         firstName: users.firstName,
         profileImageUrl: users.profileImageUrl,
       })
-      .from(participantProfiles)
-      .innerJoin(users, eq(participantProfiles.userId, users.id))
-      .where(inArray(participantProfiles.userId, allUserIds));
+      .from(users)
+      .leftJoin(participantProfiles, eq(participantProfiles.userId, users.id))
+      .where(inArray(users.id, allUserIds));
 
     // Batch-load recent messages (last 15 minutes) to determine active chatters
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
@@ -635,7 +636,7 @@ export class DatabaseStorage implements IStorage {
             isActive: activeUsers.has(b.userId),
           };
         })
-        .filter((p): p is NonNullable<typeof p> => p !== null && (p.displayName !== null || p.firstName !== null)) // Only include participants with names
+        .filter((p): p is NonNullable<typeof p> => p !== null && (p.displayName !== null || p.firstName !== null || p.avatarUrl !== null))
         .slice(0, 4); // Limit to 4 previews
 
       return {

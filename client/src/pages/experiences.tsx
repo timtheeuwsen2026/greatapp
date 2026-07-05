@@ -2,13 +2,12 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import Navigation from "@/components/navigation";
-import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Search, MapPin, Calendar, Users, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
-import { Link } from "wouter";
-import { normalizeImageUrl } from "@/lib/utils";
+import { Search, MapPin, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { DiscoveryExperienceCard } from "@/components/DiscoveryExperienceCard";
 
 const pillars = [
   { id: "all", title: "All" },
@@ -100,7 +99,7 @@ export default function Experiences() {
   }, []);
 
   const { data: experiences = [], isLoading, error, refetch } = useQuery({
-    queryKey: ["/api/experiences"],
+    queryKey: ["/api/experiences?includeParticipants=true"],
     retry: 2,
     retryDelay: 1000,
   });
@@ -559,101 +558,7 @@ export default function Experiences() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               {paginatedExperiences.map((experience) => (
-                <Card key={experience.id} className="overflow-hidden hover:shadow-lg transition-shadow" data-testid={`card-experience-${experience.id}`}>
-                  <div className="aspect-video relative overflow-hidden">
-                    {experience.coverImageUrl ? (
-                      <img 
-                        src={normalizeImageUrl(experience.coverImageUrl) || ''} 
-                        alt={experience.title}
-                        className="w-full h-full object-cover"
-                        data-testid={`img-experience-cover-${experience.id}`}
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
-                        <div className="text-center">
-                          <div className="w-16 h-16 bg-white/90 rounded-full flex items-center justify-center mx-auto mb-2">
-                            <Calendar className="h-8 w-8 text-primary" />
-                          </div>
-                          <p className="text-sm font-medium text-gray-600">Community Experience</p>
-                        </div>
-                      </div>
-                    )}
-                    <Badge 
-                      variant="secondary" 
-                      className={`absolute top-3 right-3 ${
-                        (experience.status === 'approved' || experience.status === 'published') 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-yellow-100 text-yellow-800'
-                      }`}
-                    >
-                      {(experience.status === 'approved' || experience.status === 'published') ? 'Verified' : 'Pending'}
-                    </Badge>
-                  </div>
-                  <CardContent className="p-6">
-                    {(() => {
-                      const urgency = getUrgency(experience);
-                      return urgency ? (
-                        <p
-                          className={`mb-1 text-sm font-bold leading-tight ${urgency.className}`}
-                          data-testid={`text-urgency-${experience.id}`}
-                        >
-                          {urgency.text}
-                        </p>
-                      ) : null;
-                    })()}
-                    <p
-                      className="mb-1 text-xs font-medium text-gray-500"
-                      data-testid={`text-location-pillar-${experience.id}`}
-                    >
-                      {getExperienceCity(experience)} <span aria-hidden="true">·</span> {getCorePillar(experience)}
-                    </p>
-                    <div className="flex justify-between items-start mb-2">
-                      <CardTitle className="text-lg font-semibold line-clamp-2">{experience.title}</CardTitle>
-                      <div className="text-right ml-2">
-                        {(() => {
-                          const { price, hasRange } = getDisplayPrice(experience);
-                          return (
-                            <>
-                              {hasRange && <div className="text-xs text-gray-500">From</div>}
-                              <div className="text-xl font-bold text-primary" data-testid="text-price">{formatCurrency(price, experience.currency)}</div>
-                              <div className="text-sm text-gray-500">per person</div>
-                            </>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    
-                    <p className="text-gray-600 text-sm mb-4 line-clamp-3">{experience.description}</p>
-                    
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-center text-sm text-gray-600">
-                        <MapPin className="h-4 w-4 mr-2" />
-                        {experience.location}
-                      </div>
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        {formatDate(experience.startDate)} - {formatDate(experience.endDate)}
-                      </div>
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Users className="h-4 w-4 mr-2" />
-                        {experience.participantCount || 0} / {experience.maxParticipants} participants
-                      </div>
-                    </div>
-                    
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Link href={`/experience/${experience.id}`} className="flex-1">
-                        <Button className="w-full" variant="outline">
-                          View Details
-                        </Button>
-                      </Link>
-                      <Link href={`/checkout/${experience.id}`} className="flex-1">
-                        <Button className="w-full btn-gradient">
-                          Join Experience
-                        </Button>
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
+                <DiscoveryExperienceCard key={experience.id} experience={experience} layout="grid" />
               ))}
             </div>
 

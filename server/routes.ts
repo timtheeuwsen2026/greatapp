@@ -161,6 +161,37 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
   };
 }
 
+function buildRequestedVenueContractObject(input: any) {
+  const model = input.venueTargetDeal || "access_only";
+  const targetValue = numberOrZero(input.venueTargetDealValue);
+  const terms: Record<string, number | string> = {
+    currency: input.currency || "eur",
+    platformPct: FIXED_PLATFORM_FEE_PCT,
+  };
+
+  if (model === "fixed_fee" || model === "venue_sponsored" || model === "upfront_rental") {
+    terms.fixedFee = targetValue;
+  } else if (model === "per_head") {
+    terms.perHeadAmount = targetValue;
+  } else if (model === "minimum_spend") {
+    terms.minimumSpend = targetValue;
+  } else if (model === "revenue_share") {
+    terms.revenueSharePct = targetValue;
+  } else {
+    terms.accessFee = targetValue;
+  }
+
+  return {
+    model,
+    status: "creator_request",
+    terms,
+    risk: {
+      requireMinimumParticipants: !!(input.requireMinimumParticipants ?? input.mvgEnabled),
+      minimumParticipants: Number(input.minimumParticipants ?? input.mvgMinimumSize ?? input.mvgMin ?? 0) || 0,
+    },
+  };
+}
+
 function getExperienceUpdatesFromAcceptedContract(contract: any) {
   const terms = contract?.terms || {};
   return applyMarketplaceEconomics({
@@ -10400,6 +10431,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         venueOpenSpaceType: e.venueOpenSpaceType,
         venueTargetDeal: e.venueTargetDeal,
         venueTargetDealValue: e.venueTargetDealValue,
+        requestedContract: buildRequestedVenueContractObject(e),
+        price: e.price,
+        currency: e.currency,
+        platformPct: FIXED_PLATFORM_FEE_PCT,
         venueRelationshipStatus: e.venueRelationshipStatus,
         linkedVenueId: e.linkedVenueId,
         category: e.category,

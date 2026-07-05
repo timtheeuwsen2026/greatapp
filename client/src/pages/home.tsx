@@ -15,7 +15,8 @@ import { useQuery } from "@tanstack/react-query";
 import { FundingProgressBar } from "@/components/funding/FundingProgressBar";
 import { CountdownTimer } from "@/components/funding/CountdownTimer";
 import { ParticipantAvatars } from "@/components/funding/ParticipantAvatars";
-import { RealParticipantAvatars } from "@/components/RealParticipantAvatars";
+import { ExperienceParticipantSocialProof } from "@/components/ExperienceParticipantSocialProof";
+import { DiscoveryExperienceCard } from "@/components/DiscoveryExperienceCard";
 import { TripCardSkeletonGrid } from "@/components/skeletons/TripCardSkeleton";
 import { ProgressiveImage } from "@/components/ProgressiveImage";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -454,18 +455,21 @@ export default function Home() {
                   style={{ width: `${Math.min(100, experience.fundingPercentage || 0)}%` }}
                 />
               </div>
-              <p className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                <span className="font-bold">{spotsTaken} joined</span>
-                {!isConfirmed && spotsNeeded > 0 ? ` — ${spotsNeeded} more to confirm` : ' — group confirmed!'}
+              <ExperienceParticipantSocialProof
+                participants={experience.participants}
+                joinedCount={spotsTaken}
+                className="mt-2"
+              />
+              <p className={`mt-1 text-xs font-semibold ${isConfirmed ? 'text-emerald-700' : 'text-primary'}`}>
+                {!isConfirmed && spotsNeeded > 0 ? `${spotsNeeded} more needed to confirm` : 'Group confirmed!'}
               </p>
             </div>
           ) : (
-            <div className="flex items-center gap-2 mb-3">
-              <div className="h-10 w-10 rounded-full border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center">
-                <Users className="h-4 w-4 text-gray-400" />
-              </div>
-              <span className="text-xs text-gray-500 italic">Be the first to join</span>
-            </div>
+            <ExperienceParticipantSocialProof
+              participants={experience.participants}
+              joinedCount={spotsTaken}
+              className="mb-3"
+            />
           )}
           <div className="pt-3 border-t border-gray-100 dark:border-gray-700 mb-3">
             {depositAmount > 0 ? (
@@ -491,6 +495,10 @@ export default function Home() {
       </Card>
     );
   };
+
+  const renderDiscoveryCard = (experience: any) => (
+    <DiscoveryExperienceCard key={experience.id} experience={experience} layout="swimlane" />
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -658,7 +666,7 @@ export default function Home() {
                       </div>
                     </div>
                     <div ref={trendingScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="trending-swimlane">
-                      {trendingExps.map((experience: any) => renderSwimlaneCard(experience))}
+                      {trendingExps.map((experience: any) => renderDiscoveryCard(experience))}
                     </div>
                   </section>
                 )}
@@ -701,7 +709,7 @@ export default function Home() {
                       </div>
                     </div>
                     <div ref={newlyAddedScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="newly-added-swimlane">
-                      {newlyAddedExps.map((experience: any) => renderSwimlaneCard(experience))}
+                      {newlyAddedExps.map((experience: any) => renderDiscoveryCard(experience))}
                     </div>
                   </section>
                 )}

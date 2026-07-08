@@ -410,6 +410,30 @@ export const experienceDrafts = pgTable("experience_drafts", {
     scale: 2,
   }).default("0.00"), // Commission for promoters/affiliates
 
+  // Promotion baseline deal fields
+  promotionDealType: varchar("promotion_deal_type"),
+  promotionMilestoneAttendeeTarget: integer("promotion_milestone_attendee_target"),
+  promotionMilestoneRewardTickets: integer("promotion_milestone_reward_tickets"),
+  promotionBrandPitch: text("promotion_brand_pitch"),
+  promotionSponsorshipAmount: decimal("promotion_sponsorship_amount", {
+    precision: 10,
+    scale: 2,
+  }),
+  promotionSelectedPartnerIds: jsonb("promotion_selected_partner_ids")
+    .$type<string[]>()
+    .default([]),
+  promotionExternalInvites: jsonb("promotion_external_invites")
+    .$type<
+      Array<{
+        id: string;
+        email: string;
+        name: string;
+        website: string;
+      }>
+    >()
+    .default([]),
+  promoterEnabled: boolean("promoter_enabled").default(false),
+
   // Per-SKU Discounts
   discounts: jsonb("discounts")
     .$type<
@@ -652,6 +676,29 @@ export const experiences = pgTable("experiences", {
     scale: 2,
   }).default("0.00"), // Commission for promoters/affiliates
 
+  // Promotion baseline deal fields
+  promotionDealType: varchar("promotion_deal_type"),
+  promotionMilestoneAttendeeTarget: integer("promotion_milestone_attendee_target"),
+  promotionMilestoneRewardTickets: integer("promotion_milestone_reward_tickets"),
+  promotionBrandPitch: text("promotion_brand_pitch"),
+  promotionSponsorshipAmount: decimal("promotion_sponsorship_amount", {
+    precision: 10,
+    scale: 2,
+  }),
+  promotionSelectedPartnerIds: jsonb("promotion_selected_partner_ids")
+    .$type<string[]>()
+    .default([]),
+  promotionExternalInvites: jsonb("promotion_external_invites")
+    .$type<
+      Array<{
+        id: string;
+        email: string;
+        name: string;
+        website: string;
+      }>
+    >()
+    .default([]),
+
   // Promoter Pool Fields
   promoterEnabled: boolean("promoter_enabled").default(true), // Allow promoters to promote this experience (defaults to true so approved events appear in pool)
 
@@ -847,6 +894,7 @@ export const bookings = pgTable("bookings", {
   // Promoter attribution fields
   promoterId: varchar("promoter_id").references(() => users.id), // Promoter who referred this booking
   referralCode: varchar("referral_code"), // The referral code used for this booking
+  promoterExperienceId: varchar("promoter_experience_id"), // Which promoter-trip share link drove this booking
 
   // Commission tracking fields
   commissionAmount: decimal("commission_amount", { precision: 10, scale: 2 }), // Calculated commission for promoter
@@ -897,12 +945,61 @@ export const promoterExperiences = pgTable(
     experienceId: varchar("experience_id")
       .references(() => experiences.id)
       .notNull(),
+    shareToken: varchar("share_token").unique(),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
     uniquePromoterExperience: unique().on(table.promoterId, table.experienceId),
   }),
 );
+
+// Digital Handshake for promotion deals (Part 3): direct offers to specific
+// partners (Options A/B) and marketplace bids/counters from the public pool
+// (Option C). Mirrors the venueContracts/venueOffers accept-decline pattern.
+export const promotionDeals = pgTable("promotion_deals", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id)
+    .notNull(),
+  creatorId: varchar("creator_id")
+    .references(() => users.id)
+    .notNull(),
+  // Null until an external invite (no platform account yet) is matched to a user by email.
+  partnerId: varchar("partner_id").references(() => users.id),
+  partnerEmail: varchar("partner_email"),
+  partnerName: varchar("partner_name"),
+  source: varchar("source", { length: 20 }).notNull(), // 'platform_direct' | 'external_direct' | 'marketplace'
+  dealType: varchar("deal_type", { length: 30 }).notNull(), // commission_per_ticket | milestone_barter | brand_barter | financial_sponsorship
+  baselineTerms: jsonb("baseline_terms")
+    .$type<{
+      commissionPct?: number;
+      milestoneAttendeeTarget?: number;
+      milestoneRewardTickets?: number;
+      brandPitch?: string;
+      sponsorshipAmount?: number;
+      currency?: string;
+    }>()
+    .default({}),
+  terms: jsonb("terms")
+    .$type<{
+      commissionPct?: number;
+      milestoneAttendeeTarget?: number;
+      milestoneRewardTickets?: number;
+      brandPitch?: string;
+      sponsorshipAmount?: number;
+      currency?: string;
+    }>()
+    .default({}),
+  status: varchar("status", { length: 20 }).default("pending"), // pending | countered | accepted | declined
+  // Whose turn it is to respond to the terms currently in `terms`.
+  pendingActionBy: varchar("pending_action_by", { length: 10 }).default("partner"), // 'creator' | 'partner'
+  counterMessage: text("counter_message"),
+  respondedAt: timestamp("responded_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
 
 // Experience gallery
 export const experienceGallery = pgTable("experience_gallery", {
@@ -1717,6 +1814,21 @@ export const venueContractsRelations = relations(venueContracts, ({ one }) => ({
   }),
 }));
 
+export const promotionDealsRelations = relations(promotionDeals, ({ one }) => ({
+  experience: one(experiences, {
+    fields: [promotionDeals.experienceId],
+    references: [experiences.id],
+  }),
+  creator: one(users, {
+    fields: [promotionDeals.creatorId],
+    references: [users.id],
+  }),
+  partner: one(users, {
+    fields: [promotionDeals.partnerId],
+    references: [users.id],
+  }),
+}));
+
 // Amenities relations
 export const amenitiesRelations = relations(amenities, ({ many }) => ({
   experienceAmenities: many(experienceAmenities),
@@ -1828,6 +1940,10 @@ export const referralClicks = pgTable("referral_clicks", {
   promoterCode: varchar("promoter_code").notNull(),          // The ?ref=CODE from the URL
   promoterId: varchar("promoter_id").references(() => users.id, { onDelete: "set null" }),
   experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "set null" }),
+  promoterExperienceId: varchar("promoter_experience_id").references(
+    () => promoterExperiences.id,
+    { onDelete: "set null" },
+  ),
   visitorUserId: varchar("visitor_user_id").references(() => users.id, { onDelete: "set null" }), // null = anonymous
   converted: boolean("converted").default(false),            // true once a booking is confirmed
   bookingId: varchar("booking_id"),                          // filled in when converted
@@ -2450,6 +2566,13 @@ export const insertVenueContractSchema = createInsertSchema(venueContracts).omit
   declinedAt: true,
 });
 
+export const insertPromotionDealSchema = createInsertSchema(promotionDeals).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  respondedAt: true,
+});
+
 export const insertExperienceServiceSchema = createInsertSchema(
   experienceServices,
 ).omit({
@@ -2752,6 +2875,8 @@ export type ExperienceVenue = typeof experienceVenues.$inferSelect;
 export type InsertExperienceVenue = z.infer<typeof insertExperienceVenueSchema>;
 export type VenueContract = typeof venueContracts.$inferSelect;
 export type InsertVenueContract = z.infer<typeof insertVenueContractSchema>;
+export type PromotionDeal = typeof promotionDeals.$inferSelect;
+export type InsertPromotionDeal = z.infer<typeof insertPromotionDealSchema>;
 export type ExperienceService = typeof experienceServices.$inferSelect;
 export type InsertExperienceService = z.infer<
   typeof insertExperienceServiceSchema
@@ -2936,6 +3061,26 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     // Influencer/promoter commission — DB stores as decimal string; accept number or string
     influencerCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     promoterCommission: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    promotionDealType: z.enum([
+      "commission_per_ticket",
+      "milestone_barter",
+      "brand_barter",
+      "financial_sponsorship",
+    ]).nullable().optional(),
+    promotionMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional(),
+    promotionMilestoneRewardTickets: z.coerce.number().int().min(1).optional(),
+    promotionBrandPitch: z.string().max(2000).optional(),
+    promotionSponsorshipAmount: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    promotionSelectedPartnerIds: z.array(z.string()).default([]).optional(),
+    promotionExternalInvites: z.array(
+      z.object({
+        id: z.string(),
+        email: z.string().email("Enter a valid invite email"),
+        name: z.string().min(1, "Invite name is required"),
+        website: z.string().url("Enter a valid social or website link"),
+      })
+    ).default([]).optional(),
+    promoterEnabled: z.boolean().optional(),
 
     // Venue - Foreign key validation
     selectedVenueId: z.string().optional(),

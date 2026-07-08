@@ -24,7 +24,6 @@ import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
-import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 import { 
   ExperienceWithStats, 
   ConvertReservationResponse, 
@@ -84,9 +83,6 @@ export default function ExperienceDetails() {
 
   // Connect to WebSocket for real-time MVG updates
   const { isConnected } = useRealtimeMVGUpdates(experienceId || '');
-
-  // Capture promoter attribution from URL (?ref=CODE)
-  usePromoterAttribution();
 
   // Ticket selection state - auto-select first ticket when available
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);

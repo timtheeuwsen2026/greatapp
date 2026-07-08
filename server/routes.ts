@@ -65,6 +65,11 @@ function applyMarketplaceEconomics(input: any = {}) {
   const revenueSharePct = model === "revenue_share"
     ? parseFloat(String(input.venueRevenueSharePct ?? input.venueRevenuePercentage ?? 0))
     : 0;
+  const derivedPromotionDealType = input.promotionDealType
+    ?? ((input.influencerPromotionEnabled || numberOrZero(input.influencerCommissionPct) > 0)
+      ? "commission_per_ticket"
+      : null);
+  const isCommissionPromotion = derivedPromotionDealType === "commission_per_ticket";
 
   return {
     ...input,
@@ -79,6 +84,11 @@ function applyMarketplaceEconomics(input: any = {}) {
     venueRevenueSharePct: revenueSharePct,
     venueAccessFee: input.venueAccessFee ?? "0.00",
     venueRevenuePercentage: revenueSharePct,
+    promotionDealType: derivedPromotionDealType,
+    influencerPromotionEnabled: isCommissionPromotion,
+    promoterCommission: isCommissionPromotion
+      ? (input.influencerCommissionPct ?? input.promoterCommission ?? "0.00")
+      : (input.promoterCommission ?? "0.00"),
   };
 }
 
@@ -104,11 +114,12 @@ const DRAFT_NUMERIC_FIELDS = [
   "expectedPayout", "platformCommission", "stripeFee", "influencerCommissionPct",
   "promoterCommission", "creatorPct", "platformPct", "venueFixedFee", "venuePerHeadAmount",
   "venueMinimumSpend", "venueRevenueSharePct", "venueAccessFee", "venueRevenuePercentage",
-  "creatorRevenuePercentage", "platformRevenuePercentage",
+  "creatorRevenuePercentage", "platformRevenuePercentage", "promotionSponsorshipAmount",
   // integers
   "maxParticipants", "manualVenueCapacity", "standingCapacity", "seatedCapacity",
   "roomCapacity", "totalRooms", "mvgMinimumSize", "mvgDeadlineDays", "balanceDueDays",
-  "softHoldDurationHours", "currentStep",
+  "softHoldDurationHours", "currentStep", "promotionMilestoneAttendeeTarget",
+  "promotionMilestoneRewardTickets",
 ];
 
 function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
@@ -441,6 +452,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const resolveCurrentUserId = (req: any): string | undefined => {
     return req.user?.claims?.sub || req.user?.id || (process.env.NODE_ENV === 'development' ? "45788955" : undefined);
+  };
+
+  const normalizePromotionDealType = (experience: any): string | null => {
+    return experience?.promotionDealType
+      ?? ((experience?.influencerPromotionEnabled || numberOrZero(experience?.influencerCommissionPct) > 0)
+        ? "commission_per_ticket"
+        : null);
+  };
+
+  const isPromoterCompatiblePromotion = (experience: any): boolean => {
+    const dealType = normalizePromotionDealType(experience);
+    return dealType === "commission_per_ticket" || dealType === "milestone_barter";
+  };
+
+  const buildPromoterReferralLink = (
+    baseUrl: string,
+    slugOrId: string,
+    promoterCode: string,
+    shareToken?: string | null,
+  ): string => {
+    const params = new URLSearchParams({ ref: promoterCode });
+    if (shareToken) {
+      params.set("share", shareToken);
+    }
+    return `${baseUrl}/experience/${slugOrId}?${params.toString()}`;
   };
 
   const requireParticipantProfileForCommunity = async (req: any, res: any): Promise<string | null> => {
@@ -821,16 +857,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Store promoter attribution in cookie (called when user visits with ?ref=)
   app.post('/api/promoter-attribution', async (req: any, res) => {
     try {
-      const { referralCode, experienceId } = req.body;
-      if (!referralCode || referralCode.length < 3) {
+      const { referralCode, experienceId, shareToken } = req.body;
+      if ((!referralCode || referralCode.length < 3) && !shareToken) {
         return res.status(400).json({ message: "Invalid referral code" });
       }
 
-      // Validate the referral code exists
-      const promoter = await storage.getUserByPromoterCode(referralCode);
+      const trackedPromotion = shareToken
+        ? await storage.getPromoterExperienceByShareToken(String(shareToken))
+        : undefined;
+
+      let promoter = trackedPromotion
+        ? await storage.getUser(trackedPromotion.promoterId)
+        : null;
+
+      if (!promoter && referralCode) {
+        promoter = await storage.getUserByPromoterCode(referralCode);
+      }
+
       if (!promoter) {
         return res.status(404).json({ message: "Referral code not found" });
       }
+
+      if (referralCode && promoter.promoterCode && promoter.promoterCode !== referralCode) {
+        return res.status(400).json({ message: "Referral link is invalid for this promoter" });
+      }
+
+      const effectiveReferralCode = promoter.promoterCode || referralCode;
+      if (!effectiveReferralCode) {
+        return res.status(400).json({ message: "Referral code is missing for this promoter" });
+      }
+
+      const trackedExperienceId = trackedPromotion?.experienceId || experienceId || null;
 
       // ── Record the referral click ─────────────────────────────────────────
       const visitorUserId = req.user?.claims?.sub ?? null;
@@ -840,9 +897,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ipHash = crypto.createHash('sha256').update(rawIp).digest('hex').slice(0, 16);
 
       await storage.recordReferralClick({
-        promoterCode: referralCode,
+        promoterCode: effectiveReferralCode,
         promoterId: promoter.id,
-        experienceId: experienceId ?? null,
+        experienceId: trackedExperienceId,
+        promoterExperienceId: trackedPromotion?.id ?? null,
         visitorUserId,
         ipHash,
         userAgent: req.headers['user-agent'] ?? null,
@@ -851,8 +909,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Set HttpOnly cookie with promoter info (survives auth redirect)
       const cookieValue = JSON.stringify({
         promoterId: promoter.id,
-        referralCode,
-        timestamp: Date.now()
+        referralCode: effectiveReferralCode,
+        shareToken: trackedPromotion?.shareToken || shareToken || null,
+        promoterExperienceId: trackedPromotion?.id || null,
+        experienceId: trackedExperienceId,
+        timestamp: Date.now(),
       });
 
       res.cookie('promoter_ref', cookieValue, {
@@ -863,7 +924,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         signed: false
       });
 
-      res.json({ success: true, promoterId: promoter.id });
+      res.json({
+        success: true,
+        promoterId: promoter.id,
+        referralCode: effectiveReferralCode,
+        shareToken: trackedPromotion?.shareToken || shareToken || null,
+        promoterExperienceId: trackedPromotion?.id || null,
+        experienceId: trackedExperienceId,
+      });
     } catch (error) {
       console.error("Error storing promoter attribution:", error);
       res.status(500).json({ message: "Failed to store attribution" });
@@ -873,7 +941,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Persist promoter referrer to user record (called after login)
   app.post('/api/auth/set-referrer', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
       const { promoterId, referralCode } = req.body;
       
       // Check if user already has a referrer (don't override)
@@ -917,7 +986,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // for participants who share from the experience page (not just the experience pool).
   app.post('/api/me/ensure-referral-code', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const { experienceId } = req.body;
@@ -928,17 +997,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const baseUrl = getAppBaseUrl(req);
       let referralLink: string;
       if (experienceId) {
-        referralLink = `${baseUrl}/experience/${experienceId}?ref=${referralCode}`;
+        const promotedExperience = await storage.promoteExperience(userId, experienceId);
+        const experience = await storage.getExperience(experienceId);
+        const slugOrId = experience?.slug || experienceId;
+        referralLink = buildPromoterReferralLink(
+          baseUrl,
+          slugOrId,
+          referralCode,
+          promotedExperience.shareToken,
+        );
 
         // Auto-register this experience in the user's promoter list so their
         // "My Trips" section shows it even if they found it via the experience page
         // (not the experience pool). Idempotent — onConflictDoNothing inside.
-        try {
-          const experience = await storage.getExperience(experienceId);
-          if (experience && (experience.status === 'approved' || experience.status === 'published')) {
-            await storage.promoteExperience(userId, experienceId);
-          }
-        } catch (_) { /* non-fatal */ }
       } else {
         referralLink = `${baseUrl}/?ref=${referralCode}`;
       }
@@ -954,7 +1025,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Powers the My Impact page recruitment stats + gamification
   app.get('/api/me/impact-stats', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       // Ensure user has a referral code (auto-generates if missing)
@@ -991,7 +1062,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             title: exp.title,
             location: exp.location,
             coverImageUrl: exp.coverImageUrl,
-            lifecycleStatus: exp.status,
+            lifecycleStatus: computeLifecycleStatus({
+              status: exp.status || '',
+              mvgStatus: exp.mvgStatus,
+              requireMinimumParticipants: exp.requireMinimumParticipants,
+            }),
             currency: exp.currency,
           };
         }
@@ -1016,14 +1091,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===== PROMOTER DASHBOARD ROUTES (Read-Only) =====
-  // Helper: resolve userId with dev bypass + verify promoter access
+  // Helper: resolve userId with dev bypass.
+  // Open to every authenticated user — all queries are scoped to the caller's own
+  // userId, and tracking links are earned by participants (post-checkout sharing)
+  // and brands (accepted promotion deals) whose accounts can hold any role.
   const resolvePromoterUserId = async (req: any, res: any): Promise<string | null> => {
-    const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+    const userId = resolveCurrentUserId(req);
     if (!userId) { res.status(401).json({ message: 'Not authenticated' }); return null; }
-    const user = await storage.getUser(userId);
-    // Participants retain referral access, but authorization uses only role.
-    const ok = user?.role === 'promoter' || user?.role === 'participant';
-    if (!ok) { res.status(403).json({ message: 'Access denied' }); return null; }
     return userId;
   };
 
@@ -1045,13 +1119,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = await resolvePromoterUserId(req, res);
       if (!userId) return;
-      
+
+      const dbUser = await storage.getUser(userId);
+      const promoterCode = dbUser?.promoterCode || await storage.ensureUserReferralCode(userId);
+      const baseUrl = getAppBaseUrl(req);
       const experiences = await storage.getPromoterExperiences(userId);
       // Add lifecycleStatus to each promoted experience
       const enriched = (experiences || []).map((item: any) => {
         if (item.experience) {
+          const slugOrId = item.experience.slug || item.experience.id;
           return {
             ...item,
+            referralLink: buildPromoterReferralLink(
+              baseUrl,
+              slugOrId,
+              promoterCode,
+              item.shareToken,
+            ),
             experience: {
               ...item.experience,
               lifecycleStatus: computeLifecycleStatus({
@@ -1108,7 +1192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get promoter's referral code and info
   app.get('/api/promoter/info', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
       const user = await storage.getUser(userId);
       // Auto-ensure referral code exists
@@ -1194,10 +1278,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get('/api/promotion/platform-partners', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      const promoters = await storage.getAllPromoters();
+      const partners = await Promise.all(promoters.map(async (promoter) => {
+        const profile = await storage.getPromoterProfileByUserId(promoter.id);
+        const fallbackName = `${promoter.firstName || ""} ${promoter.lastName || ""}`.trim();
+
+        return {
+          id: promoter.id,
+          role: "promoter",
+          displayName: profile?.displayName || fallbackName || promoter.email || "Platform partner",
+          bio: profile?.bio || null,
+          profilePhoto: profile?.profilePhoto || promoter.profileImageUrl || null,
+          email: promoter.email,
+          promoterCode: promoter.promoterCode || null,
+          completed: !!profile?.completed,
+        };
+      }));
+
+      res.json(partners.filter((partner) => partner.completed));
+    } catch (error) {
+      console.error("Error fetching promotion platform partners:", error);
+      res.status(500).json({ message: "Failed to fetch platform partners" });
+    }
+  });
+
   // Promoter click-through stats (clicks, unique visitors, conversions, rate)
   app.get('/api/promoter/click-stats', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
       const stats = await storage.getReferralClickStats(userId);
       res.json(stats);
@@ -1210,28 +1325,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get experience pool - promotable experiences (open to all authenticated users)
   app.get('/api/promoter/experience-pool', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) {
         return res.status(401).json({ message: "Not authenticated" });
       }
-      
+
+      const dbUser = await storage.getUser(userId);
+      const promoterCode = dbUser?.promoterCode || await storage.ensureUserReferralCode(userId);
+      const baseUrl = getAppBaseUrl(req);
+
       // Get all promotable experiences
       const experiences = await storage.getPromotableExperiences();
-      
+
       // Get which ones this promoter is already promoting
-      const promotedIds = await storage.getPromoterPromotedExperienceIds(userId);
-      
+      const promotedRows = await storage.getPromoterPromotedExperiences(userId);
+      const promotedByExperienceId = new Map(
+        promotedRows.map((row) => [row.experienceId, row]),
+      );
+
+      // Get this partner's marketplace bids (Option C: Accept / Counter Offer) so the
+      // pool card can show the current negotiation state instead of the raw actions again.
+      const marketplaceDeals = await storage.getMarketplacePromotionDealsForPartner(userId);
+      const marketplaceDealByExperienceId = new Map(
+        marketplaceDeals.map((deal) => [deal.experienceId, deal]),
+      );
+
       // Enrich with promotion status and lifecycle state (single source of truth)
       const enrichedExperiences = experiences.map(exp => ({
         ...exp,
-        isPromoting: promotedIds.includes(exp.id),
+        isPromoting: promotedByExperienceId.has(exp.id),
+        shareToken: promotedByExperienceId.get(exp.id)?.shareToken || null,
+        referralLink: buildPromoterReferralLink(
+          baseUrl,
+          exp.slug || exp.id,
+          promoterCode,
+          promotedByExperienceId.get(exp.id)?.shareToken || null,
+        ),
         lifecycleStatus: computeLifecycleStatus({
           status: exp.status || '',
           mvgStatus: exp.mvgStatus,
           requireMinimumParticipants: exp.requireMinimumParticipants,
         }),
+        marketplaceDeal: marketplaceDealByExperienceId.get(exp.id) || null,
       }));
-      
+
       res.json(enrichedExperiences);
     } catch (error) {
       console.error("Error fetching experience pool:", error);
@@ -1242,7 +1379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Promote an experience - generate referral link
   app.post('/api/promoter/promote/:experienceId', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = resolveCurrentUserId(req);
       if (!userId) {
         return res.status(401).json({ message: "Not authenticated" });
       }
@@ -1255,9 +1392,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Experience not found" });
       }
       
-      // Any approved or published experience can be promoted (matches homepage visibility)
       if (experience.status !== 'approved' && experience.status !== 'published') {
         return res.status(400).json({ message: "Only approved or published experiences can be promoted" });
+      }
+
+      if (!isPromoterCompatiblePromotion(experience)) {
+        return res.status(400).json({ message: "This creator offer is not set up for promoters" });
       }
       
       // Load promoter's DB record to get (or generate) their referral code
@@ -1273,25 +1413,256 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Register promotion (idempotent — onConflictDoNothing inside)
-      await storage.promoteExperience(userId, experienceId);
+      const promotedExperience = await storage.promoteExperience(userId, experienceId);
 
       // Build a fully-qualified, trackable referral link
       const baseUrl = getAppBaseUrl(req);
       const slug = experience.slug || experience.id;
       const promoterCode = dbUser?.promoterCode ?? '';
-      const referralLink = `${baseUrl}/experience/${slug}?ref=${promoterCode}`;
+      const referralLink = buildPromoterReferralLink(
+        baseUrl,
+        slug,
+        promoterCode,
+        promotedExperience.shareToken,
+      );
 
       res.json({
         success: true,
         experienceId,
         experienceSlug: slug,
         promoterCode,
+        shareToken: promotedExperience.shareToken,
+        promoterExperienceId: promotedExperience.id,
         referralLink,
         message: "Experience added to your promotions!",
       });
     } catch (error) {
       console.error("Error promoting experience:", error);
       res.status(500).json({ message: "Failed to promote experience" });
+    }
+  });
+
+  // ── Digital Handshake: Promotion Deals (Part 3) ──
+
+  // Fire-and-forget email helpers — a failed email must never fail the API call.
+  const partnerDisplayName = async (partnerId: string | null | undefined, fallback?: string | null) => {
+    if (!partnerId) return fallback || 'A partner';
+    const partner = await storage.getUser(partnerId);
+    const name = `${partner?.firstName || ''} ${partner?.lastName || ''}`.trim();
+    return name || partner?.email || fallback || 'A partner';
+  };
+
+  // Partner responded to a direct offer (accept/decline) → notify the creator.
+  const notifyCreatorOfPromotionResponse = (deal: any, partnerId: string, action: 'accepted' | 'declined') => {
+    (async () => {
+      const [creator, experience, partnerName] = await Promise.all([
+        storage.getUser(deal.creatorId),
+        storage.getExperience(deal.experienceId),
+        partnerDisplayName(partnerId, deal.partnerName),
+      ]);
+      if (!creator?.email || !experience) return;
+      await notificationService.sendPromotionOfferResponseEmail({
+        to: creator.email,
+        recipientName: creator.firstName,
+        partnerName,
+        experienceTitle: experience.title,
+        experienceSlugOrId: (experience as any).slug || experience.id,
+        action,
+        dealType: deal.dealType,
+        terms: deal.terms,
+        currency: (experience as any).currency,
+      });
+    })().catch((err) => console.error('Promotion response email failed:', err?.message || err));
+  };
+
+  // Creator resolved a marketplace counter offer → notify the partner who countered.
+  const notifyPartnerOfCounterResolution = (deal: any, action: 'accepted' | 'declined') => {
+    (async () => {
+      const [partner, experience] = await Promise.all([
+        deal.partnerId ? storage.getUser(deal.partnerId) : Promise.resolve(undefined),
+        storage.getExperience(deal.experienceId),
+      ]);
+      const to = partner?.email || deal.partnerEmail;
+      if (!to || !experience) return;
+      await notificationService.sendPromotionCounterResolvedEmail({
+        to,
+        recipientName: partner?.firstName || deal.partnerName,
+        experienceTitle: experience.title,
+        experienceSlugOrId: (experience as any).slug || experience.id,
+        action,
+        dealType: deal.dealType,
+        terms: deal.terms,
+        currency: (experience as any).currency,
+      });
+    })().catch((err) => console.error('Counter resolution email failed:', err?.message || err));
+  };
+
+  // GET /api/promoter/offers — Direct offers (Options A & B) sent to this partner.
+  // Accept/Decline only — matches the spec's "Brand can only click Accept or Decline".
+  app.get('/api/promoter/offers', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const dbUser = await storage.getUser(userId);
+      const rows = await storage.getDirectPromotionDealsForPartner(userId, dbUser?.email);
+
+      res.json(rows.map(({ deal, experience }) => ({
+        ...deal,
+        experienceTitle: experience.title,
+        experienceSlug: experience.slug,
+        experienceStartDate: experience.startDate,
+        experienceLocation: experience.location,
+      })));
+    } catch (error) {
+      console.error("Error fetching promoter offers:", error);
+      res.status(500).json({ message: "Failed to fetch offers" });
+    }
+  });
+
+  app.post('/api/promoter/offers/:dealId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const updated = await storage.respondToDirectPromotionDeal(req.params.dealId, userId, 'accept');
+      if (!updated) return res.status(404).json({ message: "Offer not found or already resolved" });
+      notifyCreatorOfPromotionResponse(updated, userId, 'accepted');
+      res.json(updated);
+    } catch (error) {
+      console.error("Error accepting offer:", error);
+      res.status(500).json({ message: "Failed to accept offer" });
+    }
+  });
+
+  app.post('/api/promoter/offers/:dealId/decline', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const updated = await storage.respondToDirectPromotionDeal(req.params.dealId, userId, 'decline');
+      if (!updated) return res.status(404).json({ message: "Offer not found or already resolved" });
+      notifyCreatorOfPromotionResponse(updated, userId, 'declined');
+      res.json(updated);
+    } catch (error) {
+      console.error("Error declining offer:", error);
+      res.status(500).json({ message: "Failed to decline offer" });
+    }
+  });
+
+  // Marketplace bid (Option C): accept the creator's baseline terms as-is.
+  app.post('/api/promoter/experience-pool/:experienceId/accept-deal', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const experience = await storage.getExperience(req.params.experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+      if (experience.status !== 'approved' && experience.status !== 'published') {
+        return res.status(400).json({ message: "This experience is not open for deals" });
+      }
+
+      const deal = await storage.createOrUpdateMarketplacePromotionDeal(req.params.experienceId, userId, 'accept');
+      notifyCreatorOfPromotionResponse(deal, userId, 'accepted');
+      res.json(deal);
+    } catch (error: any) {
+      console.error("Error accepting marketplace deal:", error);
+      res.status(500).json({ message: error?.message || "Failed to accept deal" });
+    }
+  });
+
+  // Marketplace bid (Option C): counter the creator's baseline terms — sends the
+  // proposal back to the Creator's dashboard to Accept/Decline.
+  app.post('/api/promoter/experience-pool/:experienceId/counter-deal', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const experience = await storage.getExperience(req.params.experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+      if (experience.status !== 'approved' && experience.status !== 'published') {
+        return res.status(400).json({ message: "This experience is not open for deals" });
+      }
+
+      const { terms, message } = req.body || {};
+      const deal = await storage.createOrUpdateMarketplacePromotionDeal(
+        req.params.experienceId,
+        userId,
+        'counter',
+        terms || {},
+        message,
+      );
+
+      // Counter offer goes back to the creator's dashboard — notify them by email.
+      (async () => {
+        const [creator, partnerName] = await Promise.all([
+          storage.getUser(deal.creatorId),
+          partnerDisplayName(userId),
+        ]);
+        if (!creator?.email) return;
+        await notificationService.sendPromotionCounterReceivedEmail({
+          to: creator.email,
+          recipientName: creator.firstName,
+          partnerName,
+          experienceTitle: experience.title,
+          experienceSlugOrId: (experience as any).slug || experience.id,
+          dealType: deal.dealType,
+          terms: deal.terms,
+          currency: (experience as any).currency,
+          message,
+        });
+      })().catch((err) => console.error('Counter offer email failed:', err?.message || err));
+
+      res.json(deal);
+    } catch (error: any) {
+      console.error("Error countering marketplace deal:", error);
+      res.status(500).json({ message: error?.message || "Failed to submit counter offer" });
+    }
+  });
+
+  // GET /api/creator/promotion-deals — everything the creator has sent or received:
+  // pending direct offers, incoming counters awaiting a decision, and resolved deals.
+  app.get('/api/creator/promotion-deals', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const rows = await storage.getPromotionDealsForCreator(userId);
+
+      res.json(rows.map(({ deal, experience, partner }) => ({
+        ...deal,
+        experienceTitle: experience.title,
+        experienceSlug: experience.slug,
+        partnerName: partner ? `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || partner.email : deal.partnerName,
+        partnerEmail: partner?.email || deal.partnerEmail,
+      })));
+    } catch (error) {
+      console.error("Error fetching creator promotion deals:", error);
+      res.status(500).json({ message: "Failed to fetch promotion deals" });
+    }
+  });
+
+  app.post('/api/creator/promotion-deals/:dealId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const updated = await storage.respondToCreatorPromotionDeal(req.params.dealId, userId, 'accept');
+      if (!updated) return res.status(404).json({ message: "Deal not found or not awaiting your response" });
+      notifyPartnerOfCounterResolution(updated, 'accepted');
+      res.json(updated);
+    } catch (error) {
+      console.error("Error accepting counter offer:", error);
+      res.status(500).json({ message: "Failed to accept counter offer" });
+    }
+  });
+
+  app.post('/api/creator/promotion-deals/:dealId/decline', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const updated = await storage.respondToCreatorPromotionDeal(req.params.dealId, userId, 'decline');
+      if (!updated) return res.status(404).json({ message: "Deal not found or not awaiting your response" });
+      notifyPartnerOfCounterResolution(updated, 'declined');
+      res.json(updated);
+    } catch (error) {
+      console.error("Error declining counter offer:", error);
+      res.status(500).json({ message: "Failed to decline counter offer" });
     }
   });
 
@@ -1855,13 +2226,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('External venue invitation failed:', error);
         }
       }
+
+      // Digital Handshake proposal: publishing with a linked platform venue puts the
+      // contract in the venue owner's Pending Offers tab — email them about it.
+      if (venueType !== 'manual' && isLinkedVenue && existingDraft.status !== 'pending_approval') {
+        (async () => {
+          const venue = await storage.getVenue(parsedBody.selectedVenueId!);
+          const owner = (venue as any)?.createdBy ? await storage.getUser((venue as any).createdBy) : undefined;
+          if (!owner?.email) return;
+          await notificationService.sendVenueContractProposalEmail({
+            to: owner.email,
+            recipientName: owner.firstName,
+            venueName: (venue as any)?.name,
+            experienceTitle: (eventData as any).title || 'A new experience',
+            experienceSlugOrId: (result as any)?.slug || (result as any)?.id || draftId,
+            model: (eventData as any).venueCompensationModel,
+            terms: {
+              fixedFee: (eventData as any).venueFixedFee,
+              perHeadAmount: (eventData as any).venuePerHeadAmount,
+              minimumSpend: (eventData as any).venueMinimumSpend,
+              revenueSharePct: (eventData as any).venueRevenueSharePct,
+              accessFee: (eventData as any).venueAccessFee,
+            },
+            currency: (eventData as any).currency,
+          });
+        })().catch((err) => console.error('Venue contract proposal email failed:', err?.message || err));
+      }
+
+      let externalPromotionInvitationsSent = 0;
+      let externalPromotionInvitationWarning: string | undefined;
+      if (Array.isArray((eventData as any).promotionExternalInvites)
+        && (eventData as any).promotionExternalInvites.length > 0
+        && existingDraft.status !== 'pending_approval') {
+        try {
+          externalPromotionInvitationsSent = await notificationService.sendPromotionExternalInvitations(eventData as any);
+        } catch (error: any) {
+          externalPromotionInvitationWarning = error?.message || 'The promotion invitations could not be sent';
+          console.error('External promotion invitations failed:', error);
+        }
+      }
       
       res.json({ 
         success: true, 
         message: "Event published successfully - pending review",
         event: result,
         externalVenueInvitationSent,
+        externalPromotionInvitationsSent,
         ...(externalVenueInvitationWarning ? { warning: externalVenueInvitationWarning } : {}),
+        ...(externalPromotionInvitationWarning ? { promotionWarning: externalPromotionInvitationWarning } : {}),
       });
     } catch (error: any) {
       console.error("Error publishing event:", error);
@@ -2647,7 +3059,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Publish draft endpoint - validates and converts draft to live experience
   app.post("/api/experience-drafts/:id/publish", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
       const { id: draftId } = req.params;
       
       // Get the draft
@@ -2872,6 +3287,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
         escrowEnabled: resolvedMvgEnabled || false,
         monetisationMode: "creator_led" as const,
+        promotionDealType: (draft as any).promotionDealType
+          ?? ((draft as any).influencerPromotionEnabled ? "commission_per_ticket" : null),
+        promotionMilestoneAttendeeTarget: (draft as any).promotionMilestoneAttendeeTarget || null,
+        promotionMilestoneRewardTickets: (draft as any).promotionMilestoneRewardTickets || null,
+        promotionBrandPitch: (draft as any).promotionBrandPitch || null,
+        promotionSponsorshipAmount: (draft as any).promotionSponsorshipAmount || null,
+        promotionSelectedPartnerIds: Array.isArray((draft as any).promotionSelectedPartnerIds)
+          ? (draft as any).promotionSelectedPartnerIds
+          : [],
+        promotionExternalInvites: Array.isArray((draft as any).promotionExternalInvites)
+          ? (draft as any).promotionExternalInvites
+          : [],
+        promoterEnabled: (draft as any).promoterEnabled ?? false,
+        influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
+        promoterCommission: (draft as any).promoterCommission || (draft as any).influencerCommissionPct || "0.00",
         
         // Revenue split fields
         // Self-hosted: creator gets back whatever % was earmarked for the Space.
@@ -3050,7 +3480,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/bookings", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { experienceId, amount, isEscrow, stripePaymentIntentId, promoterId: providedPromoterId, referralCode: providedReferralCode, paymentType, ticketSkuId: bookingTicketSkuId } = req.body;
+      const {
+        experienceId,
+        amount,
+        isEscrow,
+        stripePaymentIntentId,
+        promoterId: providedPromoterId,
+        referralCode: providedReferralCode,
+        shareToken: providedShareToken,
+        paymentType,
+        ticketSkuId: bookingTicketSkuId,
+      } = req.body;
 
       // IDEMPOTENCY: If a booking already exists for this payment intent, return it — prevents
       // duplicate bookings (and duplicate commissions) from retries or double-submits
@@ -3078,15 +3518,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // 3. null (no attribution)
       let promoterId: string | null = null;
       let referralCode: string | null = null;
-      
-      if (providedPromoterId) {
+      let promoterExperienceId: string | null = null;
+
+      if (providedShareToken) {
+        const trackedPromotion = await storage.getPromoterExperienceByShareToken(providedShareToken);
+        if (trackedPromotion) {
+          if (trackedPromotion.experienceId !== experienceId) {
+            return res.status(400).json({ message: "Referral link does not match this experience" });
+          }
+          promoterExperienceId = trackedPromotion.id;
+          promoterId = trackedPromotion.promoterId;
+          const promoter = await storage.getUser(trackedPromotion.promoterId);
+          referralCode = promoter?.promoterCode || providedReferralCode || null;
+        }
+      }
+
+      if (!promoterId && providedPromoterId) {
         // Validate provided promoter exists
         const promoter = await storage.getUser(providedPromoterId);
         if (promoter) {
           promoterId = providedPromoterId;
           referralCode = providedReferralCode || promoter.promoterCode || null;
         }
-      } else if (providedReferralCode) {
+      } else if (!promoterId && providedReferralCode) {
         // Resolve promoter from referral code
         const promoter = await storage.getUserByPromoterCode(providedReferralCode);
         if (promoter) {
@@ -3102,6 +3556,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           promoterId = user.referredByPromoterId;
           const referrer = await storage.getUser(user.referredByPromoterId);
           referralCode = referrer?.promoterCode || null;
+        }
+      }
+
+      if (promoterId && !promoterExperienceId) {
+        try {
+          const trackedPromotion = await storage.promoteExperience(promoterId, experienceId);
+          promoterExperienceId = trackedPromotion.id;
+        } catch (_) {
+          promoterExperienceId = null;
         }
       }
 
@@ -3241,6 +3704,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Promoter attribution (null if no referral)
         promoterId,
         referralCode,
+        promoterExperienceId,
         // Commission fields (null if no promoter)
         commissionAmount: commissionAmount?.toString() || null,
         commissionCurrency,
@@ -3276,8 +3740,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // ── Mark referral click as converted ──────────────────────────────────
-      if (referralCode && booking?.id) {
-        storage.markReferralClickConverted(referralCode, booking.id).catch(() => {});
+      if (booking?.id && (referralCode || promoterExperienceId)) {
+        storage.markReferralClickConverted({
+          bookingId: booking.id,
+          promoterCode: referralCode,
+          promoterId,
+          experienceId,
+          promoterExperienceId,
+        }).catch(() => {});
       }
 
       // ── Auto-add buyer to experience chat ─────────────────────────────────
@@ -10158,6 +10628,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Venue owner resolved a creator's direct contract proposal → notify the creator.
+  const notifyCreatorOfVenueContractResolution = (
+    experienceId: string,
+    venueName: string | null | undefined,
+    action: 'accepted' | 'rejected',
+    reason?: string | null,
+  ) => {
+    (async () => {
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return;
+      const creator = await storage.getUser(experience.creatorId);
+      if (!creator?.email) return;
+      await notificationService.sendVenueContractResolvedEmail({
+        to: creator.email,
+        recipientName: creator.firstName,
+        venueName,
+        experienceTitle: experience.title,
+        experienceSlugOrId: (experience as any).slug || experience.id,
+        action,
+        reason,
+      });
+    })().catch((err) => console.error('Venue contract resolution email failed:', err?.message || err));
+  };
+
   app.get('/api/venue/pending-offers', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -10293,6 +10787,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         linkedVenueId: linkedVenue.id,
       } as any);
       await storage.updateExperienceStatus(experienceId, 'approved');
+      notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'accepted');
       res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
@@ -10325,6 +10820,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contract = session.metadata?.contractId
         ? await storage.getVenueContractById(session.metadata.contractId)
         : undefined;
+      const paidVenue = userVenues.find((venue: any) => venue.id === venueId);
+      if (session.metadata?.experienceId) {
+        notifyCreatorOfVenueContractResolution(session.metadata.experienceId, paidVenue?.name, 'accepted');
+      }
       res.json({ success: true, contract, message: 'Sponsorship paid and deal confirmed' });
     } catch (err: any) {
       console.error('Error confirming venue sponsorship:', err);
@@ -10359,6 +10858,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
       await storage.updateExperienceStatus(experienceId, 'draft');
+      notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'rejected', reason);
       res.json({ success: true, contract: declinedContract, message: 'Offer rejected — experience returned to creator' });
     } catch (err: any) {
       console.error('Error rejecting venue offer:', err);
@@ -10423,6 +10923,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Return only the fields the venue dashboard needs — avoids leaking pricing internals
       const feed = events.map((e: any) => ({
         id: e.id,
+        slug: e.slug,
         title: e.title,
         location: e.location,
         startDate: e.startDate,
@@ -10450,6 +10951,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ── Reverse Handshake: Venue → Creator offers ─────────────────────────────
+
+  // Creator resolved an Offer to Host bid → notify the venue owner (fire-and-forget).
+  const notifyVenueOwnerOfBidResolution = (offer: any, action: 'accepted' | 'declined') => {
+    (async () => {
+      const [owner, venue, experience] = await Promise.all([
+        storage.getUser(offer.venueOwnerId),
+        storage.getVenue(offer.venueId),
+        storage.getExperience(offer.experienceId),
+      ]);
+      if (!owner?.email || !experience) return;
+      await notificationService.sendVenueBidResolvedEmail({
+        to: owner.email,
+        recipientName: owner.firstName,
+        venueName: venue?.name,
+        experienceTitle: experience.title,
+        experienceSlugOrId: (experience as any).slug || experience.id,
+        action,
+        model: offer.model,
+        terms: offer.terms,
+        currency: (experience as any).currency,
+      });
+    })().catch((err) => console.error('Venue bid resolution email failed:', err?.message || err));
+  };
 
   // POST /api/venue/open-events/:experienceId/offer
   // Venue owner submits a "Offer to Host" bid with their Commercial Model terms.
@@ -10533,6 +11057,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const offer = await storage.getVenueOffer(req.params.offerId);
       if (!offer) return res.status(404).json({ message: 'Offer not found' });
       const updated = await storage.approveVenueOffer(req.params.offerId);
+
+      // Bid is now visible to the creator — send the Digital Handshake proposal email.
+      (async () => {
+        const [experience, venue] = await Promise.all([
+          storage.getExperience(offer.experienceId),
+          storage.getVenue(offer.venueId),
+        ]);
+        if (!experience) return;
+        const creator = await storage.getUser(experience.creatorId);
+        if (!creator?.email) return;
+        await notificationService.sendVenueBidReceivedEmail({
+          to: creator.email,
+          recipientName: creator.firstName,
+          venueName: venue?.name,
+          experienceTitle: experience.title,
+          experienceSlugOrId: (experience as any).slug || experience.id,
+          model: offer.model,
+          terms: offer.terms,
+          currency: (experience as any).currency,
+          message: offer.message,
+        });
+      })().catch((err) => console.error('Venue bid email failed:', err?.message || err));
+
       res.json(updated);
     } catch (err: any) {
       console.error('Error approving venue offer:', err);
@@ -10646,8 +11193,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const o = row.offer ?? row;
           if (o.id !== offerId && o.status === 'pending') {
             await storage.updateVenueOfferStatus(o.id, 'declined');
+            notifyVenueOwnerOfBidResolution(o, 'declined');
           }
         }
+        notifyVenueOwnerOfBidResolution(offer, 'accepted');
 
         // Create Stripe Checkout Session — creator pays the venue rental fee
         const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -10694,9 +11243,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const o = row.offer ?? row;
         if (o.id !== offerId && o.status === 'pending') {
           await storage.updateVenueOfferStatus(o.id, 'declined');
+          notifyVenueOwnerOfBidResolution(o, 'declined');
         }
       }
 
+      notifyVenueOwnerOfBidResolution(offer, 'accepted');
       res.json({ accepted, message: 'Venue linked successfully' });
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
@@ -10721,6 +11272,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const declined = await storage.updateVenueOfferStatus(offerId, 'declined');
+      notifyVenueOwnerOfBidResolution(offer, 'declined');
       res.json(declined);
     } catch (err: any) {
       console.error('Error declining venue offer:', err);

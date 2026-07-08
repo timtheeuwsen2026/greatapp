@@ -532,6 +532,7 @@ function VenueDashboardContent() {
                               maxParticipants={event.maxParticipants}
                               currency={event.currency}
                               platformPct={event.platformPct}
+                              eventUrl={`/experience/${event.slug || event.id}`}
                             />
 
                             {event.venueTargetDeal && (
@@ -627,6 +628,7 @@ function VenueDashboardContent() {
                             maxParticipants={offer.maxParticipants}
                             currency={offer.currency}
                             platformPct={offer.platformPct || offer.platformRevenuePercentage}
+                            eventUrl={`/experience/${offer.slug || offer.id}`}
                           />
                         </div>
 

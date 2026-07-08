@@ -217,13 +217,13 @@ export default function RecruitSquad() {
       ctx.font = "bold 32px system-ui, -apple-system, sans-serif";
       if (tripConfirmed) {
         ctx.fillStyle = "#34d399"; // Green for confirmed
-        ctx.fillText("Trip Confirmed — I'm going!", 40, accentY);
+        ctx.fillText("Experience Confirmed — I'm going!", 40, accentY);
       } else if (spotsRemaining !== null) {
         ctx.fillStyle = "#fbbf24"; // Amber for urgency
         ctx.fillText(`Only ${spotsRemaining} spot${spotsRemaining === 1 ? "" : "s"} left to confirm.`, 40, accentY);
       } else {
         ctx.fillStyle = "#fbbf24";
-        ctx.fillText("Join me on this trip!", 40, accentY);
+        ctx.fillText("Join me on this experience!", 40, accentY);
       }
 
       // ── 9. Trip name line ─────────────────────────────────────────────────
@@ -293,7 +293,7 @@ export default function RecruitSquad() {
       ctx.fillText(tagline, W - tagW - 40, H - 32);
 
       // ── 12. Trigger download ──────────────────────────────────────────────
-      const safeName = (experience?.title || "trip")
+      const safeName = (experience?.title || "experience")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "")
@@ -305,7 +305,7 @@ export default function RecruitSquad() {
 
       toast({
         title: "Story card downloaded!",
-        description: `Share "${experience?.title || "the trip"}" on Instagram or WhatsApp Stories.`,
+        description: `Share "${experience?.title || "the experience"}" on Instagram or WhatsApp Stories.`,
       });
     } catch {
       toast({ title: "Download failed", description: "Please try again.", variant: "destructive" });
@@ -339,7 +339,7 @@ export default function RecruitSquad() {
             You're in! Now bring your crew.
           </h1>
           <p className="text-lg text-gray-600">
-            {userName}, your spot is secured. Share your personal link — when friends join using it, you earn event credit toward this trip.
+            {userName}, your spot is secured. Share your personal link — when friends book using it, you earn cashback on every ticket.
           </p>
           {experience && (
             <Badge variant="secondary" className="text-sm px-3 py-1">
@@ -373,7 +373,7 @@ export default function RecruitSquad() {
               <span className="font-semibold text-gray-800">Your personal referral link</span>
             </div>
             <p className="text-sm text-gray-500">
-              When a friend books using this link, the booking is attributed to you and you earn event credit — no cash payout, it goes straight toward your trip costs.
+              When a friend books using this link, the booking is attributed to you and you earn cashback on the ticket — track your earnings any time in your dashboard.
             </p>
 
             {ensureCodeMutation.isPending ? (
@@ -490,13 +490,19 @@ export default function RecruitSquad() {
                 refreshInterval={20000}
               />
               <p className="text-xs text-gray-500 mt-3">
-                Every person who joins using your link helps confirm this trip — and earns you credit.
+                Every person who joins using your link helps confirm this experience — and earns you cashback.
               </p>
             </CardContent>
           </Card>
         )}
 
         <div className="space-y-3 pt-2" data-testid="continue-actions">
+          <Link href="/promoter">
+            <Button variant="outline" className="w-full" data-testid="view-earnings-dashboard">
+              View my Cashback / Earnings dashboard
+              <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </Link>
           {bookingId && experienceId && (
             <Link href={`/booking-success?experience=${experienceId}&booking=${bookingId}`}>
               <Button

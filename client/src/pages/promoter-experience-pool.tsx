@@ -1,15 +1,26 @@
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Megaphone, AlertTriangle, MapPin, Calendar, Users, Copy, Check, ArrowLeft, Sparkles } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Megaphone, AlertTriangle, MapPin, Calendar, Copy, Check, ArrowLeft, Sparkles, ExternalLink, Clock, XCircle } from "lucide-react";
+import { Link } from "wouter";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getBaseUrl } from "@/lib/utils";
+import { getPromotionOfferSummary } from "@/lib/promotionDeals";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 interface ExperiencePoolItem {
   id: string;
@@ -23,18 +34,32 @@ interface ExperiencePoolItem {
   mvgStatus: string | null;
   lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
   status: string;
-  commissionMode: string | null;
-  commissionValue: string | null;
-  commissionBasis: string | null;
   ticketSkus: Array<{
     id: string;
     ticketName: string;
     pricePerPerson: number;
   }> | null;
   isPromoting: boolean;
-  // Creator-set bounty fields
+  referralLink?: string | null;
+  shareToken?: string | null;
   influencerPromotionEnabled: boolean | null;
   influencerCommissionPct: string | null;
+  promotionDealType: string | null;
+  promotionMilestoneAttendeeTarget: number | null;
+  promotionMilestoneRewardTickets: number | null;
+  promotionBrandPitch: string | null;
+  promotionSponsorshipAmount: string | null;
+  marketplaceDeal?: {
+    id: string;
+    status: "pending" | "countered" | "accepted" | "declined";
+    pendingActionBy: string | null;
+    terms: {
+      brandPitch?: string;
+      sponsorshipAmount?: number;
+      currency?: string;
+    } | null;
+    counterMessage: string | null;
+  } | null;
 }
 
 function formatCurrency(amount: number, currency: string): string {
@@ -65,17 +90,6 @@ function getLifecycleBadge(lifecycleStatus?: string) {
   }
 }
 
-function getCommissionDescription(mode: string | null, value: string | null, basis: string | null): string {
-  if (!mode || !value) {
-    return "10% per spot (platform default)";
-  }
-  
-  const amount = mode === 'percent' ? `${parseFloat(value)}%` : formatCurrency(parseFloat(value), 'EUR');
-  const basisLabel = basis === 'per_booking' ? 'per booking' : 'per spot';
-  
-  return `${amount} ${basisLabel}`;
-}
-
 function getLowestPrice(experience: ExperiencePoolItem): { price: number; currency: string } {
   const ticketSkus = experience.ticketSkus;
   if (ticketSkus && ticketSkus.length > 0) {
@@ -87,27 +101,123 @@ function getLowestPrice(experience: ExperiencePoolItem): { price: number; curren
   return { price: parseFloat(experience.price || '0'), currency: experience.currency || 'EUR' };
 }
 
+function CounterOfferDialog({
+  open,
+  onOpenChange,
+  experience,
+  onSubmit,
+  isSubmitting,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  experience: ExperiencePoolItem;
+  onSubmit: (terms: { brandPitch?: string; sponsorshipAmount?: number; currency?: string }, message: string) => void;
+  isSubmitting: boolean;
+}) {
+  const [pitch, setPitch] = useState(experience.promotionBrandPitch || "");
+  const [amount, setAmount] = useState(experience.promotionSponsorshipAmount || "");
+  const [message, setMessage] = useState("");
+
+  const isSponsorship = experience.promotionDealType === "financial_sponsorship";
+
+  const handleSubmit = () => {
+    const terms = isSponsorship
+      ? { sponsorshipAmount: parseFloat(amount) || 0, currency: experience.currency || "EUR" }
+      : { brandPitch: pitch };
+    onSubmit(terms, message);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Counter Offer — {experience.title}</DialogTitle>
+          <DialogDescription>
+            Adjust the terms below and send them back to the creator to Accept or Decline.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {isSponsorship ? (
+            <div>
+              <Label htmlFor="counter-sponsorship-amount">
+                Your Sponsorship Offer ({(experience.currency || "EUR").toUpperCase()})
+              </Label>
+              <Input
+                id="counter-sponsorship-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="e.g. 150.00"
+                data-testid="input-counter-sponsorship-amount"
+              />
+            </div>
+          ) : (
+            <div>
+              <Label htmlFor="counter-brand-pitch">What you can offer</Label>
+              <Textarea
+                id="counter-brand-pitch"
+                value={pitch}
+                onChange={(e) => setPitch(e.target.value)}
+                placeholder="Describe the products/services you'd provide in exchange for exposure"
+                rows={4}
+                data-testid="textarea-counter-brand-pitch"
+              />
+            </div>
+          )}
+          <div>
+            <Label htmlFor="counter-message">Note to creator (optional)</Label>
+            <Textarea
+              id="counter-message"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Any context for the creator"
+              rows={2}
+              data-testid="textarea-counter-message"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isSubmitting} data-testid="button-submit-counter-offer">
+            {isSubmitting ? "Sending..." : "Send Counter Offer"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ExperiencePoolCard({
   experience,
-  promoterCode,
   onPromote,
   isPromoting,
   overrideLink,
+  onAcceptDeal,
+  isAcceptingDeal,
+  onCounterDeal,
+  isCounteringDeal,
 }: {
   experience: ExperiencePoolItem;
-  promoterCode: string | null;
   onPromote: (experienceId: string) => void;
   isPromoting: boolean;
   overrideLink?: string; // server-returned absolute link takes priority
+  onAcceptDeal: (experienceId: string) => void;
+  isAcceptingDeal: boolean;
+  onCounterDeal: (experienceId: string, terms: any, message: string) => void;
+  isCounteringDeal: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [counterDialogOpen, setCounterDialogOpen] = useState(false);
   const lowestPrice = getLowestPrice(experience);
-  const experienceSlug = experience.slug || experience.id;
-  // Use server-returned link if available, otherwise build from env/origin
-  const baseUrl = getBaseUrl();
-  const referralLink = overrideLink ||
-    (promoterCode && experienceSlug ? `${baseUrl}/experience/${experienceSlug}?ref=${promoterCode}` : '');
-  
+  const promotionOffer = getPromotionOfferSummary(experience);
+  const referralLink = overrideLink || experience.referralLink || '';
+  const eventUrl = `/experience/${experience.slug || experience.id}`;
+  const marketplaceDeal = experience.marketplaceDeal;
+
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(true);
@@ -145,35 +255,115 @@ function ExperiencePoolCard({
             </div>
           </div>
         </div>
-        
-        <div className="border-t pt-3 space-y-1">
-          <div className="flex items-center gap-2 text-sm">
-            <Sparkles className="h-4 w-4 text-pink-500" />
-            <span className="text-muted-foreground">Platform commission:</span>
-            <span className="font-medium">
-              {getCommissionDescription(
-                experience.commissionMode,
-                experience.commissionValue,
-                experience.commissionBasis
-              )}
-            </span>
-          </div>
-          {experience.influencerPromotionEnabled && parseFloat(experience.influencerCommissionPct || '0') > 0 && (
-            <div className="flex items-center gap-2 text-sm">
-              <Sparkles className="h-4 w-4 text-green-500" />
-              <span className="text-muted-foreground">Creator bounty:</span>
-              <span className="font-semibold text-green-600 dark:text-green-400">
-                {parseFloat(experience.influencerCommissionPct!).toFixed(1)}% of ticket price
-              </span>
+
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-white p-2 shadow-sm">
+              <Sparkles className="h-4 w-4 text-emerald-600" />
             </div>
-          )}
+            <div className="min-w-0 space-y-1 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                  {promotionOffer.label}
+                </p>
+                <a
+                  href={eventUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:underline shrink-0 dark:text-blue-400"
+                  data-testid="link-view-event-details"
+                >
+                  View Event Details <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <p className="text-sm font-semibold text-slate-900">
+                {promotionOffer.headline}
+              </p>
+              <p className="text-xs leading-5 text-slate-600">
+                {promotionOffer.body}
+              </p>
+              {promotionOffer.detail && (
+                <p className="text-xs text-slate-500">
+                  {promotionOffer.detail}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
-        
-        {/* Promote This Trip action */}
-        {experience.isPromoting ? (
+
+        {promotionOffer.actionType === 'negotiate' ? (
+          // Marketplace bid (Option C): Accept as-is, or Counter Offer.
+          <div className="space-y-2">
+            {!marketplaceDeal && (
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1 bg-green-600 hover:bg-green-700"
+                  onClick={() => onAcceptDeal(experience.id)}
+                  disabled={isAcceptingDeal}
+                >
+                  <Check className="h-4 w-4 mr-2" />
+                  {isAcceptingDeal ? "Accepting..." : "Accept Deal"}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setCounterDialogOpen(true)}
+                >
+                  Counter Offer
+                </Button>
+              </div>
+            )}
+
+            {marketplaceDeal?.status === 'countered' && (
+              <Badge className="w-full justify-center bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">
+                <Clock className="h-3 w-3 mr-1" /> Counter sent — waiting on creator
+              </Badge>
+            )}
+
+            {marketplaceDeal?.status === 'declined' && (
+              <Badge className="w-full justify-center bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100">
+                <XCircle className="h-3 w-3 mr-1" /> Declined by creator
+              </Badge>
+            )}
+
+            {marketplaceDeal?.status === 'accepted' && (
+              <div className="space-y-2">
+                <Badge className="w-full justify-center bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">
+                  <Check className="h-3 w-3 mr-1" /> Deal Accepted
+                </Badge>
+                {referralLink && (
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-2 py-1 bg-muted rounded text-xs truncate">
+                      {referralLink}
+                    </code>
+                    <Button
+                      variant={copied ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleCopy(referralLink)}
+                      className={`min-w-[100px] ${copied ? 'bg-green-600 hover:bg-green-700' : ''}`}
+                    >
+                      {copied ? <><Check className="h-3 w-3 mr-1" />Copied!</> : <><Copy className="h-3 w-3 mr-1" />Copy Link</>}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <CounterOfferDialog
+              open={counterDialogOpen}
+              onOpenChange={setCounterDialogOpen}
+              experience={experience}
+              isSubmitting={isCounteringDeal}
+              onSubmit={(terms, message) => {
+                onCounterDeal(experience.id, terms, message);
+                setCounterDialogOpen(false);
+              }}
+            />
+          </div>
+        ) : experience.isPromoting ? (
           <div className="space-y-2">
             <Badge className="w-full justify-center bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100 mb-2">
-              <Check className="h-3 w-3 mr-1" /> Added to My Trips
+              <Check className="h-3 w-3 mr-1" /> Added to My Experiences
             </Badge>
             {referralLink && (
               <div className="flex items-center gap-2">
@@ -192,7 +382,7 @@ function ExperiencePoolCard({
             )}
           </div>
         ) : (
-          <Button 
+          <Button
             className="w-full bg-pink-600 hover:bg-pink-700"
             onClick={() => onPromote(experience.id)}
             disabled={isPromoting}
@@ -202,7 +392,7 @@ function ExperiencePoolCard({
             ) : (
               <>
                 <Sparkles className="h-4 w-4 mr-2" />
-                Promote This Trip
+                Promote This Experience
               </>
             )}
           </Button>
@@ -213,17 +403,11 @@ function ExperiencePoolCard({
 }
 
 export default function PromoterExperiencePool() {
-  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
-  const [, navigate] = useLocation();
+  const { isLoading: authLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
   
-  const { data: experiences, isLoading: experiencesLoading, refetch } = useQuery<ExperiencePoolItem[]>({
+  const { data: experiences, isLoading: experiencesLoading } = useQuery<ExperiencePoolItem[]>({
     queryKey: ['/api/promoter/experience-pool'],
-    enabled: isAuthenticated,
-  });
-
-  const { data: promoterInfo } = useQuery<{ promoterCode: string | null }>({
-    queryKey: ['/api/promoter/info'],
     enabled: isAuthenticated,
   });
 
@@ -232,7 +416,13 @@ export default function PromoterExperiencePool() {
   const promoteMutation = useMutation({
     mutationFn: async (experienceId: string) => {
       const response = await apiRequest('POST', `/api/promoter/promote/${experienceId}`);
-      return response.json() as Promise<{ referralLink: string; promoterCode: string; experienceId: string }>;
+      return response.json() as Promise<{
+        referralLink: string;
+        promoterCode: string;
+        shareToken: string | null;
+        promoterExperienceId: string;
+        experienceId: string;
+      }>;
     },
     onSuccess: (data, experienceId) => {
       // 1. Optimistically mark this experience as promoting so the link shows immediately
@@ -248,7 +438,7 @@ export default function PromoterExperiencePool() {
       navigator.clipboard.writeText(data.referralLink).catch(() => {});
 
       toast({
-        title: "🎉 Promotion Added — Link Copied!",
+        title: "Promotion added and link copied",
         description: data.referralLink,
       });
 
@@ -261,6 +451,34 @@ export default function PromoterExperiencePool() {
         description: error.message,
         variant: "destructive",
       });
+    },
+  });
+
+  const acceptDealMutation = useMutation({
+    mutationFn: async (experienceId: string) => {
+      const response = await apiRequest('POST', `/api/promoter/experience-pool/${experienceId}/accept-deal`);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Deal accepted", description: "You now have a tracking link for this experience." });
+      queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to accept deal", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const counterDealMutation = useMutation({
+    mutationFn: async ({ experienceId, terms, message }: { experienceId: string; terms: any; message: string }) => {
+      const response = await apiRequest('POST', `/api/promoter/experience-pool/${experienceId}/counter-deal`, { terms, message });
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Counter offer sent", description: "The creator will review your terms." });
+      queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to send counter offer", description: error.message, variant: "destructive" });
     },
   });
 
@@ -324,7 +542,7 @@ export default function PromoterExperiencePool() {
         <Card className="bg-gradient-to-r from-pink-50 to-white dark:from-pink-950/20 dark:to-gray-900 border-pink-200 dark:border-pink-800">
           <CardContent className="py-4">
             <p className="text-muted-foreground">
-              These are experiences you can promote. Click <strong>"Promote This Trip"</strong> to add it to your dashboard, 
+              These are experiences you can promote. Click <strong>"Promote This Experience"</strong> to add it to your dashboard,
               then share your unique referral link with your audience. When someone books through your link, you earn commission.
             </p>
           </CardContent>
@@ -354,10 +572,13 @@ export default function PromoterExperiencePool() {
             <ExperiencePoolCard
               key={experience.id}
               experience={experience}
-              promoterCode={promoterInfo?.promoterCode || null}
               onPromote={(id) => promoteMutation.mutate(id)}
               isPromoting={promoteMutation.isPending && promoteMutation.variables === experience.id}
               overrideLink={activeLink?.experienceId === experience.id ? activeLink.link : undefined}
+              onAcceptDeal={(id) => acceptDealMutation.mutate(id)}
+              isAcceptingDeal={acceptDealMutation.isPending && acceptDealMutation.variables === experience.id}
+              onCounterDeal={(id, terms, message) => counterDealMutation.mutate({ experienceId: id, terms, message })}
+              isCounteringDeal={counterDealMutation.isPending && counterDealMutation.variables?.experienceId === experience.id}
             />
           ))}
         </div>

@@ -14,6 +14,63 @@ if (process.env.SENDGRID_API_KEY) {
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@great.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Great. Experiences';
 
+// Public base URL used for links inside emails (View Event Details, dashboards).
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://greatapp.replit.app';
+
+function experienceDetailsUrl(slugOrId: string): string {
+  return `${APP_BASE_URL}/experience/${slugOrId}`;
+}
+
+// Human-readable one-liner for a promotion deal's baseline/counter terms.
+export function formatPromotionDealSummary(
+  dealType: string | null | undefined,
+  terms: Record<string, any> | null | undefined,
+  currency?: string | null,
+): string {
+  const t = terms || {};
+  const cur = String(currency || t.currency || 'eur').toUpperCase();
+  switch (dealType) {
+    case 'commission_per_ticket':
+      return `Commission per Ticket — ${t.commissionPct ?? t.influencerCommissionPct ?? 0}% per ticket sold`;
+    case 'milestone_barter':
+      return `Milestone Barter — bring ${t.attendeeTarget ?? 'X'} attendees, earn ${t.rewardTickets ?? 1} free ticket(s)`;
+    case 'brand_barter':
+      return `Brand Barter — ${t.brandPitch || 'products or services in exchange for exposure'}`;
+    case 'financial_sponsorship':
+      return `Financial Sponsorship — ${cur} ${t.sponsorshipAmount ?? 0} for exposure`;
+    default:
+      return 'Promotion partnership deal';
+  }
+}
+
+// Human-readable one-liner for a venue deal's commercial model.
+export function formatVenueDealSummary(
+  model: string | null | undefined,
+  terms: Record<string, any> | null | undefined,
+  currency?: string | null,
+): string {
+  const t = terms || {};
+  const cur = String(currency || t.currency || 'eur').toUpperCase();
+  switch (model) {
+    case 'fixed_fee':
+      return `Flat Fee — ${cur} ${t.fixedFee ?? 0}`;
+    case 'per_head':
+      return `Per Head — ${cur} ${t.perHeadAmount ?? 0} per participant`;
+    case 'minimum_spend':
+      return `Minimum Spend Guarantee — ${cur} ${t.minimumSpend ?? 0}`;
+    case 'revenue_share':
+      return `Revenue Share — ${t.revenueSharePct ?? 0}% of ticket sales`;
+    case 'venue_sponsored':
+      return `Venue-Sponsored — venue pays ${cur} ${t.fixedFee ?? 0} to the creator`;
+    case 'upfront_rental':
+      return `Upfront Rental — creator pays ${cur} ${t.fixedFee ?? 0} rental fee`;
+    case 'access_only':
+      return `Access-Only / Pay-at-Counter${t.accessFee ? ` — ${cur} ${t.accessFee} access fee` : ''}`;
+    default:
+      return model || 'Venue deal';
+  }
+}
+
 export interface NotificationPayload {
   type: 'mvg_confirmed' | 'mvg_failed' | 'deposit_created' | 'balance_due';
   experienceId: string;
@@ -470,6 +527,310 @@ The Great. Team
     if (!result.success) {
       throw new Error(result.error || 'Failed to send external venue invitation');
     }
+  }
+
+  async sendPromotionExternalInvitations(event: {
+    title?: string | null;
+    startDate?: Date | string | null;
+    location?: string | null;
+    currency?: string | null;
+    promotionDealType?: string | null;
+    influencerCommissionPct?: string | number | null;
+    promotionMilestoneAttendeeTarget?: string | number | null;
+    promotionMilestoneRewardTickets?: string | number | null;
+    promotionBrandPitch?: string | null;
+    promotionSponsorshipAmount?: string | number | null;
+    promotionExternalInvites?: Array<{
+      email?: string | null;
+      name?: string | null;
+      website?: string | null;
+    }> | null;
+  }): Promise<number> {
+    const invites = Array.isArray(event.promotionExternalInvites)
+      ? event.promotionExternalInvites.filter((invite) => invite?.email)
+      : [];
+    if (invites.length === 0) return 0;
+
+    const dealSummary = (() => {
+      switch (event.promotionDealType) {
+        case 'commission_per_ticket':
+          return `Commission per Ticket: ${event.influencerCommissionPct || 0}% per ticket sold.`;
+        case 'milestone_barter':
+          return `Milestone Barter: Bring ${event.promotionMilestoneAttendeeTarget || 'X'} attendees and earn ${event.promotionMilestoneRewardTickets || 1} free ticket(s).`;
+        case 'brand_barter':
+          return `Brand Barter: ${event.promotionBrandPitch || 'Products or services in exchange for exposure.'}`;
+        case 'financial_sponsorship':
+          return `Financial Sponsorship: ${String(event.currency || 'eur').toUpperCase()} ${event.promotionSponsorshipAmount || 0} for exposure.`;
+        default:
+          return 'A creator would like to discuss a promotion partnership for this experience.';
+      }
+    })();
+
+    let sentCount = 0;
+    for (const invite of invites) {
+      const subject = `Promotion invitation: ${event.title || 'A Great. experience'}`;
+      const textContent = `
+Hi ${invite.name?.trim() || 'there'},
+
+A creator would like to invite you to promote "${event.title || 'an experience'}" on Great.
+
+Date: ${formatDate(event.startDate)}
+Location: ${event.location || 'TBD'}
+Suggested profile link: ${invite.website || 'Not provided'}
+Baseline deal: ${dealSummary}
+
+Reply to this email to continue the conversation.
+
+The Great. Team
+      `.trim();
+
+      const result = await sendEmail(invite.email!, subject, textContent);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to send external promotion invitation');
+      }
+      sentCount += 1;
+    }
+
+    return sentCount;
+  }
+
+  // ── Digital Handshake emails ──────────────────────────────────────────────
+  // One shared layout for every handshake email (proposal, counter, acceptance,
+  // decline). Every email carries a View Event Details link so the receiving
+  // party can read the full event page before acting on the terms.
+  private async sendHandshakeEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    subject: string;
+    headline: string;
+    detailLines?: string[];
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    ctaNote?: string;
+  }): Promise<void> {
+    const details = (opts.detailLines || []).filter(Boolean).join('\n');
+    const textContent = `
+Hi ${opts.recipientName?.trim() || 'there'},
+
+${opts.headline}
+
+📍 Event: ${opts.experienceTitle}
+${details}
+
+View Event Details: ${experienceDetailsUrl(opts.experienceSlugOrId)}
+
+${opts.ctaNote || 'Log in to your Great. dashboard to respond.'}
+
+The Great. Team
+    `.trim().replace(/\n{3,}/g, '\n\n');
+
+    const result = await sendEmail(opts.to, opts.subject, textContent);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send handshake email');
+    }
+  }
+
+  // Direct offer (Options A & B) landed in a partner's Offers tab.
+  async sendPromotionOfferReceivedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    dealType?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `New promotion offer: ${opts.experienceTitle}`,
+      headline: `A creator sent you a Digital Handshake offer to promote "${opts.experienceTitle}".`,
+      detailLines: [`🤝 Deal: ${formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency)}`],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: 'Open your dashboard to Accept or Decline this offer.',
+    });
+  }
+
+  // Partner accepted/declined a direct offer, or accepted marketplace baseline terms.
+  async sendPromotionOfferResponseEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    partnerName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    action: 'accepted' | 'declined';
+    dealType?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+  }): Promise<void> {
+    const partner = opts.partnerName?.trim() || 'A partner';
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `${partner} ${opts.action} your promotion deal — ${opts.experienceTitle}`,
+      headline: `${partner} has ${opts.action} the Digital Handshake deal for "${opts.experienceTitle}".`,
+      detailLines: [`🤝 Deal: ${formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency)}`],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: opts.action === 'accepted'
+        ? 'The partner now has their tracking link and can start promoting.'
+        : 'You can adjust your deal or invite other partners from your dashboard.',
+    });
+  }
+
+  // Marketplace bid (Option C): a partner countered the creator's baseline terms.
+  async sendPromotionCounterReceivedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    partnerName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    dealType?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+    message?: string | null;
+  }): Promise<void> {
+    const partner = opts.partnerName?.trim() || 'A partner';
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `Counter offer received — ${opts.experienceTitle}`,
+      headline: `${partner} sent a counter offer on your baseline deal for "${opts.experienceTitle}".`,
+      detailLines: [
+        `🤝 Proposed terms: ${formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency)}`,
+        opts.message ? `💬 Message: "${opts.message}"` : '',
+      ],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: 'Open your creator dashboard to Accept or Decline the counter offer.',
+    });
+  }
+
+  // Creator resolved a partner's counter offer.
+  async sendPromotionCounterResolvedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    action: 'accepted' | 'declined';
+    dealType?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `Your counter offer was ${opts.action} — ${opts.experienceTitle}`,
+      headline: `The creator has ${opts.action} your counter offer for "${opts.experienceTitle}".`,
+      detailLines: [`🤝 Deal: ${formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency)}`],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: opts.action === 'accepted'
+        ? 'Your tracking link is ready in your dashboard — you can start promoting now.'
+        : 'You can accept the original baseline terms or browse other experiences in the pool.',
+    });
+  }
+
+  // Reverse Handshake: an admin-approved venue bid is now visible to the creator.
+  async sendVenueBidReceivedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    venueName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    model?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+    message?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `New venue offer for ${opts.experienceTitle}`,
+      headline: `${opts.venueName || 'A venue'} submitted an Offer to Host "${opts.experienceTitle}".`,
+      detailLines: [
+        `🏛️ Commercial model: ${formatVenueDealSummary(opts.model, opts.terms, opts.currency)}`,
+        opts.message ? `💬 Message: "${opts.message}"` : '',
+      ],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: 'Open your creator dashboard (Venue Offers tab) to Accept or Decline.',
+    });
+  }
+
+  // Creator resolved a venue's Offer to Host bid.
+  async sendVenueBidResolvedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    venueName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    action: 'accepted' | 'declined';
+    model?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `Your venue offer was ${opts.action} — ${opts.experienceTitle}`,
+      headline: `The creator has ${opts.action} ${opts.venueName ? `${opts.venueName}'s` : 'your'} Offer to Host "${opts.experienceTitle}".`,
+      detailLines: [`🏛️ Deal: ${formatVenueDealSummary(opts.model, opts.terms, opts.currency)}`],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: opts.action === 'accepted'
+        ? 'The event is being linked to your venue — track sales in your venue dashboard.'
+        : 'You can bid on other open events from your venue dashboard.',
+    });
+  }
+
+  // Creator published an event linked to a platform venue — proposal lands in the
+  // venue owner's Pending Offers tab.
+  async sendVenueContractProposalEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    venueName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    model?: string | null;
+    terms?: Record<string, any> | null;
+    currency?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `New event proposal for ${opts.venueName || 'your venue'}: ${opts.experienceTitle}`,
+      headline: `A creator wants to host "${opts.experienceTitle}" at ${opts.venueName || 'your venue'}.`,
+      detailLines: [`🏛️ Proposed deal: ${formatVenueDealSummary(opts.model, opts.terms, opts.currency)}`],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: 'Open your venue dashboard (Pending Offers tab) to Accept or Reject the Digital Handshake.',
+    });
+  }
+
+  // Venue owner resolved the creator's direct contract proposal.
+  async sendVenueContractResolvedEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    venueName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    action: 'accepted' | 'rejected';
+    reason?: string | null;
+  }): Promise<void> {
+    await this.sendHandshakeEmail({
+      to: opts.to,
+      recipientName: opts.recipientName,
+      subject: `${opts.venueName || 'The venue'} ${opts.action} your event — ${opts.experienceTitle}`,
+      headline: `${opts.venueName || 'The venue'} has ${opts.action} your Digital Handshake proposal for "${opts.experienceTitle}".`,
+      detailLines: [opts.reason ? `💬 Reason: "${opts.reason}"` : ''],
+      experienceTitle: opts.experienceTitle,
+      experienceSlugOrId: opts.experienceSlugOrId,
+      ctaNote: opts.action === 'accepted'
+        ? 'Your event is now live and open for bookings.'
+        : 'Your event was returned to draft — you can pick another venue and republish.',
+    });
   }
 
   private logNotification(payload: NotificationPayload) {

@@ -23,10 +23,12 @@ import {
   Building,
   MapPin,
   AlertCircle,
+  Send,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
+import { formatPromotionDealTerms } from "@/lib/promotionDeals";
 import EmbeddedPricingCalculator from "@/components/embedded-pricing-calculator";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Breadcrumb from "@/components/Breadcrumb";
@@ -341,6 +343,28 @@ function CreatorDashboardContent() {
     onError: () => toast({ title: "Error", description: "Failed to decline offer", variant: "destructive" }),
   });
 
+  // Promotion Deals — Digital Handshake for promoters/brands (Part 3)
+  const { data: promotionDeals = [], isLoading: promotionDealsLoading } = useQuery({
+    queryKey: ["/api/creator/promotion-deals"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any[], isLoading: boolean };
+
+  const respondToPromotionDeal = useMutation({
+    mutationFn: ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) =>
+      apiRequest("POST", `/api/creator/promotion-deals/${dealId}/${action}`, {}),
+    onSuccess: (_data, { action }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/promotion-deals"] });
+      toast({
+        title: action === 'accept' ? "Counter Offer Accepted" : "Counter Offer Declined",
+        description: action === 'accept'
+          ? "The partner now has a tracking link for this experience."
+          : "The partner has been notified.",
+      });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to respond to counter offer", variant: "destructive" }),
+  });
+
   // Delete draft mutation
   const deleteDraft = useMutation({
     mutationFn: async (draftId: string) => {
@@ -605,6 +629,14 @@ function CreatorDashboardContent() {
               {venueOffers.length > 0 && (
                 <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
                   {venueOffers.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="promotion-deals" className="relative">
+              Promotion Deals
+              {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-pink-500 text-white text-xs w-5 h-5">
+                  {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length}
                 </span>
               )}
             </TabsTrigger>
@@ -1126,7 +1158,20 @@ function CreatorDashboardContent() {
                         <div className="flex-1 space-y-3">
                           {/* Experience + venue headline */}
                           <div>
-                            <p className="text-xs text-gray-500 mb-1">For event: <strong>{experience.title || offer.experienceId}</strong></p>
+                            <p className="text-xs text-gray-500 mb-1">
+                              For event: <strong>{experience.title || offer.experienceId}</strong>
+                              {experience.slug || experience.id ? (
+                                <a
+                                  href={`/experience/${experience.slug || experience.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="ml-2 text-blue-600 hover:underline dark:text-blue-400"
+                                  data-testid="link-view-event-details"
+                                >
+                                  View Event Details →
+                                </a>
+                              ) : null}
+                            </p>
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="font-semibold text-lg">{venue.name || "Venue"}</h3>
                               <Badge className="bg-blue-100 text-blue-800 border-blue-300">
@@ -1213,7 +1258,20 @@ function CreatorDashboardContent() {
                       <CardContent className="p-4">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                           <div>
-                            <p className="text-xs text-gray-500 mb-0.5">Event: <strong>{exp.title || offer.experienceId}</strong></p>
+                            <p className="text-xs text-gray-500 mb-0.5">
+                              Event: <strong>{exp.title || offer.experienceId}</strong>
+                              {exp.slug || exp.id ? (
+                                <a
+                                  href={`/experience/${exp.slug || exp.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="ml-2 text-blue-600 hover:underline dark:text-blue-400"
+                                  data-testid="link-view-event-details"
+                                >
+                                  View Event Details →
+                                </a>
+                              ) : null}
+                            </p>
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold">{venue.name || "Venue"}</span>
                               {venue.city && <span className="text-sm text-gray-500">· {venue.city}</span>}
@@ -1236,6 +1294,157 @@ function CreatorDashboardContent() {
                   );
                 })}
               </div>
+            )}
+          </TabsContent>
+
+          {/* ── Promotion Deals Tab — Digital Handshake for promoters/brands (Part 3) ── */}
+          <TabsContent value="promotion-deals" className="space-y-4">
+            <h2 className="text-xl font-semibold">Promotion Deals</h2>
+            <p className="text-sm text-gray-500">
+              Direct offers you've sent (Options A &amp; B) and marketplace counter offers from the public pool (Option C).
+            </p>
+
+            {promotionDealsLoading ? (
+              <div className="text-center py-8 text-gray-500">
+                <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3" />
+                Loading promotion deals…
+              </div>
+            ) : promotionDeals.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <Send className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No promotion deals yet</p>
+                <p className="text-sm mt-1">Direct offers you send and marketplace counter offers will appear here.</p>
+              </div>
+            ) : (
+              <>
+                {/* Needs your response: countered marketplace bids */}
+                {promotionDeals
+                  .filter((deal: any) => deal.status === 'countered' && deal.pendingActionBy === 'creator')
+                  .map((deal: any) => (
+                    <Card key={deal.id} className="border-pink-200 dark:border-pink-800">
+                      <CardContent className="p-5">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                          <div className="flex-1 space-y-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-semibold text-lg">{deal.experienceTitle}</h3>
+                              <Badge className="bg-pink-100 text-pink-800 border-pink-300">
+                                <Clock className="w-3 h-3 mr-1" />Counter Offer
+                              </Badge>
+                              <a
+                                href={`/experience/${deal.experienceSlug || deal.experienceId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                                data-testid="link-view-event-details"
+                              >
+                                View Event Details →
+                              </a>
+                            </div>
+                            <p className="text-sm text-gray-500">
+                              From: <strong>{deal.partnerName || deal.partnerEmail || "A partner"}</strong>
+                            </p>
+                            <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border text-sm space-y-1">
+                              <p className="text-xs font-semibold text-gray-600 mb-1">Countered Terms</p>
+                              <p>{formatPromotionDealTerms(deal.dealType, deal.terms)}</p>
+                            </div>
+                            {deal.counterMessage && (
+                              <p className="text-sm text-gray-600 italic border-l-2 border-pink-300 pl-3">"{deal.counterMessage}"</p>
+                            )}
+                          </div>
+                          <div className="flex md:flex-col gap-2 shrink-0">
+                            <Button
+                              className="bg-green-600 hover:bg-green-700 text-white flex-1 md:flex-none"
+                              onClick={() => respondToPromotionDeal.mutate({ dealId: deal.id, action: 'accept' })}
+                              disabled={respondToPromotionDeal.isPending}
+                            >
+                              <CheckCircle className="w-4 h-4 mr-1" />Accept
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="border-red-300 text-red-600 hover:bg-red-50 flex-1 md:flex-none"
+                              onClick={() => respondToPromotionDeal.mutate({ dealId: deal.id, action: 'decline' })}
+                              disabled={respondToPromotionDeal.isPending}
+                            >
+                              <XCircle className="w-4 h-4 mr-1" />Decline
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+
+                {/* Sent direct offers still awaiting the partner's response */}
+                {promotionDeals.some((deal: any) => deal.status === 'pending') && (
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-base">Sent Offers — Awaiting Response</h3>
+                    {promotionDeals
+                      .filter((deal: any) => deal.status === 'pending')
+                      .map((deal: any) => (
+                        <Card key={deal.id}>
+                          <CardContent className="p-4 flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium">{deal.experienceTitle}</p>
+                              <p className="text-xs text-gray-500">
+                                To: {deal.partnerName || deal.partnerEmail || "Invited partner"} · {formatPromotionDealTerms(deal.dealType, deal.terms)}
+                              </p>
+                            </div>
+                            <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+                              <Clock className="w-3 h-3 mr-1" />Pending
+                            </Badge>
+                          </CardContent>
+                        </Card>
+                      ))}
+                  </div>
+                )}
+
+                {/* Confirmed deals */}
+                {promotionDeals.some((deal: any) => deal.status === 'accepted') && (
+                  <div className="mt-8 space-y-3">
+                    <h3 className="font-semibold text-base flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-green-600" />Confirmed Promotion Deals
+                    </h3>
+                    {promotionDeals
+                      .filter((deal: any) => deal.status === 'accepted')
+                      .map((deal: any) => (
+                        <Card key={deal.id} className="border-green-200 dark:border-green-800 bg-green-50/30 dark:bg-green-900/10">
+                          <CardContent className="p-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Event: <strong>{deal.experienceTitle}</strong></p>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold">{deal.partnerName || deal.partnerEmail || "Partner"}</span>
+                                  <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+                                    <CheckCircle className="w-3 h-3 mr-1" />Confirmed
+                                  </Badge>
+                                </div>
+                              </div>
+                              <div className="text-sm text-right shrink-0 text-gray-600">
+                                {formatPromotionDealTerms(deal.dealType, deal.terms)}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                  </div>
+                )}
+
+                {/* Declined */}
+                {promotionDeals.some((deal: any) => deal.status === 'declined') && (
+                  <div className="mt-6 space-y-2">
+                    <h3 className="font-semibold text-base text-gray-500">Declined</h3>
+                    {promotionDeals
+                      .filter((deal: any) => deal.status === 'declined')
+                      .map((deal: any) => (
+                        <div key={deal.id} className="flex items-center justify-between gap-3 text-sm py-1.5 border-b last:border-0">
+                          <span className="truncate">{deal.experienceTitle} — {deal.partnerName || deal.partnerEmail || "Partner"}</span>
+                          <Badge className="bg-red-100 text-red-800 border-red-300">
+                            <XCircle className="w-3 h-3 mr-1" />Declined
+                          </Badge>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </>
             )}
           </TabsContent>
 

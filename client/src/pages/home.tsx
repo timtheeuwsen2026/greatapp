@@ -48,11 +48,12 @@ const CATEGORY_EMOJIS: { [key: string]: string } = {
 
 const HOMEPAGE_QUICK_CATEGORIES = [
   "Run Clubs",
-  "Yoga",
-  "Wellness",
+  "Fitness & Yoga",
+  "Community & Social",
+  "Sports & Wellness",
+  "Festivals & Events",
   "Retreats",
-  "Workshops",
-  "Matcha",
+  "Adventure Trips",
 ] as const;
 
 export default function Home() {
@@ -65,7 +66,6 @@ export default function Home() {
   const { toast } = useToast();
   const depositMutation = useDepositMutation();
   const { isConnected } = useRealtimeMVGUpdates('all');
-  const heroVideoRef = useRef<HTMLVideoElement>(null);
   const trendingScrollRef = useRef<HTMLDivElement>(null);
   const newlyAddedScrollRef = useRef<HTMLDivElement>(null);
 
@@ -79,26 +79,6 @@ export default function Home() {
   };
 
   useCoreWebVitals();
-
-  // Force hero video to play — handles browsers that ignore the autoPlay attribute
-  useEffect(() => {
-    const video = heroVideoRef.current;
-    if (!video) return;
-    video.muted = true;
-    const playPromise = video.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // Autoplay blocked — wait for first user interaction then play
-        const resume = () => {
-          video.play().catch(() => {});
-          document.removeEventListener('click', resume);
-          document.removeEventListener('touchstart', resume);
-        };
-        document.addEventListener('click', resume, { once: true });
-        document.addEventListener('touchstart', resume, { once: true });
-      });
-    }
-  }, []);
 
   // Scroll to experiences section when navigated here from another page via "Explore experiences"
   useEffect(() => {
@@ -516,32 +496,15 @@ export default function Home() {
           TOP 70% — FOR PARTICIPANTS (B2C)
           ══════════════════════════════════════════════════════════════════════ */}
 
-      {/* 1. Hero Section with Search Bar + Category Pills */}
-      <section id="main-content" tabIndex={-1} className="relative overflow-visible bg-gradient-to-br from-primary via-primary/80 to-secondary min-h-[85vh] flex items-center justify-center px-4 py-16 sm:py-20">
-        {/* Hero background video — poster shows first frame instantly; branded gradient is the CSS fallback */}
-        <video
-          ref={heroVideoRef}
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-          poster="/assets/hero-poster.jpg"
-          onCanPlay={() => heroVideoRef.current?.play().catch(() => {})}
-          className="absolute inset-0 w-full h-full object-cover z-0"
-          aria-hidden="true"
-        >
-          <source src="/assets/hero-video.mp4" type="video/mp4" />
-        </video>
-        {/* Thin dark overlay — just enough contrast for white text, video clearly visible through it */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/20 to-black/50 z-[1]" aria-hidden="true" />
-
+      {/* 1. Hero Section with Search Bar + Category Pills — solid brand gradient, compact
+          height so the search bar, pills, and first row of cards sit above the fold */}
+      <section id="main-content" tabIndex={-1} className="relative overflow-visible bg-gradient-to-br from-primary via-primary/80 to-secondary min-h-[60vh] flex items-center justify-center px-4 py-10 sm:py-12">
         <div className="max-w-7xl mx-auto w-full relative z-10">
           <div className="text-center text-white px-4 sm:px-6 lg:px-8">
-            <h1 className="font-bold mb-8 leading-[1.1] px-2" style={{ fontSize: 'clamp(2.5rem, 7vw, 5rem)' }}>
+            <h1 className="font-bold mb-4 leading-[1.1] px-2" style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)' }}>
               Experiences backed by real communities.
             </h1>
-            <p className="text-white/95 mb-12 max-w-4xl mx-auto leading-relaxed px-2" style={{ fontSize: 'clamp(1.25rem, 2.8vw, 2rem)' }}>
+            <p className="text-white/95 mb-8 max-w-4xl mx-auto leading-relaxed px-2" style={{ fontSize: 'clamp(1.1rem, 2vw, 1.5rem)' }}>
               Join a squad, reserve your spot, and make the experience a reality.
             </p>
             <form

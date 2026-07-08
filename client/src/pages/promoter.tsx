@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import Navigation from "@/components/navigation";
 import { ShareKitModal } from "@/components/ShareKitModal";
-import { getBaseUrl } from "@/lib/utils";
+import { getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
 
 interface EarningsSummary {
   byCurrency: Array<{
@@ -24,6 +24,9 @@ interface EarningsSummary {
 }
 
 interface PromotedExperience {
+  promoterExperienceId: string | null;
+  shareToken: string | null;
+  referralLink: string;
   experience: {
     id: string;
     title: string;
@@ -36,7 +39,17 @@ interface PromotedExperience {
     lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
     influencerPromotionEnabled?: boolean | null;
     influencerCommissionPct?: string | null;
+    promotionDealType?: string | null;
+    promotionMilestoneAttendeeTarget?: number | null;
+    promotionMilestoneRewardTickets?: number | null;
+    promotionBrandPitch?: string | null;
+    promotionSponsorshipAmount?: string | null;
+    currency?: string | null;
   };
+  clicks: number;
+  uniqueVisitors: number;
+  conversions: number;
+  conversionRate: number;
   spotsBooked: number;
   estimatedCommission: number;
   lockedCommission: number;
@@ -135,7 +148,7 @@ function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | unde
       <Card className="mb-8">
         <CardContent className="p-6 text-center text-muted-foreground">
           <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-50" />
-          <p>No trip credit yet. Share your referral link to start earning!</p>
+          <p>No cashback earnings yet. Share your referral link to start earning!</p>
         </CardContent>
       </Card>
     );
@@ -233,7 +246,7 @@ function PromoterInfoCard({ data, isLoading }: { data: PromoterInfo | undefined;
           <Rocket className="h-5 w-5 text-primary" />
           My Referral Code
         </CardTitle>
-        <CardDescription>Share your referral link to earn trip credit when friends join</CardDescription>
+        <CardDescription>Share your referral link to earn cashback when friends book</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div>
@@ -256,8 +269,8 @@ function PromoterInfoCard({ data, isLoading }: { data: PromoterInfo | undefined;
         </div>
         {data?.promoterCode && (
           <p className="text-sm text-muted-foreground">
-            Your referral links are generated per trip in the <strong>My Trips</strong> section below.
-            Copy the link for any trip and share it — anyone who books earns you trip credit.
+            Your referral links are generated per experience in the <strong>My Experiences</strong> section below.
+            Copy the link for any experience and share it — anyone who books earns you cashback.
           </p>
         )}
       </CardContent>
@@ -353,14 +366,14 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-indigo-500" />
-            My Promoted Trips
+            My Promoted Experiences
           </CardTitle>
         </CardHeader>
         <CardContent className="text-center py-8">
           <TrendingUp className="h-10 w-10 mx-auto mb-3 text-indigo-300" />
-          <h3 className="font-medium text-lg mb-2">You haven't added any trips to promote yet</h3>
+          <h3 className="font-medium text-lg mb-2">You haven't added any experiences to promote yet</h3>
           <p className="text-muted-foreground mb-4 max-w-md mx-auto">
-            Browse the Experience Pool, click "Promote This Trip" to add a trip here, then share your unique referral link.
+            Browse the Experience Pool, click "Promote This Experience" to add an experience here, then share your unique referral link.
           </p>
           <Button asChild className="bg-pink-600 hover:bg-pink-700">
             <Link href="/promoter/experience-pool">
@@ -373,8 +386,6 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
     );
   }
 
-  const baseUrl = getBaseUrl();
-
   return (
     <Card className="mb-8">
       <CardHeader>
@@ -382,14 +393,14 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
           <div>
             <CardTitle className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-indigo-500" />
-              My Promoted Trips
+              My Promoted Experiences
             </CardTitle>
-            <CardDescription>Trips you're promoting with earnings and referral links</CardDescription>
+            <CardDescription>Experiences you're promoting with earnings and referral links</CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild>
             <Link href="/promoter/experience-pool">
               <Sparkles className="h-4 w-4 mr-2" />
-              Add More Trips
+              Add More Experiences
             </Link>
           </Button>
         </div>
@@ -398,9 +409,8 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
         <div className="space-y-4">
           {data.map((item) => (
             <PromotedExperienceItem 
-              key={item.experience.id} 
+              key={item.promoterExperienceId || item.experience.id} 
               item={item} 
-              baseUrl={baseUrl}
               onNavigate={() => navigate(`/experience/${item.experience.slug || item.experience.id}`)}
             />
           ))}
@@ -412,23 +422,16 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
 
 function PromotedExperienceItem({ 
   item, 
-  baseUrl,
   onNavigate 
 }: { 
   item: PromotedExperience; 
-  baseUrl: string;
   onNavigate: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const { data: promoterInfo } = useQuery<PromoterInfo>({
-    queryKey: ['/api/promoter/info'],
+  const referralLink = item.referralLink || "";
+  const promotionOffer = getPromotionOfferSummary(item.experience, {
+    referredBookings: item.spotsBooked,
   });
-  
-  // Use slug if available, otherwise fall back to experience ID
-  const experienceSlug = item.experience.slug || item.experience.id;
-  const referralLink = promoterInfo?.promoterCode && experienceSlug
-    ? `${baseUrl}/experience/${experienceSlug}?ref=${promoterInfo.promoterCode}`
-    : '';
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -464,38 +467,69 @@ function PromotedExperienceItem({
           </div>
         </div>
         
-        {/* Earnings Grid */}
-        <div className="grid grid-cols-3 gap-3 mb-4 p-3 bg-muted/50 rounded-lg">
-          <div className="text-center">
-            <p className="text-xs text-muted-foreground mb-1">Your Referrals</p>
-            <p className="font-bold text-lg text-purple-600 dark:text-purple-400">{item.spotsBooked}</p>
-            <p className="text-xs text-muted-foreground">spots</p>
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-white p-2 shadow-sm">
+              <Sparkles className="h-4 w-4 text-emerald-600" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                {promotionOffer.label}
+              </p>
+              <p className="text-sm font-semibold text-slate-900">
+                {promotionOffer.headline}
+              </p>
+              <p className="text-xs leading-5 text-slate-600">
+                {promotionOffer.body}
+              </p>
+              {promotionOffer.detail && (
+                <p className="text-xs text-slate-500">
+                  {promotionOffer.detail}
+                </p>
+              )}
+            </div>
           </div>
-          <div className="text-center border-l border-r border-muted-foreground/20">
-            <p className="text-xs text-muted-foreground mb-1">Estimated</p>
-            <p className="font-bold text-lg text-gray-600 dark:text-gray-400">
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-4">
+          <div className="rounded-xl bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground mb-1">Link Clicks</p>
+            <p className="font-bold text-lg text-primary">{item.clicks}</p>
+            <p className="text-xs text-muted-foreground">all visits</p>
+          </div>
+          <div className="rounded-xl bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground mb-1">Unique Visitors</p>
+            <p className="font-bold text-lg text-blue-600 dark:text-blue-400">{item.uniqueVisitors}</p>
+            <p className="text-xs text-muted-foreground">deduplicated</p>
+          </div>
+          <div className="rounded-xl bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground mb-1">Bookings</p>
+            <p className="font-bold text-lg text-purple-600 dark:text-purple-400">{item.spotsBooked}</p>
+            <p className="text-xs text-muted-foreground">from your link</p>
+          </div>
+          <div className="rounded-xl bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground mb-1">Conversion Rate</p>
+            <p className="font-bold text-lg text-green-600 dark:text-green-400">{item.conversionRate}%</p>
+            <p className="text-xs text-muted-foreground">{item.conversions} converted click{item.conversions === 1 ? "" : "s"}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="rounded-xl border bg-slate-50/70 p-3">
+            <p className="text-xs text-muted-foreground mb-1">Estimated Cashback</p>
+            <p className="font-bold text-lg text-slate-700 dark:text-slate-200">
               {formatCurrency(item.estimatedCommission, item.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">pending</p>
+            <p className="text-xs text-muted-foreground">Pending experience confirmation</p>
           </div>
-          <div className="text-center">
-            <p className="text-xs text-muted-foreground mb-1">Locked</p>
+          <div className="rounded-xl border bg-green-50/70 p-3">
+            <p className="text-xs text-muted-foreground mb-1">Locked Cashback</p>
             <p className="font-bold text-lg text-green-600 dark:text-green-400">
               {formatCurrency(item.lockedCommission, item.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">confirmed</p>
+            <p className="text-xs text-muted-foreground">Confirmed and secured</p>
           </div>
         </div>
-        
-        {/* Creator-set bounty incentive */}
-        {item.experience.influencerPromotionEnabled && parseFloat(item.experience.influencerCommissionPct || '0') > 0 && (
-          <div className="flex items-center gap-2 text-sm mb-3 p-2 bg-green-50 dark:bg-green-950 rounded">
-            <Trophy className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
-            <span className="text-green-700 dark:text-green-300">
-              Creator bounty: <strong>{parseFloat(item.experience.influencerCommissionPct!).toFixed(1)}%</strong> of each ticket price — deducted from creator's share for you
-            </span>
-          </div>
-        )}
 
         {/* Referral Link */}
         {referralLink && (
@@ -566,7 +600,7 @@ function BookingsTableCard({ data, isLoading }: { data: PromoterBooking[] | unde
                 <TableHead>Experience</TableHead>
                 <TableHead>Booking ID</TableHead>
                 <TableHead>Booking Value</TableHead>
-                <TableHead>Trip Credit</TableHead>
+                <TableHead>Cashback / Earnings</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
@@ -620,10 +654,10 @@ interface ImpactStats {
 }
 
 function getMotivationalMessage(friendsJoined: number): string {
-  if (friendsJoined === 0) return "You haven't invited anyone yet. Share your link and help your trip confirm faster!";
-  if (friendsJoined <= 2) return "Great start! Every person you bring gets the trip one step closer to confirming.";
-  if (friendsJoined <= 5) return "You're on fire! Your squad is helping make this trip happen.";
-  return "🏆 Trip Co-Founder! You are the reason this trip is happening.";
+  if (friendsJoined === 0) return "You haven't invited anyone yet. Share your link and help your experience confirm faster!";
+  if (friendsJoined <= 2) return "Great start! Every person you bring gets the experience one step closer to confirming.";
+  if (friendsJoined <= 5) return "You're on fire! Your squad is helping make this experience happen.";
+  return "Top promoter momentum. Your sharing is helping this experience happen.";
 }
 
 function RecruitmentStatsSection({
@@ -642,8 +676,8 @@ function RecruitmentStatsSection({
   if (isLoading) {
     return (
       <div className="mb-8">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-          {[1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+          {[1, 2, 3, 4].map((i) => (
             <Card key={i} className="text-center">
               <CardContent className="pt-6 pb-5">
                 <Skeleton className="h-10 w-16 mx-auto mb-2" />
@@ -659,17 +693,16 @@ function RecruitmentStatsSection({
     );
   }
 
-  const friendsJoined = stats?.friendsJoined ?? 0;
-  const peopleInvited = stats?.peopleInvited ?? 0;
+  const bookingsFromLinks = stats?.friendsJoined ?? 0;
+  const linkClicks = stats?.peopleInvited ?? 0;
   const uniqueVisitors = stats?.uniqueVisitors ?? 0;
   const conversionRate = stats?.conversionRate ?? 0;
   const tripCreditsEarned = stats?.tripCreditsEarned ?? 0;
-  const message = getMotivationalMessage(friendsJoined);
-  const isTrophyTier = friendsJoined >= 6;
+  const message = getMotivationalMessage(bookingsFromLinks);
+  const isTrophyTier = bookingsFromLinks >= 6;
 
   return (
     <div className="mb-8" data-testid="recruitment-stats-section">
-      {/* Three stat cards */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-bold text-gray-900 dark:text-white">Your Recruitment Stats</h2>
         <button
@@ -684,45 +717,41 @@ function RecruitmentStatsSection({
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-        {/* Card 1 — Link Clicks */}
         <Card className="border-primary/10 dark:border-primary/20 bg-gradient-to-br from-primary/5 to-white dark:from-primary/10 dark:to-gray-900 text-center" data-testid="stat-people-invited">
           <CardContent className="pt-5 pb-4">
-            <div className="text-2xl mb-1">📨</div>
-            <p className="text-3xl font-black text-primary mb-1">{peopleInvited}</p>
+            <div className="text-2xl mb-1">Link</div>
+            <p className="text-3xl font-black text-primary mb-1">{linkClicks}</p>
             <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Link Clicks</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{uniqueVisitors} unique visitors</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Every tracked visit to your shared links</p>
           </CardContent>
         </Card>
 
-        {/* Card 2 — Friends Joined (Converted) */}
+        <Card className="border-blue-100 dark:border-blue-900/40 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/30 dark:to-gray-900 text-center" data-testid="stat-unique-visitors">
+          <CardContent className="pt-5 pb-4">
+            <div className="text-2xl mb-1">Visits</div>
+            <p className="text-3xl font-black text-blue-600 mb-1">{uniqueVisitors}</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Unique Visitors</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Deduplicated people who opened your links</p>
+          </CardContent>
+        </Card>
+
         <Card className="border-primary/10 dark:border-primary/20 bg-gradient-to-br from-primary/5 to-white dark:from-primary/10 dark:to-gray-900 text-center" data-testid="stat-friends-joined">
           <CardContent className="pt-5 pb-4">
-            <div className="text-2xl mb-1">👥</div>
-            <p className="text-3xl font-black text-primary mb-1">{friendsJoined}</p>
-            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Friends Joined</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Booked through your link</p>
+            <div className="text-2xl mb-1">Booked</div>
+            <p className="text-3xl font-black text-primary mb-1">{bookingsFromLinks}</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Bookings</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{conversionRate}% click-to-book conversion</p>
           </CardContent>
         </Card>
 
-        {/* Card 3 — Conversion Rate */}
-        <Card className="border-blue-100 dark:border-blue-900/40 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/30 dark:to-gray-900 text-center" data-testid="stat-conversion-rate">
-          <CardContent className="pt-5 pb-4">
-            <div className="text-2xl mb-1">🎯</div>
-            <p className="text-3xl font-black text-blue-600 mb-1">{conversionRate}%</p>
-            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Conversion Rate</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Clicks that became bookings</p>
-          </CardContent>
-        </Card>
-
-        {/* Card 4 — Trip Credits Earned */}
         <Card className="border-green-100 dark:border-green-900/40 bg-gradient-to-br from-green-50 to-white dark:from-green-950/30 dark:to-gray-900 text-center" data-testid="stat-trip-credits">
           <CardContent className="pt-5 pb-4">
-            <div className="text-2xl mb-1">💰</div>
+            <div className="text-2xl mb-1">Earned</div>
             <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">
-              €{tripCreditsEarned.toFixed(0)}
+              EUR {tripCreditsEarned.toFixed(0)}
             </p>
-            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Trip Credits</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Applied to your next trip</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Cashback / Earnings</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Paid out to your Stripe account</p>
           </CardContent>
         </Card>
       </div>
@@ -756,6 +785,146 @@ function RecruitmentStatsSection({
         Invite the Squad
       </Button>
     </div>
+  );
+}
+
+interface DirectOffer {
+  id: string;
+  experienceId: string;
+  experienceTitle: string;
+  experienceSlug: string;
+  experienceLocation: string | null;
+  dealType: string;
+  terms: PromotionDealTerms;
+  status: 'pending' | 'accepted' | 'declined';
+}
+
+// Direct offers (Options A & B): the Brand/Promoter can only Accept or Decline — no counter.
+function PromoterOffersCard({
+  data,
+  isLoading,
+  onAccept,
+  onDecline,
+  respondingId,
+}: {
+  data?: DirectOffer[];
+  isLoading: boolean;
+  onAccept: (id: string) => void;
+  onDecline: (id: string) => void;
+  respondingId: string | null;
+}) {
+  if (isLoading) {
+    return (
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Incoming Offers</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-20 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const offers = data ?? [];
+  if (offers.length === 0) return null;
+
+  const pending = offers.filter((o) => o.status === 'pending');
+  const resolved = offers.filter((o) => o.status !== 'pending');
+
+  return (
+    <Card className="mb-8" data-testid="card-promoter-offers">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Send className="h-5 w-5" />
+          Incoming Offers
+        </CardTitle>
+        <CardDescription>
+          Direct deals creators have sent you. Accept or decline — no negotiation needed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {pending.length === 0 && (
+          <p className="text-sm text-muted-foreground">No pending offers right now.</p>
+        )}
+        {pending.map((offer) => (
+          <div
+            key={offer.id}
+            className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20 p-4"
+            data-testid={`offer-card-${offer.id}`}
+          >
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">{offer.experienceTitle}</span>
+                  <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+                    <Clock className="h-3 w-3 mr-1" />Pending
+                  </Badge>
+                  <a
+                    href={`/experience/${offer.experienceSlug || offer.experienceId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                    data-testid="link-view-event-details"
+                  >
+                    View Event Details →
+                  </a>
+                </div>
+                {offer.experienceLocation && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />{offer.experienceLocation}
+                  </p>
+                )}
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  {formatPromotionDealTerms(offer.dealType, offer.terms)}
+                </p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => onAccept(offer.id)}
+                  disabled={respondingId === offer.id}
+                  data-testid={`button-accept-offer-${offer.id}`}
+                >
+                  <CheckCircle className="h-4 w-4 mr-1" />Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-red-300 text-red-600 hover:bg-red-50"
+                  onClick={() => onDecline(offer.id)}
+                  disabled={respondingId === offer.id}
+                  data-testid={`button-decline-offer-${offer.id}`}
+                >
+                  <XCircle className="h-4 w-4 mr-1" />Decline
+                </Button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {resolved.length > 0 && (
+          <div className="pt-2 space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Resolved</p>
+            {resolved.map((offer) => (
+              <div key={offer.id} className="flex items-center justify-between gap-3 text-sm py-1.5 border-b last:border-0">
+                <span className="truncate">{offer.experienceTitle}</span>
+                <Badge
+                  className={offer.status === 'accepted'
+                    ? "bg-green-100 text-green-800 border-green-300"
+                    : "bg-red-100 text-red-800 border-red-300"}
+                >
+                  {offer.status === 'accepted'
+                    ? <><CheckCircle className="h-3 w-3 mr-1" />Accepted</>
+                    : <><XCircle className="h-3 w-3 mr-1" />Declined</>}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -793,6 +962,29 @@ export default function PromoterDashboard() {
     queryKey: ['/api/promoter-profile'],
     enabled: !!user,
     retry: false,
+  });
+
+  const { data: directOffers, isLoading: offersLoading } = useQuery<DirectOffer[]>({
+    queryKey: ['/api/promoter/offers'],
+    enabled: !!user,
+  });
+
+  const [respondingOfferId, setRespondingOfferId] = useState<string | null>(null);
+
+  const respondToOfferMutation = useMutation({
+    mutationFn: async ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) => {
+      const response = await apiRequest('POST', `/api/promoter/offers/${dealId}/${action}`);
+      return response.json();
+    },
+    onMutate: ({ dealId }) => setRespondingOfferId(dealId),
+    onSuccess: (_data, { action }) => {
+      qc.invalidateQueries({ queryKey: ['/api/promoter/offers'] });
+      qc.invalidateQueries({ queryKey: ['/api/promoter/experiences'] });
+      if (action === 'accept') {
+        qc.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
+      }
+    },
+    onSettled: () => setRespondingOfferId(null),
   });
 
   // click stats are now embedded inside impactStats (via /api/me/impact-stats)
@@ -863,7 +1055,7 @@ export default function PromoterDashboard() {
             My Impact
           </h1>
           <p className="text-muted-foreground mt-2 max-w-2xl">
-            Every person you invite brings your trip one step closer to confirming.
+            Every person you invite brings your experience one step closer to confirming.
           </p>
         </div>
 
@@ -883,16 +1075,16 @@ export default function PromoterDashboard() {
               <Rocket className="h-8 w-8 text-primary shrink-0" />
               <div className="text-center sm:text-left">
                 <p className="font-semibold text-gray-900 dark:text-white">
-                  Share your referral link and earn trip credit when friends join.
+                  Share your referral link and earn cashback when friends book.
                 </p>
                 <p className="text-muted-foreground text-sm mt-0.5">
-                  The more you share, the sooner your trip confirms. Trip credit is applied to your booking.
+                  The more you share, the sooner your experience confirms. Cashback / earnings are paid out to your Stripe account.
                 </p>
               </div>
               <Button asChild size="sm" className="ml-auto bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white shrink-0">
                 <Link href="/promoter/experience-pool">
                   <Sparkles className="h-4 w-4 mr-2" />
-                  Browse Trips to Share
+                  Browse Experiences to Share
                 </Link>
               </Button>
             </div>
@@ -904,14 +1096,14 @@ export default function PromoterDashboard() {
         {/* Referral Code */}
         <PromoterInfoCard data={promoterInfo} isLoading={infoLoading} />
 
-        {/* Trip Credit Summary */}
+        {/* Cashback / Earnings Summary */}
         <EarningsSummaryCard data={earnings} isLoading={earningsLoading} />
 
-        {/* How Trip Credit Works */}
+        {/* How Cashback / Earnings Work */}
         <Card className="mb-8 bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
           <CardContent className="py-4">
             <h3 className="text-sm font-semibold mb-3 text-blue-800 dark:text-blue-300">
-              How Trip Credit Works
+              How Cashback / Earnings Work
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
               <div className="flex items-start gap-2">
@@ -920,7 +1112,7 @@ export default function PromoterDashboard() {
                 </div>
                 <div>
                   <span className="font-medium text-gray-700 dark:text-gray-300">Estimated</span>
-                  <p className="text-muted-foreground text-xs">Friend booked — trip credit pending group confirmation.</p>
+                  <p className="text-muted-foreground text-xs">Friend booked — cashback pending group confirmation.</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -929,7 +1121,7 @@ export default function PromoterDashboard() {
                 </div>
                 <div>
                   <span className="font-medium text-green-700 dark:text-green-300">Locked</span>
-                  <p className="text-muted-foreground text-xs">Trip confirmed — your trip credit is secured.</p>
+                  <p className="text-muted-foreground text-xs">Experience confirmed — your cashback is secured.</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -938,14 +1130,26 @@ export default function PromoterDashboard() {
                 </div>
                 <div>
                   <span className="font-medium text-red-700 dark:text-red-300">Voided</span>
-                  <p className="text-muted-foreground text-xs">Trip didn't confirm or booking was refunded.</p>
+                  <p className="text-muted-foreground text-xs">Experience didn't confirm or booking was refunded.</p>
                 </div>
               </div>
             </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Locked earnings are routed to your connected Stripe account on the next scheduled payout.
+            </p>
           </CardContent>
         </Card>
 
-        {/* My Trips */}
+        {/* Incoming Offers (Digital Handshake — Options A & B direct offers) */}
+        <PromoterOffersCard
+          data={directOffers}
+          isLoading={offersLoading}
+          onAccept={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'accept' })}
+          onDecline={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'decline' })}
+          respondingId={respondingOfferId}
+        />
+
+        {/* My Experiences */}
         <PromotedExperiencesCard data={experiences} isLoading={experiencesLoading} />
 
         {/* Referred Bookings */}

@@ -27,6 +27,9 @@ interface DigitalHandshakeContractProps {
   currency?: string | null;
   platformPct?: number | string | null;
   title?: string;
+  // Lets the receiving party (Creator, Venue, or Promoter) click through and read the
+  // full event page before accepting the terms.
+  eventUrl?: string | null;
 }
 
 const modelLabels: Record<string, string> = {
@@ -46,6 +49,7 @@ export function DigitalHandshakeContract({
   currency,
   platformPct,
   title = "Digital Handshake Contract",
+  eventUrl,
 }: DigitalHandshakeContractProps) {
   const terms = contract?.terms || {};
   const risk = contract?.risk || {};
@@ -84,7 +88,20 @@ export function DigitalHandshakeContract({
       className="mt-3 rounded-lg border bg-gray-50 p-3 dark:bg-gray-900"
       data-testid="digital-handshake-contract"
     >
-      <p className="mb-2 text-xs font-semibold text-gray-600">{title}</p>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-gray-600">{title}</p>
+        {eventUrl && (
+          <a
+            href={eventUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+            data-testid="link-view-event-details"
+          >
+            View Event Details →
+          </a>
+        )}
+      </div>
       <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
         <span className="text-gray-500">
           Model: <strong className="text-gray-900 dark:text-white">{modelLabels[model] || model}</strong>

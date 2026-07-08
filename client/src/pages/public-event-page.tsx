@@ -26,7 +26,6 @@ import { VenueInfoCard } from "@/components/VenueInfoCard";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
-import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 import { ChatTeaser } from "@/components/ChatTeaser";
 import { EventSocialProofToast } from "@/components/EventSocialProofToast";
 
@@ -130,9 +129,6 @@ export default function PublicEventPage() {
   const [, params] = useRoute("/e/:slugOrId");
   const [location] = useLocation();
   const slugOrId = params?.slugOrId;
-
-  // Capture promoter attribution from ?ref= parameter
-  usePromoterAttribution();
 
   // Extract preview token from URL query params
   const searchParams = new URLSearchParams(location.split('?')[1] || '');

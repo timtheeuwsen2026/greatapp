@@ -35,8 +35,8 @@ export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps)
   const spotsNeeded = experience.participantsNeeded ?? 0;
 
   const shareMessage = isForming
-    ? `I just reserved my spot for ${experience.title}! If we get ${spotsNeeded > 0 ? spotsNeeded : "a few"} more people, the trip is officially ON. Who's coming with me? ${referralLink}`
-    : `This trip to ${location} is confirmed and happening! Grab your spot before it sells out. ${referralLink}`;
+    ? `I just reserved my spot for ${experience.title}! If we get ${spotsNeeded > 0 ? spotsNeeded : "a few"} more people, the experience is officially ON. Who's coming with me? ${referralLink}`
+    : `This experience in ${location} is confirmed and happening! Grab your spot before it sells out. ${referralLink}`;
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +110,7 @@ export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps)
               🚀 Invite the Squad
             </DialogTitle>
             <DialogDescription className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Share this trip and help make it happen. Every person you bring gets us one step closer.
+              Share this experience and help make it happen. Every person you bring gets us one step closer.
             </DialogDescription>
           </DialogHeader>
 

@@ -23,6 +23,9 @@ import {
   participantReactions,
   promoterExperiences,
   promoterProfiles,
+  promotionDeals,
+  type PromotionDeal,
+  type InsertPromotionDeal,
   type User,
   type UpsertUser,
   type Experience,
@@ -100,6 +103,21 @@ import {
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull } from "drizzle-orm";
 
+type ReferralClickStats = {
+  totalClicks: number;
+  uniqueClicks: number;
+  conversions: number;
+  conversionRate: number;
+};
+
+type PromoterExperienceRecord = {
+  id: string;
+  promoterId: string;
+  experienceId: string;
+  shareToken: string | null;
+  createdAt: Date | null;
+};
+
 export interface IStorage {
   // User operations (mandatory for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
@@ -135,9 +153,26 @@ export interface IStorage {
   updateExperienceStatus(id: string, status: string): Promise<void>;
   getBookingsByVenueIds(venueIds: string[]): Promise<any[]>;
   getBookingsByCreator(creatorId: string): Promise<any[]>;
-  recordReferralClick(data: { promoterCode: string; promoterId: string; experienceId: string | null; visitorUserId: string | null; ipHash: string | null; userAgent: string | null }): Promise<void>;
-  markReferralClickConverted(promoterCode: string, bookingId: string): Promise<void>;
-  getReferralClickStats(promoterId: string): Promise<{ totalClicks: number; uniqueClicks: number; conversions: number; conversionRate: number }>;
+  recordReferralClick(data: {
+    promoterCode: string;
+    promoterId: string;
+    experienceId: string | null;
+    promoterExperienceId?: string | null;
+    visitorUserId: string | null;
+    ipHash: string | null;
+    userAgent: string | null;
+  }): Promise<void>;
+  markReferralClickConverted(criteria: {
+    bookingId: string;
+    promoterCode?: string | null;
+    promoterId?: string | null;
+    experienceId?: string | null;
+    promoterExperienceId?: string | null;
+  }): Promise<void>;
+  getReferralClickStats(
+    promoterId: string,
+    options?: { promoterExperienceId?: string; experienceId?: string },
+  ): Promise<ReferralClickStats>;
   createExperienceMessage(data: { experienceId: string; userId: string; message: string; messageType?: string }): Promise<void>;
   deleteExperience(id: string): Promise<void>;
   
@@ -352,11 +387,17 @@ export interface IStorage {
     }>;
   }>;
   getPromoterExperiences(promoterId: string): Promise<Array<{
+    promoterExperienceId: string | null;
+    shareToken: string | null;
     experience: Experience;
     spotsBooked: number;
     estimatedCommission: number;
     lockedCommission: number;
     currency: string;
+    clicks: number;
+    uniqueVisitors: number;
+    conversions: number;
+    conversionRate: number;
   }>>;
 
   // Admin promoter management operations
@@ -377,6 +418,22 @@ export interface IStorage {
   getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined>;
   updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout>;
   getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number }[]>;
+}
+
+function getReferralVisitorKey(click: {
+  id?: string;
+  visitorUserId?: string | null;
+  ipHash?: string | null;
+}): string {
+  if (click.visitorUserId) return `user:${click.visitorUserId}`;
+  if (click.ipHash) return `ip:${click.ipHash}`;
+  return `click:${click.id ?? Math.random().toString(36).slice(2)}`;
+}
+
+function getPromoterMetricKey(promoterExperienceId: string | null, experienceId: string | null): string | null {
+  if (promoterExperienceId) return `pe:${promoterExperienceId}`;
+  if (experienceId) return `exp:${experienceId}`;
+  return null;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -468,6 +525,9 @@ export class DatabaseStorage implements IStorage {
   // Experience operations
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
     const [experience] = await db.insert(experiences).values([experienceData]).returning();
+    this.syncDirectPromotionDeals(experience.id).catch((err) =>
+      console.error("Error syncing direct promotion deals:", err),
+    );
     return experience;
   }
 
@@ -678,11 +738,17 @@ export class DatabaseStorage implements IStorage {
       .set(updateData)
       .where(eq(experiences.id, id))
       .returning();
+    this.syncDirectPromotionDeals(id).catch((err) =>
+      console.error("Error syncing direct promotion deals:", err),
+    );
     return experience;
   }
 
   async updateExperienceStatus(id: string, status: string): Promise<void> {
     await db.update(experiences).set({ status: status as any, updatedAt: new Date() }).where(eq(experiences.id, id));
+    this.syncDirectPromotionDeals(id).catch((err) =>
+      console.error("Error syncing direct promotion deals:", err),
+    );
   }
 
   async getExperiencesByVenueIds(venueIds: string[], status?: string): Promise<Experience[]> {
@@ -850,6 +916,7 @@ export class DatabaseStorage implements IStorage {
     promoterCode: string;
     promoterId: string;
     experienceId: string | null;
+    promoterExperienceId?: string | null;
     visitorUserId: string | null;
     ipHash: string | null;
     userAgent: string | null;
@@ -858,46 +925,72 @@ export class DatabaseStorage implements IStorage {
       promoterCode: data.promoterCode,
       promoterId: data.promoterId,
       experienceId: data.experienceId,
+      promoterExperienceId: data.promoterExperienceId ?? null,
       visitorUserId: data.visitorUserId,
       ipHash: data.ipHash,
       userAgent: data.userAgent,
     });
   }
 
-  async markReferralClickConverted(promoterCode: string, bookingId: string): Promise<void> {
-    // Mark the most recent unconverted click for this code as converted
+  async markReferralClickConverted(criteria: {
+    bookingId: string;
+    promoterCode?: string | null;
+    promoterId?: string | null;
+    experienceId?: string | null;
+    promoterExperienceId?: string | null;
+  }): Promise<void> {
+    const conditions = [eq(referralClicks.converted, false)];
+
+    if (criteria.promoterExperienceId) {
+      conditions.push(eq(referralClicks.promoterExperienceId, criteria.promoterExperienceId));
+    } else if (criteria.experienceId) {
+      conditions.push(eq(referralClicks.experienceId, criteria.experienceId));
+    }
+
+    if (criteria.promoterCode) {
+      conditions.push(eq(referralClicks.promoterCode, criteria.promoterCode));
+    } else if (criteria.promoterId) {
+      conditions.push(eq(referralClicks.promoterId, criteria.promoterId));
+    }
+
     const [click] = await db
       .select()
       .from(referralClicks)
-      .where(and(eq(referralClicks.promoterCode, promoterCode), eq(referralClicks.converted, false)))
+      .where(and(...conditions))
       .orderBy(desc(referralClicks.clickedAt))
       .limit(1);
 
-    if (click) {
-      await db
-        .update(referralClicks)
-        .set({ converted: true, bookingId, convertedAt: new Date() })
-        .where(eq(referralClicks.id, click.id));
-    }
+    if (!click) return;
+
+    await db
+      .update(referralClicks)
+      .set({ converted: true, bookingId: criteria.bookingId, convertedAt: new Date() })
+      .where(eq(referralClicks.id, click.id));
   }
 
-  async getReferralClickStats(promoterId: string): Promise<{
-    totalClicks: number;
-    uniqueClicks: number;
-    conversions: number;
-    conversionRate: number;
-  }> {
+  async getReferralClickStats(
+    promoterId: string,
+    options?: { promoterExperienceId?: string; experienceId?: string },
+  ): Promise<ReferralClickStats> {
+    const conditions = [eq(referralClicks.promoterId, promoterId)];
+
+    if (options?.promoterExperienceId) {
+      conditions.push(eq(referralClicks.promoterExperienceId, options.promoterExperienceId));
+    } else if (options?.experienceId) {
+      conditions.push(eq(referralClicks.experienceId, options.experienceId));
+    }
+
     const clicks = await db
       .select()
       .from(referralClicks)
-      .where(eq(referralClicks.promoterId, promoterId));
+      .where(and(...conditions));
 
     const totalClicks = clicks.length;
-    const uniqueIps = new Set(clicks.map(c => c.ipHash).filter(Boolean)).size;
+    const uniqueVisitors = new Set(clicks.map((click) => getReferralVisitorKey(click))).size;
     const conversions = clicks.filter(c => c.converted).length;
     return {
       totalClicks,
-      uniqueClicks: uniqueIps,
+      uniqueClicks: uniqueVisitors,
       conversions,
       conversionRate: totalClicks > 0 ? Math.round((conversions / totalClicks) * 100) : 0,
     };
@@ -3108,146 +3201,364 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPromoterExperiences(promoterId: string): Promise<Array<{
+    promoterExperienceId: string | null;
+    shareToken: string | null;
     experience: Experience;
     spotsBooked: number;
     estimatedCommission: number;
     lockedCommission: number;
     currency: string;
+    clicks: number;
+    uniqueVisitors: number;
+    conversions: number;
+    conversionRate: number;
   }>> {
-    // Get all experiences the promoter is actively promoting
-    const promotedExperienceIds = await this.getPromoterPromotedExperienceIds(promoterId);
-    
-    // Get all bookings for this promoter
+    const promotedExperiences = await this.getPromoterPromotedExperiences(promoterId);
+    const promotedExperienceById = new Map(
+      promotedExperiences.map((row) => [row.id, row]),
+    );
+    const promotedExperienceByExperienceId = new Map(
+      promotedExperiences.map((row) => [row.experienceId, row]),
+    );
+
     const promoterBookings = await db
       .select()
       .from(bookings)
       .where(eq(bookings.promoterId, promoterId));
-    
-    // Build booking stats by (experience, currency)
-    const bookingStatsMap = new Map<string, { 
-      spotsBooked: number; 
-      estimatedCommission: number; 
-      lockedCommission: number; 
+
+    const promoterClicks = await db
+      .select()
+      .from(referralClicks)
+      .where(eq(referralClicks.promoterId, promoterId));
+
+    const experienceIds = Array.from(new Set([
+      ...promotedExperiences.map((row) => row.experienceId),
+      ...promoterBookings.map((booking) => booking.experienceId),
+      ...promoterClicks.map((click) => click.experienceId).filter((value): value is string => !!value),
+    ]));
+
+    if (experienceIds.length === 0) {
+      return [];
+    }
+
+    const linkedExperiences = await db
+      .select()
+      .from(experiences)
+      .where(inArray(experiences.id, experienceIds));
+
+    const experienceMap = new Map(linkedExperiences.map((experience) => [experience.id, experience]));
+
+    const bookingStatsMap = new Map<string, {
+      experienceId: string;
+      promoterExperienceId: string | null;
+      spotsBooked: number;
+      estimatedCommission: number;
+      lockedCommission: number;
       currency: string;
     }>();
-    
+
     for (const booking of promoterBookings) {
       const expId = booking.experienceId;
-      const currency = booking.commissionCurrency || 'EUR';
+      const promotedExperience = promotedExperienceByExperienceId.get(expId);
+      const promoterExperienceId = booking.promoterExperienceId || promotedExperience?.id || null;
+      const key = getPromoterMetricKey(promoterExperienceId, expId);
+      if (!key) continue;
+
+      const currency =
+        booking.commissionCurrency ||
+        experienceMap.get(expId)?.currency ||
+        'EUR';
       const amount = parseFloat(booking.commissionAmount || '0');
       const status = booking.commissionStatus || 'estimated';
-      
-      const key = `${expId}:${currency}`;
+
       if (!bookingStatsMap.has(key)) {
-        bookingStatsMap.set(key, { 
-          spotsBooked: 0, 
-          estimatedCommission: 0, 
-          lockedCommission: 0, 
-          currency 
+        bookingStatsMap.set(key, {
+          experienceId: expId,
+          promoterExperienceId,
+          spotsBooked: 0,
+          estimatedCommission: 0,
+          lockedCommission: 0,
+          currency,
         });
       }
-      
+
       const entry = bookingStatsMap.get(key)!;
       entry.spotsBooked++;
-      
+
       if (status === 'estimated') {
         entry.estimatedCommission += amount;
       } else if (status === 'locked') {
         entry.lockedCommission += amount;
       }
     }
-    
-    // Build result: include ALL promoted experiences (even without bookings)
+
+    const clickStatsMap = new Map<string, {
+      experienceId: string;
+      promoterExperienceId: string | null;
+      totalClicks: number;
+      conversions: number;
+      visitorKeys: Set<string>;
+    }>();
+
+    for (const click of promoterClicks) {
+      const promotedExperience =
+        (click.promoterExperienceId
+          ? promotedExperienceById.get(click.promoterExperienceId)
+          : undefined) ||
+        (click.experienceId
+          ? promotedExperienceByExperienceId.get(click.experienceId)
+          : undefined);
+      const expId = click.experienceId || promotedExperience?.experienceId || null;
+      const promoterExperienceId = click.promoterExperienceId || promotedExperience?.id || null;
+      const key = getPromoterMetricKey(promoterExperienceId, expId);
+      if (!key || !expId) continue;
+
+      if (!clickStatsMap.has(key)) {
+        clickStatsMap.set(key, {
+          experienceId: expId,
+          promoterExperienceId,
+          totalClicks: 0,
+          conversions: 0,
+          visitorKeys: new Set<string>(),
+        });
+      }
+
+      const entry = clickStatsMap.get(key)!;
+      entry.totalClicks++;
+      entry.visitorKeys.add(getReferralVisitorKey(click));
+      if (click.converted) {
+        entry.conversions++;
+      }
+    }
+
     const result: Array<{
+      promoterExperienceId: string | null;
+      shareToken: string | null;
       experience: Experience;
       spotsBooked: number;
       estimatedCommission: number;
       lockedCommission: number;
       currency: string;
+      clicks: number;
+      uniqueVisitors: number;
+      conversions: number;
+      conversionRate: number;
     }> = [];
-    
-    const seenExperienceIds = new Set<string>();
-    
-    // First, add promoted experiences (from promoter_experiences table)
-    for (const expId of promotedExperienceIds) {
-      const [experience] = await db.select().from(experiences).where(eq(experiences.id, expId));
-      if (experience) {
-        seenExperienceIds.add(expId);
-        // Check if we have booking stats for this experience
-        const currency = experience.currency || 'EUR';
-        const key = `${expId}:${currency}`;
-        const stats = bookingStatsMap.get(key);
-        
-        result.push({
-          experience,
-          spotsBooked: stats?.spotsBooked || 0,
-          estimatedCommission: stats?.estimatedCommission || 0,
-          lockedCommission: stats?.lockedCommission || 0,
-          currency,
-        });
-      }
+
+    const seenMetricKeys = new Set<string>();
+
+    for (const promotedExperience of promotedExperiences) {
+      const experience = experienceMap.get(promotedExperience.experienceId);
+      if (!experience) continue;
+
+      const metricKey = getPromoterMetricKey(promotedExperience.id, promotedExperience.experienceId)!;
+      seenMetricKeys.add(metricKey);
+
+      const bookingStats = bookingStatsMap.get(metricKey);
+      const clickStats = clickStatsMap.get(metricKey);
+
+      result.push({
+        promoterExperienceId: promotedExperience.id,
+        shareToken: promotedExperience.shareToken,
+        experience,
+        spotsBooked: bookingStats?.spotsBooked || 0,
+        estimatedCommission: bookingStats?.estimatedCommission || 0,
+        lockedCommission: bookingStats?.lockedCommission || 0,
+        currency: bookingStats?.currency || experience.currency || 'EUR',
+        clicks: clickStats?.totalClicks || 0,
+        uniqueVisitors: clickStats?.visitorKeys.size || 0,
+        conversions: clickStats?.conversions || 0,
+        conversionRate: clickStats?.totalClicks
+          ? Math.round((clickStats.conversions / clickStats.totalClicks) * 100)
+          : 0,
+      });
     }
-    
-    // Also add any experiences from bookings that aren't in the promoter_experiences table yet
-    // (legacy bookings from before this feature, or direct referrals)
-    for (const [key, stats] of bookingStatsMap.entries()) {
-      const expId = key.split(':')[0];
-      if (!seenExperienceIds.has(expId)) {
-        const [experience] = await db.select().from(experiences).where(eq(experiences.id, expId));
-        if (experience) {
-          result.push({
-            experience,
-            spotsBooked: stats.spotsBooked,
-            estimatedCommission: stats.estimatedCommission,
-            lockedCommission: stats.lockedCommission,
-            currency: stats.currency,
-          });
-        }
-      }
+
+    for (const [metricKey, bookingStats] of Array.from(bookingStatsMap.entries())) {
+      if (seenMetricKeys.has(metricKey)) continue;
+      const experience = experienceMap.get(bookingStats.experienceId);
+      if (!experience) continue;
+
+      const clickStats = clickStatsMap.get(metricKey);
+
+      result.push({
+        promoterExperienceId: bookingStats.promoterExperienceId,
+        shareToken: bookingStats.promoterExperienceId
+          ? promotedExperienceById.get(bookingStats.promoterExperienceId)?.shareToken || null
+          : null,
+        experience,
+        spotsBooked: bookingStats.spotsBooked,
+        estimatedCommission: bookingStats.estimatedCommission,
+        lockedCommission: bookingStats.lockedCommission,
+        currency: bookingStats.currency,
+        clicks: clickStats?.totalClicks || 0,
+        uniqueVisitors: clickStats?.visitorKeys.size || 0,
+        conversions: clickStats?.conversions || 0,
+        conversionRate: clickStats?.totalClicks
+          ? Math.round((clickStats.conversions / clickStats.totalClicks) * 100)
+          : 0,
+      });
+      seenMetricKeys.add(metricKey);
     }
-    
-    // Sort by startDate ASC (closest first), then createdAt DESC (matches homepage ordering)
+
+    for (const [metricKey, clickStats] of Array.from(clickStatsMap.entries())) {
+      if (seenMetricKeys.has(metricKey)) continue;
+      const experience = experienceMap.get(clickStats.experienceId);
+      if (!experience) continue;
+
+      result.push({
+        promoterExperienceId: clickStats.promoterExperienceId,
+        shareToken: clickStats.promoterExperienceId
+          ? promotedExperienceById.get(clickStats.promoterExperienceId)?.shareToken || null
+          : null,
+        experience,
+        spotsBooked: 0,
+        estimatedCommission: 0,
+        lockedCommission: 0,
+        currency: experience.currency || 'EUR',
+        clicks: clickStats.totalClicks,
+        uniqueVisitors: clickStats.visitorKeys.size,
+        conversions: clickStats.conversions,
+        conversionRate: clickStats.totalClicks
+          ? Math.round((clickStats.conversions / clickStats.totalClicks) * 100)
+          : 0,
+      });
+      seenMetricKeys.add(metricKey);
+    }
+
     result.sort((a, b) => {
       const aStart = a.experience.startDate ? new Date(a.experience.startDate).getTime() : Infinity;
       const bStart = b.experience.startDate ? new Date(b.experience.startDate).getTime() : Infinity;
       if (aStart !== bStart) {
-        return aStart - bStart; // Closest date first
+        return aStart - bStart;
       }
       const aCreated = a.experience.createdAt ? new Date(a.experience.createdAt).getTime() : 0;
       const bCreated = b.experience.createdAt ? new Date(b.experience.createdAt).getTime() : 0;
-      return bCreated - aCreated; // Newest created first as tiebreaker
+      return bCreated - aCreated;
     });
-    
+
     return result;
   }
 
   // Experience Pool Methods
   async getPromotableExperiences(): Promise<Experience[]> {
-    // Get approved/published experiences - matches homepage logic exactly
-    // DO NOT filter by promoterEnabled - all approved/published experiences are promotable
-    // Ordering: startDate ASC (closest first), then createdAt DESC (newest upload as tiebreaker)
+    // The pool covers every Digital Handshake deal type: promoters can self-serve
+    // commission/milestone deals instantly, while brand_barter and financial_sponsorship
+    // go through the marketplace Accept / Counter Offer flow (see promotionDeals).
     return await db
       .select()
       .from(experiences)
       .where(
-        or(eq(experiences.status, 'approved'), eq(experiences.status, 'published'))
+        and(
+          or(eq(experiences.status, 'approved'), eq(experiences.status, 'published')),
+          eq(experiences.promoterEnabled, true),
+          or(
+            eq(experiences.promotionDealType, 'commission_per_ticket'),
+            eq(experiences.promotionDealType, 'milestone_barter'),
+            eq(experiences.promotionDealType, 'brand_barter'),
+            eq(experiences.promotionDealType, 'financial_sponsorship'),
+            and(
+              isNull(experiences.promotionDealType),
+              eq(experiences.influencerPromotionEnabled, true),
+            ),
+          ),
+        )
       )
       .orderBy(asc(experiences.startDate), desc(experiences.createdAt));
   }
 
-  async getPromoterPromotedExperienceIds(promoterId: string): Promise<string[]> {
-    const results = await db
-      .select({ experienceId: promoterExperiences.experienceId })
+  async getPromoterPromotedExperiences(promoterId: string): Promise<PromoterExperienceRecord[]> {
+    const rows = await db
+      .select()
       .from(promoterExperiences)
-      .where(eq(promoterExperiences.promoterId, promoterId));
-    return results.map(r => r.experienceId);
+      .where(eq(promoterExperiences.promoterId, promoterId))
+      .orderBy(desc(promoterExperiences.createdAt));
+
+    const normalized: PromoterExperienceRecord[] = [];
+
+    for (const row of rows) {
+      if (row.shareToken) {
+        normalized.push(row);
+        continue;
+      }
+
+      const [updated] = await db
+        .update(promoterExperiences)
+        .set({ shareToken: row.id })
+        .where(eq(promoterExperiences.id, row.id))
+        .returning();
+
+      normalized.push(updated ?? { ...row, shareToken: row.id });
+    }
+
+    return normalized;
   }
 
-  async promoteExperience(promoterId: string, experienceId: string): Promise<void> {
-    await db.insert(promoterExperiences).values({
-      promoterId,
-      experienceId,
-    }).onConflictDoNothing();
+  async getPromoterExperience(
+    promoterId: string,
+    experienceId: string,
+  ): Promise<PromoterExperienceRecord | undefined> {
+    const [existing] = await db
+      .select()
+      .from(promoterExperiences)
+      .where(
+        and(
+          eq(promoterExperiences.promoterId, promoterId),
+          eq(promoterExperiences.experienceId, experienceId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) return undefined;
+    if (existing.shareToken) return existing;
+
+    const [updated] = await db
+      .update(promoterExperiences)
+      .set({ shareToken: existing.id })
+      .where(eq(promoterExperiences.id, existing.id))
+      .returning();
+
+    return updated ?? { ...existing, shareToken: existing.id };
+  }
+
+  async getPromoterPromotedExperienceIds(promoterId: string): Promise<string[]> {
+    const rows = await this.getPromoterPromotedExperiences(promoterId);
+    return rows.map((row) => row.experienceId);
+  }
+
+  async getPromoterExperienceByShareToken(shareToken: string): Promise<PromoterExperienceRecord | undefined> {
+    const [row] = await db
+      .select()
+      .from(promoterExperiences)
+      .where(eq(promoterExperiences.shareToken, shareToken))
+      .limit(1);
+
+    return row;
+  }
+
+  async promoteExperience(promoterId: string, experienceId: string): Promise<PromoterExperienceRecord> {
+    const existing = await this.getPromoterExperience(promoterId, experienceId);
+    if (existing) return existing;
+
+    const [inserted] = await db
+      .insert(promoterExperiences)
+      .values({
+        promoterId,
+        experienceId,
+      })
+      .returning();
+
+    if (inserted.shareToken) {
+      return inserted;
+    }
+
+    const [updated] = await db
+      .update(promoterExperiences)
+      .set({ shareToken: inserted.id })
+      .where(eq(promoterExperiences.id, inserted.id))
+      .returning();
+
+    return updated ?? { ...inserted, shareToken: inserted.id };
   }
 
   async isPromotingExperience(promoterId: string, experienceId: string): Promise<boolean> {
@@ -3261,6 +3572,305 @@ export class DatabaseStorage implements IStorage {
         )
       );
     return !!result;
+  }
+
+  // Promotion Deals — Digital Handshake for promoter/brand negotiation (Part 3)
+  private extractBaselinePromotionTerms(experience: Experience, dealType: string): NonNullable<PromotionDeal["terms"]> {
+    switch (dealType) {
+      case "commission_per_ticket":
+        return { commissionPct: Number((experience as any).influencerCommissionPct || 0) };
+      case "milestone_barter":
+        return {
+          milestoneAttendeeTarget: (experience as any).promotionMilestoneAttendeeTarget ?? undefined,
+          milestoneRewardTickets: (experience as any).promotionMilestoneRewardTickets ?? undefined,
+        };
+      case "brand_barter":
+        return { brandPitch: (experience as any).promotionBrandPitch ?? undefined };
+      case "financial_sponsorship":
+        return {
+          sponsorshipAmount: (experience as any).promotionSponsorshipAmount
+            ? Number((experience as any).promotionSponsorshipAmount)
+            : undefined,
+          currency: (experience as any).currency ?? undefined,
+        };
+      default:
+        return {};
+    }
+  }
+
+  // Translate an experience's Option A (platform partners) and Option B (external invites)
+  // selections into Digital Handshake deal rows the recipients see in their Offers tab.
+  // Idempotent — safe to call every time the promotion step is saved.
+  async syncDirectPromotionDeals(experienceId: string): Promise<void> {
+    const experience = await this.getExperience(experienceId);
+    if (!experience || !(experience as any).promotionDealType) return;
+    if (experience.status !== "approved" && experience.status !== "published") return;
+
+    const dealType = (experience as any).promotionDealType as string;
+    const baselineTerms = this.extractBaselinePromotionTerms(experience, dealType);
+    const selectedPartnerIds: string[] = Array.isArray((experience as any).promotionSelectedPartnerIds)
+      ? (experience as any).promotionSelectedPartnerIds
+      : [];
+    const externalInvites: Array<{ id: string; email: string; name: string }> = Array.isArray(
+      (experience as any).promotionExternalInvites,
+    )
+      ? (experience as any).promotionExternalInvites
+      : [];
+
+    const existingDeals = await db
+      .select()
+      .from(promotionDeals)
+      .where(
+        and(
+          eq(promotionDeals.experienceId, experienceId),
+          or(eq(promotionDeals.source, "platform_direct"), eq(promotionDeals.source, "external_direct")),
+        ),
+      );
+
+    const existingByPartnerId = new Set(
+      existingDeals.filter((d) => d.source === "platform_direct" && d.partnerId).map((d) => d.partnerId),
+    );
+    const existingByEmail = new Set(
+      existingDeals
+        .filter((d) => d.source === "external_direct" && d.partnerEmail)
+        .map((d) => d.partnerEmail!.toLowerCase()),
+    );
+
+    for (const partnerId of selectedPartnerIds) {
+      if (existingByPartnerId.has(partnerId)) continue;
+      await db.insert(promotionDeals).values({
+        experienceId,
+        creatorId: experience.creatorId,
+        partnerId,
+        source: "platform_direct",
+        dealType,
+        baselineTerms,
+        terms: baselineTerms,
+        status: "pending",
+        pendingActionBy: "partner",
+      });
+
+      // Notify the platform partner their Offers tab has a new Digital Handshake.
+      // Dynamic import — notifications.ts imports storage, so a static import here
+      // would be circular. Fire-and-forget: email failure must not break the sync.
+      this.getUser(partnerId)
+        .then(async (partner) => {
+          if (!partner?.email) return;
+          const { notificationService } = await import('./notifications');
+          await notificationService.sendPromotionOfferReceivedEmail({
+            to: partner.email,
+            recipientName: partner.firstName,
+            experienceTitle: experience.title,
+            experienceSlugOrId: (experience as any).slug || experience.id,
+            dealType,
+            terms: baselineTerms,
+            currency: (experience as any).currency,
+          });
+        })
+        .catch((err) => console.error('Promotion offer email failed:', err?.message || err));
+    }
+
+    for (const invite of externalInvites) {
+      const email = invite?.email?.toLowerCase().trim();
+      if (!email || existingByEmail.has(email)) continue;
+      const matchedUser = await this.getUserByEmail(email);
+      await db.insert(promotionDeals).values({
+        experienceId,
+        creatorId: experience.creatorId,
+        partnerId: matchedUser?.id,
+        partnerEmail: email,
+        partnerName: invite.name,
+        source: "external_direct",
+        dealType,
+        baselineTerms,
+        terms: baselineTerms,
+        status: "pending",
+        pendingActionBy: "partner",
+      });
+    }
+  }
+
+  async getPromotionDeal(dealId: string): Promise<PromotionDeal | undefined> {
+    const [row] = await db.select().from(promotionDeals).where(eq(promotionDeals.id, dealId)).limit(1);
+    return row;
+  }
+
+  // Backfills partnerId on external-invite deals once the invited person creates/logs into
+  // an account matching the invite email, then returns all direct offers awaiting this user.
+  async getDirectPromotionDealsForPartner(
+    userId: string,
+    userEmail?: string | null,
+  ): Promise<Array<{ deal: PromotionDeal; experience: Experience }>> {
+    if (userEmail) {
+      await db
+        .update(promotionDeals)
+        .set({ partnerId: userId })
+        .where(and(isNull(promotionDeals.partnerId), eq(promotionDeals.partnerEmail, userEmail.toLowerCase())));
+    }
+
+    const rows = await db
+      .select({ deal: promotionDeals, experience: experiences })
+      .from(promotionDeals)
+      .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
+      .where(
+        and(
+          eq(promotionDeals.partnerId, userId),
+          or(eq(promotionDeals.source, "platform_direct"), eq(promotionDeals.source, "external_direct")),
+        ),
+      )
+      .orderBy(desc(promotionDeals.createdAt));
+
+    return rows;
+  }
+
+  async respondToDirectPromotionDeal(
+    dealId: string,
+    partnerId: string,
+    action: "accept" | "decline",
+  ): Promise<PromotionDeal | undefined> {
+    const deal = await this.getPromotionDeal(dealId);
+    if (!deal || deal.partnerId !== partnerId || deal.status !== "pending") return undefined;
+
+    const [updated] = await db
+      .update(promotionDeals)
+      .set({
+        status: action === "accept" ? "accepted" : "declined",
+        pendingActionBy: null,
+        respondedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(promotionDeals.id, dealId))
+      .returning();
+
+    // Accepting a deal is only useful if the partner walks away with a trackable link —
+    // grant them the same promoter tracking record regular promoters get.
+    if (updated && action === "accept") {
+      await this.promoteExperience(partnerId, deal.experienceId);
+    }
+
+    return updated;
+  }
+
+  // All marketplace bids this partner has placed, keyed by experience — used to render
+  // the Experience Pool card state (Accept/Counter vs. already accepted/countered).
+  async getMarketplacePromotionDealsForPartner(partnerId: string): Promise<PromotionDeal[]> {
+    return db
+      .select()
+      .from(promotionDeals)
+      .where(and(eq(promotionDeals.partnerId, partnerId), eq(promotionDeals.source, "marketplace")));
+  }
+
+  // Marketplace (Option C): partner either accepts the creator's baseline terms as-is,
+  // or counters with new terms that the creator must then accept/decline.
+  async createOrUpdateMarketplacePromotionDeal(
+    experienceId: string,
+    partnerId: string,
+    action: "accept" | "counter",
+    counterTerms?: PromotionDeal["terms"],
+    counterMessage?: string,
+  ): Promise<PromotionDeal> {
+    const experience = await this.getExperience(experienceId);
+    if (!experience || !(experience as any).promotionDealType) {
+      throw new Error("Experience is not configured for promotion deals");
+    }
+
+    const dealType = (experience as any).promotionDealType as string;
+    const baselineTerms = this.extractBaselinePromotionTerms(experience, dealType);
+
+    const [existing] = await db
+      .select()
+      .from(promotionDeals)
+      .where(
+        and(
+          eq(promotionDeals.experienceId, experienceId),
+          eq(promotionDeals.partnerId, partnerId),
+          eq(promotionDeals.source, "marketplace"),
+        ),
+      )
+      .limit(1);
+
+    const values = {
+      status: action === "accept" ? "accepted" : "countered",
+      pendingActionBy: action === "accept" ? null : "creator",
+      terms: action === "accept" ? baselineTerms : counterTerms ?? {},
+      counterMessage: action === "counter" ? counterMessage ?? null : null,
+      respondedAt: action === "accept" ? new Date() : null,
+      updatedAt: new Date(),
+    } as const;
+
+    let result: PromotionDeal;
+    if (existing) {
+      const [updated] = await db
+        .update(promotionDeals)
+        .set(values)
+        .where(eq(promotionDeals.id, existing.id))
+        .returning();
+      result = updated;
+    } else {
+      const [inserted] = await db
+        .insert(promotionDeals)
+        .values({
+          experienceId,
+          creatorId: experience.creatorId,
+          partnerId,
+          source: "marketplace",
+          dealType,
+          baselineTerms,
+          ...values,
+        })
+        .returning();
+      result = inserted;
+    }
+
+    // Accepting a deal is only useful if the partner walks away with a trackable link —
+    // grant them the same promoter tracking record regular promoters get.
+    if (action === "accept") {
+      await this.promoteExperience(partnerId, experienceId);
+    }
+
+    return result;
+  }
+
+  async getPromotionDealsForCreator(
+    creatorId: string,
+  ): Promise<Array<{ deal: PromotionDeal; experience: Experience; partner: User | undefined }>> {
+    const rows = await db
+      .select({ deal: promotionDeals, experience: experiences, partner: users })
+      .from(promotionDeals)
+      .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
+      .leftJoin(users, eq(promotionDeals.partnerId, users.id))
+      .where(eq(promotionDeals.creatorId, creatorId))
+      .orderBy(desc(promotionDeals.updatedAt));
+
+    return rows;
+  }
+
+  async respondToCreatorPromotionDeal(
+    dealId: string,
+    creatorId: string,
+    action: "accept" | "decline",
+  ): Promise<PromotionDeal | undefined> {
+    const deal = await this.getPromotionDeal(dealId);
+    if (!deal || deal.creatorId !== creatorId || deal.status !== "countered" || deal.pendingActionBy !== "creator") {
+      return undefined;
+    }
+
+    const [updated] = await db
+      .update(promotionDeals)
+      .set({
+        status: action === "accept" ? "accepted" : "declined",
+        pendingActionBy: null,
+        respondedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(promotionDeals.id, dealId))
+      .returning();
+
+    if (updated && action === "accept" && deal.partnerId) {
+      await this.promoteExperience(deal.partnerId, deal.experienceId);
+    }
+
+    return updated;
   }
 
   // Admin Promoter Management Methods

@@ -81,6 +81,12 @@ const VENUE_COMPENSATION_MODELS = [
   "venue_sponsored",
   "upfront_rental",
 ] as const;
+const PROMOTION_DEAL_TYPES = [
+  "commission_per_ticket",
+  "milestone_barter",
+  "brand_barter",
+  "financial_sponsorship",
+] as const;
 
 function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES[number]> {
   const rawValues = Array.isArray(value)
@@ -96,7 +102,7 @@ function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES
     );
 }
 
-// 9-Step Event Builder Schema aligned with database fields
+// 11-step Event Builder schema aligned with database fields
 const eventBuilderSchema = z.object({
   // Step 1: Basic Info
   title: z.string().min(1, "Title is required").max(255, "Title too long").optional().or(z.literal('')),
@@ -184,7 +190,22 @@ const eventBuilderSchema = z.object({
     }))
   ),
 
-  // Step 8: Itinerary
+  // Step 8: Promotion
+  promotionDealType: z.enum(PROMOTION_DEAL_TYPES).optional().nullable(),
+  promotionMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional().nullable(),
+  promotionMilestoneRewardTickets: z.coerce.number().int().min(1).optional().nullable(),
+  promotionBrandPitch: z.string().max(2000, "Promotion brief is too long").optional(),
+  promotionSponsorshipAmount: z.coerce.number().min(0).optional().nullable(),
+  promotionSelectedPartnerIds: z.array(z.string()).default([]),
+  promotionExternalInvites: z.array(z.object({
+    id: z.string(),
+    email: z.string().email("Enter a valid invite email address"),
+    name: z.string().min(1, "Partner name is required"),
+    website: z.string().url("Enter a valid social or website link"),
+  })).default([]),
+  promoterEnabled: z.boolean().default(false),
+
+  // Step 9: Itinerary
   itinerary: z.array(z.object({
     day: z.number(),
     date: z.date(),
@@ -199,7 +220,7 @@ const eventBuilderSchema = z.object({
     notes: z.string().default("")
   })).default([]),
 
-  // Step 9: Pricing
+  // Step 10: Pricing
   price: z.coerce.number().min(0, "Price cannot be negative").optional(),
   pricePerPerson: z.coerce.number().min(0, "Price per person cannot be negative").default(0),
   currency: z.enum(["usd", "eur", "gbp", "cad", "aud"]).optional(),
@@ -287,7 +308,7 @@ const eventBuilderSchema = z.object({
   softHoldEnabled: z.boolean().default(false),
   softHoldDurationHours: z.number().min(1, "Minimum hold duration is 1 hour").max(168, "Maximum hold duration is 7 days").default(48),
 
-  // Step 10: Terms - validation handled in validateForPublish to avoid immediate errors on step load
+  // Step 11: Terms - validation handled in validateForPublish to avoid immediate errors on step load
   termsAccepted: z.boolean().default(false),
   termsDocumentUrl: z.string().optional(), // URL to uploaded PDF terms document
   customTerms: z.string().optional() // Editable custom terms and conditions text
@@ -304,9 +325,10 @@ const ALL_STEPS = [
   { id: 5, title: "Services & Amenities", icon: Users, description: "Services and facility features" },
   { id: 6, title: "Roles", icon: UserCog, description: "Participant roles and contributions" },
   { id: 7, title: "Rooms", icon: Bed, description: "Accommodation and capacity" },
-  { id: 8, title: "Plan", icon: Calendar, description: "Daily schedule and activities" },
-  { id: 9, title: "Pricing", icon: DollarSign, description: "Pricing and monetization" },
-  { id: 10, title: "Terms", icon: FileText, description: "Terms and final review" }
+  { id: 8, title: "Promotion", icon: Users, description: "Promoter and brand deal setup" },
+  { id: 9, title: "Plan", icon: Calendar, description: "Daily schedule and activities" },
+  { id: 10, title: "Pricing", icon: DollarSign, description: "Pricing and monetization" },
+  { id: 11, title: "Terms", icon: FileText, description: "Terms and final review" }
 ];
 
 // Helper to get filtered steps based on event type.
@@ -451,6 +473,14 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       accommodationType: undefined,
       roomCapacity: undefined,
       totalRooms: undefined,
+      promotionDealType: null,
+      promotionMilestoneAttendeeTarget: undefined,
+      promotionMilestoneRewardTickets: 1,
+      promotionBrandPitch: '',
+      promotionSponsorshipAmount: undefined,
+      promotionSelectedPartnerIds: [],
+      promotionExternalInvites: [],
+      promoterEnabled: false,
       itinerary: [],
       price: undefined,
       pricePerPerson: 0,
@@ -861,6 +891,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     }
     
     // Map MVG fields and ensure image fields are properly handled
+    const derivedPromotionDealType = data.promotionDealType
+      ?? (data.influencerPromotionEnabled ? 'commission_per_ticket' : null);
     return {
       ...data,
       requireMinimumParticipants: data.mvgEnabled !== undefined ? data.mvgEnabled : true,
@@ -904,6 +936,20 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       platformPct: FIXED_PLATFORM_FEE_PCT,
       influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
       influencerCommissionPct: data.influencerCommissionPct != null ? parseFloat(data.influencerCommissionPct) : 0,
+      promotionDealType: derivedPromotionDealType,
+      promotionMilestoneAttendeeTarget: data.promotionMilestoneAttendeeTarget ?? null,
+      promotionMilestoneRewardTickets: data.promotionMilestoneRewardTickets ?? 1,
+      promotionBrandPitch: data.promotionBrandPitch || '',
+      promotionSponsorshipAmount: data.promotionSponsorshipAmount != null
+        ? parseFloat(data.promotionSponsorshipAmount)
+        : null,
+      promotionSelectedPartnerIds: Array.isArray(data.promotionSelectedPartnerIds)
+        ? data.promotionSelectedPartnerIds
+        : [],
+      promotionExternalInvites: Array.isArray(data.promotionExternalInvites)
+        ? data.promotionExternalInvites
+        : [],
+      promoterEnabled: data.promoterEnabled ?? false,
       standingCapacity: data.standingCapacity ?? null,
       seatedCapacity: data.seatedCapacity ?? null,
       // Ensure ticketSkus array is properly handled
@@ -1115,6 +1161,14 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
+        promotionDealType: formData.promotionDealType ?? null,
+        promotionMilestoneAttendeeTarget: formData.promotionMilestoneAttendeeTarget ?? null,
+        promotionMilestoneRewardTickets: formData.promotionMilestoneRewardTickets ?? 1,
+        promotionBrandPitch: formData.promotionBrandPitch || '',
+        promotionSponsorshipAmount: formData.promotionSponsorshipAmount ?? null,
+        promotionSelectedPartnerIds: formData.promotionSelectedPartnerIds || [],
+        promotionExternalInvites: formData.promotionExternalInvites || [],
+        promoterEnabled: formData.promoterEnabled ?? false,
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
         influencerCommissionPct: formData.influencerCommissionPct ?? 0,
         promoterCommission: formData.influencerCommissionPct ?? 0,
@@ -1372,6 +1426,58 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     if (!data.currency || data.currency === '') {
       errors.push("Currency must be explicitly selected");
     }
+
+    if (data.promotionDealType === 'commission_per_ticket'
+      && Number(data.influencerCommissionPct || 0) <= 0) {
+      errors.push("Set a commission percentage for the promotion deal");
+    }
+    if (data.promotionDealType === 'milestone_barter') {
+      if (Number(data.promotionMilestoneAttendeeTarget || 0) <= 0) {
+        errors.push("Set how many attendees a promoter must bring for the milestone barter deal");
+      }
+      if (Number(data.promotionMilestoneRewardTickets || 0) <= 0) {
+        errors.push("Set how many free tickets are earned in the milestone barter deal");
+      }
+    }
+    if (data.promotionDealType === 'brand_barter'
+      && (!data.promotionBrandPitch || data.promotionBrandPitch.trim() === '')) {
+      errors.push("Describe what the brand barter deal includes");
+    }
+    if (data.promotionDealType === 'financial_sponsorship'
+      && Number(data.promotionSponsorshipAmount || 0) <= 0) {
+      errors.push("Set the sponsorship amount for the financial sponsorship deal");
+    }
+    if (data.promotionDealType) {
+      const selectedPartners = Array.isArray(data.promotionSelectedPartnerIds)
+        ? data.promotionSelectedPartnerIds
+        : [];
+      const externalInvites = Array.isArray(data.promotionExternalInvites)
+        ? data.promotionExternalInvites
+        : [];
+      const hasExternalInvites = externalInvites.length > 0;
+      const hasOpenToOffers = !!data.promoterEnabled;
+
+      if (!hasOpenToOffers && selectedPartners.length === 0 && !hasExternalInvites) {
+        errors.push("Choose at least one promotion distribution option: platform partners, external invites, or open to offers");
+      }
+
+      const emailSchema = z.string().email();
+      const urlSchema = z.string().url();
+      for (const invite of externalInvites) {
+        if (!invite?.name || invite.name.trim() === '') {
+          errors.push("Each external invite needs a brand or promoter name");
+          break;
+        }
+        if (!invite?.email || !emailSchema.safeParse(invite.email).success) {
+          errors.push("Each external invite needs a valid email address");
+          break;
+        }
+        if (!invite?.website || !urlSchema.safeParse(invite.website).success) {
+          errors.push("Each external invite needs a valid social or website link");
+          break;
+        }
+      }
+    }
     
     // Required: terms acceptance
     if (!data.termsAccepted) {
@@ -1552,6 +1658,14 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         monetisationMode: 'creator_led',
 
         // Promoter bounty (deducted from creator's share)
+        promotionDealType: formData.promotionDealType ?? null,
+        promotionMilestoneAttendeeTarget: formData.promotionMilestoneAttendeeTarget ?? null,
+        promotionMilestoneRewardTickets: formData.promotionMilestoneRewardTickets ?? 1,
+        promotionBrandPitch: formData.promotionBrandPitch || '',
+        promotionSponsorshipAmount: formData.promotionSponsorshipAmount ?? null,
+        promotionSelectedPartnerIds: formData.promotionSelectedPartnerIds || [],
+        promotionExternalInvites: formData.promotionExternalInvites || [],
+        promoterEnabled: formData.promoterEnabled ?? false,
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
         influencerCommissionPct: formData.influencerCommissionPct ?? 0,
         promoterCommission: formData.influencerCommissionPct ?? 0,
@@ -1872,7 +1986,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                     completed={(() => {
                       const pricePerPerson = form.watch('pricePerPerson');
                       const parsed = parseFloat(String(pricePerPerson));
-                      return pricePerPerson !== undefined && pricePerPerson !== null && pricePerPerson !== '' && !Number.isNaN(parsed) && parsed >= 0;
+                      return pricePerPerson !== undefined && pricePerPerson !== null && !Number.isNaN(parsed) && parsed >= 0;
                     })()}
                   />
                   <ChecklistItem 
@@ -2017,10 +2131,12 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       case 7:
         return <RoomsStep form={form} />;
       case 8:
-        return <ItineraryStep form={form} />;
+        return <PromotionStep form={form} />;
       case 9:
-        return <PricingStep form={form} />;
+        return <ItineraryStep form={form} />;
       case 10:
+        return <PricingStep form={form} />;
+      case 11:
         return <TermsStep form={form} />;
       default:
         return <div>Unknown step</div>;
@@ -4304,6 +4420,529 @@ function RoomsStep({ form }: { form: any }) {
   );
 }
 
+function PromotionStep({ form }: { form: any }) {
+  const [platformPartners, setPlatformPartners] = useState<any[]>([]);
+  const [isLoadingPartners, setIsLoadingPartners] = useState(false);
+  const [partnersError, setPartnersError] = useState<string | null>(null);
+  const currency = form.watch('currency');
+  const promotionDealType = form.watch('promotionDealType');
+  const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
+  const milestoneAttendeeTarget = form.watch('promotionMilestoneAttendeeTarget');
+  const milestoneRewardTickets = form.watch('promotionMilestoneRewardTickets') || 1;
+  const brandPitch = form.watch('promotionBrandPitch') || '';
+  const sponsorshipAmount = form.watch('promotionSponsorshipAmount');
+  const selectedPartnerIds = form.watch('promotionSelectedPartnerIds') || [];
+  const externalInvites = form.watch('promotionExternalInvites') || [];
+  const openToOffers = !!form.watch('promoterEnabled');
+
+  useEffect(() => {
+    form.setValue(
+      'influencerPromotionEnabled',
+      promotionDealType === 'commission_per_ticket',
+      { shouldDirty: true }
+    );
+    if (promotionDealType === 'milestone_barter' && !form.getValues('promotionMilestoneRewardTickets')) {
+      form.setValue('promotionMilestoneRewardTickets', 1, { shouldDirty: false });
+    }
+  }, [form, promotionDealType]);
+
+  useEffect(() => {
+    if (!promotionDealType) return;
+
+    let cancelled = false;
+    const fetchPlatformPartners = async () => {
+      setIsLoadingPartners(true);
+      setPartnersError(null);
+      try {
+        const response = await apiRequest("GET", "/api/promotion/platform-partners");
+        const data = await response.json();
+        if (!cancelled) {
+          setPlatformPartners(Array.isArray(data) ? data : []);
+        }
+      } catch (error) {
+        console.error("Error fetching promotion platform partners:", error);
+        if (!cancelled) {
+          setPartnersError("Failed to load platform partners. Please try again.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPartners(false);
+        }
+      }
+    };
+
+    fetchPlatformPartners();
+    return () => {
+      cancelled = true;
+    };
+  }, [promotionDealType]);
+
+  const clearPromotionSetup = () => {
+    form.setValue('promotionDealType', null, { shouldDirty: true });
+    form.setValue('promotionSelectedPartnerIds', [], { shouldDirty: true });
+    form.setValue('promotionExternalInvites', [], { shouldDirty: true });
+    form.setValue('promoterEnabled', false, { shouldDirty: true });
+    form.setValue('influencerPromotionEnabled', false, { shouldDirty: true });
+  };
+
+  const togglePartnerSelection = (partnerId: string) => {
+    const current = form.getValues('promotionSelectedPartnerIds') || [];
+    const next = current.includes(partnerId)
+      ? current.filter((id: string) => id !== partnerId)
+      : [...current, partnerId];
+    form.setValue('promotionSelectedPartnerIds', next, { shouldDirty: true });
+  };
+
+  const addExternalInvite = () => {
+    const current = form.getValues('promotionExternalInvites') || [];
+    form.setValue('promotionExternalInvites', [
+      ...current,
+      {
+        id: `invite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        email: '',
+        name: '',
+        website: '',
+      },
+    ], { shouldDirty: true });
+  };
+
+  const updateExternalInvite = (inviteId: string, field: 'email' | 'name' | 'website', value: string) => {
+    const current = form.getValues('promotionExternalInvites') || [];
+    form.setValue(
+      'promotionExternalInvites',
+      current.map((invite: any) => invite.id === inviteId ? { ...invite, [field]: value } : invite),
+      { shouldDirty: true }
+    );
+  };
+
+  const removeExternalInvite = (inviteId: string) => {
+    const current = form.getValues('promotionExternalInvites') || [];
+    form.setValue(
+      'promotionExternalInvites',
+      current.filter((invite: any) => invite.id !== inviteId),
+      { shouldDirty: true }
+    );
+  };
+
+  const dealOptions = [
+    {
+      value: 'commission_per_ticket',
+      title: 'Commission per Ticket',
+      description: 'Set a percentage revenue share for each ticket sold.',
+    },
+    {
+      value: 'milestone_barter',
+      title: 'Milestone Barter (Free Access)',
+      description: 'Reward promoters with free access after they bring a target number of attendees.',
+    },
+    {
+      value: 'brand_barter',
+      title: 'Brand Barter (Products for Exposure)',
+      description: 'Describe the products or services you want in exchange for exposure.',
+    },
+    {
+      value: 'financial_sponsorship',
+      title: 'Financial Sponsorship (EUR)',
+      description: 'Set the fixed sponsorship amount you want a brand to pay.',
+    },
+  ] as const;
+
+  return (
+    <div className="space-y-8">
+      <div className="text-center">
+        <h3 className="text-lg font-semibold mb-2">Promotion</h3>
+        <p className="text-gray-600 dark:text-gray-400">
+          Define the baseline promoter or brand deal you want to offer before sending it out.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="w-5 h-5" />
+            Baseline Deal
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-dashed border-gray-300 p-4">
+            <div>
+              <p className="font-medium text-gray-900 dark:text-white">Choose one deal type</p>
+              <p className="text-sm text-gray-500">
+                This step is optional until you are ready to work with promoters or brands.
+              </p>
+            </div>
+            {promotionDealType && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={clearPromotionSetup}
+                data-testid="button-clear-promotion-deal"
+              >
+                Clear Deal
+              </Button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {dealOptions.map((option) => {
+              const isActive = promotionDealType === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => form.setValue('promotionDealType', option.value, { shouldDirty: true })}
+                  className={cn(
+                    "rounded-xl border p-4 text-left transition-colors",
+                    isActive
+                      ? "border-blue-600 bg-blue-50 shadow-sm dark:border-blue-400 dark:bg-blue-950/40"
+                      : "border-gray-200 hover:border-blue-300 dark:border-gray-700 dark:hover:border-blue-500"
+                  )}
+                  data-testid={`promotion-deal-${option.value}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-gray-900 dark:text-white">{option.title}</p>
+                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{option.description}</p>
+                    </div>
+                    {isActive && (
+                      <span className="rounded-full bg-blue-600 px-2 py-1 text-xs font-medium text-white">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {promotionDealType === 'commission_per_ticket' && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 dark:border-blue-900 dark:bg-blue-950/30">
+              <Label htmlFor="promotion-commission-pct">Commission Percentage (%)</Label>
+              <Input
+                id="promotion-commission-pct"
+                type="number"
+                min="0"
+                max="50"
+                step="0.5"
+                value={influencerCommissionPct}
+                onChange={(e) => form.setValue('influencerCommissionPct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                data-testid="input-promotion-commission-pct"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Use this for promoter and influencer deals where the partner earns a percentage of each ticket sold.
+              </p>
+            </div>
+          )}
+
+          {promotionDealType === 'milestone_barter' && (
+            <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="promotion-milestone-attendees">Bring Attendees</Label>
+                  <Input
+                    id="promotion-milestone-attendees"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={milestoneAttendeeTarget ?? ''}
+                    onChange={(e) => form.setValue('promotionMilestoneAttendeeTarget', e.target.value ? parseInt(e.target.value, 10) : undefined, { shouldDirty: true })}
+                    placeholder="e.g. 10"
+                    data-testid="input-promotion-milestone-attendees"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="promotion-milestone-reward">Free Tickets Earned</Label>
+                  <Input
+                    id="promotion-milestone-reward"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={milestoneRewardTickets}
+                    onChange={(e) => form.setValue('promotionMilestoneRewardTickets', e.target.value ? parseInt(e.target.value, 10) : 1, { shouldDirty: true })}
+                    data-testid="input-promotion-milestone-reward"
+                  />
+                </div>
+              </div>
+              <p className="text-sm text-emerald-800 dark:text-emerald-200">
+                Preview: Bring {milestoneAttendeeTarget || 'X'} attendees = earn {milestoneRewardTickets} free ticket{milestoneRewardTickets === 1 ? '' : 's'}.
+              </p>
+            </div>
+          )}
+
+          {promotionDealType === 'brand_barter' && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+              <Label htmlFor="promotion-brand-pitch">What are you asking the brand to provide?</Label>
+              <Textarea
+                id="promotion-brand-pitch"
+                value={brandPitch}
+                onChange={(e) => form.setValue('promotionBrandPitch', e.target.value, { shouldDirty: true })}
+                placeholder="e.g. We need 50 energy bars in exchange for 2 free staff tickets and event mention across the campaign."
+                className="min-h-[140px]"
+                data-testid="textarea-promotion-brand-pitch"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                No Stripe cash flow is expected for this deal type. Use it to describe the barter clearly.
+              </p>
+            </div>
+          )}
+
+          {promotionDealType === 'financial_sponsorship' && (
+            <div className="rounded-xl border border-purple-200 bg-purple-50/70 p-4 dark:border-purple-900 dark:bg-purple-950/30">
+              <Label htmlFor="promotion-sponsorship-amount">
+                Sponsorship Amount ({currency?.toUpperCase() || 'EUR'})
+              </Label>
+              <div className="mt-2 flex gap-2">
+                <span className="rounded-md border bg-gray-100 px-3 py-2 text-sm dark:bg-gray-800">
+                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '€'}
+                </span>
+                <Input
+                  id="promotion-sponsorship-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={sponsorshipAmount ?? ''}
+                  onChange={(e) => form.setValue('promotionSponsorshipAmount', e.target.value ? parseFloat(e.target.value) : undefined, { shouldDirty: true })}
+                  placeholder="e.g. 250.00"
+                  className="flex-1"
+                  data-testid="input-promotion-sponsorship-amount"
+                />
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                This is the fixed sponsorship fee the creator wants the brand to pay for exposure.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {promotionDealType && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              Matchmaking
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="rounded-lg border border-dashed border-gray-300 p-4">
+              <p className="font-medium text-gray-900 dark:text-white">Choose how to distribute this deal</p>
+              <p className="text-sm text-gray-500 mt-1">
+                You can send the same baseline offer to platform partners, external contacts, and the public partner pool.
+              </p>
+            </div>
+
+            <div className="space-y-4 rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white">Option A: Select from Platform</h4>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Browse registered promoters now. This structure also stays ready for future brand accounts.
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {selectedPartnerIds.length} selected
+                </Badge>
+              </div>
+
+              {isLoadingPartners ? (
+                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-gray-600 dark:text-gray-300">
+                  <Clock className="w-4 h-4 animate-spin" />
+                  Loading platform partners...
+                </div>
+              ) : partnersError ? (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                  <AlertCircle className="w-4 h-4" />
+                  {partnersError}
+                </div>
+              ) : platformPartners.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-gray-500">
+                  No completed platform partner profiles are available yet.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {platformPartners.map((partner) => {
+                    const isSelected = selectedPartnerIds.includes(partner.id);
+                    return (
+                      <button
+                        key={partner.id}
+                        type="button"
+                        onClick={() => togglePartnerSelection(partner.id)}
+                        className={cn(
+                          "rounded-xl border p-4 text-left transition-colors",
+                          isSelected
+                            ? "border-blue-600 bg-blue-50 shadow-sm dark:border-blue-400 dark:bg-blue-950/40"
+                            : "border-gray-200 hover:border-blue-300 dark:border-gray-700 dark:hover:border-blue-500"
+                        )}
+                        data-testid={`promotion-platform-partner-${partner.id}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <p className="font-semibold text-gray-900 dark:text-white">{partner.displayName}</p>
+                              <Badge variant="secondary">Promoter</Badge>
+                            </div>
+                            <p className="text-sm text-gray-500">{partner.email}</p>
+                            <p className="text-sm text-gray-600 dark:text-gray-300">
+                              {partner.bio || 'This partner has completed a profile and is available for promotion deals.'}
+                            </p>
+                          </div>
+                          {isSelected && (
+                            <span className="rounded-full bg-blue-600 px-2 py-1 text-xs font-medium text-white">
+                              Selected
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4 rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white">Option B: Invite External</h4>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Add external brands or promoters with their email, name, and social or website link.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addExternalInvite}
+                  data-testid="button-add-promotion-external-invite"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Invite
+                </Button>
+              </div>
+
+              {externalInvites.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-gray-500">
+                  No external invites added yet.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {externalInvites.map((invite: any, index: number) => (
+                    <div key={invite.id} className="rounded-xl border bg-gray-50/70 p-4 dark:bg-gray-900/30">
+                      <div className="flex items-center justify-between gap-4 mb-4">
+                        <p className="font-medium text-gray-900 dark:text-white">External Invite {index + 1}</p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeExternalInvite(invite.id)}
+                          data-testid={`button-remove-promotion-external-invite-${index}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <Label htmlFor={`promotion-external-name-${invite.id}`}>Brand / Promoter Name</Label>
+                          <Input
+                            id={`promotion-external-name-${invite.id}`}
+                            value={invite.name || ''}
+                            onChange={(e) => updateExternalInvite(invite.id, 'name', e.target.value)}
+                            placeholder="e.g. Local Run Club"
+                            data-testid={`input-promotion-external-name-${index}`}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor={`promotion-external-email-${invite.id}`}>Email Address</Label>
+                          <Input
+                            id={`promotion-external-email-${invite.id}`}
+                            type="email"
+                            value={invite.email || ''}
+                            onChange={(e) => updateExternalInvite(invite.id, 'email', e.target.value)}
+                            placeholder="name@example.com"
+                            data-testid={`input-promotion-external-email-${index}`}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor={`promotion-external-website-${invite.id}`}>Social Media / Website Link</Label>
+                          <Input
+                            id={`promotion-external-website-${invite.id}`}
+                            value={invite.website || ''}
+                            onChange={(e) => updateExternalInvite(invite.id, 'website', e.target.value)}
+                            placeholder="https://instagram.com/brand"
+                            data-testid={`input-promotion-external-website-${index}`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h4 className="font-semibold text-gray-900 dark:text-white">Option C: Open to Offers</h4>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Make this event discoverable in the public partner pool so new partners can find it.
+                  </p>
+                </div>
+                <Switch
+                  checked={openToOffers}
+                  onCheckedChange={(checked) => form.setValue('promoterEnabled', checked, { shouldDirty: true })}
+                  data-testid="switch-promotion-open-to-offers"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-blue-950/40">
+        <CardContent className="p-6">
+          <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Deal Preview</h4>
+          {!promotionDealType && (
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              No promotion deal configured yet. You can leave this blank for now and come back later.
+            </p>
+          )}
+          {promotionDealType === 'commission_per_ticket' && (
+            <p className="text-sm text-gray-700 dark:text-gray-200">
+              Promoters earn <strong>{influencerCommissionPct}% commission</strong> on each successful ticket sale.
+            </p>
+          )}
+          {promotionDealType === 'milestone_barter' && (
+            <p className="text-sm text-gray-700 dark:text-gray-200">
+              Promoters who bring <strong>{milestoneAttendeeTarget || 'X'} attendees</strong> earn <strong>{milestoneRewardTickets} free ticket{milestoneRewardTickets === 1 ? '' : 's'}</strong>.
+            </p>
+          )}
+          {promotionDealType === 'brand_barter' && (
+            <p className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-line">
+              {brandPitch || 'Add a short barter brief so brands know exactly what you need.'}
+            </p>
+          )}
+          {promotionDealType === 'financial_sponsorship' && (
+            <p className="text-sm text-gray-700 dark:text-gray-200">
+              Brands are asked to pay <strong>{formatPriceByCurrency(Number(sponsorshipAmount || 0), currency || 'eur')}</strong> for exposure.
+            </p>
+          )}
+          {promotionDealType && (
+            <div className="mt-4 space-y-1 text-sm text-gray-600 dark:text-gray-300">
+              <p>
+                Platform partners selected: <strong>{selectedPartnerIds.length}</strong>
+              </p>
+              <p>
+                External invites prepared: <strong>{externalInvites.length}</strong>
+              </p>
+              <p>
+                Public partner pool: <strong>{openToOffers ? 'Open to offers' : 'Private only'}</strong>
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function PricingStep({ form }: { form: any }) {
   // Watch form values for reactivity
   const currency = form.watch('currency');
@@ -4313,7 +4952,6 @@ function PricingStep({ form }: { form: any }) {
   const eventType = form.watch('type'); // Track event type for dynamic UI
   const venueType = form.watch('venueType') || "catalog";
   const selectedVenueId = form.watch('selectedVenueId') || "";
-  const monetisationMode = form.watch('monetisationMode');
   const creatorPct = form.watch('creatorPct') || 85;
   const platformPct = FIXED_PLATFORM_FEE_PCT;
   const venueCompensationModel = form.watch('venueCompensationModel') || "access_only";
@@ -4328,7 +4966,8 @@ function PricingStep({ form }: { form: any }) {
   const minimumParticipants = form.watch('minimumParticipants') || 6;
   const softHoldEnabled = form.watch('softHoldEnabled');
   const softHoldDurationHours = form.watch('softHoldDurationHours') || 48;
-  const influencerPromotionEnabled = form.watch('influencerPromotionEnabled');
+  const promotionDealType = form.watch('promotionDealType');
+  const influencerPromotionEnabled = promotionDealType === 'commission_per_ticket';
   const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
   const discounts = form.watch('discounts') || [];
   const ticketSkus = form.watch('ticketSkus') || [];
@@ -4662,7 +5301,8 @@ function PricingStep({ form }: { form: any }) {
     : activeVenueDeal === 'fixed_fee' || activeVenueDeal === 'upfront_rental'
       ? -activeFlatVenueAmount
       : -venueCommercialEstimate;
-  const promoterBounty = influencerPromotionEnabled ? totalRevenue * influencerCommissionPct / 100 : 0;
+  const isCommissionPromotion = promotionDealType === 'commission_per_ticket';
+  const promoterBounty = isCommissionPromotion ? totalRevenue * influencerCommissionPct / 100 : 0;
   const estimatedCreatorNet = revenueSplit.creatorAmount + venuePayout - promoterBounty;
 
   // **4. MVG PROGRESS** - Using pricing service computation
@@ -5208,9 +5848,9 @@ function PricingStep({ form }: { form: any }) {
                   className="bg-gray-100 dark:bg-gray-800 cursor-not-allowed"
                   data-testid="input-creator-pct"
                 />
-                {influencerPromotionEnabled && influencerCommissionPct > 0 && (
+                {isCommissionPromotion && influencerCommissionPct > 0 && (
                   <p className="text-xs text-amber-600 mt-1">
-                    Promoter bounty ({influencerCommissionPct}%) deducted from your share
+                    Promotion commission ({influencerCommissionPct}%) from the Promotion step is deducted from your share.
                   </p>
                 )}
               </div>
@@ -5377,9 +6017,9 @@ function PricingStep({ form }: { form: any }) {
                   </span>
                 </div>
 
-                {influencerPromotionEnabled && influencerCommissionPct > 0 && (
+                {isCommissionPromotion && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
-                    <span>Promoter Bounty ({influencerCommissionPct}%) — from your share</span>
+                    <span>Promotion Commission ({influencerCommissionPct}%)</span>
                     <span className="text-amber-600">-{formatPriceByCurrency(promoterBounty, currency)}</span>
                   </div>
                 )}
@@ -5553,7 +6193,7 @@ function PricingStep({ form }: { form: any }) {
       </Card>
 
       {/* **5. INFLUENCER COMMISSION POOL** */}
-      {(monetisationMode === 'promo_only' || monetisationMode === 'creator_led') && (
+      {false && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

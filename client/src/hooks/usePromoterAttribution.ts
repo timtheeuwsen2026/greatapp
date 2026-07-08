@@ -5,10 +5,12 @@ import { apiRequest } from '@/lib/queryClient';
 
 const STORAGE_KEY = 'promoter_ref_id';
 const PROMOTER_ID_KEY = 'promoter_id';
+const SHARE_TOKEN_KEY = 'promoter_share_token';
 
 interface PromoterAttribution {
   promoterId: string | null;
   referralCode: string | null;
+  shareToken: string | null;
 }
 
 export function usePromoterAttribution() {
@@ -19,9 +21,10 @@ export function usePromoterAttribution() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const refCode = urlParams.get('ref');
+    const shareToken = urlParams.get('share');
     
     if (refCode) {
-      storeAttribution(refCode);
+      storeAttribution(refCode, shareToken);
     }
   }, [location]);
 
@@ -39,10 +42,18 @@ export function usePromoterAttribution() {
   };
 }
 
-export async function storeAttribution(refCode: string): Promise<void> {
+export async function storeAttribution(refCode: string, shareToken?: string | null): Promise<void> {
   try {
     sessionStorage.setItem(STORAGE_KEY, refCode);
     localStorage.setItem(STORAGE_KEY, refCode);
+
+    if (shareToken) {
+      sessionStorage.setItem(SHARE_TOKEN_KEY, shareToken);
+      localStorage.setItem(SHARE_TOKEN_KEY, shareToken);
+    } else {
+      sessionStorage.removeItem(SHARE_TOKEN_KEY);
+      localStorage.removeItem(SHARE_TOKEN_KEY);
+    }
     
     sessionStorage.removeItem(PROMOTER_ID_KEY);
     localStorage.removeItem(PROMOTER_ID_KEY);
@@ -50,7 +61,7 @@ export async function storeAttribution(refCode: string): Promise<void> {
     const response = await fetch('/api/promoter-attribution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ referralCode: refCode }),
+      body: JSON.stringify({ referralCode: refCode, shareToken: shareToken || undefined }),
       credentials: 'include'
     });
     
@@ -59,6 +70,10 @@ export async function storeAttribution(refCode: string): Promise<void> {
       if (data.promoterId) {
         sessionStorage.setItem(PROMOTER_ID_KEY, data.promoterId);
         localStorage.setItem(PROMOTER_ID_KEY, data.promoterId);
+      }
+      if (data.shareToken) {
+        sessionStorage.setItem(SHARE_TOKEN_KEY, data.shareToken);
+        localStorage.setItem(SHARE_TOKEN_KEY, data.shareToken);
       }
     }
   } catch (e) {
@@ -75,14 +90,19 @@ export function getAttribution(): PromoterAttribution {
     const sessionPromoterId = sessionStorage.getItem(PROMOTER_ID_KEY);
     const localPromoterId = localStorage.getItem(PROMOTER_ID_KEY);
     const promoterId = sessionPromoterId || localPromoterId || null;
+
+    const sessionShareToken = sessionStorage.getItem(SHARE_TOKEN_KEY);
+    const localShareToken = localStorage.getItem(SHARE_TOKEN_KEY);
+    const shareToken = sessionShareToken || localShareToken || null;
     
     return {
       promoterId,
       referralCode,
+      shareToken,
     };
   } catch (e) {
     console.error('Failed to get promoter attribution:', e);
-    return { promoterId: null, referralCode: null };
+    return { promoterId: null, referralCode: null, shareToken: null };
   }
 }
 
@@ -92,6 +112,8 @@ export function clearAttribution(): void {
     localStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(PROMOTER_ID_KEY);
     localStorage.removeItem(PROMOTER_ID_KEY);
+    sessionStorage.removeItem(SHARE_TOKEN_KEY);
+    localStorage.removeItem(SHARE_TOKEN_KEY);
   } catch (e) {
     console.error('Failed to clear promoter attribution:', e);
   }

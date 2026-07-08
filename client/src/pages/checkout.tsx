@@ -123,6 +123,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             stripePaymentIntentId: paymentIntent.id,
             promoterId: attribution.promoterId,
             referralCode: attribution.referralCode,
+            shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
             paymentType: paymentMode
           });
@@ -171,6 +172,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             stripePaymentIntentId: paymentIntent.id,
             promoterId: attribution.promoterId,
             referralCode: attribution.referralCode,
+            shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
             paymentType: paymentMode
           });
@@ -502,6 +504,7 @@ export default function Checkout() {
         stripePaymentIntentId: null,
         promoterId: attribution.promoterId,
         referralCode: attribution.referralCode,
+        shareToken: attribution.shareToken,
         ticketSkuId: freeRsvpInfo?.ticketSkuId,
         paymentType: 'full'
       });

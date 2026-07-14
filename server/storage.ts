@@ -102,6 +102,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
+import { normalizeCurrency } from "./impactLedger";
 
 type ReferralClickStats = {
   totalClicks: number;
@@ -3213,13 +3214,26 @@ export class DatabaseStorage implements IStorage {
     }>;
   }> {
     const promoterBookings = await this.getPromoterBookings(promoterId, referralAudience);
+    const experienceIds = Array.from(new Set(promoterBookings.map((booking) => booking.experienceId)));
+    const experienceRows = experienceIds.length > 0
+      ? await db.select({ id: experiences.id, currency: experiences.currency })
+          .from(experiences)
+          .where(inArray(experiences.id, experienceIds))
+      : [];
+    const experienceCurrencyById = new Map(
+      experienceRows.map((experience) => [experience.id, experience.currency]),
+    );
     
     // Group by currency and SUM stored commission amounts (no recalculation)
-    // Uses ONLY stored booking data: commissionAmount, commissionCurrency, commissionStatus
+    // Amount and status remain immutable booking-ledger values; event currency fills legacy nulls.
     const currencyMap = new Map<string, { estimated: number; locked: number; paid: number; voided: number; totalBookings: number }>();
     
     for (const booking of promoterBookings) {
-      const currency = booking.commissionCurrency || 'EUR';
+      const currency = normalizeCurrency(
+        booking.commissionCurrency,
+        experienceCurrencyById.get(booking.experienceId),
+      );
+      if (!currency) continue;
       // Use stored commission amount directly (calculated at booking time)
       const amount = parseFloat(booking.commissionAmount || '0');
       const status = booking.commissionStatus || 'estimated';

@@ -156,13 +156,9 @@ function numberOrZero(value: unknown): number {
 }
 
 function getBookingValue(booking: PromoterBooking): number {
-  return numberOrZero(
-    booking.bookingValue
-      ?? booking.totalAmount
-      ?? booking.totalPrice
-      ?? booking.amount
-      ?? 0,
-  );
+  const values = [booking.bookingValue, booking.totalPrice, booking.totalAmount, booking.amount];
+  const positiveValue = values.map(numberOrZero).find((value) => value > 0);
+  return positiveValue ?? 0;
 }
 
 function MVGProgressBar({ experience }: { experience: PromotedExperience["experience"] }) {
@@ -717,15 +713,15 @@ function BookingsTableCard({ data, isLoading, official }: { data: PromoterBookin
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((booking) => (
+              {data.map((booking) => {
+                const bookingCurrency = booking.currency || booking.commissionCurrency;
+                const bookingValue = getBookingValue(booking);
+                return (
                 <TableRow key={booking.id}>
                   <TableCell className="font-medium">{booking.experienceName}</TableCell>
                   <TableCell className="font-mono text-sm">{booking.id.slice(0, 8)}...</TableCell>
                   <TableCell>
-                    {formatCurrency(
-                      getBookingValue(booking),
-                      booking.commissionCurrency || booking.currency || 'EUR',
-                    )}
+                    {bookingCurrency ? formatCurrency(bookingValue, bookingCurrency) : bookingValue.toFixed(2)}
                   </TableCell>
                   <TableCell>
                     {/* DATA CONTRACT: Commission from stored values only - no fallback */}
@@ -738,7 +734,8 @@ function BookingsTableCard({ data, isLoading, official }: { data: PromoterBookin
                     {new Date(booking.bookingDate).toLocaleDateString()}
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -754,7 +751,7 @@ interface ImpactStats {
   uniqueVisitors: number;
   conversionRate: number;
   tripCreditsEarned: number;
-  tripCreditsCurrency?: string;
+  tripCreditsCurrency?: string | null;
   tripCreditsByCurrency?: Record<string, number>;
   shareExperience: {
     id: string;
@@ -813,8 +810,9 @@ function RecruitmentStatsSection({
   const uniqueVisitors = stats?.uniqueVisitors ?? 0;
   const conversionRate = stats?.conversionRate ?? 0;
   const tripCreditsEarned = stats?.tripCreditsEarned ?? 0;
-  const tripCreditsCurrency = stats?.tripCreditsCurrency || 'EUR';
-  const creditEntries = Object.entries(stats?.tripCreditsByCurrency || {});
+  const tripCreditsCurrency = stats?.tripCreditsCurrency || stats?.shareExperience?.currency;
+  const creditEntries = Object.entries(stats?.tripCreditsByCurrency || {})
+    .sort(([left], [right]) => left.localeCompare(right));
   const message = getMotivationalMessage(bookingsFromLinks);
   const isTrophyTier = bookingsFromLinks >= 6;
 
@@ -864,11 +862,17 @@ function RecruitmentStatsSection({
         <Card className="border-green-100 dark:border-green-900/40 bg-gradient-to-br from-green-50 to-white dark:from-green-950/30 dark:to-gray-900 text-center" data-testid="stat-trip-credits">
           <CardContent className="pt-5 pb-4">
             <div className="text-2xl mb-1">Earned</div>
-            <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">
-              {creditEntries.length > 0
-                ? creditEntries.map(([currency, amount]) => formatCurrency(amount, currency)).join(' / ')
-                : formatCurrency(tripCreditsEarned, tripCreditsCurrency)}
-            </p>
+            <div className="mb-1 space-y-1 text-green-600 dark:text-green-400">
+              {creditEntries.length > 0 ? creditEntries.map(([currency, amount]) => (
+                <p key={currency} className="text-2xl font-black" data-testid={`earned-${currency.toLowerCase()}`}>
+                  {formatCurrency(amount, currency)}
+                </p>
+              )) : (
+                <p className="text-3xl font-black">
+                  {tripCreditsCurrency ? formatCurrency(tripCreditsEarned, tripCreditsCurrency) : '—'}
+                </p>
+              )}
+            </div>
             <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">
               {official ? "Commission" : "Cashback"}
             </p>

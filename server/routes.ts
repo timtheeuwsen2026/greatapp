@@ -35,6 +35,7 @@ import { calculateBookingCommission, lockCommissionsForExperience, voidCommissio
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
+import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -1050,19 +1051,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const promoterBookings = await storage.getPromoterBookings(userId, audience);
 
       const friendsJoined = promoterBookings.length;
+      const experienceEntries = await Promise.all(
+        Array.from(new Set(promoterBookings.map((booking) => booking.experienceId))).map(async (experienceId) => [
+          experienceId,
+          await storage.getExperience(experienceId),
+        ] as const),
+      );
+      const experienceById = new Map(experienceEntries);
 
-      // Sum commissions (estimated + locked — not voided)
+      // Sum active commissions by currency (estimated + locked + paid, not voided).
       let tripCreditsEarned = 0;
-      let tripCreditsCurrency = 'EUR';
-      const tripCreditsByCurrency: Record<string, number> = {};
-      for (const b of promoterBookings) {
-        const status = b.commissionStatus;
-        const currency = (b.commissionCurrency || 'EUR').toUpperCase();
-        if (status === 'estimated' || status === 'locked' || status === 'paid') {
-          const amount = parseFloat(b.commissionAmount || '0');
-          tripCreditsByCurrency[currency] = (tripCreditsByCurrency[currency] || 0) + amount;
-        }
-      }
+      let tripCreditsCurrency: string | null = null;
+      const tripCreditsByCurrency = summarizeImpactEarnings(
+        promoterBookings.map((booking) => ({
+          booking,
+          experienceCurrency: experienceById.get(booking.experienceId)?.currency,
+        })),
+      );
       const creditCurrencies = Object.keys(tripCreditsByCurrency);
       if (creditCurrencies.length === 1) {
         tripCreditsCurrency = creditCurrencies[0];
@@ -1076,7 +1081,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
         );
         const recentExpId = sorted[0].experienceId;
-        const exp = await storage.getExperience(recentExpId);
+        const exp = experienceById.get(recentExpId) || await storage.getExperience(recentExpId);
         if (exp) {
           shareExperience = {
             id: exp.id,
@@ -1231,15 +1236,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enrichedBookings = await Promise.all(
         bookings.map(async (booking) => {
           const experience = await storage.getExperience(booking.experienceId);
-          const bookingValue = (booking as any).totalPrice || (booking as any).totalAmount || booking.amount || '0.00';
+          const bookingValue = resolveBookingGrossValue(booking as any).toFixed(2);
+          const currency = normalizeCurrency(experience?.currency, booking.commissionCurrency);
           return {
             ...booking,
             experienceName: experience?.title || 'Unknown Experience',
             experienceSlug: experience?.slug,
             bookingValue,
             totalAmount: bookingValue,
-            currency: booking.commissionCurrency || experience?.currency || 'EUR',
-            commissionCurrency: booking.commissionCurrency || experience?.currency || null,
+            currency,
+            commissionCurrency: normalizeCurrency(booking.commissionCurrency, experience?.currency),
           };
         })
       );
@@ -9530,12 +9536,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           experienceName: experience.title,
           ticketSkuId: booking.ticketSkuId,
           spots: (booking as any).spots || 1,
-          bookingValue: (booking as any).totalAmount || booking.totalPrice || booking.amount || '0.00',
+          bookingValue: resolveBookingGrossValue(booking as any).toFixed(2),
           commissionAmount: booking.commissionAmount,
           commissionStatus: booking.commissionStatus || 'estimated',
           commissionTransferId: booking.commissionTransferId,
           commissionPaidAt: booking.commissionPaidAt,
-          currency: booking.commissionCurrency || experience.currency || 'EUR',
+          currency: normalizeCurrency(experience.currency, booking.commissionCurrency),
           participantName: participant ? `${participant.firstName || ''} ${participant.lastName || ''}`.trim() || participant.email : 'Unknown',
           createdAt: booking.createdAt,
         })),

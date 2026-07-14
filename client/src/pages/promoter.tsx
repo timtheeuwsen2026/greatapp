@@ -9,15 +9,17 @@ import { apiRequest } from "@/lib/queryClient";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import Navigation from "@/components/navigation";
 import { ShareKitModal } from "@/components/ShareKitModal";
-import { getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
+import { getParticipantReferralSummary, getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
 
 interface EarningsSummary {
   byCurrency: Array<{
     currency: string;
     estimated: number;
     locked: number;
+    paid: number;
     voided: number;
     totalBookings: number;
   }>;
@@ -27,16 +29,28 @@ interface PromotedExperience {
   promoterExperienceId: string | null;
   shareToken: string | null;
   referralLink: string;
+  referralAudience: 'participant' | 'official_partner';
+  dealOffer?: any;
   experience: {
     id: string;
     title: string;
     slug: string;
     mvgStatus: string | null;
     status: string;
+    requireMinimumParticipants?: boolean | null;
+    minimumParticipants?: number | null;
+    mvgMin?: number | null;
+    currentParticipants?: number | null;
+    maxParticipants?: number | null;
+    mvgMet?: boolean | null;
     startDate: string | null;
     endDate: string | null;
     location: string | null;
     lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
+    participantReferralDealType?: string | null;
+    participantReferralCommissionPct?: string | null;
+    participantReferralMilestoneAttendeeTarget?: number | null;
+    participantReferralMilestoneRewardDescription?: string | null;
     influencerPromotionEnabled?: boolean | null;
     influencerCommissionPct?: string | null;
     promotionDealType?: string | null;
@@ -53,6 +67,7 @@ interface PromotedExperience {
   spotsBooked: number;
   estimatedCommission: number;
   lockedCommission: number;
+  paidCommission: number;
   currency: string;
 }
 
@@ -62,9 +77,13 @@ interface PromoterBooking {
   experienceName: string;
   experienceSlug: string;
   ticketTypes: string | null;
-  totalAmount: string;
+  totalAmount?: string | null;
+  totalPrice?: string | null;
+  amount?: string | null;
+  bookingValue?: string | null;
   commissionAmount: string | null;
   commissionCurrency: string | null;
+  currency?: string | null;
   commissionStatus: string | null;
   bookingDate: string;
   status: string;
@@ -82,6 +101,8 @@ interface PromoterProfile {
   profilePhoto: string | null;
   bio: string;
   completed: boolean;
+  stripeAccountId?: string | null;
+  stripeVerificationStatus?: string | null;
 }
 
 function formatCurrency(amount: number, currency: string): string {
@@ -121,13 +142,61 @@ function getCommissionStatusBadge(status: string | null) {
       return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"><CheckCircle className="h-3 w-3 mr-1" />Locked</Badge>;
     case 'voided':
       return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"><XCircle className="h-3 w-3 mr-1" />Voided</Badge>;
+    case 'paid':
+      return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100"><DollarSign className="h-3 w-3 mr-1" />Paid</Badge>;
     case 'estimated':
     default:
       return <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><Clock className="h-3 w-3 mr-1" />Estimated</Badge>;
   }
 }
 
-function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | undefined; isLoading: boolean }) {
+function numberOrZero(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getBookingValue(booking: PromoterBooking): number {
+  return numberOrZero(
+    booking.bookingValue
+      ?? booking.totalAmount
+      ?? booking.totalPrice
+      ?? booking.amount
+      ?? 0,
+  );
+}
+
+function MVGProgressBar({ experience }: { experience: PromotedExperience["experience"] }) {
+  const target = numberOrZero(experience.mvgMin ?? experience.minimumParticipants);
+  if (!experience.requireMinimumParticipants || target <= 0) return null;
+
+  const current = numberOrZero(experience.currentParticipants);
+  const isConfirmed = !!experience.mvgMet
+    || experience.mvgStatus === "met"
+    || experience.lifecycleStatus === "confirmed"
+    || current >= target;
+  const progress = Math.min(100, Math.round((current / target) * 100));
+  const remaining = Math.max(0, target - current);
+
+  return (
+    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900 dark:bg-amber-950/20">
+      <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+        <span className="font-semibold text-amber-900 dark:text-amber-100">
+          {isConfirmed
+            ? `${current}/${target} bookings - confirmed!`
+            : `${current}/${target} bookings to confirm!`}
+        </span>
+        {!isConfirmed && (
+          <span className="text-xs font-medium text-amber-700 dark:text-amber-200">
+            {remaining} more needed
+          </span>
+        )}
+      </div>
+      <Progress value={progress} className="h-2" />
+    </div>
+  );
+}
+
+function EarningsSummaryCard({ data, isLoading, official }: { data: EarningsSummary | undefined; isLoading: boolean; official: boolean }) {
   if (isLoading) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -148,7 +217,7 @@ function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | unde
       <Card className="mb-8">
         <CardContent className="p-6 text-center text-muted-foreground">
           <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-50" />
-          <p>No cashback earnings yet. Share your referral link to start earning!</p>
+          <p>No {official ? "commission earnings" : "cashback"} yet. Share your referral link to start earning!</p>
         </CardContent>
       </Card>
     );
@@ -158,7 +227,7 @@ function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | unde
     <div className="space-y-4 mb-8">
       {data.byCurrency.map((currencyData) => (
         <div key={currencyData.currency}>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <Card>
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 text-muted-foreground mb-1">
@@ -169,6 +238,19 @@ function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | unde
                   {formatCurrency(currencyData.estimated, currencyData.currency)}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">Pending MVG outcome</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-6">
+                <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                  <DollarSign className="h-4 w-4 text-blue-500" />
+                  <span className="text-sm">Paid</span>
+                </div>
+                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                  {formatCurrency(currencyData.paid || 0, currencyData.currency)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">Transferred via Stripe</p>
               </CardContent>
             </Card>
             
@@ -217,7 +299,7 @@ function EarningsSummaryCard({ data, isLoading }: { data: EarningsSummary | unde
   );
 }
 
-function PromoterInfoCard({ data, isLoading }: { data: PromoterInfo | undefined; isLoading: boolean }) {
+function PromoterInfoCard({ data, isLoading, official }: { data: PromoterInfo | undefined; isLoading: boolean; official: boolean }) {
   const [copied, setCopied] = useState(false);
   
   const handleCopy = (text: string) => {
@@ -246,7 +328,9 @@ function PromoterInfoCard({ data, isLoading }: { data: PromoterInfo | undefined;
           <Rocket className="h-5 w-5 text-primary" />
           My Referral Code
         </CardTitle>
-        <CardDescription>Share your referral link to earn cashback when friends book</CardDescription>
+        <CardDescription>
+          Share your referral link to earn {official ? "commission" : "cashback"} when people book
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div>
@@ -344,7 +428,15 @@ function PromoterProfileStatusCard({ profile, isLoading }: { profile: PromoterPr
   );
 }
 
-function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience[] | undefined; isLoading: boolean }) {
+function PromotedExperiencesCard({
+  data,
+  isLoading,
+  showPartnerPool,
+}: {
+  data: PromotedExperience[] | undefined;
+  isLoading: boolean;
+  showPartnerPool: boolean;
+}) {
   const [, navigate] = useLocation();
 
   if (isLoading) {
@@ -373,14 +465,16 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
           <TrendingUp className="h-10 w-10 mx-auto mb-3 text-indigo-300" />
           <h3 className="font-medium text-lg mb-2">You haven't added any experiences to promote yet</h3>
           <p className="text-muted-foreground mb-4 max-w-md mx-auto">
-            Browse the Experience Pool, click "Promote This Experience" to add an experience here, then share your unique referral link.
+            Your attendee referral links will appear here after you share or book experiences.
           </p>
-          <Button asChild className="bg-pink-600 hover:bg-pink-700">
-            <Link href="/promoter/experience-pool">
-              <Sparkles className="h-4 w-4 mr-2" />
-              Browse Experience Pool
-            </Link>
-          </Button>
+          {showPartnerPool && (
+            <Button asChild className="bg-pink-600 hover:bg-pink-700">
+              <Link href="/promoter/experience-pool">
+                <Sparkles className="h-4 w-4 mr-2" />
+                Browse Experience Pool
+              </Link>
+            </Button>
+          )}
         </CardContent>
       </Card>
     );
@@ -397,12 +491,14 @@ function PromotedExperiencesCard({ data, isLoading }: { data: PromotedExperience
             </CardTitle>
             <CardDescription>Experiences you're promoting with earnings and referral links</CardDescription>
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/promoter/experience-pool">
-              <Sparkles className="h-4 w-4 mr-2" />
-              Add More Experiences
-            </Link>
-          </Button>
+          {showPartnerPool && (
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/promoter/experience-pool">
+                <Sparkles className="h-4 w-4 mr-2" />
+                Add More Experiences
+              </Link>
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -429,9 +525,9 @@ function PromotedExperienceItem({
 }) {
   const [copied, setCopied] = useState(false);
   const referralLink = item.referralLink || "";
-  const promotionOffer = getPromotionOfferSummary(item.experience, {
-    referredBookings: item.spotsBooked,
-  });
+  const promotionOffer = item.referralAudience === 'official_partner'
+    ? getPromotionOfferSummary(item.dealOffer || item.experience, { referredBookings: item.spotsBooked })
+    : getParticipantReferralSummary(item.experience, { referredBookings: item.spotsBooked });
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -491,6 +587,8 @@ function PromotedExperienceItem({
           </div>
         </div>
 
+        <MVGProgressBar experience={item.experience} />
+
         <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-4">
           <div className="rounded-xl bg-muted/50 p-3 text-center">
             <p className="text-xs text-muted-foreground mb-1">Link Clicks</p>
@@ -514,20 +612,33 @@ function PromotedExperienceItem({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-1 gap-3 mb-4 sm:grid-cols-3">
           <div className="rounded-xl border bg-slate-50/70 p-3">
-            <p className="text-xs text-muted-foreground mb-1">Estimated Cashback</p>
+            <p className="text-xs text-muted-foreground mb-1">
+              Estimated {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
+            </p>
             <p className="font-bold text-lg text-slate-700 dark:text-slate-200">
               {formatCurrency(item.estimatedCommission, item.currency)}
             </p>
             <p className="text-xs text-muted-foreground">Pending experience confirmation</p>
           </div>
           <div className="rounded-xl border bg-green-50/70 p-3">
-            <p className="text-xs text-muted-foreground mb-1">Locked Cashback</p>
+            <p className="text-xs text-muted-foreground mb-1">
+              Locked {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
+            </p>
             <p className="font-bold text-lg text-green-600 dark:text-green-400">
               {formatCurrency(item.lockedCommission, item.currency)}
             </p>
             <p className="text-xs text-muted-foreground">Confirmed and secured</p>
+          </div>
+          <div className="rounded-xl border bg-blue-50/70 p-3">
+            <p className="text-xs text-muted-foreground mb-1">
+              Paid {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
+            </p>
+            <p className="font-bold text-lg text-blue-600 dark:text-blue-400">
+              {formatCurrency(item.paidCommission, item.currency)}
+            </p>
+            <p className="text-xs text-muted-foreground">Transferred via Stripe</p>
           </div>
         </div>
 
@@ -552,7 +663,7 @@ function PromotedExperienceItem({
   );
 }
 
-function BookingsTableCard({ data, isLoading }: { data: PromoterBooking[] | undefined; isLoading: boolean }) {
+function BookingsTableCard({ data, isLoading, official }: { data: PromoterBooking[] | undefined; isLoading: boolean; official: boolean }) {
   if (isLoading) {
     return (
       <Card>
@@ -600,7 +711,7 @@ function BookingsTableCard({ data, isLoading }: { data: PromoterBooking[] | unde
                 <TableHead>Experience</TableHead>
                 <TableHead>Booking ID</TableHead>
                 <TableHead>Booking Value</TableHead>
-                <TableHead>Cashback / Earnings</TableHead>
+                <TableHead>{official ? "Commission" : "Cashback"}</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
@@ -611,10 +722,10 @@ function BookingsTableCard({ data, isLoading }: { data: PromoterBooking[] | unde
                   <TableCell className="font-medium">{booking.experienceName}</TableCell>
                   <TableCell className="font-mono text-sm">{booking.id.slice(0, 8)}...</TableCell>
                   <TableCell>
-                    {/* DATA CONTRACT: Use booking.commissionCurrency only - no fallback */}
-                    {booking.commissionCurrency
-                      ? formatCurrency(parseFloat(booking.totalAmount || '0'), booking.commissionCurrency)
-                      : '—'}
+                    {formatCurrency(
+                      getBookingValue(booking),
+                      booking.commissionCurrency || booking.currency || 'EUR',
+                    )}
                   </TableCell>
                   <TableCell>
                     {/* DATA CONTRACT: Commission from stored values only - no fallback */}
@@ -643,6 +754,8 @@ interface ImpactStats {
   uniqueVisitors: number;
   conversionRate: number;
   tripCreditsEarned: number;
+  tripCreditsCurrency?: string;
+  tripCreditsByCurrency?: Record<string, number>;
   shareExperience: {
     id: string;
     title: string;
@@ -666,12 +779,14 @@ function RecruitmentStatsSection({
   onRefresh,
   isRefreshing,
   onInviteClick,
+  official,
 }: {
   stats: ImpactStats | undefined;
   isLoading: boolean;
   onRefresh: () => void;
   isRefreshing: boolean;
   onInviteClick: () => void;
+  official: boolean;
 }) {
   if (isLoading) {
     return (
@@ -698,6 +813,8 @@ function RecruitmentStatsSection({
   const uniqueVisitors = stats?.uniqueVisitors ?? 0;
   const conversionRate = stats?.conversionRate ?? 0;
   const tripCreditsEarned = stats?.tripCreditsEarned ?? 0;
+  const tripCreditsCurrency = stats?.tripCreditsCurrency || 'EUR';
+  const creditEntries = Object.entries(stats?.tripCreditsByCurrency || {});
   const message = getMotivationalMessage(bookingsFromLinks);
   const isTrophyTier = bookingsFromLinks >= 6;
 
@@ -748,9 +865,13 @@ function RecruitmentStatsSection({
           <CardContent className="pt-5 pb-4">
             <div className="text-2xl mb-1">Earned</div>
             <p className="text-3xl font-black text-green-600 dark:text-green-400 mb-1">
-              EUR {tripCreditsEarned.toFixed(0)}
+              {creditEntries.length > 0
+                ? creditEntries.map(([currency, amount]) => formatCurrency(amount, currency)).join(' / ')
+                : formatCurrency(tripCreditsEarned, tripCreditsCurrency)}
             </p>
-            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Cashback / Earnings</p>
+            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">
+              {official ? "Commission" : "Cashback"}
+            </p>
             <p className="text-xs text-muted-foreground mt-0.5">Paid out to your Stripe account</p>
           </CardContent>
         </Card>
@@ -968,6 +1089,10 @@ export default function PromoterDashboard() {
     queryKey: ['/api/promoter/offers'],
     enabled: !!user,
   });
+  const showPartnerPool = !!promoterProfile?.completed;
+  const showOfficialPartnerDeals = showPartnerPool || !!directOffers?.length;
+  const isOfficialDashboard = showPartnerPool
+    || !!experiences?.some((item) => item.referralAudience === "official_partner");
 
   const [respondingOfferId, setRespondingOfferId] = useState<string | null>(null);
 
@@ -985,6 +1110,16 @@ export default function PromoterDashboard() {
       }
     },
     onSettled: () => setRespondingOfferId(null),
+  });
+
+  const stripeConnectMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', '/api/promoter/stripe-connect');
+      return response.json() as Promise<{ url: string }>;
+    },
+    onSuccess: ({ url }) => {
+      window.location.assign(url);
+    },
   });
 
   // click stats are now embedded inside impactStats (via /api/me/impact-stats)
@@ -1066,6 +1201,7 @@ export default function PromoterDashboard() {
           onRefresh={() => refetchStats()}
           isRefreshing={statsFetching}
           onInviteClick={() => setShowShareModal(true)}
+          official={isOfficialDashboard}
         />
 
         {/* Impact explainer banner */}
@@ -1075,18 +1211,20 @@ export default function PromoterDashboard() {
               <Rocket className="h-8 w-8 text-primary shrink-0" />
               <div className="text-center sm:text-left">
                 <p className="font-semibold text-gray-900 dark:text-white">
-                  Share your referral link and earn cashback when friends book.
+                  Share your referral link and earn {isOfficialDashboard ? "commission" : "cashback"} when people book.
                 </p>
                 <p className="text-muted-foreground text-sm mt-0.5">
-                  The more you share, the sooner your experience confirms. Cashback / earnings are paid out to your Stripe account.
+                  The more you share, the sooner your experience confirms. {isOfficialDashboard ? "Commission" : "Cashback"} is paid out to your Stripe account.
                 </p>
               </div>
-              <Button asChild size="sm" className="ml-auto bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white shrink-0">
-                <Link href="/promoter/experience-pool">
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Browse Experiences to Share
-                </Link>
-              </Button>
+              {showPartnerPool && (
+                <Button asChild size="sm" className="ml-auto bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white shrink-0">
+                  <Link href="/promoter/experience-pool">
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Browse Experiences to Share
+                  </Link>
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1094,16 +1232,16 @@ export default function PromoterDashboard() {
         <PromoterProfileStatusCard profile={promoterProfile} isLoading={profileLoading} />
 
         {/* Referral Code */}
-        <PromoterInfoCard data={promoterInfo} isLoading={infoLoading} />
+        <PromoterInfoCard data={promoterInfo} isLoading={infoLoading} official={isOfficialDashboard} />
 
         {/* Cashback / Earnings Summary */}
-        <EarningsSummaryCard data={earnings} isLoading={earningsLoading} />
+        <EarningsSummaryCard data={earnings} isLoading={earningsLoading} official={isOfficialDashboard} />
 
         {/* How Cashback / Earnings Work */}
         <Card className="mb-8 bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
           <CardContent className="py-4">
             <h3 className="text-sm font-semibold mb-3 text-blue-800 dark:text-blue-300">
-              How Cashback / Earnings Work
+              How {isOfficialDashboard ? "Commission" : "Cashback"} Works
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
               <div className="flex items-start gap-2">
@@ -1112,7 +1250,7 @@ export default function PromoterDashboard() {
                 </div>
                 <div>
                   <span className="font-medium text-gray-700 dark:text-gray-300">Estimated</span>
-                  <p className="text-muted-foreground text-xs">Friend booked — cashback pending group confirmation.</p>
+                  <p className="text-muted-foreground text-xs">Booking received - {isOfficialDashboard ? "commission" : "cashback"} pending group confirmation.</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -1121,7 +1259,7 @@ export default function PromoterDashboard() {
                 </div>
                 <div>
                   <span className="font-medium text-green-700 dark:text-green-300">Locked</span>
-                  <p className="text-muted-foreground text-xs">Experience confirmed — your cashback is secured.</p>
+                  <p className="text-muted-foreground text-xs">Experience confirmed - your {isOfficialDashboard ? "commission" : "cashback"} is secured.</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -1137,23 +1275,42 @@ export default function PromoterDashboard() {
             <p className="mt-3 text-xs text-muted-foreground">
               Locked earnings are routed to your connected Stripe account on the next scheduled payout.
             </p>
+            {promoterProfile?.stripeVerificationStatus !== 'verified' && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                disabled={stripeConnectMutation.isPending}
+                onClick={() => stripeConnectMutation.mutate()}
+              >
+                <DollarSign className="mr-2 h-4 w-4" />
+                {stripeConnectMutation.isPending ? 'Opening Stripe...' : 'Connect Stripe for Payouts'}
+              </Button>
+            )}
           </CardContent>
         </Card>
 
         {/* Incoming Offers (Digital Handshake — Options A & B direct offers) */}
-        <PromoterOffersCard
-          data={directOffers}
-          isLoading={offersLoading}
-          onAccept={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'accept' })}
-          onDecline={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'decline' })}
-          respondingId={respondingOfferId}
-        />
+        {showOfficialPartnerDeals && (
+          <PromoterOffersCard
+            data={directOffers}
+            isLoading={offersLoading}
+            onAccept={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'accept' })}
+            onDecline={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'decline' })}
+            respondingId={respondingOfferId}
+          />
+        )}
 
         {/* My Experiences */}
-        <PromotedExperiencesCard data={experiences} isLoading={experiencesLoading} />
+        <PromotedExperiencesCard
+          data={experiences}
+          isLoading={experiencesLoading}
+          showPartnerPool={showPartnerPool}
+        />
 
         {/* Referred Bookings */}
-        <BookingsTableCard data={bookings} isLoading={bookingsLoading} />
+        <BookingsTableCard data={bookings} isLoading={bookingsLoading} official={isOfficialDashboard} />
       </div>
 
       {/* Share Kit Modal */}

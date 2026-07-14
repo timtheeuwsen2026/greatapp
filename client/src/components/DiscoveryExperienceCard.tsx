@@ -27,11 +27,28 @@ function getCity(experience: any) {
   return city.replace(/^\d{3,6}\s+/, "").trim() || city;
 }
 
-function getPillar(experience: any) {
-  const pillar = Array.isArray(experience.greatPillars)
-    ? experience.greatPillars.find((value: unknown) => Boolean(value))
-    : undefined;
-  return formatLabel(String(pillar || experience.category || "Experience"));
+const PILLAR_LABELS: Record<string, string> = {
+  health: "Health",
+  sports: "Sports",
+  wellness: "Wellness",
+  food: "Food",
+};
+
+const PILLAR_COLORS: Record<string, string> = {
+  health: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  sports: "bg-orange-100 text-orange-700 border-orange-200",
+  wellness: "bg-purple-100 text-purple-700 border-purple-200",
+  food: "bg-amber-100 text-amber-700 border-amber-200",
+};
+
+function getPillars(experience: any): string[] {
+  return Array.isArray(experience.greatPillars)
+    ? experience.greatPillars.filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
+function getCategoryFallbackLabel(experience: any) {
+  return formatLabel(String(experience.category || "Experience"));
 }
 
 function getPrice(experience: any) {
@@ -97,6 +114,7 @@ export function DiscoveryExperienceCard({
   const urgency = getUrgency(experience, currentParticipants);
   const price = getPrice(experience);
   const deposit = getDeposit(experience);
+  const pillars = getPillars(experience);
   const target = Number(experience.minimumParticipants || 0);
   const progress = target > 0
     ? Math.min(100, Math.round((currentParticipants / target) * 100))
@@ -134,9 +152,26 @@ export function DiscoveryExperienceCard({
             {urgency}
           </p>
         )}
-        <p className="mb-1 text-xs font-medium text-gray-500" data-testid={`card-location-pillar-${experience.id}`}>
-          {getCity(experience)} <span aria-hidden="true">·</span> {getPillar(experience)}
+        <p className="mb-1 text-xs font-medium text-gray-500" data-testid={`card-location-${experience.id}`}>
+          {getCity(experience)}
         </p>
+        {pillars.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-1" data-testid={`card-pillars-${experience.id}`}>
+            {pillars.map((pillar) => (
+              <span
+                key={pillar}
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PILLAR_COLORS[pillar] || "border-gray-200 bg-gray-100 text-gray-700"}`}
+                data-testid={`card-pillar-${experience.id}-${pillar}`}
+              >
+                {PILLAR_LABELS[pillar] || formatLabel(pillar)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-2 text-xs font-medium text-gray-500" data-testid={`card-category-${experience.id}`}>
+            {getCategoryFallbackLabel(experience)}
+          </p>
+        )}
         <h3 className="mb-2 min-h-[2.75rem] line-clamp-2 text-base font-semibold text-gray-800 dark:text-gray-200">
           {experience.title}
         </h3>

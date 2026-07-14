@@ -42,10 +42,48 @@ interface MVGData {
   met: boolean;
 }
 
+interface ReferralTarget {
+  kind: "mvg" | "capacity" | null;
+  remaining: number | null;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  sports_wellness: "Sports & Wellness",
+  retreats: "Retreats",
+  community_social: "Community & Social",
+  adventure_trips: "Adventure Trips",
+  workations: "Workations",
+  festivals_events: "Festivals & Events",
+};
+
+function categoryLabel(category?: string | null) {
+  if (!category) return null;
+  return CATEGORY_LABELS[category] || category
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function resolveLifecycle(experience: any, mvg: MVGData): LifecycleState {
   if (experience.status === "cancelled") return "CANCELLED";
   if (mvg.met || experience.status === "confirmed") return "CONFIRMED";
   return "FORMING";
+}
+
+function resolveReferralTarget(experience: any, mvg: MVGData): ReferralTarget {
+  const mvgTarget = experience.requireMinimumParticipants && mvg.minimum > 0
+    ? mvg.minimum
+    : null;
+  const capacityTarget = Number(experience.maxParticipants) > 0
+    ? Number(experience.maxParticipants)
+    : null;
+  const target = mvgTarget ?? capacityTarget;
+
+  return {
+    kind: mvgTarget ? "mvg" : capacityTarget ? "capacity" : null,
+    remaining: target ? Math.max(0, target - mvg.current) : null,
+  };
 }
 
 function buildOGTitle(experience: any, mvg: MVGData): string {
@@ -185,20 +223,19 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   });
 
   // 7. Spot count / confirmed line
-  const spotsLeft = Math.max(0, mvg.minimum - mvg.current);
+  const target = resolveReferralTarget(experience, mvg);
   const infoY = titleStartY + titleLines.slice(0, 2).length * (titleFontSize + 8) + 14;
 
   ctx.font = "500 28px sans-serif";
-  if (state === "FORMING" && mvg.minimum > 0) {
+  if (state === "FORMING") {
     ctx.fillStyle = "#fbbf24";
-    ctx.fillText(
-      `Only ${spotsLeft} more needed to confirm — join me!`,
-      56,
-      infoY
-    );
-  } else if (state === "CONFIRMED") {
-    ctx.fillStyle = "#34d399";
-    ctx.fillText("Trip confirmed — grab your spot!", 56, infoY);
+    const line = target.remaining && target.remaining > 0
+      ? target.kind === "mvg"
+        ? `Only ${target.remaining} more needed to confirm — join me!`
+        : `Only ${target.remaining} spot${target.remaining === 1 ? "" : "s"} left — join me!`
+      : "Join my squad!";
+    ctx.fillText(line, 56, infoY);
+
   }
 
   // 8. Right side: subtle Great. logo watermark (large, transparent)
@@ -213,7 +250,11 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   ctx.font = "400 15px sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.4)";
   ctx.textBaseline = "middle";
-  ctx.fillText("Great.  ·  transformative travel  ·  greatapp.ai", 56, H - 22);
+  const footerCategory = categoryLabel(experience.category);
+  const footerText = footerCategory
+    ? `Great. - ${footerCategory} - greatapp.ai`
+    : "Great. - greatapp.ai";
+  ctx.fillText(footerText, 56, H - 22);
 
   return canvas.toBuffer("image/png");
 }

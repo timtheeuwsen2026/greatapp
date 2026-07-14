@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { isAdminUser } from "@/lib/authUtils";
-import { ArrowLeft, Users, Eye, DollarSign, TrendingUp, AlertCircle } from "lucide-react";
-import { useState, useEffect } from "react";
+import { ArrowLeft, Users, Eye, DollarSign, TrendingUp, Copy, Link2 } from "lucide-react";
+import { useEffect } from "react";
 import { useLocation, Link } from "wouter";
 
 interface PromoterSummary {
@@ -16,11 +16,25 @@ interface PromoterSummary {
   email: string | null;
   firstName: string | null;
   lastName: string | null;
+  role: string | null;
   promoterCode: string | null;
+  affiliateLink: string | null;
+  affiliateLinks: Array<{
+    experienceId: string;
+    experienceTitle: string;
+    referralAudience: string;
+    url: string;
+  }>;
+  payoutStatus: string;
+  status: "active";
+  lastActiveAt: string | null;
   totalBookings: number;
   estimatedByCurrency: Record<string, number>;
   lockedByCurrency: Record<string, number>;
+  paidByCurrency: Record<string, number>;
   voidedByCurrency: Record<string, number>;
+  currentBalanceByCurrency: Record<string, number>;
+  availablePayoutByCurrency: Record<string, number>;
 }
 
 function formatCurrency(amount: number | string, currency: string): string {
@@ -74,16 +88,26 @@ export default function AdminPromotersPage() {
   }
 
   const totalBookings = promoters.reduce((sum, p) => sum + p.totalBookings, 0);
+
+  const copyAffiliateLink = async (affiliateLink: string) => {
+    const absoluteLink = new URL(affiliateLink, window.location.origin).toString();
+    await navigator.clipboard.writeText(absoluteLink);
+    toast({ title: "Affiliate link copied", description: absoluteLink });
+  };
   
   // Aggregate totals by currency to avoid mixing currencies
   const aggregatedEstimated: Record<string, number> = {};
   const aggregatedLocked: Record<string, number> = {};
+  const aggregatedPaid: Record<string, number> = {};
   promoters.forEach(p => {
     Object.entries(p.estimatedByCurrency).forEach(([currency, amount]) => {
       aggregatedEstimated[currency] = (aggregatedEstimated[currency] || 0) + amount;
     });
     Object.entries(p.lockedByCurrency).forEach(([currency, amount]) => {
       aggregatedLocked[currency] = (aggregatedLocked[currency] || 0) + amount;
+    });
+    Object.entries(p.paidByCurrency).forEach(([currency, amount]) => {
+      aggregatedPaid[currency] = (aggregatedPaid[currency] || 0) + amount;
     });
   });
 
@@ -102,18 +126,30 @@ export default function AdminPromotersPage() {
             <Users className="h-8 w-8 text-primary" />
             <div>
               <h1 className="text-3xl font-bold">Promoter Management</h1>
-              <p className="text-muted-foreground">View all promoters, their attributed bookings, and commission status</p>
+              <p className="text-muted-foreground">Active affiliate users, referral links, balances, and payout-ready earnings</p>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Total Promoters</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{promoters.length}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground flex items-center gap-1">
+                <DollarSign className="h-4 w-4" /> Paid
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-blue-600">
+                {formatCurrencyMap(aggregatedPaid)}
+              </div>
             </CardContent>
           </Card>
           <Card>
@@ -158,7 +194,7 @@ export default function AdminPromotersPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>All Promoters</CardTitle>
+            <CardTitle>Active Promoters &amp; Affiliates</CardTitle>
           </CardHeader>
           <CardContent>
             {promoters.length === 0 ? (
@@ -171,12 +207,12 @@ export default function AdminPromotersPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Promoter Code</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Affiliate Link</TableHead>
                     <TableHead className="text-right">Bookings</TableHead>
-                    <TableHead className="text-right">Estimated</TableHead>
-                    <TableHead className="text-right">Locked</TableHead>
-                    <TableHead className="text-right">Voided</TableHead>
+                    <TableHead className="text-right">Current Balance</TableHead>
+                    <TableHead className="text-right">Available Payout</TableHead>
+                    <TableHead className="text-right">Paid</TableHead>
                     <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -184,25 +220,70 @@ export default function AdminPromotersPage() {
                   {promoters.map((promoter) => (
                     <TableRow key={promoter.id}>
                       <TableCell className="font-medium">
-                        {promoter.firstName || promoter.lastName 
-                          ? `${promoter.firstName || ''} ${promoter.lastName || ''}`.trim()
-                          : 'Unknown'}
+                        <div>
+                          <div>
+                            {promoter.firstName || promoter.lastName
+                              ? `${promoter.firstName || ''} ${promoter.lastName || ''}`.trim()
+                              : 'Unknown'}
+                          </div>
+                          <div className="max-w-[220px] truncate text-xs font-normal text-muted-foreground">
+                            {promoter.email || 'No email'}
+                          </div>
+                        </div>
                       </TableCell>
-                      <TableCell>{promoter.email || '-'}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="font-mono">
-                          {promoter.promoterCode || '-'}
-                        </Badge>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant="secondary" className="capitalize">
+                            {(promoter.role || 'participant').replace(/_/g, ' ')}
+                          </Badge>
+                          <Badge variant="outline" className="border-green-200 text-green-700">
+                            Active
+                          </Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {promoter.affiliateLinks.length > 0 ? (
+                          <div className="flex max-w-[260px] items-center gap-2">
+                            <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate text-xs" title={promoter.affiliateLinks[0].url}>
+                              {promoter.affiliateLinks[0].experienceTitle}
+                            </span>
+                            {promoter.affiliateLinks.length > 1 && (
+                              <Badge variant="secondary">+{promoter.affiliateLinks.length - 1}</Badge>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 shrink-0"
+                              onClick={() => copyAffiliateLink(promoter.affiliateLinks[0].url)}
+                              aria-label={`Copy affiliate link for ${promoter.email || promoter.id}`}
+                            >
+                              <Copy className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ) : promoter.affiliateLink ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => copyAffiliateLink(promoter.affiliateLink!)}
+                          >
+                            <Copy className="mr-2 h-4 w-4" />
+                            {promoter.promoterCode}
+                          </Button>
+                        ) : '-'}
                       </TableCell>
                       <TableCell className="text-right">{promoter.totalBookings}</TableCell>
-                      <TableCell className="text-right text-gray-600">
-                        {formatCurrencyMap(promoter.estimatedByCurrency)}
+                      <TableCell className="text-right font-medium">
+                        {formatCurrencyMap(promoter.currentBalanceByCurrency)}
                       </TableCell>
                       <TableCell className="text-right text-green-600">
-                        {formatCurrencyMap(promoter.lockedByCurrency)}
+                        <div>{formatCurrencyMap(promoter.availablePayoutByCurrency)}</div>
+                        <div className="text-xs capitalize text-muted-foreground">
+                          {promoter.payoutStatus.replace(/_/g, ' ')}
+                        </div>
                       </TableCell>
-                      <TableCell className="text-right text-red-600">
-                        {formatCurrencyMap(promoter.voidedByCurrency)}
+                      <TableCell className="text-right text-blue-600">
+                        {formatCurrencyMap(promoter.paidByCurrency)}
                       </TableCell>
                       <TableCell className="text-center">
                         <Link href={`/admin/promoters/${promoter.id}`}>

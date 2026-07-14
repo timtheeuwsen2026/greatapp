@@ -88,6 +88,21 @@ export default function PromoterProfileSetup() {
     },
   });
 
+  const connectStripe = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/promoter/stripe-connect", {});
+      return response.json();
+    },
+    onSuccess: (data: { url: string }) => {
+      window.location.assign(data.url);
+    },
+    onError: (error: Error) => toast({
+      title: "Stripe setup failed",
+      description: error.message,
+      variant: "destructive",
+    }),
+  });
+
   const canSubmit = form.displayName.trim() && form.profilePhoto && form.bio.trim().length >= 10;
 
   if (isLoading) {
@@ -164,6 +179,27 @@ export default function PromoterProfileSetup() {
             </div>
           </CardContent>
         </Card>
+
+        {(existingProfile as any)?.completed && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Cash Payouts</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-medium">
+                  {(existingProfile as any)?.stripeAccountId ? "Stripe account connected" : "Connect Stripe to receive locked commissions"}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Payouts are released only after the event reaches its MVG and the payout window opens.
+                </p>
+              </div>
+              <Button type="button" variant="outline" onClick={() => connectStripe.mutate()} disabled={connectStripe.isPending}>
+                {connectStripe.isPending ? "Opening Stripe..." : (existingProfile as any)?.stripeAccountId ? "Manage Stripe" : "Connect Stripe"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
       </main>
     </div>
   );

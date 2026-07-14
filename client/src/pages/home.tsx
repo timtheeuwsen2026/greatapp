@@ -197,6 +197,7 @@ export default function Home() {
             : null,
           fundingDeadline: trip.mvgDeadline || trip.startDate,
           category: trip.category,
+          greatPillars: trip.greatPillars || [],
           creatorName: trip.creator?.displayName || trip.creatorName || 'Creator',
           participants: trip.participantsPreview,
           activeChatters: trip.activeChatters,

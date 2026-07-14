@@ -26,14 +26,41 @@ import {
 type Experience = {
   id: string;
   title: string;
+  category?: string;
   shortDescription?: string;
   coverImageUrl?: string;
   requireMinimumParticipants?: boolean;
   mvgMin?: number;
+  minimumParticipants?: number;
   mvgDeadline?: string;
+  maxParticipants?: number;
+  currentParticipants?: number;
   location?: string;
   startDate?: string;
 };
+
+const CATEGORY_LABELS: Record<string, string> = {
+  sports_wellness: "Sports & Wellness",
+  retreats: "Retreats",
+  community_social: "Community & Social",
+  adventure_trips: "Adventure Trips",
+  workations: "Workations",
+  festivals_events: "Festivals & Events",
+};
+
+function categoryLabel(category?: string | null) {
+  if (!category) return null;
+  return CATEGORY_LABELS[category] || category
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function positiveNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 export default function RecruitSquad() {
   const [experienceId, setExperienceId] = useState<string | null>(null);
@@ -124,8 +151,9 @@ export default function RecruitSquad() {
       const H = 960;
 
       // ── 1. Fetch live MVG progress at moment of download ──────────────────
-      let spotsRemaining: number | null = null;
-      let tripConfirmed = false;
+      let liveCurrentBookings: number | null = null;
+      let liveMvgTarget: number | null = null;
+      let mvgMet = false;
       if (experienceId) {
         try {
           const mvgRes = await fetch(`/api/experiences/${experienceId}/mvg-progress`);
@@ -133,17 +161,32 @@ export default function RecruitSquad() {
             const mvgData = await mvgRes.json();
             const current = mvgData.currentBookings ?? mvgData.current_participants ?? 0;
             const minimum = mvgData.mvgMin ?? mvgData.minimum_participants ?? 0;
-            tripConfirmed = mvgData.mvg_met === true || mvgData.mvgStatus === "met";
-            if (minimum > 0) {
-              spotsRemaining = Math.max(0, minimum - current);
-            }
+            liveCurrentBookings = Number.isFinite(Number(current)) ? Number(current) : null;
+            liveMvgTarget = positiveNumber(minimum);
+            mvgMet = mvgData.mvg_met === true || mvgData.mvgStatus === "met";
           }
         } catch {
-          // Silently fall back — spotsRemaining stays null
+          // Silently fall back to the experience payload.
         }
       }
 
       // ── 2. Build canvas ───────────────────────────────────────────────────
+      const currentBookings = liveCurrentBookings ?? Number(experience?.currentParticipants ?? 0);
+      const mvgTarget = liveMvgTarget
+        ?? positiveNumber(experience?.mvgMin)
+        ?? positiveNumber(experience?.minimumParticipants);
+      const capacityTarget = positiveNumber(experience?.maxParticipants);
+      const usesMvgTarget = !!experience?.requireMinimumParticipants && !!mvgTarget;
+      const activeTarget = usesMvgTarget ? mvgTarget : capacityTarget;
+      const targetMet = mvgMet || (!!activeTarget && currentBookings >= activeTarget);
+      const remainingSpots = activeTarget && !targetMet
+        ? Math.max(0, activeTarget - currentBookings)
+        : null;
+      const accentLine = remainingSpots && remainingSpots > 0
+        ? `Only ${remainingSpots} spot${remainingSpots === 1 ? "" : "s"} left to confirm.`
+        : "Join my squad!";
+      const footerCategory = categoryLabel(experience?.category);
+
       const canvas = document.createElement("canvas");
       canvas.width = W;
       canvas.height = H;
@@ -215,16 +258,8 @@ export default function RecruitSquad() {
       // ── 8. Spot count line (accent colour) ───────────────────────────────
       const accentY = heroY + 88;
       ctx.font = "bold 32px system-ui, -apple-system, sans-serif";
-      if (tripConfirmed) {
-        ctx.fillStyle = "#34d399"; // Green for confirmed
-        ctx.fillText("Experience Confirmed — I'm going!", 40, accentY);
-      } else if (spotsRemaining !== null) {
-        ctx.fillStyle = "#fbbf24"; // Amber for urgency
-        ctx.fillText(`Only ${spotsRemaining} spot${spotsRemaining === 1 ? "" : "s"} left to confirm.`, 40, accentY);
-      } else {
-        ctx.fillStyle = "#fbbf24";
-        ctx.fillText("Join me on this experience!", 40, accentY);
-      }
+      ctx.fillStyle = remainingSpots && remainingSpots > 0 ? "#fbbf24" : "#34d399";
+      ctx.fillText(accentLine, 40, accentY);
 
       // ── 9. Trip name line ─────────────────────────────────────────────────
       const tripY = accentY + 54;
@@ -285,12 +320,13 @@ export default function RecruitSquad() {
       ctx.font = "500 15px system-ui, -apple-system, sans-serif";
       ctx.textBaseline = "middle";
       ctx.fillText("Great.  ·  greatapp.ai", 40, H - 32);
-      // Right side: small platform tagline
-      ctx.font = "400 13px system-ui, -apple-system, sans-serif";
-      ctx.fillStyle = "rgba(255,255,255,0.35)";
-      const tagline = "transformative travel";
-      const tagW = ctx.measureText(tagline).width;
-      ctx.fillText(tagline, W - tagW - 40, H - 32);
+      // Right side: event category, when available.
+      if (footerCategory) {
+        ctx.font = "400 13px system-ui, -apple-system, sans-serif";
+        ctx.fillStyle = "rgba(255,255,255,0.35)";
+        const tagW = ctx.measureText(footerCategory).width;
+        ctx.fillText(footerCategory, W - tagW - 40, H - 32);
+      }
 
       // ── 12. Trigger download ──────────────────────────────────────────────
       const safeName = (experience?.title || "experience")

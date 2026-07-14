@@ -22,6 +22,7 @@ import { db } from "./db";
 import { experiences, bookings, platformSettings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { storage } from "./storage";
+import { isExperiencePayoutEligible } from "./payoutRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
@@ -104,8 +105,7 @@ async function executeExperiencePayout(
   if (!experience) throw new Error(`Experience ${experienceId} not found`);
 
   // Only pay out experiences where MVG was met (or non-MVG events that are published)
-  const eligibleStatuses = ["met"] as const;
-  if (experience.mvgEnabled && !eligibleStatuses.includes(experience.mvgStatus as any)) {
+  if (!isExperiencePayoutEligible(experience)) {
     console.log(
       `[Payout Scheduler] Skipping ${experienceId}: mvgStatus=${experience.mvgStatus}`
     );
@@ -161,23 +161,65 @@ async function executeExperiencePayout(
   const currency = (experience.currency || "eur").toLowerCase();
   const transferIds: Record<string, string> = {};
 
-  let remainingCents = grossAmountCents;
-  let platformFeeAmountCents = 0;
+  const lockedCommissionBookings = await db
+    .select()
+    .from(bookings)
+    .where(and(
+      eq(bookings.experienceId, experienceId),
+      eq(bookings.commissionStatus, 'locked'),
+    ));
+  const commissionsByPromoter = new Map<string, typeof lockedCommissionBookings>();
+  for (const booking of lockedCommissionBookings) {
+    if (!booking.promoterId) continue;
+    const rows = commissionsByPromoter.get(booking.promoterId) || [];
+    rows.push(booking);
+    commissionsByPromoter.set(booking.promoterId, rows);
+  }
+  const promoterProfiles = new Map(
+    await Promise.all(Array.from(commissionsByPromoter.keys()).map(async (promoterId) => [
+      promoterId,
+      await storage.getPromoterProfile(promoterId),
+    ] as const)),
+  );
+  const unreadyPromoters = Array.from(promoterProfiles.entries())
+    .filter(([, profile]) => !profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified')
+    .map(([promoterId]) => promoterId);
+  if (unreadyPromoters.length > 0) {
+    await storage.updateScheduledPayout(scheduledPayoutId, {
+      status: 'pending',
+      scheduledFor: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      errorMessage: `Waiting for verified Stripe accounts: ${unreadyPromoters.join(', ')}`,
+    });
+    console.warn(`[Payout Scheduler] Deferred ${experienceId}: promoter payout account not ready`);
+    return;
+  }
+  const promoterReserveCents = lockedCommissionBookings.reduce(
+    (sum, booking) => sum + Math.round(parseFloat(booking.commissionAmount || '0') * 100),
+    0,
+  );
+
+  const platformRecipient = effectiveRecipients.find(
+    (recipient) => recipient.isActive && recipient.recipientType === "platform",
+  );
+  const platformFeeAmountCents = platformRecipient
+    ? calculateSplitAmount(platformRecipient, grossAmountCents, grossAmountCents)
+    : Math.round(grossAmountCents * (platformFeePct / 100));
+
+  if (platformFeeAmountCents + promoterReserveCents > grossAmountCents) {
+    throw new Error("Platform fee and promoter commissions exceed available event funds");
+  }
+
+  let remainingCents = grossAmountCents - platformFeeAmountCents - promoterReserveCents;
+  let promoterReserveRemainingCents = promoterReserveCents;
+  console.log(
+    `[Payout Scheduler] Platform fee: ${platformFeeAmountCents / 100} ${currency.toUpperCase()}`
+  );
 
   for (const recipient of effectiveRecipients) {
     if (!recipient.isActive) continue;
 
     // Platform fee is retained — not transferred
     if (recipient.recipientType === "platform") {
-      platformFeeAmountCents = calculateSplitAmount(
-        recipient,
-        grossAmountCents,
-        remainingCents
-      );
-      remainingCents -= platformFeeAmountCents;
-      console.log(
-        `[Payout Scheduler] Platform fee: ${platformFeeAmountCents / 100} ${currency.toUpperCase()}`
-      );
       continue;
     }
 
@@ -188,11 +230,13 @@ async function executeExperiencePayout(
       continue;
     }
 
-    const transferAmountCents = calculateSplitAmount(
+    let transferAmountCents = calculateSplitAmount(
       recipient,
       grossAmountCents,
       remainingCents
     );
+
+    transferAmountCents = Math.min(transferAmountCents, Math.max(0, remainingCents));
 
     if (transferAmountCents <= 0) continue;
 
@@ -226,6 +270,40 @@ async function executeExperiencePayout(
         `Transfer to ${recipient.recipientType} (${recipient.stripeAccountId}) failed: ${err.message}`
       );
     }
+  }
+
+  for (const [promoterId, promoterBookings] of Array.from(commissionsByPromoter.entries())) {
+    const profile = promoterProfiles.get(promoterId);
+    if (!profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified') {
+      console.warn(`[Payout Scheduler] Promoter ${promoterId} has locked commission but no verified Stripe account`);
+      continue;
+    }
+    const amount = promoterBookings.reduce(
+      (sum, booking) => sum + Math.round(parseFloat(booking.commissionAmount || '0') * 100),
+      0,
+    );
+    if (amount <= 0) continue;
+    if (amount > promoterReserveRemainingCents) {
+      throw new Error(`Insufficient reserved payout balance for promoter ${promoterId}`);
+    }
+
+    const transfer = await stripe.transfers.create({
+      amount,
+      currency,
+      destination: profile.stripeAccountId,
+      description: `${experience.title} - promoter commission`,
+      metadata: { experienceId, recipientType: 'promoter', userId: promoterId, scheduledPayoutId },
+    });
+    await db
+      .update(bookings)
+      .set({
+        commissionStatus: 'paid',
+        commissionTransferId: transfer.id,
+        commissionPaidAt: new Date(),
+      })
+      .where(inArray(bookings.id, promoterBookings.map(booking => booking.id)));
+    promoterReserveRemainingCents -= amount;
+    transferIds[`promoter:${promoterId}`] = transfer.id;
   }
 
   await storage.updateScheduledPayout(scheduledPayoutId, {

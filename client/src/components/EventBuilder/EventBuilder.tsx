@@ -28,6 +28,7 @@ import {
   Minus,
   AlertCircle,
   AlertTriangle,
+  Send,
   Trash2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -86,6 +87,10 @@ const PROMOTION_DEAL_TYPES = [
   "milestone_barter",
   "brand_barter",
   "financial_sponsorship",
+] as const;
+const PARTICIPANT_REFERRAL_DEAL_TYPES = [
+  "commission_per_ticket",
+  "milestone_barter",
 ] as const;
 
 function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES[number]> {
@@ -191,6 +196,10 @@ const eventBuilderSchema = z.object({
   ),
 
   // Step 8: Promotion
+  participantReferralDealType: z.enum(PARTICIPANT_REFERRAL_DEAL_TYPES).optional().nullable(),
+  participantReferralCommissionPct: z.coerce.number().min(0).max(50).optional().nullable().default(0),
+  participantReferralMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional().nullable(),
+  participantReferralMilestoneRewardDescription: z.string().max(500, "Participant reward is too long").optional(),
   promotionDealType: z.enum(PROMOTION_DEAL_TYPES).optional().nullable(),
   promotionMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional().nullable(),
   promotionMilestoneRewardTickets: z.coerce.number().int().min(1).optional().nullable(),
@@ -203,7 +212,7 @@ const eventBuilderSchema = z.object({
     name: z.string().min(1, "Partner name is required"),
     website: z.string().url("Enter a valid social or website link"),
   })).default([]),
-  promoterEnabled: z.boolean().default(false),
+  promoterEnabled: z.boolean().default(true),
 
   // Step 9: Itinerary
   itinerary: z.array(z.object({
@@ -473,6 +482,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       accommodationType: undefined,
       roomCapacity: undefined,
       totalRooms: undefined,
+      participantReferralDealType: 'commission_per_ticket',
+      participantReferralCommissionPct: 0,
+      participantReferralMilestoneAttendeeTarget: undefined,
+      participantReferralMilestoneRewardDescription: '',
       promotionDealType: null,
       promotionMilestoneAttendeeTarget: undefined,
       promotionMilestoneRewardTickets: 1,
@@ -480,7 +493,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       promotionSponsorshipAmount: undefined,
       promotionSelectedPartnerIds: [],
       promotionExternalInvites: [],
-      promoterEnabled: false,
+      promoterEnabled: true,
       itinerary: [],
       price: undefined,
       pricePerPerson: 0,
@@ -934,6 +947,12 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueRevenuePercentage: data.venueRevenuePercentage ?? data.venueRevenueSharePct ?? 0,
       creatorPct: data.creatorPct ?? 85,
       platformPct: FIXED_PLATFORM_FEE_PCT,
+      participantReferralDealType: data.participantReferralDealType ?? 'commission_per_ticket',
+      participantReferralCommissionPct: data.participantReferralCommissionPct != null
+        ? parseFloat(data.participantReferralCommissionPct)
+        : 0,
+      participantReferralMilestoneAttendeeTarget: data.participantReferralMilestoneAttendeeTarget ?? null,
+      participantReferralMilestoneRewardDescription: data.participantReferralMilestoneRewardDescription || '',
       influencerPromotionEnabled: data.influencerPromotionEnabled ?? false,
       influencerCommissionPct: data.influencerCommissionPct != null ? parseFloat(data.influencerCommissionPct) : 0,
       promotionDealType: derivedPromotionDealType,
@@ -949,7 +968,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       promotionExternalInvites: Array.isArray(data.promotionExternalInvites)
         ? data.promotionExternalInvites
         : [],
-      promoterEnabled: data.promoterEnabled ?? false,
+      promoterEnabled: data.promoterEnabled ?? true,
       standingCapacity: data.standingCapacity ?? null,
       seatedCapacity: data.seatedCapacity ?? null,
       // Ensure ticketSkus array is properly handled
@@ -1160,7 +1179,13 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         platformPct: FIXED_PLATFORM_FEE_PCT,
         monetisationMode: 'creator_led',
 
-        // Promoter bounty (deducted from creator's share)
+        // Participant referral perk (B2C loop attached to attendee referral links)
+        participantReferralDealType: formData.participantReferralDealType ?? null,
+        participantReferralCommissionPct: formData.participantReferralCommissionPct ?? 0,
+        participantReferralMilestoneAttendeeTarget: formData.participantReferralMilestoneAttendeeTarget ?? null,
+        participantReferralMilestoneRewardDescription: formData.participantReferralMilestoneRewardDescription || '',
+
+        // Official partner deal (B2B loop for promoters, brands, and invited partners)
         promotionDealType: formData.promotionDealType ?? null,
         promotionMilestoneAttendeeTarget: formData.promotionMilestoneAttendeeTarget ?? null,
         promotionMilestoneRewardTickets: formData.promotionMilestoneRewardTickets ?? 1,
@@ -1168,10 +1193,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         promotionSponsorshipAmount: formData.promotionSponsorshipAmount ?? null,
         promotionSelectedPartnerIds: formData.promotionSelectedPartnerIds || [],
         promotionExternalInvites: formData.promotionExternalInvites || [],
-        promoterEnabled: formData.promoterEnabled ?? false,
+        promoterEnabled: formData.promoterEnabled ?? true,
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
         influencerCommissionPct: formData.influencerCommissionPct ?? 0,
-        promoterCommission: formData.influencerCommissionPct ?? 0,
+        promoterCommission: formData.participantReferralCommissionPct ?? 0,
 
         // Daytime Space capacity
         standingCapacity: formData.standingCapacity ?? null,
@@ -1427,13 +1452,27 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       errors.push("Currency must be explicitly selected");
     }
 
+    if (data.participantReferralDealType === 'commission_per_ticket'
+      && Number(data.participantReferralCommissionPct || 0) <= 0) {
+      errors.push("Set a cashback percentage for the participant referral perk");
+    }
+    if (data.participantReferralDealType === 'milestone_barter') {
+      if (Number(data.participantReferralMilestoneAttendeeTarget || 0) <= 0) {
+        errors.push("Set how many friends a participant must bring for the referral milestone");
+      }
+      if (!data.participantReferralMilestoneRewardDescription
+        || data.participantReferralMilestoneRewardDescription.trim() === '') {
+        errors.push("Describe the participant milestone reward");
+      }
+    }
+
     if (data.promotionDealType === 'commission_per_ticket'
       && Number(data.influencerCommissionPct || 0) <= 0) {
-      errors.push("Set a commission percentage for the promotion deal");
+      errors.push("Set a commission percentage for the official partner deal");
     }
     if (data.promotionDealType === 'milestone_barter') {
       if (Number(data.promotionMilestoneAttendeeTarget || 0) <= 0) {
-        errors.push("Set how many attendees a promoter must bring for the milestone barter deal");
+        errors.push("Set how many attendees an official partner must bring for the milestone barter deal");
       }
       if (Number(data.promotionMilestoneRewardTickets || 0) <= 0) {
         errors.push("Set how many free tickets are earned in the milestone barter deal");
@@ -1657,7 +1696,13 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         platformPct: FIXED_PLATFORM_FEE_PCT,
         monetisationMode: 'creator_led',
 
-        // Promoter bounty (deducted from creator's share)
+        // Participant referral perk (B2C loop attached to attendee referral links)
+        participantReferralDealType: formData.participantReferralDealType ?? null,
+        participantReferralCommissionPct: formData.participantReferralCommissionPct ?? 0,
+        participantReferralMilestoneAttendeeTarget: formData.participantReferralMilestoneAttendeeTarget ?? null,
+        participantReferralMilestoneRewardDescription: formData.participantReferralMilestoneRewardDescription || '',
+
+        // Official partner deal (B2B loop for promoters, brands, and invited partners)
         promotionDealType: formData.promotionDealType ?? null,
         promotionMilestoneAttendeeTarget: formData.promotionMilestoneAttendeeTarget ?? null,
         promotionMilestoneRewardTickets: formData.promotionMilestoneRewardTickets ?? 1,
@@ -1665,10 +1710,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         promotionSponsorshipAmount: formData.promotionSponsorshipAmount ?? null,
         promotionSelectedPartnerIds: formData.promotionSelectedPartnerIds || [],
         promotionExternalInvites: formData.promotionExternalInvites || [],
-        promoterEnabled: formData.promoterEnabled ?? false,
+        promoterEnabled: formData.promoterEnabled ?? true,
         influencerPromotionEnabled: formData.influencerPromotionEnabled ?? false,
         influencerCommissionPct: formData.influencerCommissionPct ?? 0,
-        promoterCommission: formData.influencerCommissionPct ?? 0,
+        promoterCommission: formData.participantReferralCommissionPct ?? 0,
 
         // Daytime Space capacity
         standingCapacity: formData.standingCapacity ?? null,
@@ -2348,7 +2393,7 @@ function BasicInfoStep({ form }: { form: any }) {
               { value: "sports", label: "Sports" },
               { value: "wellness", label: "Wellness" },
               { value: "food", label: "Food" },
-            ];
+            ] as const;
             const currentValue = normalizeGreatPillars(field.value);
             
             return (
@@ -4425,6 +4470,10 @@ function PromotionStep({ form }: { form: any }) {
   const [isLoadingPartners, setIsLoadingPartners] = useState(false);
   const [partnersError, setPartnersError] = useState<string | null>(null);
   const currency = form.watch('currency');
+  const participantReferralDealType = form.watch('participantReferralDealType');
+  const participantReferralCommissionPct = form.watch('participantReferralCommissionPct') || 0;
+  const participantReferralMilestoneTarget = form.watch('participantReferralMilestoneAttendeeTarget');
+  const participantReferralMilestoneReward = form.watch('participantReferralMilestoneRewardDescription') || '';
   const promotionDealType = form.watch('promotionDealType');
   const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
   const milestoneAttendeeTarget = form.watch('promotionMilestoneAttendeeTarget');
@@ -4441,10 +4490,14 @@ function PromotionStep({ form }: { form: any }) {
       promotionDealType === 'commission_per_ticket',
       { shouldDirty: true }
     );
+    if (participantReferralDealType === 'milestone_barter'
+      && !form.getValues('participantReferralMilestoneRewardDescription')) {
+      form.setValue('participantReferralMilestoneRewardDescription', 'Friend milestone reward', { shouldDirty: false });
+    }
     if (promotionDealType === 'milestone_barter' && !form.getValues('promotionMilestoneRewardTickets')) {
       form.setValue('promotionMilestoneRewardTickets', 1, { shouldDirty: false });
     }
-  }, [form, promotionDealType]);
+  }, [form, participantReferralDealType, promotionDealType]);
 
   useEffect(() => {
     if (!promotionDealType) return;
@@ -4481,7 +4534,7 @@ function PromotionStep({ form }: { form: any }) {
     form.setValue('promotionDealType', null, { shouldDirty: true });
     form.setValue('promotionSelectedPartnerIds', [], { shouldDirty: true });
     form.setValue('promotionExternalInvites', [], { shouldDirty: true });
-    form.setValue('promoterEnabled', false, { shouldDirty: true });
+    form.setValue('promoterEnabled', true, { shouldDirty: true });
     form.setValue('influencerPromotionEnabled', false, { shouldDirty: true });
   };
 
@@ -4524,7 +4577,20 @@ function PromotionStep({ form }: { form: any }) {
     );
   };
 
-  const dealOptions = [
+  const participantDealOptions = [
+    {
+      value: 'commission_per_ticket',
+      title: 'Commission per Ticket',
+      description: 'Participants see this as cashback when friends book from their link.',
+    },
+    {
+      value: 'milestone_barter',
+      title: 'Milestone Barter',
+      description: 'Reward participants when enough friends book from their link.',
+    },
+  ] as const;
+
+  const partnerDealOptions = [
     {
       value: 'commission_per_ticket',
       title: 'Commission per Ticket',
@@ -4552,7 +4618,7 @@ function PromotionStep({ form }: { form: any }) {
       <div className="text-center">
         <h3 className="text-lg font-semibold mb-2">Promotion</h3>
         <p className="text-gray-600 dark:text-gray-400">
-          Define the baseline promoter or brand deal you want to offer before sending it out.
+          Set separate referral rules for regular attendees and official partners.
         </p>
       </div>
 
@@ -4560,15 +4626,118 @@ function PromotionStep({ form }: { form: any }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="w-5 h-5" />
-            Baseline Deal
+            Participant Referral Perk
           </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            The default B2C reward attached to attendee referral links generated after checkout.
+          </p>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between gap-4 rounded-lg border border-dashed border-gray-300 p-4">
             <div>
-              <p className="font-medium text-gray-900 dark:text-white">Choose one deal type</p>
+              <p className="font-medium text-gray-900 dark:text-white">Choose the attendee reward type</p>
               <p className="text-sm text-gray-500">
-                This step is optional until you are ready to work with promoters or brands.
+                Participants will see B2C language such as Cashback and Friend Milestones.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {participantDealOptions.map((option) => {
+              const isActive = participantReferralDealType === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => form.setValue('participantReferralDealType', option.value, { shouldDirty: true })}
+                  className={cn(
+                    "rounded-xl border p-4 text-left transition-colors",
+                    isActive
+                      ? "border-emerald-600 bg-emerald-50 shadow-sm dark:border-emerald-400 dark:bg-emerald-950/40"
+                      : "border-gray-200 hover:border-emerald-300 dark:border-gray-700 dark:hover:border-emerald-500"
+                  )}
+                  data-testid={`participant-referral-deal-${option.value}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-gray-900 dark:text-white">{option.title}</p>
+                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{option.description}</p>
+                    </div>
+                    {isActive && (
+                      <span className="rounded-full bg-emerald-600 px-2 py-1 text-xs font-medium text-white">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {participantReferralDealType === 'commission_per_ticket' && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+              <Label htmlFor="participant-referral-cashback-pct">Cashback Percentage (%)</Label>
+              <Input
+                id="participant-referral-cashback-pct"
+                type="number"
+                min="0"
+                max="50"
+                step="0.5"
+                value={participantReferralCommissionPct}
+                onChange={(e) => form.setValue('participantReferralCommissionPct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                data-testid="input-participant-referral-cashback-pct"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Participant dashboards translate this commission-style mechanic into Cashback.
+              </p>
+            </div>
+          )}
+
+          {participantReferralDealType === 'milestone_barter' && (
+            <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="participant-referral-milestone-attendees">Friends Booked</Label>
+                  <Input
+                    id="participant-referral-milestone-attendees"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={participantReferralMilestoneTarget ?? ''}
+                    onChange={(e) => form.setValue('participantReferralMilestoneAttendeeTarget', e.target.value ? parseInt(e.target.value, 10) : undefined, { shouldDirty: true })}
+                    placeholder="e.g. 3"
+                    data-testid="input-participant-referral-milestone-attendees"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="participant-referral-milestone-reward">Reward</Label>
+                  <Input
+                    id="participant-referral-milestone-reward"
+                    value={participantReferralMilestoneReward}
+                    onChange={(e) => form.setValue('participantReferralMilestoneRewardDescription', e.target.value, { shouldDirty: true })}
+                    placeholder="e.g. Free drink"
+                    data-testid="input-participant-referral-milestone-reward"
+                  />
+                </div>
+              </div>
+              <p className="text-sm text-emerald-800 dark:text-emerald-200">
+                Preview: Bring {participantReferralMilestoneTarget || 'X'} friends = earn {participantReferralMilestoneReward || 'a reward'}.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Send className="w-5 h-5" />
+                Official Partner Deal
+              </CardTitle>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The B2B deal shown only to invited partners and verified promoters or brands in the public partner pool.
               </p>
             </div>
             {promotionDealType && (
@@ -4582,9 +4751,10 @@ function PromotionStep({ form }: { form: any }) {
               </Button>
             )}
           </div>
-
+        </CardHeader>
+        <CardContent className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {dealOptions.map((option) => {
+            {partnerDealOptions.map((option) => {
               const isActive = promotionDealType === option.value;
               return (
                 <button
@@ -4629,7 +4799,7 @@ function PromotionStep({ form }: { form: any }) {
                 data-testid="input-promotion-commission-pct"
               />
               <p className="mt-2 text-xs text-gray-500">
-                Use this for promoter and influencer deals where the partner earns a percentage of each ticket sold.
+                Professional partners see this as commission.
               </p>
             </div>
           )}
@@ -4712,22 +4882,16 @@ function PromotionStep({ form }: { form: any }) {
               </p>
             </div>
           )}
-        </CardContent>
-      </Card>
 
       {promotionDealType && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+          <div className="space-y-6 rounded-xl border p-4">
+            <div>
+              <h4 className="flex items-center gap-2 font-semibold text-gray-900 dark:text-white">
               <CheckCircle className="w-5 h-5" />
               Matchmaking
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="rounded-lg border border-dashed border-gray-300 p-4">
-              <p className="font-medium text-gray-900 dark:text-white">Choose how to distribute this deal</p>
+              </h4>
               <p className="text-sm text-gray-500 mt-1">
-                You can send the same baseline offer to platform partners, external contacts, and the public partner pool.
+                Choose how to distribute the official partner deal.
               </p>
             </div>
 
@@ -4882,7 +5046,7 @@ function PromotionStep({ form }: { form: any }) {
                 <div>
                   <h4 className="font-semibold text-gray-900 dark:text-white">Option C: Open to Offers</h4>
                   <p className="text-sm text-gray-500 mt-1">
-                    Make this event discoverable in the public partner pool so new partners can find it.
+                    Make this event discoverable in the public partner pool so verified promoters and brands can find it.
                   </p>
                 </div>
                 <Switch
@@ -4892,16 +5056,33 @@ function PromotionStep({ form }: { form: any }) {
                 />
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
       )}
+        </CardContent>
+      </Card>
 
       <Card className="bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-blue-950/40">
         <CardContent className="p-6">
-          <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Deal Preview</h4>
+          <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Split Deal Preview</h4>
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Participant Referral Perk</p>
+              {participantReferralDealType === 'commission_per_ticket' && (
+                <p className="text-sm text-gray-700 dark:text-gray-200">
+                  Participants see <strong>{participantReferralCommissionPct}% cashback</strong> on each successful friend booking.
+                </p>
+              )}
+              {participantReferralDealType === 'milestone_barter' && (
+                <p className="text-sm text-gray-700 dark:text-gray-200">
+                  Participants who bring <strong>{participantReferralMilestoneTarget || 'X'} friend bookings</strong> unlock <strong>{participantReferralMilestoneReward || 'a reward'}</strong>.
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Official Partner Deal</p>
           {!promotionDealType && (
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              No promotion deal configured yet. You can leave this blank for now and come back later.
+                  No official partner deal configured yet.
             </p>
           )}
           {promotionDealType === 'commission_per_ticket' && (
@@ -4933,10 +5114,12 @@ function PromotionStep({ form }: { form: any }) {
                 External invites prepared: <strong>{externalInvites.length}</strong>
               </p>
               <p>
-                Public partner pool: <strong>{openToOffers ? 'Open to offers' : 'Private only'}</strong>
+              Public partner pool: <strong>{openToOffers ? 'Open to offers' : 'Private only'}</strong>
               </p>
             </div>
           )}
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -4966,9 +5149,10 @@ function PricingStep({ form }: { form: any }) {
   const minimumParticipants = form.watch('minimumParticipants') || 6;
   const softHoldEnabled = form.watch('softHoldEnabled');
   const softHoldDurationHours = form.watch('softHoldDurationHours') || 48;
-  const promotionDealType = form.watch('promotionDealType');
-  const influencerPromotionEnabled = promotionDealType === 'commission_per_ticket';
-  const influencerCommissionPct = form.watch('influencerCommissionPct') || 0;
+  const participantReferralDealType = form.watch('participantReferralDealType');
+  const participantReferralCommissionPct = form.watch('participantReferralCommissionPct') || 0;
+  const influencerPromotionEnabled = participantReferralDealType === 'commission_per_ticket';
+  const influencerCommissionPct = participantReferralCommissionPct;
   const discounts = form.watch('discounts') || [];
   const ticketSkus = form.watch('ticketSkus') || [];
   const [selectedMarketplaceVenue, setSelectedMarketplaceVenue] = useState<any | null>(null);
@@ -5027,17 +5211,20 @@ function PricingStep({ form }: { form: any }) {
   const isMultiDayEvent = eventType === 'multi-day';
   // venueDealContext drives which UI branch the Pricing step renders:
   //   "open"              — creator is seeking venue bids; sets a target deal preference only
-  //   "external"          — non-catalog venue (manual/outdoor/virtual); creator manages venue payment themselves
+  //   "invited"           — creator invited a specific external venue (manual); proposes a deal to that venue
+  //   "external"          — outdoor/virtual, no venue to negotiate a deal with; creator manages venue payment themselves
   //   "marketplace_day"   — catalog daytime space or one-day event; limited short-stay deal models
   //   "marketplace_retreat" — catalog multi-day retreat; full revenue-share models
   const venueDealContext =
     venueType === "open"
       ? "open"
-      : venueType !== "catalog"
-        ? "external"
-        : selectedMarketplaceVenue?.venueType === "daytime" || eventType === "one-day"
-          ? "marketplace_day"
-          : "marketplace_retreat";
+      : venueType === "manual"
+        ? "invited"
+        : venueType !== "catalog"
+          ? "external"
+          : selectedMarketplaceVenue?.venueType === "daytime" || eventType === "one-day"
+            ? "marketplace_day"
+            : "marketplace_retreat";
 
   // All available target deal options grouped by flow (for "open" bidding mode)
   const openTargetDealOptions = {
@@ -5067,10 +5254,11 @@ function PricingStep({ form }: { form: any }) {
   }), []);
 
   useEffect(() => {
-    if (venueDealContext === "external" || venueDealContext === "open") {
-      // Zero out venue deal amounts for external and open modes.
+    if (venueDealContext === "external" || venueDealContext === "open" || venueDealContext === "invited") {
+      // Zero out venue deal amounts for external, open, and invited modes.
       // External: creator handles venue payment independently, no platform split needed.
       // Open: no specific venue is chosen yet — amounts are determined when a venue accepts the bid.
+      // Invited: amount lives in venueTargetDealValue, determined when the invited venue accepts.
       form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
       form.setValue('venueFixedFee', 0, { shouldDirty: false });
       form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });
@@ -5275,13 +5463,13 @@ function PricingStep({ form }: { form: any }) {
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
   const totalRevenue = ticketTotalRevenue > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
   const revenueSplit = computeRevenueSplit(totalRevenue, creatorPct, platformPct);
-  const activeVenueDeal = venueDealContext === "open"
+  const activeVenueDeal = venueDealContext === "open" || venueDealContext === "invited"
     ? venueTargetDeal
     : venueDealContext === "external"
       ? "access_only"
       : venueCompensationModel;
-  const activeRevenueSharePct = venueDealContext === "open" ? venueTargetDealValue : venueRevenueSharePct;
-  const activeFlatVenueAmount = venueDealContext === "open" ? venueTargetDealValue : venueFixedFee;
+  const activeRevenueSharePct = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueRevenueSharePct;
+  const activeFlatVenueAmount = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueFixedFee;
   const venueRevenueShareAmount = safeMultiply(totalRevenue, activeRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
   const venueCommercialEstimate = (() => {
@@ -5301,7 +5489,7 @@ function PricingStep({ form }: { form: any }) {
     : activeVenueDeal === 'fixed_fee' || activeVenueDeal === 'upfront_rental'
       ? -activeFlatVenueAmount
       : -venueCommercialEstimate;
-  const isCommissionPromotion = promotionDealType === 'commission_per_ticket';
+  const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
   const promoterBounty = isCommissionPromotion ? totalRevenue * influencerCommissionPct / 100 : 0;
   const estimatedCreatorNet = revenueSplit.creatorAmount + venuePayout - promoterBounty;
 
@@ -5744,9 +5932,11 @@ function PricingStep({ form }: { form: any }) {
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
                   External Venue Selected. You manage venue payments independently.
                 </div>
-              ) : venueDealContext === "open" ? (
+              ) : (venueDealContext === "open" || venueDealContext === "invited") ? (
                 <div>
-                  <Label htmlFor="venue-target-deal">Target Deal (What you're looking for)</Label>
+                  <Label htmlFor="venue-target-deal">
+                    {venueDealContext === "invited" ? "Target Deal (Propose to your venue)" : "Target Deal (What you're looking for)"}
+                  </Label>
                   <Select
                     value={form.watch('venueTargetDeal') || ""}
                     onValueChange={(value) => form.setValue('venueTargetDeal', value, { shouldDirty: true })}
@@ -5775,7 +5965,9 @@ function PricingStep({ form }: { form: any }) {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-amber-600 mt-1">
-                    Venues will see this preference when they bid to host your event.
+                    {venueDealContext === "invited"
+                      ? "Your invited venue will see this proposed deal when they review the invite."
+                      : "Venues will see this preference when they bid to host your event."}
                   </p>
                   {/* Value input: only shown for deal types that carry a number.
                       access_only has no target amount, so it is excluded from the list.
@@ -5850,13 +6042,13 @@ function PricingStep({ form }: { form: any }) {
                 />
                 {isCommissionPromotion && influencerCommissionPct > 0 && (
                   <p className="text-xs text-amber-600 mt-1">
-                    Promotion commission ({influencerCommissionPct}%) from the Promotion step is deducted from your share.
+                    Participant cashback ({influencerCommissionPct}%) from the Promotion step is deducted from your share.
                   </p>
                 )}
               </div>
             </div>
 
-            {venueDealContext !== "external" && venueDealContext !== "open" && (
+            {venueDealContext !== "external" && venueDealContext !== "open" && venueDealContext !== "invited" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {venueCompensationModel === "fixed_fee" && (
                 <div>
@@ -5985,10 +6177,16 @@ function PricingStep({ form }: { form: any }) {
               </div>
             )}
 
+            {venueDealContext === "invited" && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 text-sm text-amber-900 dark:text-amber-100">
+                <strong>Invite Pending:</strong> Your proposed deal will be sent to the venue you invited. Once they accept, their deal terms are locked into the payment flow.
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
               {venueDealContext === "external"
                 ? "Only the fixed 15% platform infrastructure fee is applied in Great."
-                : venueDealContext === "open"
+                : (venueDealContext === "open" || venueDealContext === "invited")
                   ? "Actual venue payout will be determined when a venue accepts your offer."
                   : "Venue compensation is negotiated separately from the 15% platform infrastructure fee."}
             </p>
@@ -6019,7 +6217,7 @@ function PricingStep({ form }: { form: any }) {
 
                 {isCommissionPromotion && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
-                    <span>Promotion Commission ({influencerCommissionPct}%)</span>
+                    <span>Participant Cashback ({influencerCommissionPct}%)</span>
                     <span className="text-amber-600">-{formatPriceByCurrency(promoterBounty, currency)}</span>
                   </div>
                 )}
@@ -6205,13 +6403,13 @@ function PricingStep({ form }: { form: any }) {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label htmlFor="influencer-enabled">Enable Influencer Promotion</Label>
-                  <p className="text-xs text-gray-500">Allow influencers to promote your experience for commission</p>
+                  <Label htmlFor="influencer-enabled">Enable Participant Cashback</Label>
+                  <p className="text-xs text-gray-500">Attach a cashback perk to attendee referral links</p>
                 </div>
                 <Switch
                   id="influencer-enabled"
                   checked={influencerPromotionEnabled}
-                  onCheckedChange={(checked) => form.setValue('influencerPromotionEnabled', checked, { shouldDirty: true })}
+                  onCheckedChange={(checked) => form.setValue('participantReferralDealType', checked ? 'commission_per_ticket' : null, { shouldDirty: true })}
                   data-testid="switch-influencer-enabled"
                 />
               </div>
@@ -6219,7 +6417,7 @@ function PricingStep({ form }: { form: any }) {
               {influencerPromotionEnabled && (
                 <div className="ml-4 border-l-2 border-gray-200 pl-4 space-y-4">
                   <div>
-                    <Label htmlFor="influencer-commission">Commission Percentage (%)</Label>
+                    <Label htmlFor="influencer-commission">Cashback Percentage (%)</Label>
                     <Input
                       id="influencer-commission"
                       type="number"
@@ -6227,17 +6425,17 @@ function PricingStep({ form }: { form: any }) {
                       max="50"
                       step="0.5"
                       value={influencerCommissionPct}
-                      onChange={(e) => form.setValue('influencerCommissionPct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      onChange={(e) => form.setValue('participantReferralCommissionPct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
                       data-testid="input-influencer-commission"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Commission paid to influencers per successful booking (0-50%)
+                      Cashback paid to participants per successful friend booking (0-50%)
                     </p>
                   </div>
                   
                   <div className="bg-purple-50 dark:bg-purple-950 p-3 rounded text-sm">
                     <p className="text-purple-700 dark:text-purple-300">
-                      🚀 Your experience will be available in our influencer marketplace for promotion.
+                      Participant referral links use B2C cashback language in My Impact.
                     </p>
                   </div>
                 </div>

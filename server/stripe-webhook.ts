@@ -21,6 +21,7 @@ import { db } from "./db";
 import {
   bookings,
   creatorProfiles,
+  promoterProfiles,
   platformSettings,
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
@@ -296,8 +297,20 @@ async function handleAccountUpdated(account: Stripe.Account): Promise<void> {
     console.log(
       `[Webhook] Creator profile ${profile.id} Stripe status → ${verificationStatus}`
     );
-  } else {
-    console.warn(`[Webhook] account.updated: no creator profile for Stripe account ${account.id}`);
+  }
+
+  const [promoterProfile] = await db
+    .select()
+    .from(promoterProfiles)
+    .where(eq(promoterProfiles.stripeAccountId, account.id));
+  if (promoterProfile) {
+    await db
+      .update(promoterProfiles)
+      .set({ stripeVerificationStatus: verificationStatus, updatedAt: new Date() })
+      .where(eq(promoterProfiles.id, promoterProfile.id));
+    console.log(`[Webhook] Promoter profile ${promoterProfile.id} Stripe status -> ${verificationStatus}`);
+  } else if (!profile) {
+    console.warn(`[Webhook] account.updated: no payout profile for Stripe account ${account.id}`);
   }
 }
 

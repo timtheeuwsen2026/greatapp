@@ -9,7 +9,7 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, User, X } from "lucide-react";
+import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
@@ -159,6 +159,12 @@ export default function Navigation() {
                   {/* Account + role dashboard */}
                   <DropdownMenuItem asChild>
                     <Link href="/profile">My Account</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/promoter" className="gap-2">
+                      <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                      My Impact
+                    </Link>
                   </DropdownMenuItem>
                   {user?.role === 'creator' && (
                     <DropdownMenuItem asChild>
@@ -321,6 +327,15 @@ export default function Navigation() {
                     My Account
                   </Link>
                   <Link href="/messages" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary" onClick={() => setMobileMenuOpen(false)}><MessageCircle className="h-4 w-4"/>Messages{!!inbox?.unreadCount&&<span className="rounded-full bg-red-600 px-2 text-xs text-white">{inbox.unreadCount}</span>}</Link>
+                  <Link
+                    href="/promoter"
+                    className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                    onClick={() => setMobileMenuOpen(false)}
+                    data-testid="mobile-link-my-impact"
+                  >
+                    <TrendingUp className="h-4 w-4" />
+                    My Impact
+                  </Link>
 
                   {/* Role dashboard shortcut */}
                   {user?.role === 'creator' && (

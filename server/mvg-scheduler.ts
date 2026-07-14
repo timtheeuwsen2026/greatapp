@@ -7,6 +7,7 @@ import { notificationService } from './notifications';
 import { broadcastMVGUpdate } from './websocket';
 import { storage } from './storage';
 import { scheduleExperiencePayout } from './payout-scheduler';
+import { lockCommissionsForExperience, voidCommissionsForExperience } from './commissionService';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-07-30.basil',
@@ -138,6 +139,7 @@ async function processMVGSuccess(experienceId: string) {
       mvgResolvedAt: new Date()
     })
     .where(eq(experiences.id, experienceId));
+  await lockCommissionsForExperience(experienceId);
   
   console.log(`[MVG Scheduler] MVG SUCCESS complete: ${capturedCount} captured, ${stripeFailedCount} Stripe failures`);
   
@@ -220,6 +222,7 @@ async function processMVGFailure(experienceId: string) {
       currentParticipants: 0
     })
     .where(eq(experiences.id, experienceId));
+  await voidCommissionsForExperience(experienceId);
   
   const experience = await storage.getExperience(experienceId);
   if (experience) {

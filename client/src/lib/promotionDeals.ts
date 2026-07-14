@@ -24,6 +24,10 @@ export function formatPromotionDealTerms(dealType: string, terms: PromotionDealT
 }
 
 type PromotionOfferInput = {
+  participantReferralDealType?: string | null;
+  participantReferralCommissionPct?: string | number | null;
+  participantReferralMilestoneAttendeeTarget?: string | number | null;
+  participantReferralMilestoneRewardDescription?: string | null;
   promotionDealType?: string | null;
   influencerCommissionPct?: string | number | null;
   promotionMilestoneAttendeeTarget?: string | number | null;
@@ -132,6 +136,55 @@ export function getPromotionOfferSummary(
         label: "Tracked Referral Link",
         headline: "Share the experience and track clicks and bookings",
         body: "This trip uses a general referral link without a creator-set promoter deal.",
+        promoterCompatible: true,
+        actionType: "instant",
+      };
+  }
+}
+
+export function getParticipantReferralSummary(
+  offer: PromotionOfferInput,
+  options?: { referredBookings?: number },
+): PromotionOfferSummary {
+  const dealType = offer.participantReferralDealType ?? null;
+  const referredBookings = options?.referredBookings ?? 0;
+
+  switch (dealType) {
+    case "commission_per_ticket": {
+      const pct = numberOrZero(offer.participantReferralCommissionPct);
+      return {
+        dealType,
+        label: "Cashback",
+        headline: `Earn ${pct.toFixed(1)}% cashback when friends book`,
+        body: "Friend bookings from your tracked link generate cashback for this experience.",
+        promoterCompatible: true,
+        actionType: "instant",
+      };
+    }
+    case "milestone_barter": {
+      const attendeeTarget = Math.max(1, Math.round(numberOrZero(
+        offer.participantReferralMilestoneAttendeeTarget,
+      ) || 1));
+      const reward = offer.participantReferralMilestoneRewardDescription?.trim()
+        || "Friend milestone reward";
+      const remaining = Math.max(attendeeTarget - referredBookings, 0);
+      return {
+        dealType,
+        label: "Friend Milestone",
+        headline: `Bring ${attendeeTarget} friend booking${attendeeTarget === 1 ? "" : "s"} to unlock ${reward}`,
+        body: remaining > 0
+          ? `${referredBookings}/${attendeeTarget} friend bookings tracked so far. ${remaining} more to unlock the reward.`
+          : `Reward unlocked. ${referredBookings}/${attendeeTarget} tracked friend bookings reached the milestone.`,
+        promoterCompatible: true,
+        actionType: "instant",
+      };
+    }
+    default:
+      return {
+        dealType: null,
+        label: "Tracked Referral Link",
+        headline: "Share the experience and track friend bookings",
+        body: "Your referral link tracks clicks, bookings, and impact for this experience.",
         promoterCompatible: true,
         actionType: "instant",
       };

@@ -65,10 +65,12 @@ function applyMarketplaceEconomics(input: any = {}) {
   const revenueSharePct = model === "revenue_share"
     ? parseFloat(String(input.venueRevenueSharePct ?? input.venueRevenuePercentage ?? 0))
     : 0;
+  const participantReferralDealType = input.participantReferralDealType ?? null;
+  const participantReferralCommissionPct = numberOrZero(
+    input.participantReferralCommissionPct
+  );
   const derivedPromotionDealType = input.promotionDealType
-    ?? ((input.influencerPromotionEnabled || numberOrZero(input.influencerCommissionPct) > 0)
-      ? "commission_per_ticket"
-      : null);
+    ?? null;
   const isCommissionPromotion = derivedPromotionDealType === "commission_per_ticket";
 
   return {
@@ -84,11 +86,11 @@ function applyMarketplaceEconomics(input: any = {}) {
     venueRevenueSharePct: revenueSharePct,
     venueAccessFee: input.venueAccessFee ?? "0.00",
     venueRevenuePercentage: revenueSharePct,
+    participantReferralDealType,
+    participantReferralCommissionPct,
     promotionDealType: derivedPromotionDealType,
     influencerPromotionEnabled: isCommissionPromotion,
-    promoterCommission: isCommissionPromotion
-      ? (input.influencerCommissionPct ?? input.promoterCommission ?? "0.00")
-      : (input.promoterCommission ?? "0.00"),
+    promoterCommission: participantReferralCommissionPct,
   };
 }
 
@@ -112,14 +114,16 @@ const DRAFT_NUMERIC_FIELDS = [
   // decimals
   "pricePerPerson", "price", "depositPercentage", "depositAmount", "balanceAmount",
   "expectedPayout", "platformCommission", "stripeFee", "influencerCommissionPct",
+  "participantReferralCommissionPct",
   "promoterCommission", "creatorPct", "platformPct", "venueFixedFee", "venuePerHeadAmount",
   "venueMinimumSpend", "venueRevenueSharePct", "venueAccessFee", "venueRevenuePercentage",
   "creatorRevenuePercentage", "platformRevenuePercentage", "promotionSponsorshipAmount",
+  "venueTargetDealValue",
   // integers
   "maxParticipants", "manualVenueCapacity", "standingCapacity", "seatedCapacity",
   "roomCapacity", "totalRooms", "mvgMinimumSize", "mvgDeadlineDays", "balanceDueDays",
   "softHoldDurationHours", "currentStep", "promotionMilestoneAttendeeTarget",
-  "promotionMilestoneRewardTickets",
+  "promotionMilestoneRewardTickets", "participantReferralMilestoneAttendeeTarget",
 ];
 
 function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
@@ -1021,6 +1025,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const resolveImpactAudience = async (userId: string): Promise<"participant" | "official_partner"> => {
+    const [profile, promotedExperiences] = await Promise.all([
+      storage.getPromoterProfile(userId),
+      storage.getPromoterExperiences(userId),
+    ]);
+    return profile?.completed || promotedExperiences.some((item) => item.referralAudience === "official_partner")
+      ? "official_partner"
+      : "participant";
+  };
+
   // Get impact stats for any authenticated user (no promoter role required)
   // Powers the My Impact page recruitment stats + gamification
   app.get('/api/me/impact-stats', isAuthenticated, async (req: any, res) => {
@@ -1031,21 +1045,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Ensure user has a referral code (auto-generates if missing)
       const referralCode = await storage.ensureUserReferralCode(userId);
 
-      // Count all bookings attributed to this user as promoter
-      const promoterBookings = await db
-        .select()
-        .from(bookings)
-        .where(eq(bookings.promoterId, userId));
+      const audience = await resolveImpactAudience(userId);
+      const promoterBookings = await storage.getPromoterBookings(userId, audience);
 
       const friendsJoined = promoterBookings.length;
 
       // Sum commissions (estimated + locked — not voided)
       let tripCreditsEarned = 0;
+      let tripCreditsCurrency = 'EUR';
+      const tripCreditsByCurrency: Record<string, number> = {};
       for (const b of promoterBookings) {
         const status = b.commissionStatus;
-        if (status === 'estimated' || status === 'locked') {
-          tripCreditsEarned += parseFloat(b.commissionAmount || '0');
+        const currency = (b.commissionCurrency || 'EUR').toUpperCase();
+        if (status === 'estimated' || status === 'locked' || status === 'paid') {
+          const amount = parseFloat(b.commissionAmount || '0');
+          tripCreditsByCurrency[currency] = (tripCreditsByCurrency[currency] || 0) + amount;
         }
+      }
+      const creditCurrencies = Object.keys(tripCreditsByCurrency);
+      if (creditCurrencies.length === 1) {
+        tripCreditsCurrency = creditCurrencies[0];
+        tripCreditsEarned = tripCreditsByCurrency[tripCreditsCurrency];
       }
 
       // Most recent experience for share CTA (from latest booking or promoted experiences)
@@ -1073,7 +1093,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Use real click data from referralClicks table
-      const clickStats = await storage.getReferralClickStats(userId);
+      const clickStats = await storage.getReferralClickStats(userId, { referralAudience: audience });
 
       res.json({
         referralCode,
@@ -1082,6 +1102,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         uniqueVisitors: clickStats.uniqueClicks,
         conversionRate: clickStats.conversionRate,
         tripCreditsEarned,
+        tripCreditsCurrency,
+        tripCreditsByCurrency,
         shareExperience,
       });
     } catch (error) {
@@ -1106,7 +1128,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = await resolvePromoterUserId(req, res);
       if (!userId) return;
-      const summary = await storage.getPromoterEarningsSummary(userId);
+      const audience = await resolveImpactAudience(userId);
+      const summary = await storage.getPromoterEarningsSummary(userId, audience);
       res.json(summary);
     } catch (error) {
       console.error("Error fetching promoter earnings:", error);
@@ -1123,11 +1146,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const dbUser = await storage.getUser(userId);
       const promoterCode = dbUser?.promoterCode || await storage.ensureUserReferralCode(userId);
       const baseUrl = getAppBaseUrl(req);
-      const experiences = await storage.getPromoterExperiences(userId);
+      const audience = await resolveImpactAudience(userId);
+      const experiences = (await storage.getPromoterExperiences(userId))
+        .filter((item) => item.referralAudience === audience);
       // Add lifecycleStatus to each promoted experience
-      const enriched = (experiences || []).map((item: any) => {
+      const enriched = await Promise.all((experiences || []).map(async (item: any) => {
         if (item.experience) {
           const slugOrId = item.experience.slug || item.experience.id;
+          const acceptedDeal = item.promotionDealId
+            ? await storage.getPromotionDeal(item.promotionDealId)
+            : undefined;
+          const acceptedTerms = acceptedDeal?.terms || {};
+          const officialOffer = item.referralAudience === 'official_partner'
+            ? {
+                ...item.experience,
+                promotionDealType: acceptedDeal?.dealType || item.experience.promotionDealType,
+                influencerCommissionPct: acceptedTerms.commissionPct ?? item.experience.influencerCommissionPct,
+                promotionMilestoneAttendeeTarget: acceptedTerms.milestoneAttendeeTarget ?? item.experience.promotionMilestoneAttendeeTarget,
+                promotionMilestoneRewardTickets: acceptedTerms.milestoneRewardTickets ?? item.experience.promotionMilestoneRewardTickets,
+                promotionBrandPitch: acceptedTerms.brandPitch ?? item.experience.promotionBrandPitch,
+                promotionSponsorshipAmount: acceptedTerms.sponsorshipAmount ?? item.experience.promotionSponsorshipAmount,
+                currency: acceptedTerms.currency ?? item.experience.currency,
+              }
+            : null;
+          const mvgProgress = item.experience.requireMinimumParticipants
+            ? await storage.getMVGProgress(item.experience.id)
+            : null;
+          const mvgMet = mvgProgress?.mvg_met ?? item.experience.mvgStatus === 'met';
+          const resolvedMvgStatus = mvgMet ? 'met' : (item.experience.mvgStatus || 'pending');
           return {
             ...item,
             referralLink: buildPromoterReferralLink(
@@ -1136,12 +1182,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
               promoterCode,
               item.shareToken,
             ),
+            referralAudience: item.referralAudience || 'participant',
+            promotionDeal: acceptedDeal || null,
+            dealOffer: officialOffer,
             experience: {
               ...item.experience,
+              currentParticipants: mvgProgress?.current_participants ?? item.experience.currentParticipants,
+              mvgMin: mvgProgress?.minimum_participants ?? item.experience.mvgMin,
+              minimumParticipants: mvgProgress?.minimum_participants ?? item.experience.minimumParticipants,
+              mvgMet,
+              mvgStatus: resolvedMvgStatus,
               lifecycleStatus: computeLifecycleStatus({
                 status: item.experience.status || '',
-                mvgStatus: item.experience.mvgStatus,
+                mvgStatus: resolvedMvgStatus,
                 requireMinimumParticipants: item.experience.requireMinimumParticipants,
+                mvgMet,
               }),
             },
           };
@@ -1154,7 +1209,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             requireMinimumParticipants: item.requireMinimumParticipants,
           }),
         };
-      });
+      }));
       res.json(enriched);
     } catch (error) {
       console.error("Error fetching promoted experiences:", error);
@@ -1168,16 +1223,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = await resolvePromoterUserId(req, res);
       if (!userId) return;
       
-      const bookings = await storage.getPromoterBookings(userId);
+      const audience = await resolveImpactAudience(userId);
+      const bookings = await storage.getPromoterBookings(userId, audience);
       
       // Enrich with experience info
       const enrichedBookings = await Promise.all(
         bookings.map(async (booking) => {
           const experience = await storage.getExperience(booking.experienceId);
+          const bookingValue = (booking as any).totalPrice || (booking as any).totalAmount || booking.amount || '0.00';
           return {
             ...booking,
             experienceName: experience?.title || 'Unknown Experience',
             experienceSlug: experience?.slug,
+            bookingValue,
+            totalAmount: bookingValue,
+            currency: booking.commissionCurrency || experience?.currency || 'EUR',
+            commissionCurrency: booking.commissionCurrency || experience?.currency || null,
           };
         })
       );
@@ -1246,6 +1307,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error saving promoter profile:", error);
       res.status(500).json({ message: "Failed to save promoter profile" });
+    }
+  });
+
+  app.post('/api/promoter/stripe-connect', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const [user, existingProfile] = await Promise.all([
+        storage.getUser(userId),
+        storage.getPromoterProfile(userId),
+      ]);
+      const profile = existingProfile || await storage.createOrUpdatePromoterProfile(userId, {
+        displayName: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email || 'Participant',
+        bio: '',
+        completed: false,
+      });
+
+      let account: Stripe.Account;
+      if (profile.stripeAccountId) {
+        account = await stripe.accounts.retrieve(profile.stripeAccountId);
+      } else {
+        account = await stripe.accounts.create({
+          type: 'express',
+          email: user?.email || undefined,
+          metadata: { userId, accountPurpose: 'promoter_payouts' },
+        });
+        await storage.updatePromoterProfileStripe(userId, account.id);
+      }
+
+      const accountLink = await stripe.accountLinks.create({
+        account: account.id,
+        refresh_url: `${getAppBaseUrl(req)}/promoter/profile-setup?stripe_refresh=true`,
+        return_url: `${getAppBaseUrl(req)}/promoter?stripe_success=true`,
+        type: 'account_onboarding',
+      });
+      res.json({ url: accountLink.url });
+    } catch (error: any) {
+      console.error("Error creating promoter Stripe Connect URL:", error);
+      res.status(500).json({ message: "Failed to start Stripe Connect onboarding" });
     }
   });
 
@@ -1331,6 +1431,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const dbUser = await storage.getUser(userId);
+      const partnerProfile = await storage.getPromoterProfile(userId);
+      if (!partnerProfile?.completed) {
+        return res.json([]);
+      }
+
       const promoterCode = dbUser?.promoterCode || await storage.ensureUserReferralCode(userId);
       const baseUrl = getAppBaseUrl(req);
 
@@ -1405,6 +1510,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!dbUser) {
         return res.status(404).json({ message: "User not found" });
       }
+      const partnerProfile = await storage.getPromoterProfile(userId);
+      if (!partnerProfile?.completed) {
+        return res.status(403).json({ message: "Complete your official partner profile before joining public partner deals" });
+      }
 
       // Ensure the user has a referral code — generate one if missing
       if (!dbUser.promoterCode) {
@@ -1413,7 +1522,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Register promotion (idempotent — onConflictDoNothing inside)
-      const promotedExperience = await storage.promoteExperience(userId, experienceId);
+      const promotedExperience = await storage.promoteExperience(userId, experienceId, {
+        referralAudience: 'official_partner',
+      });
 
       // Build a fully-qualified, trackable referral link
       const baseUrl = getAppBaseUrl(req);
@@ -1524,7 +1635,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
-
       const updated = await storage.respondToDirectPromotionDeal(req.params.dealId, userId, 'accept');
       if (!updated) return res.status(404).json({ message: "Offer not found or already resolved" });
       notifyCreatorOfPromotionResponse(updated, userId, 'accepted');
@@ -1539,7 +1649,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
-
       const updated = await storage.respondToDirectPromotionDeal(req.params.dealId, userId, 'decline');
       if (!updated) return res.status(404).json({ message: "Offer not found or already resolved" });
       notifyCreatorOfPromotionResponse(updated, userId, 'declined');
@@ -1555,6 +1664,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const partnerProfile = await storage.getPromoterProfile(userId);
+      if (!partnerProfile?.completed) return res.status(403).json({ message: "Verified partner profile required" });
 
       const experience = await storage.getExperience(req.params.experienceId);
       if (!experience) return res.status(404).json({ message: "Experience not found" });
@@ -1577,6 +1688,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const partnerProfile = await storage.getPromoterProfile(userId);
+      if (!partnerProfile?.completed) return res.status(403).json({ message: "Verified partner profile required" });
 
       const experience = await storage.getExperience(req.params.experienceId);
       if (!experience) return res.status(404).json({ message: "Experience not found" });
@@ -1696,15 +1809,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       
       // Normalize date fields before saving (defense in depth).
-      // Also strip columns added to the Drizzle schema but not yet in the production DB
-      // (venueOpenSpaceType, venueTargetDeal, venueTargetDealValue, venueStatus) — remove after running db:push.
-      const {
-        venueOpenSpaceType: _venueOpenSpaceType,
-        venueTargetDeal: _venueTargetDeal,
-        venueTargetDealValue: _venueTargetDealValue,
-        venueStatus: _venueStatus,
-        ...parsedBody
-      } = req.body;
+      const parsedBody = { ...req.body };
       parsedBody.greatPillars = normalizeGreatPillarsPayload(parsedBody.greatPillars);
       parsedBody.monetisationMode = "creator_led";
       parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
@@ -1739,14 +1844,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log("Updating draft:", id, "for user:", userId);
       
       // Remove fields that should not be updated by client.
-      // Also strip columns added to the Drizzle schema but not yet in the production DB
-      // (venueOpenSpaceType, venueTargetDeal, venueTargetDealValue, venueStatus) — remove after running db:push.
       const {
         id: _id, creatorId: _creatorId, createdAt: _createdAt, updatedAt: _updatedAt,
-        venueOpenSpaceType: _venueOpenSpaceType,
-        venueTargetDeal: _venueTargetDeal,
-        venueTargetDealValue: _venueTargetDealValue,
-        venueStatus: _venueStatus,
         ...cleanBody
       } = req.body;
 
@@ -3202,6 +3301,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get roles from draft
       const roles = Array.isArray((draft as any).roles) ? (draft as any).roles : [];
       const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
+      const resolvedParticipantReferralDealType = (draft as any).participantReferralDealType
+        ?? (((draft as any).promotionDealType === "commission_per_ticket" || (draft as any).promotionDealType === "milestone_barter")
+          ? (draft as any).promotionDealType
+          : null);
+      const resolvedParticipantReferralCommissionPct = (draft as any).participantReferralCommissionPct
+        ?? (resolvedParticipantReferralDealType === "commission_per_ticket"
+          ? ((draft as any).influencerCommissionPct || "0.00")
+          : "0.00");
       
       // Prepare experience data from draft with explicit type mapping
       const experienceData = applyMarketplaceEconomics({
@@ -3287,8 +3394,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
         escrowEnabled: resolvedMvgEnabled || false,
         monetisationMode: "creator_led" as const,
+        participantReferralDealType: resolvedParticipantReferralDealType,
+        participantReferralCommissionPct: resolvedParticipantReferralCommissionPct,
+        participantReferralMilestoneAttendeeTarget: (draft as any).participantReferralMilestoneAttendeeTarget
+          ?? (((draft as any).promotionDealType === "milestone_barter")
+            ? ((draft as any).promotionMilestoneAttendeeTarget || null)
+            : null),
+        participantReferralMilestoneRewardDescription: (draft as any).participantReferralMilestoneRewardDescription || null,
         promotionDealType: (draft as any).promotionDealType
-          ?? ((draft as any).influencerPromotionEnabled ? "commission_per_ticket" : null),
+          ?? null,
         promotionMilestoneAttendeeTarget: (draft as any).promotionMilestoneAttendeeTarget || null,
         promotionMilestoneRewardTickets: (draft as any).promotionMilestoneRewardTickets || null,
         promotionBrandPitch: (draft as any).promotionBrandPitch || null,
@@ -3299,9 +3413,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         promotionExternalInvites: Array.isArray((draft as any).promotionExternalInvites)
           ? (draft as any).promotionExternalInvites
           : [],
-        promoterEnabled: (draft as any).promoterEnabled ?? false,
+        promoterEnabled: (draft as any).promoterEnabled ?? true,
         influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
-        promoterCommission: (draft as any).promoterCommission || (draft as any).influencerCommissionPct || "0.00",
+        promoterCommission: resolvedParticipantReferralCommissionPct || (draft as any).promoterCommission || "0.00",
+        commissionMode: resolvedParticipantReferralDealType === "commission_per_ticket" ? "percent" : null,
+        commissionValue: resolvedParticipantReferralDealType === "commission_per_ticket"
+          ? resolvedParticipantReferralCommissionPct
+          : null,
+        commissionBasis: resolvedParticipantReferralDealType === "commission_per_ticket" ? "per_spot" : null,
         
         // Revenue split fields
         // Self-hosted: creator gets back whatever % was earmarked for the Space.
@@ -3519,14 +3638,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let promoterId: string | null = null;
       let referralCode: string | null = null;
       let promoterExperienceId: string | null = null;
+      let referralAudience: 'participant' | 'official_partner' = 'participant';
+      let trackedPromotion: any = null;
 
       if (providedShareToken) {
-        const trackedPromotion = await storage.getPromoterExperienceByShareToken(providedShareToken);
+        trackedPromotion = await storage.getPromoterExperienceByShareToken(providedShareToken);
         if (trackedPromotion) {
           if (trackedPromotion.experienceId !== experienceId) {
             return res.status(400).json({ message: "Referral link does not match this experience" });
           }
           promoterExperienceId = trackedPromotion.id;
+          referralAudience = trackedPromotion.referralAudience === 'official_partner'
+            ? 'official_partner'
+            : 'participant';
           promoterId = trackedPromotion.promoterId;
           const promoter = await storage.getUser(trackedPromotion.promoterId);
           referralCode = promoter?.promoterCode || providedReferralCode || null;
@@ -3561,7 +3685,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (promoterId && !promoterExperienceId) {
         try {
-          const trackedPromotion = await storage.promoteExperience(promoterId, experienceId);
+          trackedPromotion = await storage.promoteExperience(promoterId, experienceId, {
+            referralAudience: 'participant',
+          });
           promoterExperienceId = trackedPromotion.id;
         } catch (_) {
           promoterExperienceId = null;
@@ -3662,7 +3788,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Calculate commission if promoter is attached
       let commissionAmount: number | null = null;
       let commissionCurrency: string | null = null;
-      let commissionStatus: 'estimated' | 'locked' | 'voided' | null = null;
+      let commissionStatus: 'estimated' | 'locked' | 'paid' | 'voided' | null = null;
       
       if (promoterId && fullPrice > 0) {
         // Commission is calculated on FULL PRICE, not deposit
@@ -3673,12 +3799,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const spotsBooked = 1; // For now, 1 spot per booking (can be extended for group bookings)
         const currency = experience.currency || 'EUR';
         
+        let referralCommissionPct = 0;
+        if (referralAudience === 'official_partner') {
+          const acceptedDeal = trackedPromotion?.promotionDealId
+            ? await storage.getPromotionDeal(trackedPromotion.promotionDealId)
+            : undefined;
+          const officialDealType = acceptedDeal?.dealType || experience.promotionDealType;
+          if (officialDealType === 'commission_per_ticket') {
+            referralCommissionPct = Number(
+              acceptedDeal?.terms?.commissionPct
+                ?? experience.influencerCommissionPct
+                ?? 0,
+            );
+          }
+        } else if (experience.participantReferralDealType === 'commission_per_ticket') {
+          referralCommissionPct = Number(experience.participantReferralCommissionPct || 0);
+        }
+
         const commission = await calculateBookingCommission(
           experienceId,
           pricePerPerson,
           spotsBooked,
           parseFloat(fullPrice.toString()),
-          currency
+          currency,
+          referralCommissionPct > 0
+            ? { mode: 'percent', value: referralCommissionPct, basis: 'per_spot' }
+            : null,
         );
         
         commissionAmount = commission.commissionAmount;
@@ -3724,6 +3870,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // MVG threshold reached! Auto-confirm
           await confirmMVGEvent(experienceId, updatedBookings);
           await storage.updateExperienceMVGStatus(experienceId, "met");
+          await lockCommissionsForExperience(experienceId);
           mvgCheckResult = { action: "mvg_confirmed", currentBookings, mvgMin };
           // Broadcast lifecycle flip to all connected browsers immediately
           const mvgParticipants = await storage.getExperienceParticipantAvatars(experienceId);
@@ -4594,6 +4741,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           console.log(`[MVG Auto-Confirm] Minimum participants reached for ${experienceId}. Auto-confirming...`);
           await storage.processMVGSuccess(experienceId);
+          await lockCommissionsForExperience(experienceId);
           mvgConfirmed = true;
           mvgMessage = "Community Confirmed! The minimum group size has been reached!";
           
@@ -4655,6 +4803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id: experienceId } = req.params;
       
       const result = await storage.processMVGSuccess(experienceId);
+      await lockCommissionsForExperience(experienceId);
 
       // Broadcast lifecycle flip via WebSocket so all open browsers update immediately
       const mvgParticipants = await storage.getExperienceParticipantAvatars(experienceId);
@@ -4690,6 +4839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id: experienceId } = req.params;
       
       const result = await storage.processMVGFailure(experienceId);
+      await voidCommissionsForExperience(experienceId);
       
       res.json({
         success: true,
@@ -5408,6 +5558,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Step 5: Update experience MVG status if any deposits were captured
       if (capturedCount > 0) {
         await storage.updateExperienceMVGStatus(experienceId, "met");
+        await lockCommissionsForExperience(experienceId);
       }
       
       res.json({
@@ -5516,6 +5667,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Step 5: Update experience MVG status if any refunds were processed
       if (refundedCount > 0) {
         await storage.updateExperienceMVGStatus(experienceId, "failed");
+        await voidCommissionsForExperience(experienceId);
       }
       
       res.json({
@@ -5694,6 +5846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Threshold met - confirm event and capture payments
             await confirmMVGEvent(experience.id, bookings);
             await storage.updateExperienceMVGStatus(experience.id, "met");
+            await lockCommissionsForExperience(experience.id);
             processedExperiences.push({ 
               id: experience.id, 
               action: "confirmed", 
@@ -9160,31 +9313,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get earnings summary for each promoter
       const promotersWithStats = await Promise.all(promoters.map(async (promoter) => {
-        const earnings = await storage.getPromoterEarningsSummary(promoter.id);
+        const [earnings, promotedExperiences, promoterProfile] = await Promise.all([
+          storage.getPromoterEarningsSummary(promoter.id),
+          storage.getPromoterExperiences(promoter.id),
+          storage.getPromoterProfile(promoter.id),
+        ]);
         
         // Aggregate stats across currencies
         let totalBookings = 0;
         let estimatedByCurrency: Record<string, number> = {};
         let lockedByCurrency: Record<string, number> = {};
+        let paidByCurrency: Record<string, number> = {};
         let voidedByCurrency: Record<string, number> = {};
         
         for (const entry of earnings.byCurrency) {
           totalBookings += entry.totalBookings;
           estimatedByCurrency[entry.currency] = (estimatedByCurrency[entry.currency] || 0) + entry.estimated;
           lockedByCurrency[entry.currency] = (lockedByCurrency[entry.currency] || 0) + entry.locked;
+          paidByCurrency[entry.currency] = (paidByCurrency[entry.currency] || 0) + entry.paid;
           voidedByCurrency[entry.currency] = (voidedByCurrency[entry.currency] || 0) + entry.voided;
         }
+
+        const baseUrl = getAppBaseUrl(req);
+        const affiliateLinks = promoter.promoterCode
+          ? promotedExperiences
+              .filter((item) => item.shareToken)
+              .map((item) => ({
+                experienceId: item.experience.id,
+                experienceTitle: item.experience.title,
+                referralAudience: item.referralAudience,
+                url: buildPromoterReferralLink(
+                  baseUrl,
+                  item.experience.slug || item.experience.id,
+                  promoter.promoterCode!,
+                  item.shareToken,
+                ),
+              }))
+          : [];
         
         return {
           id: promoter.id,
           email: promoter.email,
           firstName: promoter.firstName,
           lastName: promoter.lastName,
+          role: promoter.role,
           promoterCode: promoter.promoterCode,
+          affiliateLink: promoter.promoterCode ? `/?ref=${encodeURIComponent(promoter.promoterCode)}` : null,
+          status: "active",
+          lastActiveAt: promoter.updatedAt || promoter.createdAt,
           totalBookings,
           estimatedByCurrency,
           lockedByCurrency,
+          paidByCurrency,
           voidedByCurrency,
+          affiliateLinks,
+          payoutStatus: promoterProfile?.stripeVerificationStatus || "not_connected",
+          currentBalanceByCurrency: Object.fromEntries(
+            Array.from(new Set([...Object.keys(estimatedByCurrency), ...Object.keys(lockedByCurrency)])).map(currency => [
+              currency,
+              (estimatedByCurrency[currency] || 0) + (lockedByCurrency[currency] || 0),
+            ]),
+          ),
+          availablePayoutByCurrency: lockedByCurrency,
         };
       }));
       
@@ -9228,10 +9418,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           experienceId: booking.experienceId,
           experienceName: experience.title,
           ticketSkuId: booking.ticketSkuId,
-          spots: booking.spots || 1,
-          bookingValue: booking.totalAmount,
+          spots: (booking as any).spots || 1,
+          bookingValue: (booking as any).totalAmount || booking.totalPrice || booking.amount || '0.00',
           commissionAmount: booking.commissionAmount,
           commissionStatus: booking.commissionStatus || 'estimated',
+          commissionTransferId: booking.commissionTransferId,
+          commissionPaidAt: booking.commissionPaidAt,
           currency: booking.commissionCurrency || experience.currency || 'EUR',
           participantName: participant ? `${participant.firstName || ''} ${participant.lastName || ''}`.trim() || participant.email : 'Unknown',
           createdAt: booking.createdAt,

@@ -174,6 +174,8 @@ export const promoterProfiles = pgTable("promoter_profiles", {
   displayName: varchar("display_name").notNull(),
   bio: text("bio").notNull(),
   completed: boolean("completed").default(false),
+  stripeAccountId: varchar("stripe_account_id"),
+  stripeVerificationStatus: varchar("stripe_verification_status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -249,6 +251,7 @@ export const monetisationModeEnum = pgEnum("monetisation_mode", [
 export const commissionStatusEnum = pgEnum("commission_status", [
   "estimated", // Calculated at booking time, pending MVG outcome
   "locked", // MVG met, commission is confirmed
+  "paid", // Stripe Connect transfer completed
   "voided", // MVG failed/refunded, commission is void
 ]);
 
@@ -410,6 +413,15 @@ export const experienceDrafts = pgTable("experience_drafts", {
     scale: 2,
   }).default("0.00"), // Commission for promoters/affiliates
 
+  // Participant referral perk fields (B2C loop)
+  participantReferralDealType: varchar("participant_referral_deal_type"),
+  participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
+    precision: 5,
+    scale: 2,
+  }).default("0.00"),
+  participantReferralMilestoneAttendeeTarget: integer("participant_referral_milestone_attendee_target"),
+  participantReferralMilestoneRewardDescription: text("participant_referral_milestone_reward_description"),
+
   // Promotion baseline deal fields
   promotionDealType: varchar("promotion_deal_type"),
   promotionMilestoneAttendeeTarget: integer("promotion_milestone_attendee_target"),
@@ -432,7 +444,7 @@ export const experienceDrafts = pgTable("experience_drafts", {
       }>
     >()
     .default([]),
-  promoterEnabled: boolean("promoter_enabled").default(false),
+  promoterEnabled: boolean("promoter_enabled").default(true),
 
   // Per-SKU Discounts
   discounts: jsonb("discounts")
@@ -676,6 +688,15 @@ export const experiences = pgTable("experiences", {
     scale: 2,
   }).default("0.00"), // Commission for promoters/affiliates
 
+  // Participant referral perk fields (B2C loop)
+  participantReferralDealType: varchar("participant_referral_deal_type"),
+  participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
+    precision: 5,
+    scale: 2,
+  }).default("0.00"),
+  participantReferralMilestoneAttendeeTarget: integer("participant_referral_milestone_attendee_target"),
+  participantReferralMilestoneRewardDescription: text("participant_referral_milestone_reward_description"),
+
   // Promotion baseline deal fields
   promotionDealType: varchar("promotion_deal_type"),
   promotionMilestoneAttendeeTarget: integer("promotion_milestone_attendee_target"),
@@ -899,7 +920,9 @@ export const bookings = pgTable("bookings", {
   // Commission tracking fields
   commissionAmount: decimal("commission_amount", { precision: 10, scale: 2 }), // Calculated commission for promoter
   commissionCurrency: varchar("commission_currency", { length: 3 }), // Must match experience.currency
-  commissionStatus: commissionStatusEnum("commission_status"), // estimated | locked | voided
+  commissionStatus: commissionStatusEnum("commission_status"), // estimated | locked | paid | voided
+  commissionTransferId: varchar("commission_transfer_id"),
+  commissionPaidAt: timestamp("commission_paid_at"),
 
   ticketSkuId: varchar("ticket_sku_id"),
   ticketName: varchar("ticket_name"),
@@ -946,10 +969,12 @@ export const promoterExperiences = pgTable(
       .references(() => experiences.id)
       .notNull(),
     shareToken: varchar("share_token").unique(),
+    referralAudience: varchar("referral_audience", { length: 20 }).notNull().default("participant"),
+    promotionDealId: varchar("promotion_deal_id"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
-    uniquePromoterExperience: unique().on(table.promoterId, table.experienceId),
+    uniquePromoterExperienceAudience: unique().on(table.promoterId, table.experienceId, table.referralAudience),
   }),
 );
 
@@ -3061,6 +3086,13 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     // Influencer/promoter commission — DB stores as decimal string; accept number or string
     influencerCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     promoterCommission: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    participantReferralDealType: z.enum([
+      "commission_per_ticket",
+      "milestone_barter",
+    ]).nullable().optional(),
+    participantReferralCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    participantReferralMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional(),
+    participantReferralMilestoneRewardDescription: z.string().max(500).optional(),
     promotionDealType: z.enum([
       "commission_per_ticket",
       "milestone_barter",

@@ -11,7 +11,7 @@ export interface CommissionConfig {
 export interface CommissionCalculation {
   commissionAmount: number;
   commissionCurrency: string;
-  commissionStatus: 'estimated' | 'locked' | 'voided';
+  commissionStatus: 'estimated' | 'locked' | 'paid' | 'voided';
 }
 
 const DEFAULT_COMMISSION_CONFIG: CommissionConfig = {
@@ -123,9 +123,20 @@ export async function calculateBookingCommission(
   pricePerPerson: number,
   spotsBooked: number,
   bookingTotal: number,
-  currency: string
+  currency: string,
+  referralConfig?: CommissionConfig | null,
 ): Promise<CommissionCalculation> {
-  const config = await getEffectiveCommissionConfig(experienceId);
+  const config = referralConfig === undefined
+    ? await getEffectiveCommissionConfig(experienceId)
+    : referralConfig;
+
+  if (!config || config.value <= 0) {
+    return {
+      commissionAmount: 0,
+      commissionCurrency: currency,
+      commissionStatus: 'estimated',
+    };
+  }
   
   const commissionAmount = calculateCommission(
     config,

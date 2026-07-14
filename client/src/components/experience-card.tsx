@@ -24,6 +24,7 @@ interface ExperienceCardProps {
     title: string;
     shortDescription: string;
     category: string;
+    greatPillars?: string[];
     coverImageUrl?: string;
     gallery?: string[];
     location: string;
@@ -84,6 +85,13 @@ function getDisplayPrice(experience: ExperienceCardProps['experience']): { price
   return { price: legacyPrice, hasRange: false };
 }
 
+const pillarLabels: Record<string, { label: string; color: string }> = {
+  health: { label: "Health", color: "bg-emerald-100 text-emerald-700" },
+  sports: { label: "Sports", color: "bg-orange-100 text-orange-700" },
+  wellness: { label: "Wellness", color: "bg-purple-100 text-purple-700" },
+  food: { label: "Food", color: "bg-amber-100 text-amber-700" },
+};
+
 const categoryLabels: Record<string, { label: string; color: string }> = {
   sports_wellness: { label: "Sports & Wellness", color: "bg-primary/10 text-primary" },
   retreats: { label: "Retreat", color: "bg-secondary/10 text-secondary" },
@@ -109,6 +117,7 @@ function getLifecycleBadge(lifecycleStatus?: string) {
 
 export default function ExperienceCard({ experience }: ExperienceCardProps) {
   const categoryInfo = categoryLabels[experience.category] || { label: "Experience", color: "bg-gray-100 text-gray-600" };
+  const pillars = Array.isArray(experience.greatPillars) ? experience.greatPillars.filter(Boolean) : [];
   const spotsLeft = experience.maxParticipants - experience.currentParticipants;
 
   // Fetch MVG progress for the progress bar numbers only (not for lifecycle determination)
@@ -223,9 +232,19 @@ export default function ExperienceCard({ experience }: ExperienceCardProps) {
       
       <CardContent className="p-6">
         <div className="flex items-center justify-between mb-3">
-          <Badge className={categoryInfo.color}>
-            {categoryInfo.label}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge className={categoryInfo.color}>
+              {categoryInfo.label}
+            </Badge>
+            {pillars.map((pillar) => {
+              const pillarInfo = pillarLabels[pillar] || { label: pillar, color: "bg-gray-100 text-gray-600" };
+              return (
+                <Badge key={pillar} variant="outline" className={pillarInfo.color} data-testid={`card-pillar-${experience.id}-${pillar}`}>
+                  {pillarInfo.label}
+                </Badge>
+              );
+            })}
+          </div>
           <span className="text-gray-500 text-sm">
             <Heart className="h-4 w-4 inline text-red-500 mr-1" />
             {Math.floor(Math.random() * 50) + 10}

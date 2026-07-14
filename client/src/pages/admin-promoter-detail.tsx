@@ -24,6 +24,7 @@ interface PromoterDetail {
       currency: string;
       estimated: number;
       locked: number;
+      paid: number;
       voided: number;
       totalBookings: number;
     }>;
@@ -37,6 +38,8 @@ interface PromoterDetail {
     bookingValue: string | null;
     commissionAmount: string | null;
     commissionStatus: string;
+    commissionTransferId: string | null;
+    commissionPaidAt: string | null;
     currency: string;
     participantName: string;
     createdAt: string;
@@ -60,6 +63,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-green-100 text-green-800">Locked</Badge>;
     case 'voided':
       return <Badge className="bg-red-100 text-red-800">Voided</Badge>;
+    case 'paid':
+      return <Badge className="bg-blue-100 text-blue-800">Paid</Badge>;
     case 'estimated':
     default:
       return <Badge className="bg-gray-100 text-gray-800">Estimated</Badge>;
@@ -99,6 +104,8 @@ export default function AdminPromoterDetailPage() {
       'Commission Amount',
       'Currency',
       'Status',
+      'Transfer ID',
+      'Paid At',
       'Booking Date'
     ];
     
@@ -113,6 +120,8 @@ export default function AdminPromoterDetailPage() {
       booking.commissionAmount || '0',
       booking.currency,
       booking.commissionStatus,
+      booking.commissionTransferId || '',
+      booking.commissionPaidAt || '',
       new Date(booking.createdAt).toISOString().split('T')[0]
     ]);
     
@@ -171,7 +180,7 @@ export default function AdminPromoterDetailPage() {
   const totalBookings = earnings.byCurrency.reduce((sum, e) => sum + e.totalBookings, 0);
   
   // Format multi-currency totals - display each currency separately, never aggregate
-  const formatMultiCurrencyTotal = (extractor: (e: { currency: string; estimated: number; locked: number; voided: number }) => number) => {
+  const formatMultiCurrencyTotal = (extractor: (e: { currency: string; estimated: number; locked: number; paid: number; voided: number }) => number) => {
     const nonZero = earnings.byCurrency.filter(e => extractor(e) > 0);
     if (nonZero.length === 0) return '-';
     return nonZero.map(e => formatCurrency(extractor(e), e.currency)).join(', ');
@@ -208,7 +217,7 @@ export default function AdminPromoterDetailPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Total Bookings</CardTitle>
@@ -238,6 +247,18 @@ export default function AdminPromoterDetailPage() {
             <CardContent>
               <div className="text-xl font-bold text-green-600">
                 {formatMultiCurrencyTotal(e => e.locked)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground flex items-center gap-1">
+                <DollarSign className="h-4 w-4" /> Paid
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-blue-600">
+                {formatMultiCurrencyTotal(e => e.paid)}
               </div>
             </CardContent>
           </Card>

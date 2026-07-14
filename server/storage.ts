@@ -101,7 +101,7 @@ import {
   type InsertScheduledPayout,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, sql, count, inArray, asc, not, isNull } from "drizzle-orm";
+import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
 
 type ReferralClickStats = {
   totalClicks: number;
@@ -115,6 +115,8 @@ type PromoterExperienceRecord = {
   promoterId: string;
   experienceId: string;
   shareToken: string | null;
+  referralAudience: string;
+  promotionDealId: string | null;
   createdAt: Date | null;
 };
 
@@ -171,7 +173,7 @@ export interface IStorage {
   }): Promise<void>;
   getReferralClickStats(
     promoterId: string,
-    options?: { promoterExperienceId?: string; experienceId?: string },
+    options?: { promoterExperienceId?: string; experienceId?: string; referralAudience?: "participant" | "official_partner" },
   ): Promise<ReferralClickStats>;
   createExperienceMessage(data: { experienceId: string; userId: string; message: string; messageType?: string }): Promise<void>;
   deleteExperience(id: string): Promise<void>;
@@ -350,6 +352,7 @@ export interface IStorage {
   getPromoterProfile(userId: string): Promise<PromoterProfile | undefined>;
   getPromoterProfileByUserId(userId: string): Promise<PromoterProfile | undefined>;
   createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile>;
+  updatePromoterProfileStripe(userId: string, stripeAccountId: string, verificationStatus?: string): Promise<void>;
 
   // Participant interaction operations
   createConnection(connection: InsertParticipantConnection): Promise<ParticipantConnection>;
@@ -376,12 +379,13 @@ export interface IStorage {
   getFeaturedMembers(): Promise<ParticipantProfile[]>;
 
   // Promoter dashboard operations
-  getPromoterBookings(promoterId: string): Promise<Booking[]>;
-  getPromoterEarningsSummary(promoterId: string): Promise<{
+  getPromoterBookings(promoterId: string, referralAudience?: "participant" | "official_partner"): Promise<Booking[]>;
+  getPromoterEarningsSummary(promoterId: string, referralAudience?: "participant" | "official_partner"): Promise<{
     byCurrency: Array<{
       currency: string;
       estimated: number;
       locked: number;
+      paid: number;
       voided: number;
       totalBookings: number;
     }>;
@@ -389,10 +393,13 @@ export interface IStorage {
   getPromoterExperiences(promoterId: string): Promise<Array<{
     promoterExperienceId: string | null;
     shareToken: string | null;
+    referralAudience: string;
+    promotionDealId: string | null;
     experience: Experience;
     spotsBooked: number;
     estimatedCommission: number;
     lockedCommission: number;
+    paidCommission: number;
     currency: string;
     clicks: number;
     uniqueVisitors: number;
@@ -970,7 +977,7 @@ export class DatabaseStorage implements IStorage {
 
   async getReferralClickStats(
     promoterId: string,
-    options?: { promoterExperienceId?: string; experienceId?: string },
+    options?: { promoterExperienceId?: string; experienceId?: string; referralAudience?: "participant" | "official_partner" },
   ): Promise<ReferralClickStats> {
     const conditions = [eq(referralClicks.promoterId, promoterId)];
 
@@ -980,10 +987,22 @@ export class DatabaseStorage implements IStorage {
       conditions.push(eq(referralClicks.experienceId, options.experienceId));
     }
 
-    const clicks = await db
+    let clicks = await db
       .select()
       .from(referralClicks)
       .where(and(...conditions));
+
+    if (options?.referralAudience) {
+      const promotedExperiences = await this.getPromoterPromotedExperiences(promoterId);
+      const audienceIds = new Set(
+        promotedExperiences
+          .filter((row) => row.referralAudience === options.referralAudience)
+          .map((row) => row.id),
+      );
+      clicks = clicks.filter((click) => click.promoterExperienceId
+        ? audienceIds.has(click.promoterExperienceId)
+        : options.referralAudience === "participant");
+    }
 
     const totalClicks = clicks.length;
     const uniqueVisitors = new Set(clicks.map((click) => getReferralVisitorKey(click))).size;
@@ -2419,6 +2438,17 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updatePromoterProfileStripe(userId: string, stripeAccountId: string, verificationStatus = 'pending'): Promise<void> {
+    await db
+      .update(promoterProfiles)
+      .set({
+        stripeAccountId,
+        stripeVerificationStatus: verificationStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(promoterProfiles.userId, userId));
+  }
+
   async getCreatorExperiences(userId: string): Promise<Experience[]> {
     return await db.select().from(experiences).where(eq(experiences.creatorId, userId));
   }
@@ -3144,31 +3174,42 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Promoter dashboard operations
-  async getPromoterBookings(promoterId: string): Promise<Booking[]> {
-    return await db
+  async getPromoterBookings(promoterId: string, referralAudience?: "participant" | "official_partner"): Promise<Booking[]> {
+    const promoterBookings = await db
       .select()
       .from(bookings)
       .where(eq(bookings.promoterId, promoterId))
       .orderBy(desc(bookings.bookingDate));
+
+    if (!referralAudience) return promoterBookings;
+
+    const promotedExperiences = await this.getPromoterPromotedExperiences(promoterId);
+    const audienceIds = new Set(
+      promotedExperiences
+        .filter((row) => row.referralAudience === referralAudience)
+        .map((row) => row.id),
+    );
+
+    return promoterBookings.filter((booking) => booking.promoterExperienceId
+      ? audienceIds.has(booking.promoterExperienceId)
+      : referralAudience === "participant");
   }
 
-  async getPromoterEarningsSummary(promoterId: string): Promise<{
+  async getPromoterEarningsSummary(promoterId: string, referralAudience?: "participant" | "official_partner"): Promise<{
     byCurrency: Array<{
       currency: string;
       estimated: number;
       locked: number;
+      paid: number;
       voided: number;
       totalBookings: number;
     }>;
   }> {
-    const promoterBookings = await db
-      .select()
-      .from(bookings)
-      .where(eq(bookings.promoterId, promoterId));
+    const promoterBookings = await this.getPromoterBookings(promoterId, referralAudience);
     
     // Group by currency and SUM stored commission amounts (no recalculation)
     // Uses ONLY stored booking data: commissionAmount, commissionCurrency, commissionStatus
-    const currencyMap = new Map<string, { estimated: number; locked: number; voided: number; totalBookings: number }>();
+    const currencyMap = new Map<string, { estimated: number; locked: number; paid: number; voided: number; totalBookings: number }>();
     
     for (const booking of promoterBookings) {
       const currency = booking.commissionCurrency || 'EUR';
@@ -3177,7 +3218,7 @@ export class DatabaseStorage implements IStorage {
       const status = booking.commissionStatus || 'estimated';
       
       if (!currencyMap.has(currency)) {
-        currencyMap.set(currency, { estimated: 0, locked: 0, voided: 0, totalBookings: 0 });
+        currencyMap.set(currency, { estimated: 0, locked: 0, paid: 0, voided: 0, totalBookings: 0 });
       }
       
       const entry = currencyMap.get(currency)!;
@@ -3187,6 +3228,8 @@ export class DatabaseStorage implements IStorage {
         entry.estimated += amount;
       } else if (status === 'locked') {
         entry.locked += amount;
+      } else if (status === 'paid') {
+        entry.paid += amount;
       } else if (status === 'voided') {
         entry.voided += amount;
       }
@@ -3203,10 +3246,13 @@ export class DatabaseStorage implements IStorage {
   async getPromoterExperiences(promoterId: string): Promise<Array<{
     promoterExperienceId: string | null;
     shareToken: string | null;
+    referralAudience: string;
+    promotionDealId: string | null;
     experience: Experience;
     spotsBooked: number;
     estimatedCommission: number;
     lockedCommission: number;
+    paidCommission: number;
     currency: string;
     clicks: number;
     uniqueVisitors: number;
@@ -3254,6 +3300,7 @@ export class DatabaseStorage implements IStorage {
       spotsBooked: number;
       estimatedCommission: number;
       lockedCommission: number;
+      paidCommission: number;
       currency: string;
     }>();
 
@@ -3278,6 +3325,7 @@ export class DatabaseStorage implements IStorage {
           spotsBooked: 0,
           estimatedCommission: 0,
           lockedCommission: 0,
+          paidCommission: 0,
           currency,
         });
       }
@@ -3289,6 +3337,8 @@ export class DatabaseStorage implements IStorage {
         entry.estimatedCommission += amount;
       } else if (status === 'locked') {
         entry.lockedCommission += amount;
+      } else if (status === 'paid') {
+        entry.paidCommission += amount;
       }
     }
 
@@ -3334,10 +3384,13 @@ export class DatabaseStorage implements IStorage {
     const result: Array<{
       promoterExperienceId: string | null;
       shareToken: string | null;
+      referralAudience: string;
+      promotionDealId: string | null;
       experience: Experience;
       spotsBooked: number;
       estimatedCommission: number;
       lockedCommission: number;
+      paidCommission: number;
       currency: string;
       clicks: number;
       uniqueVisitors: number;
@@ -3360,10 +3413,13 @@ export class DatabaseStorage implements IStorage {
       result.push({
         promoterExperienceId: promotedExperience.id,
         shareToken: promotedExperience.shareToken,
+        referralAudience: promotedExperience.referralAudience,
+        promotionDealId: promotedExperience.promotionDealId,
         experience,
         spotsBooked: bookingStats?.spotsBooked || 0,
         estimatedCommission: bookingStats?.estimatedCommission || 0,
         lockedCommission: bookingStats?.lockedCommission || 0,
+        paidCommission: bookingStats?.paidCommission || 0,
         currency: bookingStats?.currency || experience.currency || 'EUR',
         clicks: clickStats?.totalClicks || 0,
         uniqueVisitors: clickStats?.visitorKeys.size || 0,
@@ -3386,10 +3442,17 @@ export class DatabaseStorage implements IStorage {
         shareToken: bookingStats.promoterExperienceId
           ? promotedExperienceById.get(bookingStats.promoterExperienceId)?.shareToken || null
           : null,
+        referralAudience: bookingStats.promoterExperienceId
+          ? promotedExperienceById.get(bookingStats.promoterExperienceId)?.referralAudience || 'participant'
+          : 'participant',
+        promotionDealId: bookingStats.promoterExperienceId
+          ? promotedExperienceById.get(bookingStats.promoterExperienceId)?.promotionDealId || null
+          : null,
         experience,
         spotsBooked: bookingStats.spotsBooked,
         estimatedCommission: bookingStats.estimatedCommission,
         lockedCommission: bookingStats.lockedCommission,
+        paidCommission: bookingStats.paidCommission,
         currency: bookingStats.currency,
         clicks: clickStats?.totalClicks || 0,
         uniqueVisitors: clickStats?.visitorKeys.size || 0,
@@ -3411,10 +3474,17 @@ export class DatabaseStorage implements IStorage {
         shareToken: clickStats.promoterExperienceId
           ? promotedExperienceById.get(clickStats.promoterExperienceId)?.shareToken || null
           : null,
+        referralAudience: clickStats.promoterExperienceId
+          ? promotedExperienceById.get(clickStats.promoterExperienceId)?.referralAudience || 'participant'
+          : 'participant',
+        promotionDealId: clickStats.promoterExperienceId
+          ? promotedExperienceById.get(clickStats.promoterExperienceId)?.promotionDealId || null
+          : null,
         experience,
         spotsBooked: 0,
         estimatedCommission: 0,
         lockedCommission: 0,
+        paidCommission: 0,
         currency: experience.currency || 'EUR',
         clicks: clickStats.totalClicks,
         uniqueVisitors: clickStats.visitorKeys.size,
@@ -3497,6 +3567,7 @@ export class DatabaseStorage implements IStorage {
   async getPromoterExperience(
     promoterId: string,
     experienceId: string,
+    referralAudience = 'participant',
   ): Promise<PromoterExperienceRecord | undefined> {
     const [existing] = await db
       .select()
@@ -3505,6 +3576,7 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(promoterExperiences.promoterId, promoterId),
           eq(promoterExperiences.experienceId, experienceId),
+          eq(promoterExperiences.referralAudience, referralAudience),
         ),
       )
       .limit(1);
@@ -3536,15 +3608,32 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async promoteExperience(promoterId: string, experienceId: string): Promise<PromoterExperienceRecord> {
-    const existing = await this.getPromoterExperience(promoterId, experienceId);
-    if (existing) return existing;
+  async promoteExperience(
+    promoterId: string,
+    experienceId: string,
+    options: { referralAudience?: 'participant' | 'official_partner'; promotionDealId?: string | null } = {},
+  ): Promise<PromoterExperienceRecord> {
+    const referralAudience = options.referralAudience || 'participant';
+    const existing = await this.getPromoterExperience(promoterId, experienceId, referralAudience);
+    if (existing) {
+      if (options.promotionDealId && existing.promotionDealId !== options.promotionDealId) {
+        const [updated] = await db
+          .update(promoterExperiences)
+          .set({ promotionDealId: options.promotionDealId })
+          .where(eq(promoterExperiences.id, existing.id))
+          .returning();
+        return updated || existing;
+      }
+      return existing;
+    }
 
     const [inserted] = await db
       .insert(promoterExperiences)
       .values({
         promoterId,
         experienceId,
+        referralAudience,
+        promotionDealId: options.promotionDealId || null,
       })
       .returning();
 
@@ -3745,7 +3834,10 @@ export class DatabaseStorage implements IStorage {
     // Accepting a deal is only useful if the partner walks away with a trackable link —
     // grant them the same promoter tracking record regular promoters get.
     if (updated && action === "accept") {
-      await this.promoteExperience(partnerId, deal.experienceId);
+      await this.promoteExperience(partnerId, deal.experienceId, {
+        referralAudience: 'official_partner',
+        promotionDealId: updated.id,
+      });
     }
 
     return updated;
@@ -3825,7 +3917,10 @@ export class DatabaseStorage implements IStorage {
     // Accepting a deal is only useful if the partner walks away with a trackable link —
     // grant them the same promoter tracking record regular promoters get.
     if (action === "accept") {
-      await this.promoteExperience(partnerId, experienceId);
+      await this.promoteExperience(partnerId, experienceId, {
+        referralAudience: 'official_partner',
+        promotionDealId: result.id,
+      });
     }
 
     return result;
@@ -3867,7 +3962,10 @@ export class DatabaseStorage implements IStorage {
       .returning();
 
     if (updated && action === "accept" && deal.partnerId) {
-      await this.promoteExperience(deal.partnerId, deal.experienceId);
+      await this.promoteExperience(deal.partnerId, deal.experienceId, {
+        referralAudience: 'official_partner',
+        promotionDealId: updated.id,
+      });
     }
 
     return updated;
@@ -3875,7 +3973,30 @@ export class DatabaseStorage implements IStorage {
 
   // Admin Promoter Management Methods
   async getAllPromoters(): Promise<User[]> {
-    return db.select().from(users).where(eq(users.role, 'promoter'));
+    const [bookingPromoters, sharingPromoters] = await Promise.all([
+      db
+        .selectDistinct({ promoterId: bookings.promoterId })
+        .from(bookings)
+        .where(isNotNull(bookings.promoterId)),
+      db
+        .selectDistinct({ promoterId: promoterExperiences.promoterId })
+        .from(promoterExperiences),
+    ]);
+    const activePromoterIds = Array.from(new Set(
+      [...bookingPromoters, ...sharingPromoters]
+        .map(row => row.promoterId)
+        .filter((id): id is string => !!id),
+    ));
+
+    return db
+      .select()
+      .from(users)
+      .where(or(
+        eq(users.role, 'promoter'),
+        isNotNull(users.promoterCode),
+        ...(activePromoterIds.length > 0 ? [inArray(users.id, activePromoterIds)] : []),
+      ))
+      .orderBy(desc(users.updatedAt));
   }
 
   async getPromoterBookingsWithDetails(promoterId: string): Promise<Array<{

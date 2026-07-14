@@ -1061,6 +1061,7 @@ export class DatabaseStorage implements IStorage {
       })
       .where(eq(experiences.id, id))
       .returning();
+    await this.syncDirectPromotionDeals(id);
     return experience;
   }
 
@@ -3716,11 +3717,50 @@ export class DatabaseStorage implements IStorage {
         ),
       );
 
+    const desiredPartnerIds = new Set(selectedPartnerIds);
+    const desiredEmails = new Set(
+      externalInvites
+        .map((invite) => invite?.email?.toLowerCase().trim())
+        .filter((email): email is string => !!email),
+    );
+
+    for (const deal of existingDeals) {
+      if (deal.status !== "pending") continue;
+      const isSelected = deal.source === "platform_direct"
+        ? !!deal.partnerId && desiredPartnerIds.has(deal.partnerId)
+        : !!deal.partnerEmail && desiredEmails.has(deal.partnerEmail.toLowerCase());
+
+      if (!isSelected) {
+        await db.delete(promotionDeals).where(eq(promotionDeals.id, deal.id));
+        continue;
+      }
+
+      await db
+        .update(promotionDeals)
+        .set({
+          dealType,
+          baselineTerms,
+          terms: baselineTerms,
+          pendingActionBy: "partner",
+          updatedAt: new Date(),
+        })
+        .where(eq(promotionDeals.id, deal.id));
+    }
+
+    const currentDeals = await db
+      .select()
+      .from(promotionDeals)
+      .where(
+        and(
+          eq(promotionDeals.experienceId, experienceId),
+          or(eq(promotionDeals.source, "platform_direct"), eq(promotionDeals.source, "external_direct")),
+        ),
+      );
     const existingByPartnerId = new Set(
-      existingDeals.filter((d) => d.source === "platform_direct" && d.partnerId).map((d) => d.partnerId),
+      currentDeals.filter((d) => d.source === "platform_direct" && d.partnerId).map((d) => d.partnerId),
     );
     const existingByEmail = new Set(
-      existingDeals
+      currentDeals
         .filter((d) => d.source === "external_direct" && d.partnerEmail)
         .map((d) => d.partnerEmail!.toLowerCase()),
     );

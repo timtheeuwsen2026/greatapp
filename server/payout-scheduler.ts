@@ -252,6 +252,8 @@ async function executeExperiencePayout(
           userId: recipient.userId ?? "",
           scheduledPayoutId,
         },
+      }, {
+        idempotencyKey: `event-payout:${scheduledPayoutId}:recipient:${recipient.id || recipient.stripeAccountId}`,
       });
 
       transferIds[recipient.recipientType] = transfer.id;
@@ -293,6 +295,8 @@ async function executeExperiencePayout(
       destination: profile.stripeAccountId,
       description: `${experience.title} - promoter commission`,
       metadata: { experienceId, recipientType: 'promoter', userId: promoterId, scheduledPayoutId },
+    }, {
+      idempotencyKey: `event-payout:${scheduledPayoutId}:promoter:${promoterId}`,
     });
     await db
       .update(bookings)
@@ -325,6 +329,7 @@ async function executeExperiencePayout(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type MinimalRecipient = {
+  id?: string;
   recipientType: string;
   stripeAccountId: string | null;
   userId: string | null;

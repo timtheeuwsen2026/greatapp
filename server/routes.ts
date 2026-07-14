@@ -1445,7 +1445,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get which ones this promoter is already promoting
       const promotedRows = await storage.getPromoterPromotedExperiences(userId);
       const promotedByExperienceId = new Map(
-        promotedRows.map((row) => [row.experienceId, row]),
+        promotedRows
+          .filter((row) => row.referralAudience === "official_partner")
+          .map((row) => [row.experienceId, row]),
       );
 
       // Get this partner's marketplace bids (Option C: Accept / Counter Offer) so the
@@ -3301,14 +3303,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get roles from draft
       const roles = Array.isArray((draft as any).roles) ? (draft as any).roles : [];
       const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
-      const resolvedParticipantReferralDealType = (draft as any).participantReferralDealType
-        ?? (((draft as any).promotionDealType === "commission_per_ticket" || (draft as any).promotionDealType === "milestone_barter")
-          ? (draft as any).promotionDealType
-          : null);
-      const resolvedParticipantReferralCommissionPct = (draft as any).participantReferralCommissionPct
-        ?? (resolvedParticipantReferralDealType === "commission_per_ticket"
-          ? ((draft as any).influencerCommissionPct || "0.00")
-          : "0.00");
+      const resolvedParticipantReferralDealType = (draft as any).participantReferralDealType ?? null;
+      const resolvedParticipantReferralCommissionPct =
+        (draft as any).participantReferralCommissionPct ?? "0.00";
       
       // Prepare experience data from draft with explicit type mapping
       const experienceData = applyMarketplaceEconomics({
@@ -3396,10 +3393,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         monetisationMode: "creator_led" as const,
         participantReferralDealType: resolvedParticipantReferralDealType,
         participantReferralCommissionPct: resolvedParticipantReferralCommissionPct,
-        participantReferralMilestoneAttendeeTarget: (draft as any).participantReferralMilestoneAttendeeTarget
-          ?? (((draft as any).promotionDealType === "milestone_barter")
-            ? ((draft as any).promotionMilestoneAttendeeTarget || null)
-            : null),
+        participantReferralMilestoneAttendeeTarget:
+          (draft as any).participantReferralMilestoneAttendeeTarget ?? null,
         participantReferralMilestoneRewardDescription: (draft as any).participantReferralMilestoneRewardDescription || null,
         promotionDealType: (draft as any).promotionDealType
           ?? null,
@@ -3415,7 +3410,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : [],
         promoterEnabled: (draft as any).promoterEnabled ?? true,
         influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
-        promoterCommission: resolvedParticipantReferralCommissionPct || (draft as any).promoterCommission || "0.00",
+        promoterCommission: resolvedParticipantReferralCommissionPct,
         commissionMode: resolvedParticipantReferralDealType === "commission_per_ticket" ? "percent" : null,
         commissionValue: resolvedParticipantReferralDealType === "commission_per_ticket"
           ? resolvedParticipantReferralCommissionPct

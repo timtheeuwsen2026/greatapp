@@ -89,11 +89,11 @@ function resolveReferralTarget(experience: any, mvg: MVGData): ReferralTarget {
 function buildOGTitle(experience: any, mvg: MVGData): string {
   const state = resolveLifecycle(experience, mvg);
   const name = experience.title || "Unnamed Trip";
-  const spotsLeft = Math.max(0, mvg.minimum - mvg.current);
+  const target = resolveReferralTarget(experience, mvg);
 
   if (state === "FORMING") {
-    return mvg.minimum > 0
-      ? `🔥 ${name} — Only ${spotsLeft} more needed to confirm!`
+    return target.remaining !== null && target.remaining > 0
+      ? `🔥 ${name} — Only ${target.remaining} more needed to ${target.kind === "mvg" ? "confirm" : "fill the event"}!`
       : `🔥 ${name} — Reserve your spot!`;
   }
   if (state === "CONFIRMED") return `✅ ${name} — This trip is happening!`;
@@ -102,11 +102,11 @@ function buildOGTitle(experience: any, mvg: MVGData): string {
 
 function buildOGDescription(experience: any, mvg: MVGData): string {
   const state = resolveLifecycle(experience, mvg);
-  const spotsLeft = Math.max(0, mvg.minimum - mvg.current);
+  const target = resolveReferralTarget(experience, mvg);
 
   if (state === "FORMING") {
-    return mvg.minimum > 0
-      ? `I just reserved my spot! If we get ${spotsLeft} more traveler${spotsLeft === 1 ? "" : "s"} this trip is officially ON. Join me — fully refundable if the group doesn't form.`
+    return target.remaining !== null && target.remaining > 0
+      ? `I just reserved my spot! Join ${target.remaining} more traveler${target.remaining === 1 ? "" : "s"} and ${target.kind === "mvg" ? "help confirm this trip" : "fill the remaining spots"}.`
       : `I just reserved my spot! Join me on this incredible experience.`;
   }
   if (state === "CONFIRMED") {

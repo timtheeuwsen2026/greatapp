@@ -119,6 +119,17 @@ function CounterOfferDialog({
   const [message, setMessage] = useState("");
 
   const isSponsorship = experience.promotionDealType === "financial_sponsorship";
+  const originalOffer = getPromotionOfferSummary(experience);
+
+  useEffect(() => {
+    if (!open) return;
+    setPitch(experience.promotionBrandPitch || "");
+    setAmount(experience.promotionSponsorshipAmount || "");
+    setCommissionPct(experience.influencerCommissionPct || "");
+    setMilestoneTarget(String(experience.promotionMilestoneAttendeeTarget || ""));
+    setMilestoneReward(String(experience.promotionMilestoneRewardTickets || ""));
+    setMessage("");
+  }, [open, experience]);
 
   const handleSubmit = () => {
     const terms: PromotionDealTerms = experience.promotionDealType === "commission_per_ticket"
@@ -145,6 +156,12 @@ function CounterOfferDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30" data-testid="counter-original-ask">
+            <p className="text-xs font-semibold uppercase text-amber-800 dark:text-amber-200">Creator's Original Ask</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{originalOffer.headline}</p>
+            <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{originalOffer.body}</p>
+          </div>
+
           {experience.promotionDealType === "commission_per_ticket" ? (
             <div>
               <Label htmlFor="counter-commission-pct">Your Commission Request (%)</Label>
@@ -205,7 +222,7 @@ function CounterOfferDialog({
             </div>
           ) : (
             <div>
-              <Label htmlFor="counter-brand-pitch">What you can offer</Label>
+              <Label htmlFor="counter-brand-pitch">Your Counter Offer</Label>
               <Textarea
                 id="counter-brand-pitch"
                 value={pitch}

@@ -23,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
+import { isMvgStillForming } from "@/lib/experienceAvailability";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { 
   ExperienceWithStats, 
@@ -468,11 +469,13 @@ export default function ExperienceDetails() {
     return 0;
   })();
 
-  // FORMING trips: spots left to MVG minimum. Non-FORMING trips: capacity remaining.
   const liveParticipantCount = experience?.currentParticipants || 0;
-  const spotsLeft = experience?.requireMinimumParticipants
-    ? Math.max(0, (experience?.minimumParticipants || 0) - liveParticipantCount)
-    : Math.max(0, (experience?.maxParticipants || 0) - liveParticipantCount);
+  const isMvgForming = isMvgStillForming(experience);
+  const mvgSpotsNeeded = Math.max(
+    0,
+    (experience.minimumParticipants || experience.mvgMin || 0) - liveParticipantCount,
+  );
+  const spotsLeft = Math.max(0, (experience.maxParticipants || 0) - liveParticipantCount);
   const averageRating = experience.stats?.averageRating || 0;
 
   return (
@@ -612,7 +615,7 @@ export default function ExperienceDetails() {
                 </div>
                 <div className="flex items-center">
                   <Users className="h-5 w-5 mr-2" />
-                  {experience.requireMinimumParticipants ? (
+                  {isMvgForming ? (
                     <span>{liveParticipantCount}/{experience.minimumParticipants || 0} joined</span>
                   ) : (
                     <span>{liveParticipantCount}/{experience.maxParticipants || 0} spots taken</span>
@@ -674,7 +677,7 @@ export default function ExperienceDetails() {
                   </span>
                   <div className="flex items-center space-x-2">
                     <Badge variant="secondary" className="text-primary border-primary/20">
-                      {spotsLeft} {experience.requireMinimumParticipants ? "more needed" : "spots left"}
+                      {isMvgForming ? `${mvgSpotsNeeded} more needed` : `${spotsLeft} spots left`}
                     </Badge>
                   </div>
                 </CardTitle>
@@ -1121,7 +1124,7 @@ export default function ExperienceDetails() {
                           <div className="flex justify-between items-center mt-1 ml-6">
                             <span className="text-sm text-gray-500">Available</span>
                             <span className={`text-sm ${isSoldOut ? 'text-red-600 font-medium' : 'text-gray-700'}`} data-testid={`text-room-available-${index}`}>
-                              {isSoldOut ? 'Sold out' : `${roomAvailable} spots available`}
+                              {isSoldOut ? 'Sold out' : isMvgForming ? 'Available' : `${roomAvailable} spots available`}
                             </span>
                           </div>
                         </button>
@@ -1338,13 +1341,15 @@ export default function ExperienceDetails() {
                               </div>
                               <div className="text-xs text-gray-500 mb-3">per person</div>
                               <div className="flex items-center justify-between mb-3">
-                                <Badge 
-                                  variant={isSoldOut ? "destructive" : spotsAvailable <= 3 ? "destructive" : "secondary"} 
-                                  className="text-xs"
-                                  data-testid={`ticket-availability-${index}`}
-                                >
-                                  {isSoldOut ? 'Sold out' : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
-                                </Badge>
+                                {(isSoldOut || !isMvgForming) && (
+                                  <Badge
+                                    variant={isSoldOut ? "destructive" : spotsAvailable <= 3 ? "destructive" : "secondary"}
+                                    className="text-xs"
+                                    data-testid={`ticket-availability-${index}`}
+                                  >
+                                    {isSoldOut ? 'Sold out' : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
+                                  </Badge>
+                                )}
                                 {ticketDeposit > 0 && !isSoldOut && (
                                   <div className="flex items-center text-xs text-green-600 font-medium">
                                     <Shield className="h-3 w-3 mr-1" />
@@ -1448,9 +1453,11 @@ export default function ExperienceDetails() {
                     </div>
                   )}
                   
-                  <p className="text-sm text-gray-600 mt-3">
-                    {spotsLeft > 0 ? `${spotsLeft} spots remaining` : "Fully booked"}
-                  </p>
+                  {!isMvgForming && (
+                    <p className="text-sm text-gray-600 mt-3">
+                      {spotsLeft > 0 ? `${spotsLeft} spots remaining` : "Fully booked"}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-4 mb-6">

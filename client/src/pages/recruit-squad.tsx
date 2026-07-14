@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { apiRequest } from "@/lib/queryClient";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
+import { ensurePostCheckoutReferral, readPostCheckoutReferral } from "@/lib/postCheckoutReferral";
 import {
   Copy,
   CheckCircle,
@@ -65,11 +65,9 @@ function positiveNumber(value: unknown) {
 export default function RecruitSquad() {
   const [experienceId, setExperienceId] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
-  const [referralLink, setReferralLink] = useState<string | null>(null);
-  const [referralCode, setReferralCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -82,24 +80,18 @@ export default function RecruitSquad() {
     enabled: !!experienceId,
   });
 
-  const ensureCodeMutation = useMutation({
-    mutationFn: async (expId: string) => {
-      const res = await apiRequest("POST", "/api/me/ensure-referral-code", {
-        experienceId: expId,
-      });
-      return await res.json();
-    },
-    onSuccess: (data) => {
-      setReferralCode(data.referralCode);
-      setReferralLink(data.referralLink || `${getBaseUrl()}/experience/${experienceId}?ref=${data.referralCode}`);
-    },
+  const referralQuery = useQuery({
+    queryKey: ["post-checkout-referral", experienceId, user?.id],
+    queryFn: () => ensurePostCheckoutReferral(experienceId!, user!.id),
+    enabled: !!experienceId && !authLoading && isAuthenticated,
+    initialData: () => experienceId && user?.id ? readPostCheckoutReferral(experienceId, user.id) : undefined,
+    staleTime: 5 * 60 * 1000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(750 * 2 ** attempt, 4000),
   });
-
-  useEffect(() => {
-    if (experienceId && !referralLink && !ensureCodeMutation.isPending) {
-      ensureCodeMutation.mutate(experienceId);
-    }
-  }, [experienceId]);
+  const referralCode = referralQuery.data?.referralCode || null;
+  const referralLink = referralQuery.data?.referralLink
+    || (experienceId && referralCode ? `${getBaseUrl()}/experience/${experienceId}?ref=${referralCode}` : null);
 
   const handleCopy = async () => {
     if (!referralLink) return;
@@ -350,12 +342,42 @@ export default function RecruitSquad() {
     }
   };
 
-  if (expLoading) {
+  const linkLoading = authLoading
+    || !experienceId
+    || (isAuthenticated && (referralQuery.isPending || referralQuery.isFetching));
+
+  if (expLoading || linkLoading) {
     return (
       <div className="min-h-screen bg-white">
         <Navigation />
         <div className="max-w-2xl mx-auto px-4 py-12 flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          <div className="text-center">
+            <Loader2 className="mx-auto h-8 w-8 animate-spin text-emerald-600" />
+            <p className="mt-3 text-sm text-gray-500">Preparing your personal referral link...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || referralQuery.isError || !referralLink) {
+    return (
+      <div className="min-h-screen bg-white">
+        <Navigation />
+        <div className="mx-auto flex max-w-2xl flex-col items-center px-4 py-12 text-center">
+          <p className="font-semibold text-gray-900">We couldn't prepare your referral link.</p>
+          <p className="mt-2 text-sm text-gray-500">
+            {isAuthenticated ? "Your booking is safe. Try generating the link again." : "Sign in to access your post-checkout share link."}
+          </p>
+          {isAuthenticated ? (
+            <Button className="mt-5" onClick={() => referralQuery.refetch()}>
+              Try Again
+            </Button>
+          ) : (
+            <a href={`/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
+              <Button className="mt-5">Sign In</Button>
+            </a>
+          )}
         </div>
       </div>
     );
@@ -412,12 +434,7 @@ export default function RecruitSquad() {
               When a friend books using this link, the booking is attributed to you and you earn cashback on the ticket — track your earnings any time in your dashboard.
             </p>
 
-            {ensureCodeMutation.isPending ? (
-              <div className="flex items-center gap-2 text-gray-400 text-sm py-3">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Generating your link…
-              </div>
-            ) : referralLink ? (
+            {referralLink && (
               <>
                 <div
                   className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-3 cursor-pointer hover:bg-gray-100 transition-colors"
@@ -507,8 +524,6 @@ export default function RecruitSquad() {
                   Perfect for Instagram &amp; WhatsApp Stories
                 </p>
               </>
-            ) : (
-              <p className="text-sm text-red-500">Could not generate link. Please refresh.</p>
             )}
           </CardContent>
         </Card>

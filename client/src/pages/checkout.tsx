@@ -19,6 +19,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle, CheckCircle, Heart } from "lucide-react";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
+import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
 
 type Experience = {
   id: string;
@@ -80,6 +81,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
   const stripe = useStripe();
   const elements = useElements();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isDeposit = paymentMode === 'deposit' && (paymentInfo?.hasDeposit || paymentInfo?.isDepositPayment);
@@ -145,6 +147,9 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           });
 
           const bookingId = data.booking?.id || '';
+          await ensurePostCheckoutReferral(experience.id, user?.id).catch((error) => {
+            console.warn("Referral link will be retried on the confirmation page", error);
+          });
           const postPaymentPath = isDeposit
             ? `/recruit?experience=${experience.id}&booking=${bookingId}`
             : `/booking-success?experience=${experience.id}&booking=${bookingId}`;
@@ -188,6 +193,9 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
 
           const processingBookingId = processingData.booking?.id || '';
+          await ensurePostCheckoutReferral(experience.id, user?.id).catch((error) => {
+            console.warn("Referral link will be retried on the confirmation page", error);
+          });
           const processingPostPaymentPath = isDeposit
             ? `/recruit?experience=${experience.id}&booking=${processingBookingId}`
             : `/booking-success?experience=${experience.id}&booking=${processingBookingId}`;

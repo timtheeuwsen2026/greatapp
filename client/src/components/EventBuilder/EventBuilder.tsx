@@ -4608,7 +4608,7 @@ function PromotionStep({ form }: { form: any }) {
     },
     {
       value: 'financial_sponsorship',
-      title: 'Financial Sponsorship (EUR)',
+      title: 'Financial Sponsorship',
       description: 'Set the fixed sponsorship amount you want a brand to pay.',
     },
   ] as const;

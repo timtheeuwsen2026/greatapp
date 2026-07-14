@@ -727,7 +727,9 @@ The Great. Team
       experienceTitle: opts.experienceTitle,
       experienceSlugOrId: opts.experienceSlugOrId,
       ctaNote: opts.action === 'accepted'
-        ? 'Your tracking link is ready in your dashboard — you can start promoting now.'
+        ? opts.dealType === 'financial_sponsorship'
+          ? 'Your terms are approved. Open the Experience Pool to complete the sponsorship payment.'
+          : 'Your tracking link is ready in your dashboard — you can start promoting now.'
         : 'You can accept the original baseline terms or browse other experiences in the pool.',
     });
   }

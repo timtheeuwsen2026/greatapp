@@ -917,7 +917,8 @@ interface DirectOffer {
   experienceLocation: string | null;
   dealType: string;
   terms: PromotionDealTerms;
-  status: 'pending' | 'accepted' | 'declined';
+  status: 'pending' | 'pending_payment' | 'accepted' | 'declined';
+  paymentStatus?: 'unpaid' | 'paid' | 'failed' | null;
 }
 
 // Direct offers (Options A & B): the Brand/Promoter can only Accept or Decline — no counter.
@@ -925,12 +926,14 @@ function PromoterOffersCard({
   data,
   isLoading,
   onAccept,
+  onPay,
   onDecline,
   respondingId,
 }: {
   data?: DirectOffer[];
   isLoading: boolean;
   onAccept: (id: string) => void;
+  onPay: (id: string) => void;
   onDecline: (id: string) => void;
   respondingId: string | null;
 }) {
@@ -951,7 +954,8 @@ function PromoterOffersCard({
   if (offers.length === 0) return null;
 
   const pending = offers.filter((o) => o.status === 'pending');
-  const resolved = offers.filter((o) => o.status !== 'pending');
+  const awaitingPayment = offers.filter((o) => o.status === 'pending_payment');
+  const resolved = offers.filter((o) => o.status === 'accepted' || o.status === 'declined');
 
   return (
     <Card className="mb-8" data-testid="card-promoter-offers">
@@ -1021,6 +1025,29 @@ function PromoterOffersCard({
                   <XCircle className="h-4 w-4 mr-1" />Decline
                 </Button>
               </div>
+            </div>
+          </div>
+        ))}
+
+        {awaitingPayment.map((offer) => (
+          <div key={offer.id} className="rounded-lg border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-900 dark:bg-blue-950/20">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold">{offer.experienceTitle}</p>
+                <p className="text-sm text-muted-foreground">{formatPromotionDealTerms(offer.dealType, offer.terms)}</p>
+                <Badge className="mt-2 bg-blue-100 text-blue-800 border-blue-300">
+                  <Clock className="h-3 w-3 mr-1" />Pending Payment
+                </Badge>
+              </div>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => onPay(offer.id)}
+                disabled={respondingId === offer.id}
+                data-testid={`button-pay-direct-sponsorship-${offer.id}`}
+              >
+                <DollarSign className="h-4 w-4 mr-1" />Pay Sponsorship
+              </Button>
             </div>
           </div>
         ))}
@@ -1099,15 +1126,31 @@ export default function PromoterDashboard() {
   const respondToOfferMutation = useMutation({
     mutationFn: async ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) => {
       const response = await apiRequest('POST', `/api/promoter/offers/${dealId}/${action}`);
-      return response.json();
+      return response.json() as Promise<{ requiresPayment?: boolean; checkoutUrl?: string | null }>;
     },
     onMutate: ({ dealId }) => setRespondingOfferId(dealId),
-    onSuccess: (_data, { action }) => {
+    onSuccess: (data, { action }) => {
+      if (action === 'accept' && data.requiresPayment && data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['/api/promoter/offers'] });
       qc.invalidateQueries({ queryKey: ['/api/promoter/experiences'] });
       if (action === 'accept') {
         qc.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
       }
+    },
+    onSettled: () => setRespondingOfferId(null),
+  });
+
+  const paySponsorshipMutation = useMutation({
+    mutationFn: async (dealId: string) => {
+      setRespondingOfferId(dealId);
+      const response = await apiRequest('POST', `/api/promoter/promotion-deals/${dealId}/sponsorship-checkout`);
+      return response.json() as Promise<{ requiresPayment: boolean; checkoutUrl?: string | null }>;
+    },
+    onSuccess: (data) => {
+      if (data.requiresPayment && data.checkoutUrl) window.location.assign(data.checkoutUrl);
     },
     onSettled: () => setRespondingOfferId(null),
   });
@@ -1297,6 +1340,7 @@ export default function PromoterDashboard() {
             data={directOffers}
             isLoading={offersLoading}
             onAccept={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'accept' })}
+            onPay={(dealId) => paySponsorshipMutation.mutate(dealId)}
             onDecline={(dealId) => respondToOfferMutation.mutate({ dealId, action: 'decline' })}
             respondingId={respondingOfferId}
           />

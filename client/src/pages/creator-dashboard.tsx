@@ -351,14 +351,18 @@ function CreatorDashboardContent() {
   }) as { data: any[], isLoading: boolean };
 
   const respondToPromotionDeal = useMutation({
-    mutationFn: ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) =>
-      apiRequest("POST", `/api/creator/promotion-deals/${dealId}/${action}`, {}),
-    onSuccess: (_data, { action }) => {
+    mutationFn: async ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) => {
+      const response = await apiRequest("POST", `/api/creator/promotion-deals/${dealId}/${action}`, {});
+      return response.json() as Promise<{ status?: string; dealType?: string }>;
+    },
+    onSuccess: (data, { action }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/promotion-deals"] });
       toast({
         title: action === 'accept' ? "Counter Offer Accepted" : "Counter Offer Declined",
         description: action === 'accept'
-          ? "The partner now has a tracking link for this experience."
+          ? data.status === 'pending_payment'
+            ? "Terms approved. The brand has been asked to complete sponsorship payment."
+            : "The partner now has a tracking link for this experience."
           : "The partner has been notified.",
       });
     },
@@ -1390,6 +1394,29 @@ function CreatorDashboardContent() {
                             </div>
                             <Badge className="bg-amber-100 text-amber-800 border-amber-300">
                               <Clock className="w-3 h-3 mr-1" />Pending
+                            </Badge>
+                          </CardContent>
+                        </Card>
+                      ))}
+                  </div>
+                )}
+
+                {promotionDeals.some((deal: any) => deal.status === 'pending_payment') && (
+                  <div className="mt-6 space-y-2">
+                    <h3 className="font-semibold text-base">Financial Sponsorships — Pending Payment</h3>
+                    {promotionDeals
+                      .filter((deal: any) => deal.status === 'pending_payment')
+                      .map((deal: any) => (
+                        <Card key={deal.id} className="border-blue-200 bg-blue-50/30 dark:border-blue-800 dark:bg-blue-950/20">
+                          <CardContent className="p-4 flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium">{deal.experienceTitle}</p>
+                              <p className="text-xs text-gray-500">
+                                {deal.partnerName || deal.partnerEmail || "Partner"} · {formatPromotionDealTerms(deal.dealType, deal.terms)}
+                              </p>
+                            </div>
+                            <Badge className="bg-blue-100 text-blue-800 border-blue-300">
+                              <Clock className="w-3 h-3 mr-1" />Pending Payment
                             </Badge>
                           </CardContent>
                         </Card>

@@ -45,6 +45,16 @@ describe("promotion deal audience rules", () => {
     expect(summary.actionType).toBe("negotiate");
   });
 
+  it("allows commission deals to enter the counter-offer flow", () => {
+    const summary = getPromotionOfferSummary({
+      promotionDealType: "commission_per_ticket",
+      influencerCommissionPct: 15,
+    });
+
+    expect(summary.headline).toContain("15.0%");
+    expect(summary.actionType).toBe("negotiate");
+  });
+
   it("does not inherit an official commission when no participant perk exists", () => {
     const summary = getParticipantReferralSummary({
       participantReferralDealType: null,

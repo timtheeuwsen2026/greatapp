@@ -26,6 +26,7 @@ import {
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
+import { notificationService } from "./notifications";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -50,6 +51,8 @@ export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): 
       console.log(`[Webhook] checkout.session.completed ${session.id} type=${session.metadata?.type}`);
       if (session.metadata?.type === 'venue_sponsorship') {
         await finalizeVenueSponsorshipSession(session);
+      } else if (session.metadata?.type === 'promotion_sponsorship') {
+        await finalizePromotionSponsorshipSession(session);
       } else if (session.metadata?.type === 'upfront_rental') {
         await handleUpfrontRental(session);
       }
@@ -506,6 +509,60 @@ export async function finalizeVenueSponsorshipSession(session: Stripe.Checkout.S
     scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents).catch(err =>
       console.error(`[Webhook] Failed to schedule sponsorship payout for ${experienceId}:`, err.message)
     );
+  }
+}
+
+export async function finalizePromotionSponsorshipSession(session: Stripe.Checkout.Session): Promise<void> {
+  const { promotionDealId, experienceId, partnerId, sponsorshipAmountCents } = session.metadata ?? {};
+  if (!promotionDealId || !experienceId || !partnerId || session.payment_status !== "paid") {
+    console.warn(`[Webhook] promotion_sponsorship: incomplete session ${session.id}`);
+    return;
+  }
+
+  const deal = await storage.getPromotionDeal(promotionDealId);
+  if (!deal || deal.dealType !== "financial_sponsorship" || deal.partnerId !== partnerId) {
+    console.warn(`[Webhook] promotion_sponsorship: invalid deal ${promotionDealId}`);
+    return;
+  }
+
+  const expectedCents = Math.round(Number(deal.terms?.sponsorshipAmount || 0) * 100);
+  const paidCents = session.amount_total || 0;
+  if (expectedCents <= 0 || paidCents !== expectedCents || paidCents !== Number(sponsorshipAmountCents)) {
+    throw new Error(`Promotion sponsorship amount mismatch for deal ${promotionDealId}`);
+  }
+
+  const paymentIntentId = typeof session.payment_intent === "string"
+    ? session.payment_intent
+    : session.payment_intent?.id;
+  const finalized = await storage.finalizePromotionSponsorshipPayment(
+    promotionDealId,
+    session.id,
+    paymentIntentId,
+  );
+  if (!finalized?.newlyPaid) return;
+
+  const experience = await storage.getExperience(experienceId);
+  if (experience?.endDate) {
+    const scheduledFor = new Date(new Date(experience.endDate).getTime() + 7 * 24 * 60 * 60 * 1000);
+    await storage.addScheduledPayoutAdditionalGross(experienceId, scheduledFor, paidCents);
+  }
+
+  const [creator, partner] = await Promise.all([
+    storage.getUser(deal.creatorId),
+    storage.getUser(partnerId),
+  ]);
+  if (creator?.email && experience) {
+    await notificationService.sendPromotionOfferResponseEmail({
+      to: creator.email,
+      recipientName: creator.firstName,
+      partnerName: `${partner?.firstName || ""} ${partner?.lastName || ""}`.trim() || partner?.email,
+      experienceTitle: experience.title,
+      experienceSlugOrId: experience.slug || experience.id,
+      action: "accepted",
+      dealType: deal.dealType,
+      terms: deal.terms,
+      currency: experience.currency,
+    });
   }
 }
 

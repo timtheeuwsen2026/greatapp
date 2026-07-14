@@ -422,9 +422,15 @@ export interface IStorage {
 
   // Scheduled payouts (7-day post-event payout jobs)
   upsertScheduledPayout(experienceId: string, scheduledFor: Date, totalGrossCents: number): Promise<ScheduledPayout>;
+  addScheduledPayoutAdditionalGross(experienceId: string, scheduledFor: Date, amountCents: number): Promise<ScheduledPayout>;
   getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined>;
   updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout>;
-  getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number }[]>;
+  getExperiencesReadyForPayout(): Promise<{
+    experienceId: string;
+    scheduledPayoutId: string;
+    presetGrossCents: number;
+    additionalGrossCents: number;
+  }[]>;
 }
 
 function getReferralVisitorKey(click: {
@@ -3860,12 +3866,14 @@ export class DatabaseStorage implements IStorage {
     const deal = await this.getPromotionDeal(dealId);
     if (!deal || deal.partnerId !== partnerId || deal.status !== "pending") return undefined;
 
+    const requiresPayment = deal.dealType === "financial_sponsorship" && action === "accept";
     const [updated] = await db
       .update(promotionDeals)
       .set({
-        status: action === "accept" ? "accepted" : "declined",
-        pendingActionBy: null,
-        respondedAt: new Date(),
+        status: requiresPayment ? "pending_payment" : action === "accept" ? "accepted" : "declined",
+        pendingActionBy: requiresPayment ? "partner" : null,
+        paymentStatus: requiresPayment ? "unpaid" : deal.paymentStatus,
+        respondedAt: requiresPayment ? null : new Date(),
         updatedAt: new Date(),
       })
       .where(eq(promotionDeals.id, dealId))
@@ -3873,7 +3881,7 @@ export class DatabaseStorage implements IStorage {
 
     // Accepting a deal is only useful if the partner walks away with a trackable link —
     // grant them the same promoter tracking record regular promoters get.
-    if (updated && action === "accept") {
+    if (updated && action === "accept" && !requiresPayment) {
       await this.promoteExperience(partnerId, deal.experienceId, {
         referralAudience: 'official_partner',
         promotionDealId: updated.id,
@@ -3921,12 +3929,14 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
 
+    const requiresPayment = dealType === "financial_sponsorship" && action === "accept";
     const values = {
-      status: action === "accept" ? "accepted" : "countered",
-      pendingActionBy: action === "accept" ? null : "creator",
+      status: requiresPayment ? "pending_payment" : action === "accept" ? "accepted" : "countered",
+      pendingActionBy: requiresPayment ? "partner" : action === "accept" ? null : "creator",
+      paymentStatus: requiresPayment ? "unpaid" : null,
       terms: action === "accept" ? baselineTerms : counterTerms ?? {},
       counterMessage: action === "counter" ? counterMessage ?? null : null,
-      respondedAt: action === "accept" ? new Date() : null,
+      respondedAt: action === "accept" && !requiresPayment ? new Date() : null,
       updatedAt: new Date(),
     } as const;
 
@@ -3956,7 +3966,7 @@ export class DatabaseStorage implements IStorage {
 
     // Accepting a deal is only useful if the partner walks away with a trackable link —
     // grant them the same promoter tracking record regular promoters get.
-    if (action === "accept") {
+    if (action === "accept" && !requiresPayment) {
       await this.promoteExperience(partnerId, experienceId, {
         referralAudience: 'official_partner',
         promotionDealId: result.id,
@@ -3990,18 +4000,20 @@ export class DatabaseStorage implements IStorage {
       return undefined;
     }
 
+    const requiresPayment = deal.dealType === "financial_sponsorship" && action === "accept";
     const [updated] = await db
       .update(promotionDeals)
       .set({
-        status: action === "accept" ? "accepted" : "declined",
-        pendingActionBy: null,
-        respondedAt: new Date(),
+        status: requiresPayment ? "pending_payment" : action === "accept" ? "accepted" : "declined",
+        pendingActionBy: requiresPayment ? "partner" : null,
+        paymentStatus: requiresPayment ? "unpaid" : deal.paymentStatus,
+        respondedAt: requiresPayment ? null : new Date(),
         updatedAt: new Date(),
       })
       .where(eq(promotionDeals.id, dealId))
       .returning();
 
-    if (updated && action === "accept" && deal.partnerId) {
+    if (updated && action === "accept" && !requiresPayment && deal.partnerId) {
       await this.promoteExperience(deal.partnerId, deal.experienceId, {
         referralAudience: 'official_partner',
         promotionDealId: updated.id,
@@ -4009,6 +4021,60 @@ export class DatabaseStorage implements IStorage {
     }
 
     return updated;
+  }
+
+  async setPromotionSponsorshipCheckoutSession(dealId: string, sessionId: string): Promise<PromotionDeal | undefined> {
+    const [updated] = await db
+      .update(promotionDeals)
+      .set({
+        status: "pending_payment",
+        paymentStatus: "unpaid",
+        pendingActionBy: "partner",
+        stripeCheckoutSessionId: sessionId,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(promotionDeals.id, dealId),
+        eq(promotionDeals.dealType, "financial_sponsorship"),
+        eq(promotionDeals.status, "pending_payment"),
+        or(isNull(promotionDeals.paymentStatus), not(eq(promotionDeals.paymentStatus, "paid"))),
+      ))
+      .returning();
+    return updated;
+  }
+
+  async finalizePromotionSponsorshipPayment(
+    dealId: string,
+    checkoutSessionId: string,
+    paymentIntentId?: string | null,
+  ): Promise<{ deal: PromotionDeal; newlyPaid: boolean } | undefined> {
+    const deal = await this.getPromotionDeal(dealId);
+    if (!deal || deal.dealType !== "financial_sponsorship") return undefined;
+    if (deal.paymentStatus === "paid" && deal.status === "accepted") {
+      return { deal, newlyPaid: false };
+    }
+
+    const [updated] = await db
+      .update(promotionDeals)
+      .set({
+        status: "accepted",
+        paymentStatus: "paid",
+        pendingActionBy: null,
+        stripeCheckoutSessionId: checkoutSessionId,
+        stripePaymentIntentId: paymentIntentId || null,
+        paidAt: new Date(),
+        respondedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(promotionDeals.id, dealId),
+        or(isNull(promotionDeals.paymentStatus), not(eq(promotionDeals.paymentStatus, "paid"))),
+      ))
+      .returning();
+
+    if (updated) return { deal: updated, newlyPaid: true };
+    const current = await this.getPromotionDeal(dealId);
+    return current ? { deal: current, newlyPaid: false } : undefined;
   }
 
   // Admin Promoter Management Methods
@@ -4110,6 +4176,38 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async addScheduledPayoutAdditionalGross(
+    experienceId: string,
+    scheduledFor: Date,
+    amountCents: number,
+  ): Promise<ScheduledPayout> {
+    const existing = await this.getScheduledPayoutByExperience(experienceId);
+    if (existing) {
+      const [updated] = await db
+        .update(scheduledPayouts)
+        .set({
+          scheduledFor,
+          status: "pending",
+          additionalGrossAmountCents: sql`COALESCE(${scheduledPayouts.additionalGrossAmountCents}, 0) + ${amountCents}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(scheduledPayouts.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(scheduledPayouts)
+      .values({
+        experienceId,
+        scheduledFor,
+        totalGrossAmountCents: 0,
+        additionalGrossAmountCents: amountCents,
+      })
+      .returning();
+    return created;
+  }
+
   async getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined> {
     const [payout] = await db
       .select()
@@ -4127,13 +4225,14 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number }[]> {
+  async getExperiencesReadyForPayout(): Promise<{ experienceId: string; scheduledPayoutId: string; presetGrossCents: number; additionalGrossCents: number }[]> {
     const now = new Date();
     const rows = await db
       .select({
         experienceId: scheduledPayouts.experienceId,
         scheduledPayoutId: scheduledPayouts.id,
         presetGrossCents: scheduledPayouts.totalGrossAmountCents,
+        additionalGrossCents: scheduledPayouts.additionalGrossAmountCents,
       })
       .from(scheduledPayouts)
       .where(
@@ -4142,7 +4241,11 @@ export class DatabaseStorage implements IStorage {
           sql`${scheduledPayouts.scheduledFor} <= ${now}`
         )
       );
-    return rows.map(r => ({ ...r, presetGrossCents: r.presetGrossCents ?? 0 }));
+    return rows.map(r => ({
+      ...r,
+      presetGrossCents: r.presetGrossCents ?? 0,
+      additionalGrossCents: r.additionalGrossCents ?? 0,
+    }));
   }
 }
 

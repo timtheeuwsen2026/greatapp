@@ -22,7 +22,7 @@ import { db } from "./db";
 import { experiences, bookings, platformSettings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { storage } from "./storage";
-import { isExperiencePayoutEligible } from "./payoutRules";
+import { isExperiencePayoutEligible, resolvePayoutGrossCents } from "./payoutRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
@@ -63,10 +63,10 @@ export async function processReadyPayouts(): Promise<{
     const ready = await storage.getExperiencesReadyForPayout();
     console.log(`[Payout Scheduler] ${ready.length} payout(s) due`);
 
-    for (const { experienceId, scheduledPayoutId, presetGrossCents } of ready) {
+    for (const { experienceId, scheduledPayoutId, presetGrossCents, additionalGrossCents } of ready) {
       results.processed++;
       try {
-        await executeExperiencePayout(experienceId, scheduledPayoutId, presetGrossCents);
+        await executeExperiencePayout(experienceId, scheduledPayoutId, presetGrossCents, additionalGrossCents);
         results.succeeded++;
       } catch (err: any) {
         console.error(`[Payout Scheduler] Failed for experience ${experienceId}:`, err.message);
@@ -97,6 +97,7 @@ async function executeExperiencePayout(
   experienceId: string,
   scheduledPayoutId: string,
   presetGrossCents = 0,
+  additionalGrossCents = 0,
 ): Promise<void> {
   // Mark as processing to prevent double-execution
   await storage.updateScheduledPayout(scheduledPayoutId, { status: "processing" });
@@ -134,7 +135,11 @@ async function executeExperiencePayout(
 
   // For B2B upfront deals (venue_sponsored, upfront_rental) there are no attendee
   // bookings — use the preset amount stored when the deal payment was confirmed.
-  const grossAmountCents = bookingGrossCents > 0 ? bookingGrossCents : presetGrossCents;
+  const grossAmountCents = resolvePayoutGrossCents(
+    bookingGrossCents,
+    presetGrossCents,
+    additionalGrossCents,
+  );
 
   if (grossAmountCents === 0) {
     console.log(`[Payout Scheduler] ${experienceId}: gross = 0, skipping`);

@@ -1,14 +1,14 @@
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Megaphone, AlertTriangle, MapPin, Calendar, Copy, Check, ArrowLeft, Sparkles, ExternalLink, Clock, XCircle } from "lucide-react";
+import { Megaphone, AlertTriangle, MapPin, Calendar, Copy, Check, ArrowLeft, Sparkles, ExternalLink, Clock, XCircle, CreditCard } from "lucide-react";
 import { Link } from "wouter";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getPromotionOfferSummary } from "@/lib/promotionDeals";
+import { getPromotionOfferSummary, type PromotionDealTerms } from "@/lib/promotionDeals";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -51,13 +51,10 @@ interface ExperiencePoolItem {
   promotionSponsorshipAmount: string | null;
   marketplaceDeal?: {
     id: string;
-    status: "pending" | "countered" | "accepted" | "declined";
+    status: "pending" | "countered" | "pending_payment" | "accepted" | "declined";
+    paymentStatus?: "unpaid" | "paid" | "failed" | null;
     pendingActionBy: string | null;
-    terms: {
-      brandPitch?: string;
-      sponsorshipAmount?: number;
-      currency?: string;
-    } | null;
+    terms: PromotionDealTerms | null;
     counterMessage: string | null;
   } | null;
 }
@@ -111,19 +108,29 @@ function CounterOfferDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   experience: ExperiencePoolItem;
-  onSubmit: (terms: { brandPitch?: string; sponsorshipAmount?: number; currency?: string }, message: string) => void;
+  onSubmit: (terms: PromotionDealTerms, message: string) => void;
   isSubmitting: boolean;
 }) {
   const [pitch, setPitch] = useState(experience.promotionBrandPitch || "");
   const [amount, setAmount] = useState(experience.promotionSponsorshipAmount || "");
+  const [commissionPct, setCommissionPct] = useState(experience.influencerCommissionPct || "");
+  const [milestoneTarget, setMilestoneTarget] = useState(String(experience.promotionMilestoneAttendeeTarget || ""));
+  const [milestoneReward, setMilestoneReward] = useState(String(experience.promotionMilestoneRewardTickets || ""));
   const [message, setMessage] = useState("");
 
   const isSponsorship = experience.promotionDealType === "financial_sponsorship";
 
   const handleSubmit = () => {
-    const terms = isSponsorship
-      ? { sponsorshipAmount: parseFloat(amount) || 0, currency: experience.currency || "EUR" }
-      : { brandPitch: pitch };
+    const terms: PromotionDealTerms = experience.promotionDealType === "commission_per_ticket"
+      ? { commissionPct: parseFloat(commissionPct) || 0 }
+      : experience.promotionDealType === "milestone_barter"
+        ? {
+            milestoneAttendeeTarget: parseInt(milestoneTarget, 10) || 0,
+            milestoneRewardTickets: parseInt(milestoneReward, 10) || 0,
+          }
+        : isSponsorship
+          ? { sponsorshipAmount: parseFloat(amount) || 0, currency: experience.currency || "EUR" }
+          : { brandPitch: pitch };
     onSubmit(terms, message);
   };
 
@@ -138,7 +145,49 @@ function CounterOfferDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          {isSponsorship ? (
+          {experience.promotionDealType === "commission_per_ticket" ? (
+            <div>
+              <Label htmlFor="counter-commission-pct">Your Commission Request (%)</Label>
+              <Input
+                id="counter-commission-pct"
+                type="number"
+                min="0.1"
+                max="100"
+                step="0.1"
+                value={commissionPct}
+                onChange={(e) => setCommissionPct(e.target.value)}
+                placeholder="e.g. 20"
+                data-testid="input-counter-commission-pct"
+              />
+            </div>
+          ) : experience.promotionDealType === "milestone_barter" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="counter-milestone-target">Attendees to Bring</Label>
+                <Input
+                  id="counter-milestone-target"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={milestoneTarget}
+                  onChange={(e) => setMilestoneTarget(e.target.value)}
+                  data-testid="input-counter-milestone-target"
+                />
+              </div>
+              <div>
+                <Label htmlFor="counter-milestone-reward">Free Tickets</Label>
+                <Input
+                  id="counter-milestone-reward"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={milestoneReward}
+                  onChange={(e) => setMilestoneReward(e.target.value)}
+                  data-testid="input-counter-milestone-reward"
+                />
+              </div>
+            </div>
+          ) : isSponsorship ? (
             <div>
               <Label htmlFor="counter-sponsorship-amount">
                 Your Sponsorship Offer ({(experience.currency || "EUR").toUpperCase()})
@@ -198,6 +247,8 @@ function ExperiencePoolCard({
   overrideLink,
   onAcceptDeal,
   isAcceptingDeal,
+  onPaySponsorship,
+  isStartingPayment,
   onCounterDeal,
   isCounteringDeal,
 }: {
@@ -207,6 +258,8 @@ function ExperiencePoolCard({
   overrideLink?: string; // server-returned absolute link takes priority
   onAcceptDeal: (experienceId: string) => void;
   isAcceptingDeal: boolean;
+  onPaySponsorship: (dealId: string) => void;
+  isStartingPayment: boolean;
   onCounterDeal: (experienceId: string, terms: any, message: string) => void;
   isCounteringDeal: boolean;
 }) {
@@ -320,6 +373,23 @@ function ExperiencePoolCard({
               </Badge>
             )}
 
+            {marketplaceDeal?.status === 'pending_payment' && (
+              <div className="space-y-2">
+                <Badge className="w-full justify-center bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
+                  <Clock className="h-3 w-3 mr-1" /> Terms approved — payment required
+                </Badge>
+                <Button
+                  className="w-full bg-blue-600 hover:bg-blue-700"
+                  onClick={() => onPaySponsorship(marketplaceDeal.id)}
+                  disabled={isStartingPayment}
+                  data-testid={`button-pay-sponsorship-${marketplaceDeal.id}`}
+                >
+                  <CreditCard className="h-4 w-4 mr-2" />
+                  {isStartingPayment ? "Opening Checkout..." : "Pay Sponsorship"}
+                </Button>
+              </div>
+            )}
+
             {marketplaceDeal?.status === 'declined' && (
               <Badge className="w-full justify-center bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100">
                 <XCircle className="h-3 w-3 mr-1" /> Declined by creator
@@ -329,9 +399,10 @@ function ExperiencePoolCard({
             {marketplaceDeal?.status === 'accepted' && (
               <div className="space-y-2">
                 <Badge className="w-full justify-center bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">
-                  <Check className="h-3 w-3 mr-1" /> Deal Accepted
+                  <Check className="h-3 w-3 mr-1" />
+                  {experience.promotionDealType === "financial_sponsorship" ? "Sponsorship Paid" : "Deal Accepted"}
                 </Badge>
-                {referralLink && (
+                {experience.promotionDealType !== "financial_sponsorship" && referralLink && (
                   <div className="flex items-center gap-2">
                     <code className="flex-1 px-2 py-1 bg-muted rounded text-xs truncate">
                       {referralLink}
@@ -457,14 +528,35 @@ export default function PromoterExperiencePool() {
   const acceptDealMutation = useMutation({
     mutationFn: async (experienceId: string) => {
       const response = await apiRequest('POST', `/api/promoter/experience-pool/${experienceId}/accept-deal`);
-      return response.json();
+      return response.json() as Promise<{ requiresPayment?: boolean; checkoutUrl?: string | null }>;
     },
-    onSuccess: () => {
-      toast({ title: "Deal accepted", description: "You now have a tracking link for this experience." });
+    onSuccess: (data) => {
+      if (data.requiresPayment && data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
+      toast({ title: "Deal accepted", description: "Your negotiated tracking link is now ready." });
       queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
     },
     onError: (error: Error) => {
       toast({ title: "Failed to accept deal", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const sponsorshipPaymentMutation = useMutation({
+    mutationFn: async (dealId: string) => {
+      const response = await apiRequest('POST', `/api/promoter/promotion-deals/${dealId}/sponsorship-checkout`);
+      return response.json() as Promise<{ requiresPayment: boolean; checkoutUrl?: string | null }>;
+    },
+    onSuccess: (data) => {
+      if (data.requiresPayment && data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to start payment", description: error.message, variant: "destructive" });
     },
   });
 
@@ -481,6 +573,23 @@ export default function PromoterExperiencePool() {
       toast({ title: "Failed to send counter offer", description: error.message, variant: "destructive" });
     },
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("session_id");
+    if (params.get("sponsorship") !== "success" || !sessionId) return;
+
+    apiRequest("POST", "/api/promoter/promotion-sponsorship/confirm", { sessionId })
+      .then(() => {
+        toast({ title: "Sponsorship paid", description: "The financial sponsorship is now confirmed." });
+        queryClient.invalidateQueries({ queryKey: ['/api/promoter/experience-pool'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/promoter/offers'] });
+        window.history.replaceState({}, "", window.location.pathname);
+      })
+      .catch((error: Error) => {
+        toast({ title: "Payment confirmation delayed", description: error.message, variant: "destructive" });
+      });
+  }, [toast]);
 
   if (authLoading) {
     return (
@@ -577,6 +686,8 @@ export default function PromoterExperiencePool() {
               overrideLink={activeLink?.experienceId === experience.id ? activeLink.link : undefined}
               onAcceptDeal={(id) => acceptDealMutation.mutate(id)}
               isAcceptingDeal={acceptDealMutation.isPending && acceptDealMutation.variables === experience.id}
+              onPaySponsorship={(dealId) => sponsorshipPaymentMutation.mutate(dealId)}
+              isStartingPayment={sponsorshipPaymentMutation.isPending && sponsorshipPaymentMutation.variables === experience.marketplaceDeal?.id}
               onCounterDeal={(id, terms, message) => counterDealMutation.mutate({ experienceId: id, terms, message })}
               isCounteringDeal={counterDealMutation.isPending && counterDealMutation.variables?.experienceId === experience.id}
             />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isExperiencePayoutEligible } from "../payoutRules";
+import { isExperiencePayoutEligible, resolvePayoutGrossCents } from "../payoutRules";
 
 describe("MVG payout eligibility", () => {
   it.each(["pending", "failed", null])(
@@ -25,5 +25,15 @@ describe("MVG payout eligibility", () => {
       mvgEnabled: false,
       mvgStatus: "pending",
     })).toBe(true);
+  });
+});
+
+describe("payout gross", () => {
+  it("adds sponsorship revenue to ticket revenue", () => {
+    expect(resolvePayoutGrossCents(5_000, 5_000, 50_000)).toBe(55_000);
+  });
+
+  it("uses preset gross only when there are no bookings", () => {
+    expect(resolvePayoutGrossCents(0, 20_000, 5_000)).toBe(25_000);
   });
 });

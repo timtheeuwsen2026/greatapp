@@ -32,8 +32,9 @@ import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
-import { handleStripeWebhook, finalizeVenueSponsorshipSession } from "./stripe-webhook";
+import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
+import { normalizePromotionCounterTerms } from "./promotionDealRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -1506,6 +1507,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isPromoterCompatiblePromotion(experience)) {
         return res.status(400).json({ message: "This creator offer is not set up for promoters" });
       }
+      if (experience.promotionDealType) {
+        return res.status(400).json({ message: "Accept or counter the official partner deal before promoting" });
+      }
       
       // Load promoter's DB record to get (or generate) their referral code
       let dbUser = await storage.getUser(userId);
@@ -1610,6 +1614,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })().catch((err) => console.error('Counter resolution email failed:', err?.message || err));
   };
 
+  const createPromotionSponsorshipCheckout = async (req: any, deal: any) => {
+    if (deal.dealType !== "financial_sponsorship" || deal.status !== "pending_payment") {
+      throw new Error("This deal is not awaiting a sponsorship payment");
+    }
+
+    const amount = Number(deal.terms?.sponsorshipAmount || 0);
+    const amountCents = Math.round(amount * 100);
+    if (!Number.isFinite(amount) || amountCents <= 0) {
+      throw new Error("A valid sponsorship amount is required");
+    }
+    const currency = String(deal.terms?.currency || "EUR").toLowerCase();
+    if (!/^[a-z]{3}$/.test(currency)) throw new Error("A valid sponsorship currency is required");
+    const experience = await storage.getExperience(deal.experienceId);
+    if (!experience) throw new Error("Experience not found");
+    if (experience.endDate && new Date(experience.endDate).getTime() < Date.now()) {
+      throw new Error("Sponsorship payment is unavailable after the experience has ended");
+    }
+
+    if (deal.stripeCheckoutSessionId) {
+      const existingSession = await stripe.checkout.sessions.retrieve(deal.stripeCheckoutSessionId);
+      if (existingSession.status === "open" && existingSession.url) return existingSession;
+    }
+
+    const baseUrl = getAppBaseUrl(req);
+    const sponsorshipMeta = {
+      type: "promotion_sponsorship",
+      promotionDealId: deal.id,
+      experienceId: deal.experienceId,
+      creatorId: deal.creatorId,
+      partnerId: deal.partnerId || "",
+      sponsorshipAmountCents: String(amountCents),
+    };
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [{
+        quantity: 1,
+        price_data: {
+          currency,
+          unit_amount: amountCents,
+          product_data: {
+            name: `Financial Sponsorship — ${experience.title}`,
+            description: "Flat-fee event sponsorship for brand exposure",
+          },
+        },
+      }],
+      metadata: sponsorshipMeta,
+      payment_intent_data: { metadata: sponsorshipMeta },
+      success_url: `${baseUrl}/promoter/experience-pool?sponsorship=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/promoter/experience-pool?sponsorship=cancelled&deal=${deal.id}`,
+    }, {
+      idempotencyKey: `promotion-sponsorship:${deal.id}:${deal.updatedAt?.getTime?.() || "initial"}`,
+    });
+    await storage.setPromotionSponsorshipCheckoutSession(deal.id, session.id);
+    return session;
+  };
+
   // GET /api/promoter/offers — Direct offers (Options A & B) sent to this partner.
   // Accept/Decline only — matches the spec's "Brand can only click Accept or Decline".
   app.get('/api/promoter/offers', isAuthenticated, async (req: any, res) => {
@@ -1639,8 +1700,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
       const updated = await storage.respondToDirectPromotionDeal(req.params.dealId, userId, 'accept');
       if (!updated) return res.status(404).json({ message: "Offer not found or already resolved" });
+      if (updated.dealType === "financial_sponsorship") {
+        const session = await createPromotionSponsorshipCheckout(req, updated);
+        return res.json({ ...updated, requiresPayment: true, checkoutUrl: session.url });
+      }
       notifyCreatorOfPromotionResponse(updated, userId, 'accepted');
-      res.json(updated);
+      res.json({ ...updated, requiresPayment: false });
     } catch (error) {
       console.error("Error accepting offer:", error);
       res.status(500).json({ message: "Failed to accept offer" });
@@ -1676,8 +1741,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const deal = await storage.createOrUpdateMarketplacePromotionDeal(req.params.experienceId, userId, 'accept');
+      if (deal.dealType === "financial_sponsorship") {
+        const session = await createPromotionSponsorshipCheckout(req, deal);
+        return res.json({ ...deal, requiresPayment: true, checkoutUrl: session.url });
+      }
       notifyCreatorOfPromotionResponse(deal, userId, 'accepted');
-      res.json(deal);
+      res.json({ ...deal, requiresPayment: false });
     } catch (error: any) {
       console.error("Error accepting marketplace deal:", error);
       res.status(500).json({ message: error?.message || "Failed to accept deal" });
@@ -1700,11 +1769,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { terms, message } = req.body || {};
+      const normalizedTerms = normalizePromotionCounterTerms(
+        experience.promotionDealType || "",
+        terms,
+        experience.currency || "EUR",
+      );
       const deal = await storage.createOrUpdateMarketplacePromotionDeal(
         req.params.experienceId,
         userId,
         'counter',
-        terms || {},
+        normalizedTerms,
         message,
       );
 
@@ -1778,6 +1852,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error declining counter offer:", error);
       res.status(500).json({ message: "Failed to decline counter offer" });
+    }
+  });
+
+  app.post('/api/promoter/promotion-deals/:dealId/sponsorship-checkout', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const deal = await storage.getPromotionDeal(req.params.dealId);
+      if (!deal || deal.partnerId !== userId) return res.status(404).json({ message: "Sponsorship deal not found" });
+      if (deal.paymentStatus === "paid") return res.json({ requiresPayment: false, status: "accepted" });
+
+      const session = await createPromotionSponsorshipCheckout(req, deal);
+      res.json({ requiresPayment: true, checkoutUrl: session.url, status: deal.status });
+    } catch (error: any) {
+      console.error("Error creating promotion sponsorship checkout:", error);
+      res.status(500).json({ message: error?.message || "Failed to start sponsorship payment" });
+    }
+  });
+
+  app.post('/api/promoter/promotion-sponsorship/confirm', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const sessionId = String(req.body?.sessionId || "");
+      if (!sessionId.startsWith("cs_")) return res.status(400).json({ message: "A valid Checkout session is required" });
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.metadata?.type !== "promotion_sponsorship" || session.metadata?.partnerId !== userId) {
+        return res.status(403).json({ message: "This sponsorship payment does not belong to you" });
+      }
+      if (session.payment_status !== "paid") {
+        return res.status(409).json({ message: "Sponsorship payment is not complete" });
+      }
+
+      await finalizePromotionSponsorshipSession(session);
+      const deal = session.metadata?.promotionDealId
+        ? await storage.getPromotionDeal(session.metadata.promotionDealId)
+        : undefined;
+      res.json({ success: true, deal, message: "Sponsorship paid and deal confirmed" });
+    } catch (error: any) {
+      console.error("Error confirming promotion sponsorship:", error);
+      res.status(500).json({ message: error?.message || "Failed to confirm sponsorship payment" });
     }
   });
 

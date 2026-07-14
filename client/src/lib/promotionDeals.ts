@@ -44,8 +44,7 @@ type PromotionOfferSummary = {
   body: string;
   detail?: string;
   promoterCompatible: boolean;
-  // 'instant' = self-serve "Promote This Trip" (commission/milestone, or no deal type).
-  // 'negotiate' = Digital Handshake marketplace bid — Accept as-is or Counter Offer.
+  // Configured partner deals negotiate; only a generic unconfigured link remains instant.
   actionType: "instant" | "negotiate";
 };
 
@@ -89,7 +88,7 @@ export function getPromotionOfferSummary(
         headline: `Earn ${pct.toFixed(1)}% on each ticket sold`,
         body: "Bookings from your tracked link generate trip credit for this experience.",
         promoterCompatible: true,
-        actionType: "instant",
+        actionType: "negotiate",
       };
     }
     case "milestone_barter": {
@@ -104,7 +103,7 @@ export function getPromotionOfferSummary(
           ? `${referredBookings}/${attendeeTarget} bookings tracked so far. ${remaining} more to unlock the reward.`
           : `Reward unlocked. ${referredBookings}/${attendeeTarget} tracked bookings reached the milestone.`,
         promoterCompatible: true,
-        actionType: "instant",
+        actionType: "negotiate",
       };
     }
     case "brand_barter":

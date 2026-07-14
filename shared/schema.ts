@@ -1017,9 +1017,13 @@ export const promotionDeals = pgTable("promotion_deals", {
       currency?: string;
     }>()
     .default({}),
-  status: varchar("status", { length: 20 }).default("pending"), // pending | countered | accepted | declined
+  status: varchar("status", { length: 20 }).default("pending"), // pending | countered | pending_payment | accepted | declined
   // Whose turn it is to respond to the terms currently in `terms`.
   pendingActionBy: varchar("pending_action_by", { length: 10 }).default("partner"), // 'creator' | 'partner'
+  paymentStatus: varchar("payment_status", { length: 20 }), // unpaid | paid | failed (financial sponsorship only)
+  stripeCheckoutSessionId: varchar("stripe_checkout_session_id"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  paidAt: timestamp("paid_at"),
   counterMessage: text("counter_message"),
   respondedAt: timestamp("responded_at"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -3415,6 +3419,8 @@ export const scheduledPayouts = pgTable("scheduled_payouts", {
   status: scheduledPayoutStatusEnum("status").default("pending"),
   // Gross revenue collected from all confirmed bookings (in cents)
   totalGrossAmountCents: integer("total_gross_amount_cents").default(0),
+  // Non-booking revenue, such as paid brand sponsorships, added to booking gross at payout time.
+  additionalGrossAmountCents: integer("additional_gross_amount_cents").default(0),
   platformFeeAmountCents: integer("platform_fee_amount_cents").default(0),
   // Map of recipientType → stripeTransferId
   stripeTransferIds: jsonb("stripe_transfer_ids")

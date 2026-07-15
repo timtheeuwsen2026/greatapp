@@ -6,7 +6,7 @@
  *
  * When MVG is met (or for standard events), the scheduler:
  *   1. Reads the event's split_recipients rows (ordered by priority)
- *   2. Sums all confirmed/fully_paid booking amounts as gross revenue
+ *   2. Sums collectible gross from confirmed/fully_paid bookings
  *   3. Deducts the platform fee first
  *   4. Issues Stripe Connect transfers to Creator, Venue, and any other
  *      registered recipients in priority order
@@ -22,7 +22,11 @@ import { db } from "./db";
 import { experiences, bookings, platformSettings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { storage } from "./storage";
-import { isExperiencePayoutEligible, resolvePayoutGrossCents } from "./payoutRules";
+import {
+  isExperiencePayoutEligible,
+  resolvePayoutGrossCents,
+  sumBookingPayoutGrossCents,
+} from "./payoutRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
@@ -129,9 +133,7 @@ async function executeExperiencePayout(
       )
     );
 
-  const bookingGrossCents = confirmedBookings.reduce((sum, b) => {
-    return sum + Math.round(parseFloat(b.amount?.toString() ?? "0") * 100);
-  }, 0);
+  const bookingGrossCents = sumBookingPayoutGrossCents(confirmedBookings);
 
   // For B2B upfront deals (venue_sponsored, upfront_rental) there are no attendee
   // bookings — use the preset amount stored when the deal payment was confirmed.

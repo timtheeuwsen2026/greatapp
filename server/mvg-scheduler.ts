@@ -8,6 +8,7 @@ import { broadcastMVGUpdate } from './websocket';
 import { storage } from './storage';
 import { scheduleExperiencePayout } from './payout-scheduler';
 import { lockCommissionsForExperience, voidCommissionsForExperience } from './commissionService';
+import { sumBookingPayoutGrossCents } from './payoutRules';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-07-30.basil',
@@ -132,6 +133,18 @@ async function processMVGSuccess(experienceId: string) {
     }
   }
   
+  const experience = await storage.getExperience(experienceId);
+  if (!experience?.endDate) {
+    throw new Error(`Cannot complete MVG success for ${experienceId}: event end date is missing`);
+  }
+
+  const confirmedBookings = await storage.getConfirmedBookings(experienceId);
+  const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
+
+  // Schedule before leaving pending so a database failure remains retryable.
+  await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
+
+  await lockCommissionsForExperience(experienceId);
   await db
     .update(experiences)
     .set({
@@ -139,37 +152,20 @@ async function processMVGSuccess(experienceId: string) {
       mvgResolvedAt: new Date()
     })
     .where(eq(experiences.id, experienceId));
-  await lockCommissionsForExperience(experienceId);
-  
+
   console.log(`[MVG Scheduler] MVG SUCCESS complete: ${capturedCount} captured, ${stripeFailedCount} Stripe failures`);
-  
-  const experience = await storage.getExperience(experienceId);
-  if (experience) {
-    // Get all confirmed bookings for notification
-    const confirmedBookings = await storage.getConfirmedBookings(experienceId);
 
-    // Send MVG confirmed notifications to all participants
-    await notificationService.sendMVGConfirmedNotification(experience, confirmedBookings);
+  // Send MVG confirmed notifications to all participants
+  await notificationService.sendMVGConfirmedNotification(experience, confirmedBookings);
 
-    const mvgProgress = await storage.getMVGProgress(experienceId);
-    broadcastMVGUpdate({
-      trip_id: experienceId,
-      seats_taken: mvgProgress.current_participants,
-      funded_amount: parseFloat(experience.price || '0') * mvgProgress.current_participants,
-      funded_percent: 100,
-      participants: []
-    });
-
-    // Schedule the 7-day post-event payout
-    if (experience.endDate) {
-      const grossCents = confirmedBookings.reduce((sum, b) => {
-        return sum + Math.round(parseFloat(b.amount?.toString() ?? '0') * 100);
-      }, 0);
-      scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents).catch(err =>
-        console.error(`[MVG Scheduler] Failed to schedule payout for ${experienceId}:`, err.message)
-      );
-    }
-  }
+  const mvgProgress = await storage.getMVGProgress(experienceId);
+  broadcastMVGUpdate({
+    trip_id: experienceId,
+    seats_taken: mvgProgress.current_participants,
+    funded_amount: parseFloat(experience.price || '0') * mvgProgress.current_participants,
+    funded_percent: 100,
+    participants: []
+  });
 }
 
 async function processMVGFailure(experienceId: string) {

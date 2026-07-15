@@ -34,6 +34,7 @@ import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
+import { sumBookingPayoutGrossCents } from "./payoutRules";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 
@@ -3985,9 +3986,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         if (currentBookings >= mvgMin) {
           // MVG threshold reached! Auto-confirm
-          await confirmMVGEvent(experienceId, updatedBookings);
-          await storage.updateExperienceMVGStatus(experienceId, "met");
-          await lockCommissionsForExperience(experienceId);
+          await completeMVGSuccess(experienceId, updatedBookings);
           mvgCheckResult = { action: "mvg_confirmed", currentBookings, mvgMin };
           // Broadcast lifecycle flip to all connected browsers immediately
           const mvgParticipants = await storage.getExperienceParticipantAvatars(experienceId);
@@ -5916,10 +5915,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (experience.mvgStatus === "pending") {
         if (currentBookings >= mvgMin) {
           // Minimum reached - capture payments
-          await confirmMVGEvent(experienceId, bookings);
-          await storage.updateExperienceMVGStatus(experienceId, "met");
-          // Lock commissions for all promoter-attributed bookings
-          await lockCommissionsForExperience(experienceId);
+          await completeMVGSuccess(experienceId, bookings);
           result.action = "confirmed";
           result.status = "met";
         } else if (deadlinePassed) {
@@ -5961,9 +5957,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (deadlinePassed) {
           if (currentBookings >= mvgMin) {
             // Threshold met - confirm event and capture payments
-            await confirmMVGEvent(experience.id, bookings);
-            await storage.updateExperienceMVGStatus(experience.id, "met");
-            await lockCommissionsForExperience(experience.id);
+            await completeMVGSuccess(experience.id, bookings);
             processedExperiences.push({ 
               id: experience.id, 
               action: "confirmed", 
@@ -5987,10 +5981,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         } else if (currentBookings >= mvgMin) {
           // Early success - minimum reached before deadline
-          await confirmMVGEvent(experience.id, bookings);
-          await storage.updateExperienceMVGStatus(experience.id, "met");
-          // Lock commissions for all promoter-attributed bookings
-          await lockCommissionsForExperience(experience.id);
+          await completeMVGSuccess(experience.id, bookings);
           processedExperiences.push({ 
             id: experience.id, 
             action: "early_confirmed", 
@@ -6128,6 +6119,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  async function completeMVGSuccess(experienceId: string, bookings: any[]) {
+    await confirmMVGEvent(experienceId, bookings);
+
+    const experience = await storage.getExperience(experienceId);
+    if (!experience?.endDate) {
+      throw new Error(`Cannot complete MVG success for ${experienceId}: event end date is missing`);
+    }
+
+    const confirmedBookings = await storage.getConfirmedBookings(experienceId);
+    const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
+
+    // Persist the payout while MVG is still pending so scheduling failures can be retried.
+    await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
+    await lockCommissionsForExperience(experienceId);
+    await storage.updateExperienceMVGStatus(experienceId, "met");
+  }
+
   // Helper function to confirm MVG event and capture payments
   async function confirmMVGEvent(experienceId: string, bookings: any[]) {
     console.log(`Confirming MVG event ${experienceId} - processing ${bookings.length} bookings`);
@@ -6174,9 +6182,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               continue;
             }
             
+            const balanceCurrency = normalizeCurrency(paymentIntent.currency, experience.currency)?.toLowerCase();
+            if (!balanceCurrency) {
+              console.error(`[CRITICAL] MVG met but booking ${booking.id} has no valid payment currency - CANNOT AUTHORIZE BALANCE`);
+              continue;
+            }
+
             const balancePaymentIntent = await stripe.paymentIntents.create({
               amount: Math.round(balanceAmount * 100), // Convert to cents
-              currency: "usd",
+              currency: balanceCurrency,
               customer, // Reuse customer from deposit payment
               payment_method: paymentMethod, // Reuse saved payment method
               capture_method: "manual", // Will be captured later when balance is due

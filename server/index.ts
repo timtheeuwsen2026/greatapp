@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startMVGDeadlineScheduler } from "./mvg-scheduler";
 import { startPayoutScheduler } from "./payout-scheduler";
+import { startEventReminderScheduler } from "./event-reminder-scheduler";
 
 const app = express();
 // Trust Replit's reverse proxy so req.protocol and X-Forwarded-* headers are correct
@@ -72,5 +73,7 @@ app.use((req, res, next) => {
     startMVGDeadlineScheduler();
     // Start 7-day post-event payout scheduler
     startPayoutScheduler();
+    // Start 24-hour pre-event reminder scheduler
+    startEventReminderScheduler();
   });
 })();

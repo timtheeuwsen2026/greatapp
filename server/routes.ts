@@ -574,6 +574,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const activeChatBookingStatuses = [
     "pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid",
   ] as const;
+  const HUB_UNREAD_EMAIL_DELAY_MS = Number(process.env.HUB_UNREAD_EMAIL_DELAY_MS || 5 * 60 * 1000);
+  const HUB_UNREAD_EMAIL_COOLDOWN_MS = Number(process.env.HUB_UNREAD_EMAIL_COOLDOWN_MS || 60 * 60 * 1000);
+  const pendingHubUnreadEmailTimers = new Map<string, NodeJS.Timeout>();
+  const hubUnreadEmailLastSentAt = new Map<string, number>();
   const paginationFrom = (query: any) => {
     const page = Math.max(1, Number.parseInt(String(query.page || "1"), 10) || 1);
     const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(query.pageSize || "10"), 10) || 10));
@@ -589,6 +593,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!experience) return false;
     if (user?.role === "admin" || experience.creatorId === userId) return true;
     return !!booking && activeChatBookingStatuses.includes(booking.status as any);
+  };
+
+  const hasUnreadExperienceMessages = async (experienceId: string, userId: string): Promise<boolean> => {
+    const [readState] = await db
+      .select()
+      .from(experienceChatReads)
+      .where(and(eq(experienceChatReads.experienceId, experienceId), eq(experienceChatReads.userId, userId)))
+      .limit(1);
+    const lastReadAt = readState?.lastReadAt || new Date(0);
+    const unread = await db
+      .select({ id: experienceMessages.id })
+      .from(experienceMessages)
+      .where(and(
+        eq(experienceMessages.experienceId, experienceId),
+        gt(experienceMessages.createdAt, lastReadAt),
+        ne(experienceMessages.userId, userId),
+        or(eq(experienceMessages.isPrivate, false), eq(experienceMessages.recipientId, userId)),
+      ))
+      .limit(1);
+    return unread.length > 0;
+  };
+
+  const scheduleHubUnreadEmailNotifications = async (experienceId: string, senderId: string): Promise<void> => {
+    const [experience, eventBookings] = await Promise.all([
+      storage.getExperience(experienceId),
+      storage.getExperienceBookings(experienceId),
+    ]);
+    if (!experience) return;
+
+    const recipientIds = Array.from(new Set(
+      eventBookings
+        .filter((booking) => activeChatBookingStatuses.includes(booking.status as any))
+        .map((booking) => booking.userId)
+        .filter((userId): userId is string => !!userId && userId !== senderId),
+    ));
+
+    for (const userId of recipientIds) {
+      const key = `${experienceId}:${userId}`;
+      const lastSentAt = hubUnreadEmailLastSentAt.get(key) || 0;
+      if (pendingHubUnreadEmailTimers.has(key) || Date.now() - lastSentAt < HUB_UNREAD_EMAIL_COOLDOWN_MS) {
+        continue;
+      }
+
+      const timer = setTimeout(async () => {
+        pendingHubUnreadEmailTimers.delete(key);
+        try {
+          if (!(await hasUnreadExperienceMessages(experienceId, userId))) return;
+          const user = await storage.getUser(userId);
+          if (!user?.email) return;
+
+          await notificationService.sendCommunityHubUnreadEmail({
+            to: user.email,
+            userFirstName: user.firstName,
+            experienceTitle: experience.title,
+            experienceSlugOrId: (experience as any).slug || experience.id,
+          });
+          hubUnreadEmailLastSentAt.set(key, Date.now());
+        } catch (error) {
+          console.error(`Failed to send unread hub email for ${key}:`, error);
+        }
+      }, HUB_UNREAD_EMAIL_DELAY_MS);
+
+      pendingHubUnreadEmailTimers.set(key, timer);
+    }
   };
   // Auth — Supabase JWT-based (stateless, no sessions)
   app.get("/api/login", (_req, res) => {
@@ -7861,6 +7929,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         recipientId,
       });
       broadcastChatMessage(req.params.id, message);
+      scheduleHubUnreadEmailNotifications(req.params.id, userId).catch((error) => {
+        console.error("Error scheduling unread hub emails:", error);
+      });
       res.json(message);
     } catch (error) {
       console.error("Error creating message:", error);

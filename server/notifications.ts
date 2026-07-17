@@ -203,6 +203,16 @@ function formatDate(date: Date | string | null | undefined): string {
   });
 }
 
+function formatTime(date: Date | string | null | undefined): string {
+  if (!date) return 'TBD';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return d.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
+
 function formatCurrency(amount: string | number | null | undefined): string {
   if (!amount) return '$0.00';
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -288,6 +298,51 @@ class NotificationService {
     });
 
     return { subject, text: email.text, html: email.html };
+  }
+
+  async sendCommunityHubUnreadEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+  }): Promise<void> {
+    const subject = `You have unread messages in the ${opts.experienceTitle} Hub 💬`;
+    const bodyText = `Hey ${opts.userFirstName || 'there'}, the squad is talking! There are new messages waiting for you in the ${opts.experienceTitle} Community Hub. Catch up on the conversation and get to know your fellow attendees before the experience begins.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Reply in the Hub', href: communityHubUrl() },
+      preheader: `New messages are waiting in the ${opts.experienceTitle} Hub.`,
+      growthFooterContext: 'confirmed_participant',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send unread hub email');
+    }
+  }
+
+  async sendEvent24HourReminderEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    startTime: Date | string;
+  }): Promise<void> {
+    const subject = `Get ready! ${opts.experienceTitle} starts tomorrow ⏳`;
+    const bodyText = `Hey ${opts.userFirstName || 'there'}, your experience is almost here! ${opts.experienceTitle} kicks off tomorrow at ${formatTime(opts.startTime)}. Double-check the location details and jump into the Community Hub if you need to coordinate with the squad.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View Event Details', href: experienceDetailsUrl(opts.experienceSlugOrId) },
+      preheader: `${opts.experienceTitle} starts tomorrow at ${formatTime(opts.startTime)}.`,
+      growthFooterContext: 'confirmed_participant',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send 24-hour event reminder email');
+    }
   }
 
   async sendBookingCreatedEmail(userId: string, experience: Experience, booking: Booking): Promise<void> {
@@ -499,45 +554,36 @@ The Great. Team
         }
 
         let subject: string;
-        let statusMessage: string;
+        let textContent: string;
+        let htmlContent: string | undefined;
 
         if (refundFailed) {
           subject = `Important: Issue with your refund for ${experience.title}`;
-          statusMessage = `⚠️ We encountered an issue processing your refund of ${formatCurrency(booking.depositAmount)}.
-Our team has been notified and will process your refund manually within 3-5 business days.
-If you don't see your refund after 5 business days, please contact us.`;
-        } else if (wasRefunded) {
-          subject = `Trip Update: ${experience.title} did not reach minimum group size`;
-          statusMessage = `✅ Your deposit of ${formatCurrency(booking.depositAmount)} has been automatically refunded to your original payment method.
-Please allow 5-10 business days for the refund to appear on your statement.`;
-        } else {
-          subject = `Trip Update: ${experience.title} has been cancelled`;
-          statusMessage = `Your booking has been cancelled. Since no payment was captured, no refund is needed.`;
-        }
-
-        const textContent = `
+          textContent = `
 Hi ${user.firstName || 'there'},
 
-Unfortunately, "${experience.title}" did not reach the minimum number of participants needed to run.
-
-📍 Experience: ${experience.title}
-📅 Was scheduled for: ${formatDate(experience.startDate)}
-👥 Participants needed: ${experience.minimumParticipants}
-👥 Participants signed up: ${totalBookings}
-
-${statusMessage}
-
-We're sorry this trip couldn't happen. Here's what you can do:
-• Browse similar experiences on our platform
-• Sign up for notifications about future trips
-• Create your own experience!
-
-Thank you for your interest and we hope to see you on a future adventure.
+⚠️ We encountered an issue processing your refund of ${formatCurrency(booking.depositAmount)}.
+Our team has been notified and will process your refund manually within 3-5 business days.
+If you don't see your refund after 5 business days, please contact us.
 
 The Great. Team
-        `.trim();
+          `.trim();
+        } else {
+          subject = `Update on ${experience.title}: Minimum group not reached`;
+          const amountRefunded = wasRefunded ? booking.depositAmount : 0;
+          const bodyText = `Hey ${user.firstName || 'there'}, unfortunately, we didn't quite reach the minimum group size needed to make ${experience.title} happen this time. Your reservation has been canceled, and a full refund of ${formatCurrency(amountRefunded)} has been automatically processed back to your card. Don't worry—there are plenty of other incredible experiences forming right now!`;
+          const email = renderBaseEmail({
+            to: user.email,
+            bodyText,
+            cta: { label: 'Explore New Experiences', href: `${APP_BASE_URL}/experiences` },
+            preheader: `${experience.title} did not reach its minimum group size.`,
+            growthFooterContext: 'participant',
+          });
+          textContent = email.text;
+          htmlContent = email.html;
+        }
 
-        const result = await sendEmail(user.email, subject, textContent);
+        const result = await sendEmail(user.email, subject, textContent, htmlContent);
         await recordEmailSent(booking.id, 'mvg_failed', user.email, result.success, result.error);
         emailsSent++;
 

@@ -213,6 +213,14 @@ function communityHubUrl(): string {
   return `${APP_BASE_URL}/community-hub`;
 }
 
+function bookingTotalPaid(booking: Booking): string | number | null | undefined {
+  if (booking.balancePaid || !booking.isDepositOnly) {
+    return booking.totalPrice || booking.depositAmount;
+  }
+
+  return booking.depositAmount || booking.totalPrice;
+}
+
 class NotificationService {
   private logs: NotificationPayload[] = [];
 
@@ -256,6 +264,30 @@ class NotificationService {
     if (!result.success) {
       throw new Error(result.error || 'Failed to send password reset email');
     }
+  }
+
+  private renderBookingConfirmedEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    experience: Experience;
+    booking: Booking;
+  }): { subject: string; text: string; html: string } {
+    const eventName = opts.experience.title;
+    const subject = `It's Happening! You're confirmed for ${eventName} 🔥`;
+    const bodyText = `Hey ${opts.userFirstName || 'there'}, pack your bags! ${eventName} is officially confirmed and your spot is locked in. The system just announced your arrival in the Community Hub. Jump in, say hi, and introduce yourself to the squad!`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      receiptRows: [
+        { label: 'Ticket Type', value: opts.booking.ticketName || 'General Admission' },
+        { label: 'Total Paid', value: formatCurrency(bookingTotalPaid(opts.booking)) },
+      ],
+      cta: { label: 'Meet Your Squad in the Hub', href: communityHubUrl() },
+      preheader: `${eventName} is confirmed and your spot is locked in.`,
+      growthFooterContext: 'confirmed_participant',
+    });
+
+    return { subject, text: email.text, html: email.html };
   }
 
   async sendBookingCreatedEmail(userId: string, experience: Experience, booking: Booking): Promise<void> {
@@ -321,6 +353,16 @@ The Great. Team
         });
         textContent = email.text;
         htmlContent = email.html;
+      } else {
+        const email = this.renderBookingConfirmedEmail({
+          to: user.email,
+          userFirstName: user.firstName,
+          experience,
+          booking,
+        });
+        subject = email.subject;
+        textContent = email.text;
+        htmlContent = email.html;
       }
 
       const result = await sendEmail(user.email, subject, textContent, htmlContent);
@@ -378,34 +420,14 @@ The Great. Team
           continue;
         }
 
-        const subject = `🎉 Trip Confirmed! ${experience.title} is happening!`;
-        const textContent = `
-Hi ${user.firstName || 'there'},
+        const email = this.renderBookingConfirmedEmail({
+          to: user.email,
+          userFirstName: user.firstName,
+          experience,
+          booking,
+        });
 
-GREAT NEWS! Your trip is officially confirmed! 🎉
-
-The community came together and "${experience.title}" has reached the minimum group size.
-
-📍 Experience: ${experience.title}
-📅 Dates: ${formatDate(experience.startDate)} - ${formatDate(experience.endDate)}
-📍 Location: ${experience.location}
-👥 Group Size: ${bookings.length} participants
-
-💳 Your deposit of ${formatCurrency(booking.depositAmount)} has been captured.
-${booking.balanceAmount && parseFloat(booking.balanceAmount.toString()) > 0 
-  ? `💰 Remaining Balance: ${formatCurrency(booking.balanceAmount)} due by ${formatDate(booking.balanceDueDate)}`
-  : ''}
-
-What happens next?
-• You'll receive detailed trip information soon
-• Connect with fellow participants in your trip group
-• Start preparing for an amazing experience!
-
-See you there!
-The Great. Team
-        `.trim();
-
-        const result = await sendEmail(user.email, subject, textContent);
+        const result = await sendEmail(user.email, email.subject, email.text, email.html);
         await recordEmailSent(booking.id, 'mvg_confirmed', user.email, result.success, result.error);
         emailsSent++;
 

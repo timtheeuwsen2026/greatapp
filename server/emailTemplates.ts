@@ -4,6 +4,7 @@ export type GrowthFooterContext =
   | "security"
   | "participant"
   | "pre_mvg_participant"
+  | "confirmed_participant"
   | "creator"
   | "partner";
 
@@ -68,6 +69,16 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
       </div>
     `,
     text: (appBaseUrl) => `Help your group unlock the experience\nEvery introduction and share helps the community reach the minimum group size faster.\nOpen the Community Hub: ${appBaseUrl}/community-hub`,
+  },
+  confirmed_participant: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Your squad is open</p>
+        <p>Meet the people joining you, follow trip updates, and keep the momentum going inside the Community Hub.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/community-hub`)}">Meet your squad</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Your squad is open\nMeet the people joining you, follow trip updates, and keep the momentum going inside the Community Hub.\nMeet your squad: ${appBaseUrl}/community-hub`,
   },
   creator: {
     html: (appBaseUrl) => `

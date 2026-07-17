@@ -475,6 +475,58 @@ The Great. Team
     }
   }
 
+  async sendRoleApplicationReceivedEmail(opts: {
+    creatorId: string;
+    applicantId: string;
+    experience: Experience;
+    roleName: string;
+  }): Promise<void> {
+    const [creator, applicant] = await Promise.all([
+      storage.getUser(opts.creatorId),
+      storage.getUser(opts.applicantId),
+    ]);
+    if (!creator?.email) return;
+
+    const applicantName = [applicant?.firstName, applicant?.lastName].filter(Boolean).join(' ') || 'A participant';
+    const subject = `New ${opts.roleName} application - ${opts.experience.title}`;
+    const textContent = `
+Hi ${creator.firstName || 'there'},
+
+${applicantName} applied for the ${opts.roleName} role on "${opts.experience.title}".
+
+Review and approve or decline the application in your Creator Dashboard:
+${APP_BASE_URL}/creator-dashboard
+
+The Great. Team
+    `.trim();
+    await sendEmail(creator.email, subject, textContent);
+  }
+
+  async sendRoleApplicationResolvedEmail(opts: {
+    applicantId: string;
+    experience: Experience;
+    roleName: string;
+    status: 'confirmed' | 'declined';
+  }): Promise<void> {
+    const applicant = await storage.getUser(opts.applicantId);
+    if (!applicant?.email) return;
+
+    const approved = opts.status === 'confirmed';
+    const subject = `${approved ? 'Role confirmed' : 'Role application update'} - ${opts.experience.title}`;
+    const textContent = `
+Hi ${applicant.firstName || 'there'},
+
+Your application for the ${opts.roleName} role on "${opts.experience.title}" was ${approved ? 'approved' : 'declined'}.
+
+${approved ? 'You are now confirmed for this role. Open the event page for the latest experience details.' : 'You can browse other open roles and gigs in the Community Hub.'}
+
+${approved ? `${APP_BASE_URL}/experience/${(opts.experience as any).slug || opts.experience.id}` : `${APP_BASE_URL}/community-hub`}
+
+The Great. Team
+    `.trim();
+    await sendEmail(applicant.email, subject, textContent);
+  }
+
   async sendExternalVenueInvitation(event: {
     title?: string | null;
     startDate?: Date | string | null;

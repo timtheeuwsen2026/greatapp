@@ -3122,6 +3122,35 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(participantRoles.createdAt));
   }
 
+  async getParticipantRole(roleId: string): Promise<ParticipantRole | undefined> {
+    const [role] = await db
+      .select()
+      .from(participantRoles)
+      .where(eq(participantRoles.id, roleId));
+    return role;
+  }
+
+  async getParticipantRoleAssignment(roleId: string, userId: string): Promise<ParticipantRoleAssignment | undefined> {
+    const [assignment] = await db
+      .select()
+      .from(participantRoleAssignments)
+      .where(and(
+        eq(participantRoleAssignments.roleId, roleId),
+        eq(participantRoleAssignments.userId, userId),
+        inArray(participantRoleAssignments.status, ["pending", "applied", "confirmed"]),
+      ))
+      .orderBy(desc(participantRoleAssignments.createdAt));
+    return assignment;
+  }
+
+  async getParticipantRoleAssignmentById(assignmentId: string): Promise<ParticipantRoleAssignment | undefined> {
+    const [assignment] = await db
+      .select()
+      .from(participantRoleAssignments)
+      .where(eq(participantRoleAssignments.id, assignmentId));
+    return assignment;
+  }
+
   async assignParticipantRole(assignmentData: InsertParticipantRoleAssignment): Promise<ParticipantRoleAssignment> {
     const [assignment] = await db.insert(participantRoleAssignments).values(assignmentData).returning();
     return assignment;
@@ -3147,6 +3176,81 @@ export class DatabaseStorage implements IStorage {
       .where(eq(participantRoleAssignments.experienceId, experienceId));
     
     return result as (ParticipantRoleAssignment & { role: ParticipantRole; user: User })[];
+  }
+
+  async getParticipantRoleOpportunities(userId: string): Promise<any[]> {
+    return await db
+      .select({
+        role: participantRoles,
+        experience: experiences,
+        assignment: participantRoleAssignments,
+      })
+      .from(participantRoles)
+      .innerJoin(experiences, eq(participantRoles.experienceId, experiences.id))
+      .leftJoin(participantRoleAssignments, and(
+        eq(participantRoleAssignments.roleId, participantRoles.id),
+        eq(participantRoleAssignments.userId, userId),
+        inArray(participantRoleAssignments.status, ["pending", "applied", "confirmed"]),
+      ))
+      .where(or(eq(experiences.status, "approved"), eq(experiences.status, "published")))
+      .orderBy(desc(experiences.createdAt), asc(participantRoles.createdAt));
+  }
+
+  async getParticipantRoleApplicationsForCreator(creatorId: string): Promise<any[]> {
+    return await db
+      .select({
+        assignment: participantRoleAssignments,
+        role: participantRoles,
+        applicant: users,
+        experience: experiences,
+      })
+      .from(participantRoleAssignments)
+      .innerJoin(participantRoles, eq(participantRoleAssignments.roleId, participantRoles.id))
+      .innerJoin(experiences, eq(participantRoleAssignments.experienceId, experiences.id))
+      .innerJoin(users, eq(participantRoleAssignments.userId, users.id))
+      .where(and(
+        eq(experiences.creatorId, creatorId),
+        inArray(participantRoleAssignments.status, ["pending", "applied"]),
+      ))
+      .orderBy(desc(participantRoleAssignments.appliedAt));
+  }
+
+  async resolveParticipantRoleAssignment(
+    assignmentId: string,
+    status: "confirmed" | "declined",
+  ): Promise<ParticipantRoleAssignment> {
+    return await db.transaction(async (tx) => {
+      const [assignment] = await tx
+        .update(participantRoleAssignments)
+        .set({
+          status,
+          confirmedAt: status === "confirmed" ? new Date() : null,
+        })
+        .where(and(
+          eq(participantRoleAssignments.id, assignmentId),
+          inArray(participantRoleAssignments.status, ["pending", "applied"]),
+        ))
+        .returning();
+
+      if (!assignment) throw new Error("ROLE_APPLICATION_ALREADY_RESOLVED");
+
+      if (status === "confirmed") {
+        const [updatedRole] = await tx
+          .update(participantRoles)
+          .set({
+            currentCount: sql`${participantRoles.currentCount} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(participantRoles.id, assignment.roleId),
+            sql`coalesce(${participantRoles.currentCount}, 0) < coalesce(${participantRoles.maxCount}, 1)`,
+          ))
+          .returning();
+        if (!updatedRole) throw new Error("ROLE_IS_FULL");
+      }
+
+      return assignment;
+    });
   }
 
   async getParticipantsWithSkillsAndRoles(experienceId: string): Promise<any[]> {

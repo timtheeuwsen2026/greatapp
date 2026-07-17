@@ -38,6 +38,7 @@ import { sumBookingPayoutGrossCents } from "./payoutRules";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
+import { getRoleApplicationBlockReason } from "./participantRoleRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -7986,16 +7987,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { experienceId } = req.params;
       const { roleId } = req.body;
       const userId = req.user.claims.sub;
+
+      if (!roleId) return res.status(400).json({ message: "roleId is required" });
+
+      const [experience, role] = await Promise.all([
+        storage.getExperience(experienceId),
+        storage.getParticipantRole(roleId),
+      ]);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+      if (!role || role.experienceId !== experienceId) {
+        return res.status(404).json({ message: "Role not found for this experience" });
+      }
+      const existingAssignment = await storage.getParticipantRoleAssignment(roleId, userId);
+      const blockReason = getRoleApplicationBlockReason({
+        creatorId: experience.creatorId,
+        applicantId: userId,
+        experienceStatus: experience.status,
+        currentCount: role.currentCount,
+        maxCount: role.maxCount,
+        existingStatus: existingAssignment?.status,
+      });
+      if (blockReason) {
+        return res.status(409).json({ message: blockReason, assignment: existingAssignment });
+      }
       
       const assignmentData = {
         roleId,
         userId,
         experienceId,
-        status: "applied" as const,
+        status: "pending" as const,
         appliedAt: new Date()
       };
       
       const assignment = await storage.assignParticipantRole(assignmentData);
+
+      notificationService.sendRoleApplicationReceivedEmail({
+        creatorId: experience.creatorId,
+        applicantId: userId,
+        experience,
+        roleName: role.name,
+      }).catch((error) => console.error("Role application notification failed:", error?.message || error));
+
       res.status(201).json(assignment);
     } catch (error: any) {
       console.error("Error applying for participant role:", error);
@@ -8003,14 +8035,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/experiences/:experienceId/role-assignments", async (req, res) => {
+  app.get("/api/experiences/:experienceId/role-assignments", isAuthenticated, async (req: any, res) => {
     try {
       const { experienceId } = req.params;
+      const userId = req.user.claims.sub;
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
       const assignments = await storage.getParticipantRoleAssignments(experienceId);
-      res.json(assignments);
+      res.json(experience.creatorId === userId
+        ? assignments
+        : assignments.filter((assignment: any) => assignment.userId === userId));
     } catch (error: any) {
       console.error("Error fetching role assignments:", error);
       res.status(500).json({ message: "Failed to fetch role assignments" });
+    }
+  });
+
+  app.get("/api/community/role-opportunities", isAuthenticated, async (req: any, res) => {
+    try {
+      const opportunities = await storage.getParticipantRoleOpportunities(req.user.claims.sub);
+      res.json(opportunities);
+    } catch (error: any) {
+      console.error("Error fetching role opportunities:", error);
+      res.status(500).json({ message: "Failed to fetch role opportunities" });
+    }
+  });
+
+  app.get("/api/creator/role-applications", isAuthenticated, async (req: any, res) => {
+    try {
+      const applications = await storage.getParticipantRoleApplicationsForCreator(req.user.claims.sub);
+      res.json(applications);
+    } catch (error: any) {
+      console.error("Error fetching creator role applications:", error);
+      res.status(500).json({ message: "Failed to fetch role applications" });
+    }
+  });
+
+  app.post("/api/creator/role-applications/:assignmentId/:action", isAuthenticated, async (req: any, res) => {
+    try {
+      const { assignmentId, action } = req.params;
+      if (action !== "approve" && action !== "decline") {
+        return res.status(400).json({ message: "Action must be approve or decline" });
+      }
+
+      const assignment = await storage.getParticipantRoleAssignmentById(assignmentId);
+      if (!assignment) return res.status(404).json({ message: "Role application not found" });
+
+      const [experience, role] = await Promise.all([
+        storage.getExperience(assignment.experienceId),
+        storage.getParticipantRole(assignment.roleId),
+      ]);
+      if (!experience || experience.creatorId !== req.user.claims.sub) {
+        return res.status(403).json({ message: "Only the experience creator can resolve this application" });
+      }
+      if (!role) return res.status(404).json({ message: "Role not found" });
+
+      let resolved;
+      try {
+        resolved = await storage.resolveParticipantRoleAssignment(
+          assignmentId,
+          action === "approve" ? "confirmed" : "declined",
+        );
+      } catch (error: any) {
+        if (error.message === "ROLE_IS_FULL") {
+          return res.status(409).json({ message: "This role is already full" });
+        }
+        if (error.message === "ROLE_APPLICATION_ALREADY_RESOLVED") {
+          return res.status(409).json({ message: "This application has already been resolved" });
+        }
+        throw error;
+      }
+
+      notificationService.sendRoleApplicationResolvedEmail({
+        applicantId: assignment.userId,
+        experience,
+        roleName: role.name,
+        status: action === "approve" ? "confirmed" : "declined",
+      }).catch((error) => console.error("Role resolution notification failed:", error?.message || error));
+
+      res.json(resolved);
+    } catch (error: any) {
+      console.error("Error resolving role application:", error);
+      res.status(500).json({ message: "Failed to resolve role application" });
     }
   });
 

@@ -73,7 +73,7 @@ export default function ExperienceDetails() {
   // Support both singular and plural route patterns
   const [, singularParams] = useRoute("/experience/:id");
   const [, pluralParams] = useRoute("/experiences/:id");
-  const [currentLocation] = useLocation();
+  const [currentLocation, setLocation] = useLocation();
   const { isAuthenticated, user } = useAuth();
   const { toast } = useToast();
   const experienceId = singularParams?.id || pluralParams?.id;
@@ -196,7 +196,27 @@ export default function ExperienceDetails() {
   // Fetch role assignments for this experience
   const { data: roleAssignments } = useQuery({
     queryKey: ["/api/experiences", experienceId, "role-assignments"],
-    enabled: !!experienceId,
+    enabled: !!experienceId && isAuthenticated,
+  });
+
+  const applyForRole = useMutation({
+    mutationFn: async (roleId: string) => {
+      const response = await apiRequest("POST", `/api/experiences/${experienceId}/role-assignments`, { roleId });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences", experienceId, "role-assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/community/role-opportunities"] });
+      toast({
+        title: "Application sent",
+        description: "The creator has been notified and can now review your application.",
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Application not sent",
+      description: error?.message || "Please try again.",
+      variant: "destructive",
+    }),
   });
 
   // Fetch creator profile
@@ -878,7 +898,13 @@ export default function ExperienceDetails() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {Array.isArray(participantRoles) ? participantRoles.map((role: any) => (
+                    {Array.isArray(participantRoles) ? participantRoles.map((role: any) => {
+                      const assignment = Array.isArray(roleAssignments)
+                        ? roleAssignments.find((item: any) => item.roleId === role.id)
+                        : undefined;
+                      const status = assignment?.status === "applied" ? "pending" : assignment?.status;
+                      const isFull = (role.currentCount || 0) >= (role.maxCount || 1);
+                      return (
                       <div key={role.id} className="border rounded-lg p-4 hover:border-primary/30 transition-colors">
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex-1">
@@ -918,25 +944,30 @@ export default function ExperienceDetails() {
                           </div>
                         )}
                         
-                        {isAuthenticated && (role.currentCount || 0) < role.maxCount && (
+                        {!isCreator && (
                           <Button 
                             size="sm" 
                             variant="outline" 
                             className="w-full mt-2"
                             data-testid={`button-apply-role-${role.id}`}
-                            onClick={() => {
-                              // TODO: Implement role application
-                              toast({
-                                title: "Role Application",
-                                description: "Role application feature coming soon!",
-                              });
-                            }}
+                            disabled={isFull || status === "pending" || status === "confirmed" || applyForRole.isPending}
+                            onClick={() => isAuthenticated
+                              ? applyForRole.mutate(role.id)
+                              : setLocation(`/login?next=${encodeURIComponent(`/experience/${experience.slug || experience.id}`)}`)}
                           >
-                            Apply for Role
+                            {status === "confirmed"
+                              ? "Role Confirmed"
+                              : status === "pending"
+                                ? "Application Pending"
+                                : isFull
+                                  ? "Role Full"
+                                  : applyForRole.isPending
+                                    ? "Applying..."
+                                    : isAuthenticated ? "Apply for Role" : "Sign in to Apply"}
                           </Button>
                         )}
                       </div>
-                    )) : null}
+                    )}) : null}
                   </div>
                 </CardContent>
               </Card>

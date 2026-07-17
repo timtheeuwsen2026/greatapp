@@ -314,6 +314,34 @@ function CreatorDashboardContent() {
     retry: false,
   }) as { data: any[] };
 
+  const { data: roleApplications = [], isLoading: roleApplicationsLoading } = useQuery({
+    queryKey: ["/api/creator/role-applications"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any[]; isLoading: boolean };
+
+  const resolveRoleApplication = useMutation({
+    mutationFn: async ({ assignmentId, action }: { assignmentId: string; action: "approve" | "decline" }) => {
+      const response = await apiRequest("POST", `/api/creator/role-applications/${assignmentId}/${action}`, {});
+      return response.json();
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/role-applications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
+      toast({
+        title: variables.action === "approve" ? "Role Approved" : "Application Declined",
+        description: variables.action === "approve"
+          ? "The participant is confirmed and has been notified."
+          : "The participant has been notified.",
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Could not update application",
+      description: error?.message || "Please try again.",
+      variant: "destructive",
+    }),
+  });
+
   const acceptVenueOffer = useMutation({
     mutationFn: async (offerId: string) => {
       const res = await apiRequest("POST", `/api/creator/venue-offers/${offerId}/accept`, {});
@@ -630,9 +658,17 @@ function CreatorDashboardContent() {
         </div>
 
         <Tabs defaultValue={isFirstTimeCreator ? "setup" : "experiences"} className="space-y-6">
-          <TabsList>
+          <TabsList className="h-auto flex-wrap justify-start">
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
             <TabsTrigger value="experiences">My Experiences</TabsTrigger>
+            <TabsTrigger value="role-applications" className="relative">
+              Role Applications
+              {roleApplications.length > 0 && (
+                <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs text-white">
+                  {roleApplications.length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="venue-offers" className="relative">
               Venue Offers
               {venueOffers.length > 0 && (
@@ -1127,6 +1163,76 @@ function CreatorDashboardContent() {
           </TabsContent>
 
           {/* ── Venue Offers Tab — Incoming Reverse Handshake bids ── */}
+          <TabsContent value="role-applications" className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Role Applications</h2>
+              <p className="mt-1 text-sm text-gray-500">Approve or decline participants who applied for roles and gigs on your experiences.</p>
+            </div>
+
+            {roleApplicationsLoading ? (
+              <div className="py-10 text-center text-gray-500">Loading applications...</div>
+            ) : roleApplications.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-500">
+                  <Users className="mx-auto mb-3 h-12 w-12 opacity-30" />
+                  <p className="font-medium">No pending role applications</p>
+                  <p className="mt-1 text-sm">New participant applications will appear here.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              roleApplications.map((row: any) => {
+                const assignment = row.assignment || {};
+                const applicant = row.applicant || {};
+                const role = row.role || {};
+                const experience = row.experience || {};
+                const applicantName = [applicant.firstName, applicant.lastName].filter(Boolean).join(" ") || applicant.email || "Participant";
+                return (
+                  <Card key={assignment.id} className="border-amber-200 dark:border-amber-800">
+                    <CardContent className="p-5">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-lg font-semibold">{applicantName}</h3>
+                            <Badge className="border-amber-300 bg-amber-100 text-amber-800">Pending Review</Badge>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            Applied for <strong>{role.name}</strong> on <strong>{experience.title}</strong>
+                          </p>
+                          {role.description && <p className="text-sm text-gray-500">{role.description}</p>}
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                            {applicant.email && <span>{applicant.email}</span>}
+                            {assignment.appliedAt && <span>Applied {new Date(assignment.appliedAt).toLocaleDateString()}</span>}
+                            <span>{role.currentCount || 0}/{role.maxCount || 1} roles filled</span>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 gap-2 md:flex-col">
+                          <Button
+                            className="flex-1 bg-green-600 text-white hover:bg-green-700 md:flex-none"
+                            onClick={() => resolveRoleApplication.mutate({ assignmentId: assignment.id, action: "approve" })}
+                            disabled={resolveRoleApplication.isPending}
+                            data-testid={`button-approve-role-application-${assignment.id}`}
+                          >
+                            <CheckCircle className="mr-1 h-4 w-4" />Approve
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="flex-1 border-red-300 text-red-600 hover:bg-red-50 md:flex-none"
+                            onClick={() => resolveRoleApplication.mutate({ assignmentId: assignment.id, action: "decline" })}
+                            disabled={resolveRoleApplication.isPending}
+                            data-testid={`button-decline-role-application-${assignment.id}`}
+                          >
+                            <XCircle className="mr-1 h-4 w-4" />Decline
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </TabsContent>
+
           <TabsContent value="venue-offers" className="space-y-4">
             <h2 className="text-xl font-semibold">Incoming Venue Offers</h2>
             <p className="text-sm text-gray-500">

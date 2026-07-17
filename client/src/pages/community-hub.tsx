@@ -85,6 +85,30 @@ export default function CommunityHub() {
     enabled: isAuthenticated,
   });
 
+  const { data: roleOpportunities = [], isLoading: rolesLoading } = useQuery<any[]>({
+    queryKey: ["/api/community/role-opportunities"],
+    enabled: isAuthenticated,
+  });
+
+  const applyForRoleMutation = useMutation({
+    mutationFn: async ({ experienceId, roleId }: { experienceId: string; roleId: string }) => {
+      const response = await apiRequest('POST', `/api/experiences/${experienceId}/role-assignments`, { roleId });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/community/role-opportunities"] });
+      toast({
+        title: "Application sent",
+        description: "The creator has been notified and can review your application.",
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Application not sent",
+      description: error?.message || "Please try again.",
+      variant: "destructive",
+    }),
+  });
+
   const { data: participantProfileStatus, isLoading: participantProfileLoading } = useQuery<{ hasProfile: boolean }>({
     queryKey: ["/api/participant-profile/status"],
     enabled: isAuthenticated,
@@ -490,7 +514,7 @@ export default function CommunityHub() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-5">
             <TabsTrigger value="groups" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Users className="h-4 w-4" />
               Groups
@@ -502,6 +526,10 @@ export default function CommunityHub() {
             <TabsTrigger value="events" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Calendar className="h-4 w-4" />
               Events
+            </TabsTrigger>
+            <TabsTrigger value="roles" className="flex min-w-0 items-center justify-center gap-2 py-2">
+              <Briefcase className="h-4 w-4" />
+              Roles & Gigs
             </TabsTrigger>
             <TabsTrigger value="spotlight" className="flex min-w-0 items-center justify-center gap-2 py-2">
               <Star className="h-4 w-4" />
@@ -836,6 +864,84 @@ export default function CommunityHub() {
                 })
               )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="roles" className="space-y-6">
+            {rolesLoading ? (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <Card key={index} className="animate-pulse"><CardContent className="h-56 p-6" /></Card>
+                ))}
+              </div>
+            ) : roleOpportunities.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <Briefcase className="mx-auto mb-4 h-12 w-12 text-gray-400" />
+                  <h3 className="mb-2 text-lg font-medium">No open roles yet</h3>
+                  <p className="text-gray-600">Creator roles and event gigs will appear here when available.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {roleOpportunities.map((row: any) => {
+                  const role = row.role || {};
+                  const experience = row.experience || {};
+                  const assignmentStatus = row.assignment?.status === "applied" ? "pending" : row.assignment?.status;
+                  const isFull = (role.currentCount || 0) >= (role.maxCount || 1);
+                  const isOwnExperience = experience.creatorId === user?.id;
+                  return (
+                    <Card key={role.id} className="border-gray-200">
+                      <CardContent className="flex h-full flex-col p-5">
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="mb-1 text-xs font-medium text-primary">{experience.title}</p>
+                            <h3 className="break-words text-lg font-semibold">{role.name}</h3>
+                          </div>
+                          <Badge variant={isFull ? "secondary" : "outline"}>
+                            {role.currentCount || 0}/{role.maxCount || 1} filled
+                          </Badge>
+                        </div>
+
+                        {role.description && <p className="mb-3 text-sm text-gray-600">{role.description}</p>}
+                        {Array.isArray(role.requirements) && role.requirements.length > 0 && (
+                          <div className="mb-4 flex flex-wrap gap-1">
+                            {role.requirements.map((requirement: string) => (
+                              <Badge key={requirement} variant="secondary" className="text-xs">{requirement}</Badge>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setLocation(`/experience/${experience.slug || experience.id}`)}
+                          >
+                            <BookOpen className="mr-1 h-4 w-4" />Details
+                          </Button>
+                          <Button
+                            size="sm"
+                            disabled={isOwnExperience || isFull || assignmentStatus === "pending" || assignmentStatus === "confirmed" || applyForRoleMutation.isPending}
+                            onClick={() => applyForRoleMutation.mutate({ experienceId: experience.id, roleId: role.id })}
+                            data-testid={`button-community-apply-role-${role.id}`}
+                          >
+                            {isOwnExperience
+                              ? "Your Event"
+                              : assignmentStatus === "confirmed"
+                                ? "Confirmed"
+                                : assignmentStatus === "pending"
+                                  ? "Pending"
+                                  : isFull
+                                    ? "Role Full"
+                                    : applyForRoleMutation.isPending ? "Applying..." : "Apply"}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="spotlight" className="space-y-6">

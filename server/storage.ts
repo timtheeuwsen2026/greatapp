@@ -103,6 +103,24 @@ import {
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
 import { normalizeCurrency } from "./impactLedger";
+import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
+
+function withoutSingleDayDeposits(experience: Record<string, any>): any {
+  if (!isSingleDayExperience(experience)) return experience;
+
+  const ticketSkus = Array.isArray(experience.ticketSkus)
+    ? experience.ticketSkus.map((sku: any) => ({ ...sku, depositPerPerson: 0 }))
+    : experience.ticketSkus;
+
+  return {
+    ...experience,
+    ticketSkus,
+    depositEnabled: false,
+    depositPercentage: "0.00",
+    depositAmount: "0.00",
+    balanceAmount: "0.00",
+  };
+}
 
 type ReferralClickStats = {
   totalClicks: number;
@@ -539,7 +557,8 @@ export class DatabaseStorage implements IStorage {
 
   // Experience operations
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
-    const [experience] = await db.insert(experiences).values([experienceData]).returning();
+    const normalizedExperience = withoutSingleDayDeposits(experienceData);
+    const [experience] = await db.insert(experiences).values([normalizedExperience]).returning();
     this.syncDirectPromotionDeals(experience.id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
     );
@@ -747,7 +766,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateExperience(id: string, updates: Partial<InsertExperience>): Promise<Experience> {
-    const updateData = { ...updates, updatedAt: new Date() } as any;
+    const current = await this.getExperience(id);
+    const normalizedUpdates = current && isSingleDayExperience({ ...current, ...updates })
+      ? withoutSingleDayDeposits({
+          ...updates,
+          experienceType: updates.experienceType ?? current.experienceType,
+          startDate: updates.startDate ?? current.startDate,
+          endDate: updates.endDate ?? current.endDate,
+          ticketSkus: updates.ticketSkus ?? current.ticketSkus,
+        })
+      : updates;
+    const updateData = { ...normalizedUpdates, updatedAt: new Date() } as any;
     const [experience] = await db
       .update(experiences)
       .set(updateData)
@@ -1192,6 +1221,17 @@ export class DatabaseStorage implements IStorage {
 
     if (experience.status !== "approved" && experience.status !== "published") {
       throw new Error(`Cannot create deposit for experience with status: ${experience.status}`);
+    }
+
+    const depositSchedule = getDepositSchedule({
+      experienceType: experience.experienceType,
+      startDate: experience.startDate,
+      endDate: experience.endDate,
+      balanceDueDays: experience.balanceDueDays,
+      depositAmount: amount,
+    });
+    if (!depositSchedule.available) {
+      throw new Error("Deposits are not available for this event. Please use full payment.");
     }
 
     const totalPrice = Number(experience.price);

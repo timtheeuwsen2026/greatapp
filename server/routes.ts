@@ -44,6 +44,7 @@ import {
   normalizeMvgDeadlineDays,
 } from "./mvgDeadlineRules";
 import { normalizeBuilderParticipantRoles } from "./participantRoleSync";
+import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -146,6 +147,11 @@ function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
 
 function buildVenueContractObject(input: any, experienceId: string, venueId: string, creatorId: string) {
   const model = input.venueCompensationModel || "access_only";
+  const singleDayEvent = isSingleDayExperience({
+    experienceType: input.experienceType ?? input.type,
+    startDate: input.startDate,
+    endDate: input.endDate,
+  });
   return {
     experienceId,
     venueId,
@@ -168,9 +174,9 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
       requireMinimumParticipants: !!(input.requireMinimumParticipants ?? input.mvgEnabled),
       minimumParticipants: Number(input.minimumParticipants ?? input.mvgMinimumSize ?? input.mvgMin ?? 0) || 0,
       mvgDeadline: input.mvgDeadline ? new Date(input.mvgDeadline).toISOString() : null,
-      depositEnabled: !!input.depositEnabled,
-      depositAmount: numberOrZero(input.depositAmount),
-      depositPercentage: numberOrZero(input.depositPercentage),
+      depositEnabled: !singleDayEvent && !!input.depositEnabled,
+      depositAmount: singleDayEvent ? 0 : numberOrZero(input.depositAmount),
+      depositPercentage: singleDayEvent ? 0 : numberOrZero(input.depositPercentage),
       balanceDueDays: Number(input.balanceDueDays ?? 0) || 0,
       softHoldEnabled: !!input.softHoldEnabled,
       softHoldDurationHours: Number(input.softHoldDurationHours ?? 0) || 0,
@@ -3908,6 +3914,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fixedDeposit = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
+      const depositSchedule = getDepositSchedule({
+        experienceType: experience.experienceType,
+        startDate: experience.startDate,
+        endDate: experience.endDate,
+        balanceDueDays: experience.balanceDueDays,
+        depositAmount: fixedDeposit,
+      });
 
       if (fixedDeposit > fullPrice) {
         return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
@@ -3917,16 +3930,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isDepositOnly = false;
         depositAmount = 0;
         balanceAmount = 0;
-      } else if (fixedDeposit > 0) {
+      } else if (depositSchedule.available) {
         isDepositOnly = true;
         depositAmount = fixedDeposit;
         balanceAmount = fullPrice - depositAmount;
-        
-        if (experience.startDate) {
-          const startDate = new Date(experience.startDate);
-          const dueDays = experience.balanceDueDays || 14;
-          balanceDueDate = new Date(startDate.getTime() - (dueDays * 24 * 60 * 60 * 1000));
-        }
+        balanceDueDate = depositSchedule.balanceDueDate;
+      } else if (paymentType === 'deposit' && fixedDeposit > 0) {
+        return res.status(400).json({
+          message: "Deposit payment is not available for this event. Please pay the full ticket price.",
+          reason: depositSchedule.reason,
+        });
       } else {
         depositAmount = 0;
         balanceAmount = 0;
@@ -4392,6 +4405,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
 
+    const depositSchedule = getDepositSchedule({
+      experienceType: experience.experienceType,
+      startDate: experience.startDate,
+      endDate: experience.endDate,
+      balanceDueDays: experience.balanceDueDays,
+      depositAmount,
+    });
+    if (!depositSchedule.available) {
+      return res.status(400).json({
+        success: false,
+        message: "Deposits are not available for this event. Please use full payment.",
+        reason: depositSchedule.reason,
+      });
+    }
+
     // Validation 5: Spots must be available
     const currentBookings = await storage.getBookingsByExperience(experienceId);
     const activeBookings = currentBookings.filter(b => 
@@ -4820,6 +4848,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({
           success: false,
           message: "Valid deposit amount is required"
+        });
+      }
+
+      const depositExperience = await storage.getExperience(experienceId);
+      if (!depositExperience) {
+        return res.status(404).json({
+          success: false,
+          message: "Experience not found",
+        });
+      }
+      const depositSchedule = getDepositSchedule({
+        experienceType: depositExperience.experienceType,
+        startDate: depositExperience.startDate,
+        endDate: depositExperience.endDate,
+        balanceDueDays: depositExperience.balanceDueDays,
+        depositAmount: amount,
+      });
+      if (!depositSchedule.available) {
+        return res.status(400).json({
+          success: false,
+          message: "Deposits are not available for this event. Please use full payment.",
+          reason: depositSchedule.reason,
         });
       }
 
@@ -5468,7 +5518,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       // A per-ticket fixed deposit is the source of truth. Older builder payloads
       // did not always set the legacy experience-level depositEnabled flag.
-      const hasDeposit = fixedDeposit > 0;
+      const depositSchedule = getDepositSchedule({
+        experienceType: experience.experienceType,
+        startDate: experience.startDate,
+        endDate: experience.endDate,
+        balanceDueDays: experience.balanceDueDays,
+        depositAmount: fixedDeposit,
+      });
+      const hasDeposit = depositSchedule.available;
 
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
       const acceptedVenueContract = await storage.getAcceptedVenueContractForExperience(experienceId);
@@ -5562,7 +5619,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         mvgMin: experience.mvgMin || experience.minimumParticipants,
         mvgDeadline: experience.mvgDeadline,
         paymentMode: isDepositPayment ? 'deposit' : 'full',
-        hasDeposit
+        hasDeposit,
+        depositUnavailableReason: hasDeposit ? null : depositSchedule.reason,
+        balanceDueDate: depositSchedule.balanceDueDate,
       });
     } catch (error: any) {
       res.status(500).json({ message: "Error creating payment intent: " + error.message });

@@ -397,6 +397,13 @@ function normalizeEventTripFields(draft: any) {
     copy.selectedAmenityIds = [];
     copy.serviceDemandNotes = {};
     copy.serviceConnectRequests = {};
+    copy.ticketSkus = copy.ticketSkus.map((sku: any) => ({
+      ...sku,
+      depositPerPerson: 0,
+    }));
+    copy.depositEnabled = false;
+    copy.depositAmount = 0;
+    copy.balanceAmount = 0;
   }
 
   if (type === 'multi-day') {
@@ -1163,7 +1170,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
-        depositEnabled: formData.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
+        depositEnabled: formData.type === 'multi-day'
+          && normalizeEventTripFields(formData).ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
@@ -1681,7 +1689,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         ticketSkus: normalizeEventTripFields(formData).ticketSkus,
         // DATA CONTRACT: Default to EUR for new experiences
         currency: (formData.currency || 'eur').toLowerCase(),
-        depositEnabled: formData.ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
+        depositEnabled: formData.type === 'multi-day'
+          && normalizeEventTripFields(formData).ticketSkus.some((sku: any) => Number(sku?.depositPerPerson || 0) > 0),
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
@@ -5837,7 +5846,7 @@ function PricingStep({ form }: { form: any }) {
                         )}
 
                         {/* Deposit (only when MVG is ON and ticket is not free) */}
-                        {requireMinimumParticipants && sku.pricingMode !== 'free_rsvp' && (
+                        {requireMinimumParticipants && isMultiDayEvent && sku.pricingMode !== 'free_rsvp' && (
                           <div>
                             <Label htmlFor={`sku-deposit-${sku.id}`}>Deposit Per Person</Label>
                             <div className="flex gap-2">

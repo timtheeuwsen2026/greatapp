@@ -878,6 +878,8 @@ export const experiences = pgTable("experiences", {
   // Cancellation tracking
   cancellationReason: varchar("cancellation_reason"), // Track why trip was cancelled (e.g., "MVG Not Reached")
   cancelledAt: timestamp("cancelled_at"),
+  archivedAt: timestamp("archived_at"),
+  archivedBy: varchar("archived_by").references(() => users.id),
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -1029,6 +1031,34 @@ export const promotionDeals = pgTable("promotion_deals", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+export const perkFulfillments = pgTable(
+  "perk_fulfillments",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    promoterExperienceId: varchar("promoter_experience_id")
+      .references(() => promoterExperiences.id)
+      .notNull(),
+    experienceId: varchar("experience_id").references(() => experiences.id).notNull(),
+    beneficiaryId: varchar("beneficiary_id").references(() => users.id).notNull(),
+    promotionDealId: varchar("promotion_deal_id").references(() => promotionDeals.id),
+    referralAudience: varchar("referral_audience", { length: 20 }).notNull(),
+    dealType: varchar("deal_type", { length: 30 }).notNull().default("milestone_barter"),
+    milestoneTarget: integer("milestone_target").notNull(),
+    qualifyingBookings: integer("qualifying_bookings").notNull().default(0),
+    rewardDescription: text("reward_description").notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("unlocked"),
+    notes: text("notes"),
+    unlockedAt: timestamp("unlocked_at").defaultNow(),
+    fulfilledAt: timestamp("fulfilled_at"),
+    fulfilledBy: varchar("fulfilled_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    uniquePromoterExperienceFulfillment: unique().on(table.promoterExperienceId),
+  }),
+);
 
 // Experience gallery
 export const experienceGallery = pgTable("experience_gallery", {
@@ -2906,6 +2936,7 @@ export type VenueContract = typeof venueContracts.$inferSelect;
 export type InsertVenueContract = z.infer<typeof insertVenueContractSchema>;
 export type PromotionDeal = typeof promotionDeals.$inferSelect;
 export type InsertPromotionDeal = z.infer<typeof insertPromotionDealSchema>;
+export type PerkFulfillment = typeof perkFulfillments.$inferSelect;
 export type ExperienceService = typeof experienceServices.$inferSelect;
 export type InsertExperienceService = z.infer<
   typeof insertExperienceServiceSchema

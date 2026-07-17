@@ -1902,6 +1902,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get('/api/creator/perk-fulfillments', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      res.json(await storage.getCreatorPerkFulfillments(userId));
+    } catch (error) {
+      console.error("Error fetching perk fulfillments:", error);
+      res.status(500).json({ message: "Failed to fetch perk fulfillments" });
+    }
+  });
+
+  app.patch('/api/creator/perk-fulfillments/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { status, notes } = req.body || {};
+      if (status !== "unlocked" && status !== "fulfilled") {
+        return res.status(400).json({ message: "Status must be unlocked or fulfilled" });
+      }
+      const updated = await storage.updatePerkFulfillmentStatus(req.params.id, userId, status, notes);
+      if (!updated) return res.status(404).json({ message: "Perk fulfillment not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating perk fulfillment:", error);
+      res.status(500).json({ message: "Failed to update perk fulfillment" });
+    }
+  });
+
   app.post('/api/creator/promotion-deals/:dealId/accept', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -4615,6 +4641,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching all experiences:", error);
       res.status(500).json({ message: "Failed to fetch experiences" });
+    }
+  });
+
+  app.get("/api/admin/deal-ledger", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      res.json(await storage.getAdminDealLedger());
+    } catch (error) {
+      console.error("Error fetching admin deal ledger:", error);
+      res.status(500).json({ message: "Failed to fetch deal ledger" });
+    }
+  });
+
+  app.patch("/api/admin/experiences/:id/archive", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const userId = req.user.claims.sub;
+      const experience = await storage.archiveExperience(
+        req.params.id,
+        userId,
+        req.body?.reason || "Archived by admin",
+      );
+      res.json(experience);
+    } catch (error: any) {
+      console.error("Error archiving experience as admin:", error);
+      res.status(error?.message === "Experience not found" ? 404 : 500).json({
+        message: error?.message || "Failed to archive experience",
+      });
     }
   });
   
@@ -7937,6 +7995,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching creator experiences:", error);
       res.status(500).json({ message: "Failed to fetch creator experiences" });
+    }
+  });
+
+  app.patch("/api/creator/experiences/:id/archive", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = req.user.claims.sub;
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience || experience.creatorId !== creatorId) {
+        return res.status(404).json({ message: "Experience not found" });
+      }
+      const archived = await storage.archiveExperience(
+        experience.id,
+        creatorId,
+        req.body?.reason || "Archived by creator",
+      );
+      res.json(archived);
+    } catch (error) {
+      console.error("Error archiving creator experience:", error);
+      res.status(500).json({ message: "Failed to archive experience" });
+    }
+  });
+
+  // Backward-compatible endpoint for older creator dashboard builds. This is a
+  // soft archive so bookings, payouts, and contract history remain auditable.
+  app.delete("/api/experiences/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = req.user.claims.sub;
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience || experience.creatorId !== creatorId) {
+        return res.status(404).json({ message: "Experience not found" });
+      }
+      res.json(await storage.archiveExperience(experience.id, creatorId, "Archived by creator"));
+    } catch (error) {
+      console.error("Error archiving creator experience:", error);
+      res.status(500).json({ message: "Failed to archive experience" });
     }
   });
 

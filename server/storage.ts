@@ -24,6 +24,7 @@ import {
   promoterExperiences,
   promoterProfiles,
   promotionDeals,
+  perkFulfillments,
   type PromotionDeal,
   type InsertPromotionDeal,
   type User,
@@ -104,6 +105,7 @@ import { db } from "./db";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
 import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
+import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillmentRules";
 
 function withoutSingleDayDeposits(experience: Record<string, any>): any {
   if (!isSingleDayExperience(experience)) return experience;
@@ -196,6 +198,7 @@ export interface IStorage {
   ): Promise<ReferralClickStats>;
   createExperienceMessage(data: { experienceId: string; userId: string; message: string; messageType?: string }): Promise<void>;
   deleteExperience(id: string): Promise<void>;
+  archiveExperience(id: string, actorId: string, reason?: string): Promise<Experience>;
   
   // Experience draft operations
   getExperienceDraftsByCreator(creatorId: string): Promise<ExperienceDraft[]>;
@@ -426,6 +429,13 @@ export interface IStorage {
     conversions: number;
     conversionRate: number;
   }>>;
+  getCreatorPerkFulfillments(creatorId: string): Promise<any[]>;
+  updatePerkFulfillmentStatus(
+    id: string,
+    creatorId: string,
+    status: "unlocked" | "fulfilled",
+    notes?: string,
+  ): Promise<any | undefined>;
 
   // Admin promoter management operations
   getAllPromoters(): Promise<User[]>;
@@ -434,6 +444,7 @@ export interface IStorage {
     experience: Experience;
     participant: User | undefined;
   }>>;
+  getAdminDealLedger(): Promise<any[]>;
 
   // Split recipients (multi-party payout routing per experience)
   createSplitRecipients(recipients: InsertSplitRecipient[]): Promise<SplitRecipient[]>;
@@ -1073,6 +1084,25 @@ export class DatabaseStorage implements IStorage {
 
   async deleteExperience(id: string): Promise<void> {
     await db.delete(experiences).where(eq(experiences.id, id));
+  }
+
+  async archiveExperience(id: string, actorId: string, reason = "Archived"): Promise<Experience> {
+    const now = new Date();
+    const [archived] = await db
+      .update(experiences)
+      .set({
+        status: "cancelled",
+        archivedAt: now,
+        archivedBy: actorId,
+        cancelledAt: now,
+        cancellationReason: reason,
+        updatedAt: now,
+      } as any)
+      .where(eq(experiences.id, id))
+      .returning();
+
+    if (!archived) throw new Error("Experience not found");
+    return archived;
   }
 
   async getPendingExperiences(): Promise<Experience[]> {
@@ -4175,6 +4205,232 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(promotionDeals.updatedAt));
 
     return rows;
+  }
+
+  async getCreatorPerkFulfillments(creatorId: string): Promise<any[]> {
+    const referralRows = await db
+      .select({
+        promotion: promoterExperiences,
+        experience: experiences,
+        beneficiary: users,
+        deal: promotionDeals,
+      })
+      .from(promoterExperiences)
+      .innerJoin(experiences, eq(promoterExperiences.experienceId, experiences.id))
+      .innerJoin(users, eq(promoterExperiences.promoterId, users.id))
+      .leftJoin(promotionDeals, eq(promoterExperiences.promotionDealId, promotionDeals.id))
+      .where(eq(experiences.creatorId, creatorId));
+
+    const referralIds = referralRows.map((row) => row.promotion.id);
+    if (referralIds.length) {
+      const attributedBookings = await db
+        .select({
+          promoterExperienceId: bookings.promoterExperienceId,
+          status: bookings.status,
+        })
+        .from(bookings)
+        .where(inArray(bookings.promoterExperienceId, referralIds));
+
+      const bookingCounts = new Map<string, number>();
+      for (const booking of attributedBookings) {
+        if (!booking.promoterExperienceId || !isQualifyingReferralBooking(booking.status)) continue;
+        bookingCounts.set(
+          booking.promoterExperienceId,
+          (bookingCounts.get(booking.promoterExperienceId) || 0) + 1,
+        );
+      }
+
+      const existingRows = await db
+        .select()
+        .from(perkFulfillments)
+        .where(inArray(perkFulfillments.promoterExperienceId, referralIds));
+      const existingByReferral = new Map(existingRows.map((row) => [row.promoterExperienceId, row]));
+
+      for (const row of referralRows) {
+        const milestone = resolveMilestoneReward({
+          referralAudience: row.promotion.referralAudience,
+          experience: row.experience,
+          deal: row.deal,
+        });
+        const qualifyingBookings = bookingCounts.get(row.promotion.id) || 0;
+        const existing = existingByReferral.get(row.promotion.id);
+
+        if (!milestone || qualifyingBookings < milestone.target) {
+          if (existing && existing.status !== "fulfilled" && existing.status !== "voided") {
+            await db
+              .update(perkFulfillments)
+              .set({ status: "voided", qualifyingBookings, updatedAt: new Date() })
+              .where(eq(perkFulfillments.id, existing.id));
+          }
+          continue;
+        }
+
+        if (existing) {
+          await db
+            .update(perkFulfillments)
+            .set({
+              promotionDealId: row.promotion.promotionDealId,
+              referralAudience: row.promotion.referralAudience,
+              milestoneTarget: milestone.target,
+              qualifyingBookings,
+              rewardDescription: milestone.rewardDescription,
+              status: existing.status === "fulfilled" ? "fulfilled" : "unlocked",
+              unlockedAt: existing.unlockedAt || new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(perkFulfillments.id, existing.id));
+        } else {
+          await db.insert(perkFulfillments).values({
+            promoterExperienceId: row.promotion.id,
+            experienceId: row.promotion.experienceId,
+            beneficiaryId: row.promotion.promoterId,
+            promotionDealId: row.promotion.promotionDealId,
+            referralAudience: row.promotion.referralAudience,
+            dealType: "milestone_barter",
+            milestoneTarget: milestone.target,
+            qualifyingBookings,
+            rewardDescription: milestone.rewardDescription,
+            status: "unlocked",
+          });
+        }
+      }
+    }
+
+    const fulfillments = await db
+      .select({
+        fulfillment: perkFulfillments,
+        experience: experiences,
+        beneficiary: users,
+      })
+      .from(perkFulfillments)
+      .innerJoin(experiences, eq(perkFulfillments.experienceId, experiences.id))
+      .innerJoin(users, eq(perkFulfillments.beneficiaryId, users.id))
+      .where(eq(experiences.creatorId, creatorId))
+      .orderBy(desc(perkFulfillments.unlockedAt));
+
+    return fulfillments.map(({ fulfillment, experience, beneficiary }) => ({
+      ...fulfillment,
+      experience: {
+        id: experience.id,
+        title: experience.title,
+        currency: normalizeCurrency(experience.currency),
+        startDate: experience.startDate,
+      },
+      beneficiary: {
+        id: beneficiary.id,
+        firstName: beneficiary.firstName,
+        lastName: beneficiary.lastName,
+        email: beneficiary.email,
+        role: beneficiary.role,
+      },
+    }));
+  }
+
+  async updatePerkFulfillmentStatus(
+    id: string,
+    creatorId: string,
+    status: "unlocked" | "fulfilled",
+    notes?: string,
+  ): Promise<any | undefined> {
+    const [owned] = await db
+      .select({ fulfillment: perkFulfillments })
+      .from(perkFulfillments)
+      .innerJoin(experiences, eq(perkFulfillments.experienceId, experiences.id))
+      .where(and(eq(perkFulfillments.id, id), eq(experiences.creatorId, creatorId)))
+      .limit(1);
+    if (!owned) return undefined;
+
+    const [updated] = await db
+      .update(perkFulfillments)
+      .set({
+        status,
+        notes: notes?.trim() || null,
+        fulfilledAt: status === "fulfilled" ? new Date() : null,
+        fulfilledBy: status === "fulfilled" ? creatorId : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(perkFulfillments.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getAdminDealLedger(): Promise<any[]> {
+    const venueRows = await db
+      .select({ contract: venueContracts, experience: experiences, venue: venues })
+      .from(venueContracts)
+      .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+      .innerJoin(venues, eq(venueContracts.venueId, venues.id))
+      .where(eq(venueContracts.status, "accepted"));
+
+    const promotionRows = await db
+      .select({ deal: promotionDeals, experience: experiences, partner: users })
+      .from(promotionDeals)
+      .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
+      .leftJoin(users, eq(promotionDeals.partnerId, users.id))
+      .where(inArray(promotionDeals.status, ["accepted", "pending_payment"]));
+
+    const creatorIds = Array.from(new Set([
+      ...venueRows.map((row) => row.contract.creatorId),
+      ...promotionRows.map((row) => row.deal.creatorId),
+    ]));
+    const creatorRows = creatorIds.length
+      ? await db.select().from(users).where(inArray(users.id, creatorIds))
+      : [];
+    const creatorsById = new Map(creatorRows.map((creator) => [creator.id, creator]));
+
+    const creatorSummary = (creatorId: string) => {
+      const creator = creatorsById.get(creatorId);
+      return {
+        id: creatorId,
+        name: [creator?.firstName, creator?.lastName].filter(Boolean).join(" ") || creator?.email || "Creator",
+        email: creator?.email || null,
+      };
+    };
+
+    const venueLedger = venueRows.map(({ contract, experience, venue }) => ({
+      id: contract.id,
+      contractType: "venue",
+      dealType: contract.model,
+      status: contract.status,
+      terms: contract.terms || {},
+      currency: normalizeCurrency((contract.terms as any)?.currency || experience.currency),
+      acceptedAt: contract.acceptedAt || contract.updatedAt,
+      updatedAt: contract.updatedAt,
+      experience: { id: experience.id, title: experience.title },
+      creator: creatorSummary(contract.creatorId),
+      counterparty: {
+        id: venue.id,
+        name: venue.name,
+        email: venue.contactEmail || null,
+        role: "venue",
+      },
+    }));
+
+    const promotionLedger = promotionRows.map(({ deal, experience, partner }) => ({
+      id: deal.id,
+      contractType: "promotion",
+      dealType: deal.dealType,
+      status: deal.status,
+      terms: deal.terms || deal.baselineTerms || {},
+      currency: normalizeCurrency((deal.terms as any)?.currency || experience.currency),
+      acceptedAt: deal.respondedAt || deal.paidAt || deal.updatedAt,
+      updatedAt: deal.updatedAt,
+      experience: { id: experience.id, title: experience.title },
+      creator: creatorSummary(deal.creatorId),
+      counterparty: {
+        id: partner?.id || null,
+        name: [partner?.firstName, partner?.lastName].filter(Boolean).join(" ")
+          || deal.partnerName
+          || deal.partnerEmail
+          || "External partner",
+        email: partner?.email || deal.partnerEmail || null,
+        role: partner?.role || "partner",
+      },
+    }));
+
+    return [...venueLedger, ...promotionLedger].sort((left, right) =>
+      new Date(right.acceptedAt || 0).getTime() - new Date(left.acceptedAt || 0).getTime(),
+    );
   }
 
   async respondToCreatorPromotionDeal(

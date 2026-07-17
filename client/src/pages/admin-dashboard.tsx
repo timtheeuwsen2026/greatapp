@@ -35,7 +35,9 @@ import {
   Bed,
   UserCog,
   Target,
-  ListOrdered
+  ListOrdered,
+  Archive,
+  Handshake,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -67,6 +69,19 @@ interface AdminUserInventory {
   hasParticipantProfile: boolean;
 }
 
+interface AdminDealLedgerItem {
+  id: string;
+  contractType: "venue" | "promotion";
+  dealType: string;
+  status: string;
+  terms: Record<string, any>;
+  currency: string;
+  acceptedAt: string | null;
+  experience: { id: string; title: string };
+  creator: { id: string; name: string; email: string | null };
+  counterparty: { id: string | null; name: string; email: string | null; role: string };
+}
+
 // Helper to format currency with proper symbol
 // DATA CONTRACT: Currency must come from experience.currency - never default to USD
 function formatCurrency(amount: number | string | null | undefined, currency?: string): string {
@@ -82,6 +97,40 @@ function formatCurrency(amount: number | string | null | undefined, currency?: s
   };
   const symbol = symbols[currencyCode] || currencyCode + ' ';
   return `${symbol}${numAmount.toFixed(2)}`;
+}
+
+function formatDealType(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDealTerms(deal: AdminDealLedgerItem): string {
+  const terms = deal.terms || {};
+  switch (deal.dealType) {
+    case "commission_per_ticket":
+      return `${Number(terms.commissionPct || 0)}% commission per ticket`;
+    case "milestone_barter":
+      return `${Number(terms.milestoneAttendeeTarget || 0)} bookings for ${Number(terms.milestoneRewardTickets || 0)} ticket(s)`;
+    case "brand_barter":
+      return terms.brandPitch || "Brand barter";
+    case "financial_sponsorship":
+      return formatCurrency(terms.sponsorshipAmount || 0, deal.currency);
+    case "revenue_share":
+      return `${Number(terms.revenueSharePct || 0)}% revenue share`;
+    case "fixed_fee":
+    case "upfront_rental":
+    case "venue_sponsored":
+      return formatCurrency(terms.fixedFee || 0, deal.currency);
+    case "per_head":
+      return `${formatCurrency(terms.perHeadAmount || 0, deal.currency)} per attendee`;
+    case "minimum_spend":
+      return `${formatCurrency(terms.minimumSpend || 0, deal.currency)} minimum spend`;
+    case "access_only":
+      return Number(terms.accessFee || 0) > 0
+        ? `${formatCurrency(terms.accessFee, deal.currency)} access fee`
+        : "Access only";
+    default:
+      return "Terms recorded";
+  }
 }
 
 export default function AdminDashboard() {
@@ -192,6 +241,12 @@ export default function AdminDashboard() {
     retry: false,
   });
 
+  const { data: dealLedger = [], isLoading: dealLedgerLoading } = useQuery<AdminDealLedgerItem[]>({
+    queryKey: ["/api/admin/deal-ledger"],
+    enabled: isAuthenticated && isAdminUser(user),
+    retry: false,
+  });
+
   // Approve/Reject Experience
   const updateExperienceStatus = useMutation({
     mutationFn: async ({ id, status, notes }: { id: string; status: string; notes?: string }) => {
@@ -233,6 +288,29 @@ export default function AdminDashboard() {
         variant: "destructive",
       });
     },
+  });
+
+  const archiveExperience = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("PATCH", `/api/admin/experiences/${id}/archive`, {});
+      return response.json();
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/experiences"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/experiences"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] }),
+      ]);
+      toast({
+        title: "Experience Archived",
+        description: "It is removed from active listings and retained for financial audit.",
+      });
+    },
+    onError: () => toast({
+      title: "Archive Failed",
+      description: "The experience could not be archived.",
+      variant: "destructive",
+    }),
   });
 
   // Approve/Reject Community Application
@@ -423,6 +501,8 @@ export default function AdminDashboard() {
         return <Badge className="bg-red-100 text-red-800" data-testid="badge-rejected"><XCircle className="w-3 h-3 mr-1" />Rejected</Badge>;
       case "draft":
         return <Badge className="bg-gray-100 text-gray-800" data-testid="badge-draft"><Clock className="w-3 h-3 mr-1" />Draft</Badge>;
+      case "cancelled":
+        return <Badge className="bg-gray-100 text-gray-700" data-testid="badge-archived"><Archive className="w-3 h-3 mr-1" />Archived</Badge>;
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
@@ -560,6 +640,7 @@ export default function AdminDashboard() {
         <Tabs defaultValue="experiences" className="space-y-6">
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
+            <TabsTrigger value="deal-ledger">Deal Ledger</TabsTrigger>
             <TabsTrigger value="users">Users / Participants</TabsTrigger>
             <TabsTrigger value="applications">Tribe Applications</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
@@ -586,6 +667,7 @@ export default function AdminDashboard() {
                   <option value="published">Published</option>
                   <option value="rejected">Rejected</option>
                   <option value="draft">Drafts</option>
+                  <option value="cancelled">Archived</option>
                 </select>
               </div>
             </div>
@@ -696,6 +778,23 @@ export default function AdminDashboard() {
                             <Eye className="w-4 h-4 mr-1" />
                             View
                           </Button>
+                          {experience.status !== "cancelled" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="Archive experience"
+                              onClick={() => {
+                                if (window.confirm(`Archive "${experience.title}"? It will be removed from public listings.`)) {
+                                  archiveExperience.mutate(experience.id);
+                                }
+                              }}
+                              disabled={archiveExperience.isPending}
+                              data-testid={`button-archive-experience-${experience.id}`}
+                            >
+                              <Archive className="h-4 w-4" />
+                              <span className="sr-only">Archive</span>
+                            </Button>
+                          )}
                         </div>
                       </div>
 
@@ -1029,6 +1128,97 @@ export default function AdminDashboard() {
                 )}
               </div>
             );
+            })()}
+          </TabsContent>
+
+          <TabsContent value="deal-ledger" className="space-y-6">
+            <div>
+              <h2 className="text-xl font-semibold">Deal Ledger</h2>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                Accepted venue contracts, promotion agreements, and sponsorships awaiting payment.
+              </p>
+            </div>
+
+            {dealLedgerLoading ? (
+              <div className="py-10 text-center">
+                <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              </div>
+            ) : (() => {
+              const needle = searchTerm.trim().toLowerCase();
+              const filteredDeals = needle
+                ? dealLedger.filter((deal) => [
+                    deal.experience.title,
+                    deal.creator.name,
+                    deal.creator.email,
+                    deal.counterparty.name,
+                    deal.counterparty.email,
+                    deal.dealType,
+                  ].filter(Boolean).some((value) => String(value).toLowerCase().includes(needle)))
+                : dealLedger;
+
+              return filteredDeals.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center text-gray-500">
+                    <Handshake className="mx-auto mb-4 h-12 w-12 opacity-30" />
+                    <p className="font-medium">No matching deals</p>
+                    <p className="mt-1 text-sm">Accepted contracts will appear here automatically.</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="overflow-x-auto p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Experience</TableHead>
+                          <TableHead>Creator</TableHead>
+                          <TableHead>Counterparty</TableHead>
+                          <TableHead>Agreed Terms</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Accepted / Updated</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredDeals.map((deal) => (
+                          <TableRow key={`${deal.contractType}-${deal.id}`} data-testid={`deal-ledger-row-${deal.id}`}>
+                            <TableCell>
+                              <Badge variant="outline">
+                                {deal.contractType === "venue" ? "Venue" : "Promotion"}
+                              </Badge>
+                              <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground">{formatDealType(deal.dealType)}</p>
+                            </TableCell>
+                            <TableCell className="min-w-48 font-medium">{deal.experience.title}</TableCell>
+                            <TableCell className="min-w-44">
+                              <p>{deal.creator.name}</p>
+                              {deal.creator.email && <p className="text-xs text-muted-foreground">{deal.creator.email}</p>}
+                            </TableCell>
+                            <TableCell className="min-w-44">
+                              <p>{deal.counterparty.name}</p>
+                              {deal.counterparty.email && <p className="text-xs text-muted-foreground">{deal.counterparty.email}</p>}
+                            </TableCell>
+                            <TableCell className="min-w-52">{formatDealTerms(deal)}</TableCell>
+                            <TableCell>
+                              {deal.status === "pending_payment" ? (
+                                <Badge className="whitespace-nowrap bg-amber-100 text-amber-800">
+                                  <Clock className="mr-1 h-3 w-3" />Pending Payment
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-green-100 text-green-800">
+                                  <CheckCircle className="mr-1 h-3 w-3" />Accepted
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-muted-foreground">
+                              {deal.acceptedAt ? new Date(deal.acceptedAt).toLocaleDateString() : "-"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              );
             })()}
           </TabsContent>
 

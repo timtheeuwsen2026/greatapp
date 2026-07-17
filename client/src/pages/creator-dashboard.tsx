@@ -17,6 +17,8 @@ import {
   Eye,
   Edit,
   Trash2,
+  Archive,
+  Gift,
   Clock,
   CheckCircle,
   XCircle,
@@ -383,6 +385,31 @@ function CreatorDashboardContent() {
     retry: false,
   }) as { data: any[], isLoading: boolean };
 
+  const { data: perkFulfillments = [], isLoading: perkFulfillmentsLoading } = useQuery({
+    queryKey: ["/api/creator/perk-fulfillments"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+  }) as { data: any[]; isLoading: boolean };
+
+  const updatePerkFulfillment = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: "unlocked" | "fulfilled" }) => {
+      const response = await apiRequest("PATCH", `/api/creator/perk-fulfillments/${id}`, { status });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/perk-fulfillments"] });
+      toast({
+        title: "Perk Fulfilled",
+        description: "The reward is now recorded as delivered.",
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Could not update fulfillment",
+      description: error?.message || "Please try again.",
+      variant: "destructive",
+    }),
+  });
+
   const respondToPromotionDeal = useMutation({
     mutationFn: async ({ dealId, action }: { dealId: string; action: 'accept' | 'decline' }) => {
       const response = await apiRequest("POST", `/api/creator/promotion-deals/${dealId}/${action}`, {});
@@ -434,16 +461,16 @@ function CreatorDashboardContent() {
     },
   });
 
-  // Delete experience mutation - must be after all queries
-  const deleteExperience = useMutation({
+  // Published experiences are archived so their financial and contract history remains intact.
+  const archiveExperience = useMutation({
     mutationFn: async (experienceId: string) => {
-      return await apiRequest("DELETE", `/api/experiences/${experienceId}`);
+      return await apiRequest("PATCH", `/api/creator/experiences/${experienceId}/archive`, {});
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
       toast({
-        title: "Experience Deleted",
-        description: "Experience has been successfully deleted.",
+        title: "Experience Archived",
+        description: "It is hidden from active listings while its records remain available for audit.",
       });
     },
     onError: (error) => {
@@ -459,8 +486,8 @@ function CreatorDashboardContent() {
         return;
       }
       toast({
-        title: "Delete Failed",
-        description: "Failed to delete experience. Please try again.",
+        title: "Archive Failed",
+        description: "Failed to archive experience. Please try again.",
         variant: "destructive",
       });
     },
@@ -478,15 +505,18 @@ function CreatorDashboardContent() {
         return <Badge className="bg-yellow-100 text-yellow-800"><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
       case "rejected":
         return <Badge className="bg-red-100 text-red-800"><XCircle className="w-3 h-3 mr-1" />Rejected</Badge>;
+      case "cancelled":
+        return <Badge className="bg-gray-100 text-gray-700"><Archive className="w-3 h-3 mr-1" />Archived</Badge>;
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
   };
 
   // Type the data for better TypeScript support
-  const typedExperiences = (experiences as any[]).filter((exp: any) => 
-    exp.status !== 'pending_approval' && exp.status !== 'pending'
+  const typedExperiences = (experiences as any[]).filter((exp: any) =>
+    exp.status !== 'pending_approval' && exp.status !== 'pending' && !exp.archivedAt
   );
+  const visibleFulfillments = perkFulfillments.filter((item: any) => item.status !== "voided");
   const typedAnalytics = analytics as any;
   const typedEarnings = earnings as any;
   const typedRevenueAnalytics = revenueAnalytics as any;
@@ -682,6 +712,14 @@ function CreatorDashboardContent() {
               {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length > 0 && (
                 <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-pink-500 text-white text-xs w-5 h-5">
                   {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="fulfillment" className="relative">
+              Fulfillment
+              {perkFulfillments.filter((item: any) => item.status === "unlocked").length > 0 && (
+                <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-green-600 text-xs text-white">
+                  {perkFulfillments.filter((item: any) => item.status === "unlocked").length}
                 </span>
               )}
             </TabsTrigger>
@@ -894,6 +932,20 @@ function CreatorDashboardContent() {
                                 <Edit className="w-3 h-3 mr-1" />
                                 Edit
                               </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                title="Archive experience"
+                                aria-label={`Archive ${experience.title}`}
+                                onClick={() => {
+                                  if (window.confirm(`Archive "${experience.title}"? It will be removed from the approval queue.`)) {
+                                    archiveExperience.mutate(experience.id);
+                                  }
+                                }}
+                                disabled={archiveExperience.isPending}
+                              >
+                                <Archive className="h-3 w-3" />
+                              </Button>
                             </div>
                           </CardContent>
                         </Card>
@@ -1066,11 +1118,17 @@ function CreatorDashboardContent() {
                           </Button>
                           <Button
                             size="sm"
-                            variant="destructive"
-                            onClick={() => deleteExperience.mutate(experience.id)}
-                            disabled={deleteExperience.isPending}
+                            variant="outline"
+                            title="Archive experience"
+                            aria-label={`Archive ${experience.title}`}
+                            onClick={() => {
+                              if (window.confirm(`Archive "${experience.title}"? It will be removed from active listings.`)) {
+                                archiveExperience.mutate(experience.id);
+                              }
+                            }}
+                            disabled={archiveExperience.isPending}
                           >
-                            <Trash2 className="w-3 h-3" />
+                            <Archive className="w-3 h-3" />
                           </Button>
                         </div>
                       </CardContent>
@@ -1594,6 +1652,93 @@ function CreatorDashboardContent() {
                   </div>
                 )}
               </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="fulfillment" className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Perk Fulfillment</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Milestone rewards unlocked by attributed ticket sales. Mark each item fulfilled after the reward is delivered.
+              </p>
+            </div>
+
+            {perkFulfillmentsLoading ? (
+              <div className="py-10 text-center text-gray-500">
+                <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                Loading fulfillment queue...
+              </div>
+            ) : visibleFulfillments.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-500">
+                  <Gift className="mx-auto mb-3 h-12 w-12 opacity-30" />
+                  <p className="font-medium">No unlocked perks yet</p>
+                  <p className="mt-1 text-sm">Users appear here automatically when their qualifying bookings reach a milestone.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[860px] text-sm">
+                      <thead className="border-b bg-gray-50 text-left text-xs font-medium uppercase text-gray-500 dark:bg-gray-900">
+                        <tr>
+                          <th className="px-4 py-3">Recipient</th>
+                          <th className="px-4 py-3">Experience</th>
+                          <th className="px-4 py-3">Audience</th>
+                          <th className="px-4 py-3">Progress</th>
+                          <th className="px-4 py-3">Reward</th>
+                          <th className="px-4 py-3">Unlocked</th>
+                          <th className="px-4 py-3 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleFulfillments.map((item: any) => {
+                          const recipientName = [item.beneficiary?.firstName, item.beneficiary?.lastName]
+                            .filter(Boolean)
+                            .join(" ") || item.beneficiary?.email || "Participant";
+                          return (
+                            <tr key={item.id} className="border-b last:border-0">
+                              <td className="px-4 py-4">
+                                <p className="font-medium">{recipientName}</p>
+                                {item.beneficiary?.email && <p className="text-xs text-gray-500">{item.beneficiary.email}</p>}
+                              </td>
+                              <td className="px-4 py-4 font-medium">{item.experience?.title || "Experience"}</td>
+                              <td className="px-4 py-4">
+                                <Badge variant="outline">
+                                  {item.referralAudience === "participant" ? "Participant" : "Official Partner"}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-4 font-medium">
+                                {item.qualifyingBookings}/{item.milestoneTarget} bookings
+                              </td>
+                              <td className="max-w-[240px] px-4 py-4">{item.rewardDescription}</td>
+                              <td className="px-4 py-4 text-gray-500">
+                                {item.unlockedAt ? new Date(item.unlockedAt).toLocaleDateString() : "-"}
+                              </td>
+                              <td className="px-4 py-4 text-right">
+                                {item.status === "fulfilled" ? (
+                                  <Badge className="bg-green-100 text-green-800">
+                                    <CheckCircle className="mr-1 h-3 w-3" />Fulfilled
+                                  </Badge>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => updatePerkFulfillment.mutate({ id: item.id, status: "fulfilled" })}
+                                    disabled={updatePerkFulfillment.isPending}
+                                  >
+                                    <Gift className="mr-1 h-4 w-4" />Mark Fulfilled
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
             )}
           </TabsContent>
 

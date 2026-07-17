@@ -43,6 +43,7 @@ import {
   calculateMvgDeadline,
   normalizeMvgDeadlineDays,
 } from "./mvgDeadlineRules";
+import { normalizeBuilderParticipantRoles } from "./participantRoleSync";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -274,6 +275,30 @@ async function approveExperienceForPublication(
     publicationBlocked: false,
     message: 'Experience approved and published.',
   };
+}
+
+async function syncBuilderParticipantRoles(experience: any) {
+  const normalizedRoles = normalizeBuilderParticipantRoles(
+    experience.id,
+    experience.roles,
+  );
+  const existingRoles = await storage.getParticipantRolesByExperience(experience.id);
+  const existingNames = new Set(
+    existingRoles.map((role) => role.name.trim().toLowerCase()),
+  );
+  let createdRole = false;
+
+  for (const role of normalizedRoles) {
+    if (!existingNames.has(role.name.toLowerCase())) {
+      await storage.createParticipantRole(role);
+      existingNames.add(role.name.toLowerCase());
+      createdRole = true;
+    }
+  }
+
+  return createdRole
+    ? storage.getParticipantRolesByExperience(experience.id)
+    : existingRoles;
 }
 
 // Configure multer for image uploads
@@ -3629,6 +3654,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the published experience
       const experience = await storage.createExperience(experienceData);
+      await syncBuilderParticipantRoles(experience);
 
       if ((draft as any).selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
@@ -3684,6 +3710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const experience = await storage.createExperience(experienceData);
+      await syncBuilderParticipantRoles(experience);
       const selectedVenueId = req.body.selectedVenueId || req.body.linkedVenueId;
       if (status !== "draft" && selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
@@ -4752,6 +4779,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the experience from the draft
       const experience = await storage.createExperience(experienceData as any);
+      await syncBuilderParticipantRoles(experience);
 
       if ((existingDraft as any).selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
@@ -8007,7 +8035,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/experiences/:experienceId/participant-roles", async (req, res) => {
     try {
       const { experienceId } = req.params;
-      const roles = await storage.getParticipantRolesByExperience(experienceId);
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+      const roles = await syncBuilderParticipantRoles(experience);
       res.json(roles);
     } catch (error: any) {
       console.error("Error fetching participant roles:", error);
@@ -8086,6 +8116,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/community/role-opportunities", isAuthenticated, async (req: any, res) => {
     try {
+      const activeExperiences = await db
+        .select()
+        .from(experiences)
+        .where(inArray(experiences.status, ["approved", "published"]));
+      await Promise.all(activeExperiences.map(syncBuilderParticipantRoles));
       const opportunities = await storage.getParticipantRoleOpportunities(req.user.claims.sub);
       res.json(opportunities);
     } catch (error: any) {

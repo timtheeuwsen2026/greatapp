@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ArrowRight, Bed, Calendar } from "lucide-react";
 import AuthPage from "@/pages/auth";
+import ResetPasswordPage from "@/pages/reset-password";
 import Home from "@/pages/home";
 import ExperienceDetails from "@/pages/experience-details";
 import AdminDashboard from "@/pages/admin-dashboard";
@@ -233,6 +234,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={AuthPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
       <Route path="/" component={Home} />
 
       {/* Homepage CTA Routes - Redirects */}

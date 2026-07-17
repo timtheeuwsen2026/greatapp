@@ -4,7 +4,7 @@ import { db } from './db';
 import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { Booking, Experience } from '@shared/schema';
-import { renderMasterEmailTemplate, type GrowthFooterContext } from './emailTemplates';
+import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext } from './emailTemplates';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -175,6 +175,7 @@ async function sendEmail(to: string, subject: string, textContent: string, htmlC
 function renderBaseEmail(opts: {
   to: string;
   bodyText: string;
+  receiptRows?: EmailReceiptRow[];
   cta?: { label: string; href: string };
   preheader?: string;
   growthFooterContext?: GrowthFooterContext;
@@ -182,6 +183,7 @@ function renderBaseEmail(opts: {
   return renderMasterEmailTemplate({
     recipientEmail: opts.to,
     bodyText: opts.bodyText,
+    receiptRows: opts.receiptRows,
     cta: opts.cta,
     preheader: opts.preheader,
     growthFooterContext: opts.growthFooterContext,
@@ -205,6 +207,10 @@ function formatCurrency(amount: string | number | null | undefined): string {
   if (!amount) return '$0.00';
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   return `$${num.toFixed(2)}`;
+}
+
+function communityHubUrl(): string {
+  return `${APP_BASE_URL}/community-hub`;
 }
 
 class NotificationService {
@@ -265,8 +271,15 @@ class NotificationService {
         return;
       }
 
-      const subject = `Your deposit is secured - ${experience.title}`;
-      const textContent = `
+      const currentParticipants = experience.currentParticipants ?? 0;
+      const minimumParticipants = experience.minimumParticipants ?? 0;
+      const remainingMvgSpots = Math.max(0, minimumParticipants - currentParticipants);
+      const mvgNotMet = !!experience.requireMinimumParticipants
+        && experience.mvgStatus !== 'met'
+        && remainingMvgSpots > 0;
+
+      let subject = `Your deposit is secured - ${experience.title}`;
+      let textContent = `
 Hi ${user.firstName || 'there'},
 
 Great news! Your deposit for "${experience.title}" has been authorized.
@@ -289,8 +302,28 @@ Questions? Just reply to this email.
 See you on the adventure!
 The Great. Team
       `.trim();
+      let htmlContent: string | undefined;
 
-      const result = await sendEmail(user.email, subject, textContent);
+      if (mvgNotMet) {
+        subject = `Spot reserved! We need ${remainingMvgSpots} more people to confirm ${experience.title}`;
+        const bodyText = `Hey ${user.firstName || 'there'}, you are officially on the roster for ${experience.title}! Because this is a community-powered experience, it only happens if we hit our minimum group size. Your spot is reserved, but we still need ${remainingMvgSpots} more people to lock it in. The system just announced your arrival in the Community Hub. Jump in, say hi, and introduce yourself to the squad!`;
+        const email = renderBaseEmail({
+          to: user.email,
+          bodyText,
+          receiptRows: [
+            { label: 'Ticket Type', value: booking.ticketName || 'General Admission' },
+            { label: 'Deposit Paid Today', value: formatCurrency(booking.depositAmount) },
+            { label: 'Balance Due upon Confirmation', value: formatCurrency(booking.balanceAmount) },
+          ],
+          cta: { label: 'Introduce Yourself in the Hub', href: communityHubUrl() },
+          preheader: `Your spot is reserved for ${experience.title}. Help unlock the group.`,
+          growthFooterContext: 'pre_mvg_participant',
+        });
+        textContent = email.text;
+        htmlContent = email.html;
+      }
+
+      const result = await sendEmail(user.email, subject, textContent, htmlContent);
       await recordEmailSent(booking.id, 'booking_created', user.email, result.success, result.error);
 
       this.logNotification({

@@ -3,6 +3,7 @@ export type GrowthFooterContext =
   | "account"
   | "security"
   | "participant"
+  | "pre_mvg_participant"
   | "creator"
   | "partner";
 
@@ -11,10 +12,16 @@ export interface EmailCta {
   href: string;
 }
 
+export interface EmailReceiptRow {
+  label: string;
+  value: string;
+}
+
 export interface MasterEmailTemplateOptions {
   recipientEmail?: string | null;
   preheader?: string;
   bodyText: string;
+  receiptRows?: EmailReceiptRow[];
   cta?: EmailCta;
   growthFooterContext?: GrowthFooterContext;
   logoUrl?: string;
@@ -52,6 +59,16 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
     `,
     text: (appBaseUrl) => `Find your next group\nSee what is forming now and join the experiences that match your energy.\nExplore trips: ${appBaseUrl}/experiences`,
   },
+  pre_mvg_participant: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Help your group unlock the experience</p>
+        <p>Every introduction and share helps the community reach the minimum group size faster.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/community-hub`)}">Open the Community Hub</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Help your group unlock the experience\nEvery introduction and share helps the community reach the minimum group size faster.\nOpen the Community Hub: ${appBaseUrl}/community-hub`,
+  },
   creator: {
     html: (appBaseUrl) => `
       <div class="growth-footer">
@@ -81,6 +98,8 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
   const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.recipientEmail);
   const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl);
   const bodyHtml = renderBodyText(opts.bodyText);
+  const receiptHtml = renderReceiptRows(opts.receiptRows);
+  const receiptText = renderReceiptText(opts.receiptRows);
   const ctaHtml = opts.cta
     ? `<div class="cta-wrap"><a class="button" href="${escapeHtml(opts.cta.href)}">${escapeHtml(opts.cta.label)}</a></div>`
     : "";
@@ -101,6 +120,12 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
       .logo { display: inline-block; max-width: 116px; height: auto; }
       .content { padding: 34px 32px 12px; font-size: 16px; line-height: 1.68; color: #29323d; }
       .content p { margin: 0 0 18px; }
+      .receipt { margin: 4px 32px 28px; border: 1px solid #e6e1d6; border-radius: 8px; overflow: hidden; background: #fffdf8; }
+      .receipt-row { display: table; width: 100%; border-top: 1px solid #eee8dc; }
+      .receipt-row:first-child { border-top: 0; }
+      .receipt-label, .receipt-value { display: table-cell; padding: 13px 16px; font-size: 14px; line-height: 1.45; vertical-align: top; }
+      .receipt-label { width: 44%; color: #667085; font-weight: 700; }
+      .receipt-value { color: #1f2933; font-weight: 700; text-align: right; }
       .cta-wrap { padding: 8px 32px 30px; text-align: center; }
       .button { display: inline-block; padding: 13px 22px; border-radius: 6px; background: #111827; color: #ffffff !important; font-weight: 700; font-size: 15px; text-decoration: none; }
       .growth-footer { margin: 4px 32px 30px; padding: 18px; border-radius: 8px; background: #f8faf7; border: 1px solid #e4eadf; color: #364152; font-size: 14px; line-height: 1.55; }
@@ -112,6 +137,9 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
       @media screen and (max-width: 480px) {
         .shell { padding: 16px 8px; }
         .content, .cta-wrap, .footer { padding-left: 22px; padding-right: 22px; }
+        .receipt { margin-left: 22px; margin-right: 22px; }
+        .receipt-label, .receipt-value { display: block; width: auto; text-align: left; }
+        .receipt-value { padding-top: 0; }
         .growth-footer { margin-left: 22px; margin-right: 22px; }
       }
     </style>
@@ -126,6 +154,7 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
         <div class="content">
           ${bodyHtml}
         </div>
+        ${receiptHtml}
         ${ctaHtml}
         ${growthFooter.html}
         <div class="footer">
@@ -139,6 +168,7 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
 
   const textParts = [
     opts.bodyText.trim(),
+    receiptText,
     opts.cta ? `${opts.cta.label}: ${opts.cta.href}` : "",
     growthFooter.text,
     `Manage email preferences: ${preferencesUrl}`,
@@ -149,6 +179,24 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
     html,
     text: textParts.join("\n\n"),
   };
+}
+
+function renderReceiptRows(rows?: EmailReceiptRow[]): string {
+  if (!rows?.length) return "";
+  const renderedRows = rows
+    .map((row) => `
+      <div class="receipt-row">
+        <div class="receipt-label">${escapeHtml(row.label)}</div>
+        <div class="receipt-value">${escapeHtml(row.value)}</div>
+      </div>
+    `)
+    .join("");
+  return `<div class="receipt">${renderedRows}</div>`;
+}
+
+function renderReceiptText(rows?: EmailReceiptRow[]): string {
+  if (!rows?.length) return "";
+  return rows.map((row) => `${row.label}: ${row.value}`).join("\n");
 }
 
 function renderGrowthFooter(context: GrowthFooterContext, appBaseUrl: string): { html: string; text: string } {

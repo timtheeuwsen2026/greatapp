@@ -12,7 +12,7 @@ import { bookings, platformSettings, experiences, experienceMessages, experience
 import { eq, and, or, desc, inArray, gt, sql, ilike } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
-import { isAuthenticated, optionalAuth } from "./supabaseAuth";
+import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
 import { notificationService } from "./notifications";
 import { registerOGRoutes } from "./og";
 import { 
@@ -598,8 +598,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.redirect("/");
   });
 
+  app.post('/api/auth/signup', async (req, res) => {
+    try {
+      const { email, password, role, firstName } = req.body || {};
+      if (!email || typeof email !== 'string') {
+        return res.status(400).json({ message: 'Email is required' });
+      }
+      if (!password || typeof password !== 'string' || password.length < 6) {
+        return res.status(400).json({ message: 'Password must be at least 6 characters' });
+      }
+      if (!VALID_ROLES.includes(role) || role === 'admin') {
+        return res.status(400).json({ message: 'Invalid role' });
+      }
+
+      const admin = getSupabaseAdminClient();
+      if (!admin) {
+        return res.status(503).json({ message: 'Supabase service role is required to send branded verification emails' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const existingDbUser = await storage.getUserByEmail(normalizedEmail);
+      if (existingDbUser) {
+        return res.status(409).json({ message: 'This email already has an account. Please log in instead.' });
+      }
+
+      const appBaseUrl = getAppBaseUrl(req);
+      const cleanFirstName = typeof firstName === 'string' ? firstName.trim() : '';
+      const { data, error } = await (admin.auth as any).admin.generateLink({
+        type: 'signup',
+        email: normalizedEmail,
+        password,
+        options: {
+          redirectTo: `${appBaseUrl}/login?verified=1`,
+          data: {
+            selected_role: role,
+            first_name: cleanFirstName || null,
+          },
+        },
+      });
+
+      if (error) {
+        const message = String(error.message || 'Unable to create account');
+        if (message.toLowerCase().includes('already')) {
+          return res.status(409).json({ message: 'This email already has an account. Please log in instead.' });
+        }
+        return res.status(400).json({ message });
+      }
+
+      const verifyUrl = data?.properties?.action_link;
+      if (!verifyUrl) {
+        return res.status(500).json({ message: 'Unable to generate verification link' });
+      }
+
+      await notificationService.sendWelcomeVerifyEmail({
+        to: normalizedEmail,
+        userFirstName: cleanFirstName || null,
+        verifyUrl,
+      });
+
+      res.json({ message: 'Verification email sent' });
+    } catch (error: any) {
+      console.error('Error sending branded signup email:', error);
+      res.status(500).json({ message: error?.message || 'Failed to send verification email' });
+    }
+  });
+
+  app.post('/api/auth/password-reset', async (req, res) => {
+    try {
+      const { email } = req.body || {};
+      if (!email || typeof email !== 'string') {
+        return res.status(400).json({ message: 'Email is required' });
+      }
+
+      const admin = getSupabaseAdminClient();
+      if (!admin) {
+        return res.status(503).json({ message: 'Supabase service role is required to send branded password reset emails' });
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const appBaseUrl = getAppBaseUrl(req);
+      const { data, error } = await (admin.auth as any).admin.generateLink({
+        type: 'recovery',
+        email: normalizedEmail,
+        options: {
+          redirectTo: `${appBaseUrl}/reset-password`,
+        },
+      });
+
+      if (error) {
+        console.warn('Password reset link generation skipped:', error.message);
+        return res.json({ message: 'If that email exists, a reset link will be sent.' });
+      }
+
+      const resetUrl = data?.properties?.action_link;
+      if (resetUrl) {
+        await notificationService.sendPasswordResetEmail({
+          to: normalizedEmail,
+          resetUrl,
+        });
+      }
+
+      res.json({ message: 'If that email exists, a reset link will be sent.' });
+    } catch (error: any) {
+      console.error('Error sending branded password reset email:', error);
+      res.status(500).json({ message: error?.message || 'Failed to send password reset email' });
+    }
+  });
+
   // Register OG image + social bot prerender routes (must come before Vite catch-all)
   registerOGRoutes(app);
+
+  app.get('/email-assets/great-logo.jpg', (_req, res) => {
+    const logoPath = path.resolve(process.cwd(), 'attached_assets', 'great logo (1) (1)_1753970226148.jpg');
+    try {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.sendFile(logoPath);
+    } catch {
+      res.status(404).send('Logo not found');
+    }
+  });
 
   // Serve hero video with explicit range-request support so browsers can stream it
   app.get('/assets/hero-video.mp4', (req, res) => {
@@ -691,6 +808,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const email = req.user.email;
       const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
       const metadataRole = typeof req.user.signupRole === 'string' ? req.user.signupRole : undefined;
+      const metadataFirstName = typeof req.user.userMetadata?.first_name === 'string'
+        ? req.user.userMetadata.first_name.trim()
+        : '';
       const initialRole = metadataRole && metadataRole !== 'admin' && VALID_ROLES.includes(metadataRole)
         ? metadataRole
         : 'participant';
@@ -707,7 +827,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user = await storage.upsertUser({
           id: userId,
           email: normalizedEmail,
-          firstName: null,
+          firstName: metadataFirstName || null,
           lastName: null,
           profileImageUrl: null,
           role: initialRole as any,

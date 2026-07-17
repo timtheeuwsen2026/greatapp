@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { RequestHandler } from "express";
 
 // Admin client — server only, never exposed to browser
-function getAdminClient() {
+export function getSupabaseAdminClient() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
@@ -39,7 +39,7 @@ async function resolveUserFromToken(req: any): Promise<void> {
   if (!authHeader?.startsWith("Bearer ")) return;
 
   const token = authHeader.slice(7);
-  const admin = getAdminClient();
+  const admin = getSupabaseAdminClient();
   if (!admin) return;
 
   const {

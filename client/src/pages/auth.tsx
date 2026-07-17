@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Compass, MapPin, Plane, Sparkles, Ticket, Users, Briefcase } from "lucide-react";
+import { Compass, Plane } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
-type Mode = "login" | "signup";
+type Mode = "login" | "signup" | "reset";
 
 const ROLE_OPTIONS = [
   {
@@ -36,42 +36,15 @@ const ROLE_OPTIONS = [
 
 type Role = (typeof ROLE_OPTIONS)[number]["value"];
 
-const ROLE_ICONS: Record<Role, typeof Users> = {
-  participant: Users,
-  creator: Sparkles,
-  venue_provider: MapPin,
-  service_provider: Briefcase,
-  promoter: Ticket,
-};
-
 export default function AuthPage() {
   const [mode, setMode] = useState<Mode>("login");
+  const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("participant");
   const [loading, setLoading] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
-
-  function getRoleLabel(r: Role): string {
-    return ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r;
-  }
-
-  async function assignRole(token: string, selectedRole: Role) {
-    const res = await fetch("/api/auth/assign-role", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ role: selectedRole }),
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data?.message || "Failed to assign role");
-    }
-  }
 
   function redirectAfterAuth(userRole: string) {
     // If we were sent here from a specific place (e.g. a booking flow), go back there.
@@ -129,67 +102,60 @@ export default function AuthPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            selected_role: role,
-          },
-        },
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, role, firstName }),
       });
 
-      // Supabase explicitly says the email is already registered
-      if (
-        error?.message?.toLowerCase().includes("already registered") ||
-        error?.message?.toLowerCase().includes("already exists")
-      ) {
+      const responseData = await res.json().catch(() => ({}));
+      if (res.status === 409) {
         showEmailExistsError();
         return;
       }
 
-      if (error) {
-        toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
-        return;
-      }
-
-      // Supabase returns empty identities when email confirmation is enabled
-      // and the email already exists (it hides this to prevent enumeration)
-      if (data.user && (data.user.identities?.length ?? 1) === 0) {
-        showEmailExistsError();
-        return;
-      }
-
-      if (!data.session) {
+      if (!res.ok) {
         toast({
-          title: "Check your inbox",
-          description: "We sent a confirmation link to " + email + ". Click it to activate your account.",
-        });
-        return;
-      }
-
-      // When email confirmation is disabled, Supabase returns a session right away.
-      // Assign the selected role immediately so the auth bootstrap cannot leave
-      // a fresh account on the default participant role.
-      const token = data.session.access_token;
-      try {
-        await assignRole(token, role);
-      } catch (error: any) {
-        const emailAlreadyExists = error?.message === "This email already exists";
-        toast({
-          title: emailAlreadyExists ? "Email already exists" : "Sign up failed",
-          description: emailAlreadyExists
-            ? "This email already has an account. Please log in instead."
-            : error?.message || "Something went wrong. Please try again.",
+          title: "Sign up failed",
+          description: responseData?.message || "Something went wrong. Please try again.",
           variant: "destructive",
         });
-        if (emailAlreadyExists) {
-          setMode("login");
-        }
         return;
       }
-      toast({ title: "Welcome!", description: "Your account has been created as a " + getRoleLabel(role) + "." });
-      redirectAfterAuth(role);
+
+      toast({
+        title: "Check your inbox",
+        description: "We sent a verification link to " + email + ". Click it to activate your account.",
+      });
+      setMode("login");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePasswordReset(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const responseData = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({
+          title: "Reset failed",
+          description: responseData?.message || "Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Check your inbox",
+        description: "If that email exists, we sent a password reset link.",
+      });
+      setMode("login");
     } finally {
       setLoading(false);
     }
@@ -237,10 +203,10 @@ export default function AuthPage() {
                   Great.
                 </a>
                 <p className="mb-2 text-sm font-semibold uppercase text-primary">
-                  {mode === "login" ? "Welcome back" : "Start your journey"}
+                  {mode === "login" ? "Welcome back" : mode === "reset" ? "Account recovery" : "Start your journey"}
                 </p>
                 <h2 className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-3xl font-bold tracking-tight text-transparent">
-                  {mode === "login" ? "Log in to Great." : "Create your Great. account"}
+                  {mode === "login" ? "Log in to Great." : mode === "reset" ? "Reset your password" : "Create your Great. account"}
                 </h2>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">
                   Group experiences, powered by community.
@@ -264,7 +230,21 @@ export default function AuthPage() {
                 ))}
               </div>
 
-              <form onSubmit={mode === "login" ? handleLogin : handleSignup} className="space-y-5">
+              <form onSubmit={mode === "login" ? handleLogin : mode === "reset" ? handlePasswordReset : handleSignup} className="space-y-5">
+                {mode === "signup" && (
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-foreground">First name</label>
+                    <input
+                      type="text"
+                      required
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      placeholder="Your first name"
+                      className="input-primary w-full bg-white text-sm"
+                    />
+                  </div>
+                )}
+
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-foreground">Email</label>
                   <input
@@ -277,6 +257,7 @@ export default function AuthPage() {
                   />
                 </div>
 
+                {mode !== "reset" && (
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-foreground">Password</label>
                   <input
@@ -289,6 +270,7 @@ export default function AuthPage() {
                     className="input-primary w-full bg-white text-sm"
                   />
                 </div>
+                )}
 
                 {mode === "signup" && (
                   <div>
@@ -327,20 +309,34 @@ export default function AuthPage() {
                   className="flex w-full items-center justify-center rounded-lg bg-gradient-to-r from-primary to-secondary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-secondary/25 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading
-                    ? mode === "login" ? "Logging in..." : "Creating account..."
-                    : mode === "login" ? "Log in" : "Create account"}
+                    ? mode === "login" ? "Logging in..." : mode === "reset" ? "Sending..." : "Creating account..."
+                    : mode === "login" ? "Log in" : mode === "reset" ? "Send reset link" : "Create account"}
                 </button>
               </form>
 
               {mode === "login" && (
                 <p className="mt-5 text-center text-xs text-muted-foreground">
                   Forgot your password?{" "}
-                  <a
-                    href="mailto:support@greatapp.ai"
+                  <button
+                    type="button"
+                    onClick={() => setMode("reset")}
                     className="font-semibold text-primary underline-offset-4 hover:underline"
                   >
-                    Contact support
-                  </a>
+                    Reset it
+                  </button>
+                </p>
+              )}
+
+              {mode === "reset" && (
+                <p className="mt-5 text-center text-xs text-muted-foreground">
+                  Remembered it?{" "}
+                  <button
+                    type="button"
+                    onClick={() => setMode("login")}
+                    className="font-semibold text-primary underline-offset-4 hover:underline"
+                  >
+                    Back to login
+                  </button>
                 </p>
               )}
             </div>

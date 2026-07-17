@@ -39,6 +39,10 @@ import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
+import {
+  calculateMvgDeadline,
+  normalizeMvgDeadlineDays,
+} from "./mvgDeadlineRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -233,6 +237,43 @@ function computeLifecycleStatus(exp: {
   if (mvgStatus === 'met' || !exp.requireMinimumParticipants) return 'confirmed';
   // Still forming (MVG enabled, threshold not yet reached)
   return 'forming';
+}
+
+async function resolveMvgActivationBlock(experienceId: string) {
+  const { processMVGExperienceDeadline } = await import('./mvg-scheduler');
+  await processMVGExperienceDeadline(experienceId);
+
+  const current = await storage.getExperience(experienceId);
+  if (!current) throw new Error('Experience not found');
+  if (current.status === 'cancelled' || current.mvgStatus === 'failed') {
+    return {
+      experience: current,
+      message: current.cancellationReason || 'The MVG deadline expired before publication.',
+    };
+  }
+  return null;
+}
+
+async function approveExperienceForPublication(
+  experienceId: string,
+  reviewedBy: string,
+  reviewNotes?: string,
+) {
+  const activationBlock = await resolveMvgActivationBlock(experienceId);
+  if (activationBlock) {
+    return {
+      ...activationBlock.experience,
+      publicationBlocked: true,
+      message: activationBlock.message,
+    };
+  }
+
+  const approved = await storage.approveExperience(experienceId, reviewedBy, reviewNotes);
+  return {
+    ...approved,
+    publicationBlocked: false,
+    message: 'Experience approved and published.',
+  };
 }
 
 // Configure multer for image uploads
@@ -2654,11 +2695,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Otherwise use the specified status filter
       const statusFilter = status as string || undefined;
       
-      // Titles containing these strings are internal test/QA experiences — never show publicly
-      const TEST_TITLE_PATTERNS = ['test', 'qa', 'acceptance', '8rivyi'];
-      const isTestExperience = (title: string) =>
-        TEST_TITLE_PATTERNS.some(p => title.toLowerCase().includes(p));
-
       // Helper: enrich a list of experiences with live MVG progress (single source of truth)
       // Real participant count is fetched from bookings for every experience, not just
       // MVG-gated ones — the listing/card UI shows "X / Y participants" for all of them.
@@ -2704,8 +2740,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!statusFilter) {
           experiences = experiences.filter(exp => 
             (exp.status === "approved" || exp.status === "published") &&
-            !isTestExperience(exp.title || '') &&
-            exp.status !== 'cancelled' &&
             parseFloat(exp.price as string || '0') > 0
           );
         }
@@ -2722,8 +2756,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!statusFilter) {
           experiences = experiences.filter(exp => 
             (exp.status === "approved" || exp.status === "published") &&
-            !isTestExperience(exp.title || '') &&
-            exp.status !== 'cancelled' &&
             parseFloat(exp.price as string || '0') > 0
           );
         }
@@ -3328,10 +3360,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? draft.mvgEnabled
         : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true);
         
-      // Calculate MVG deadline from draft data
-      const mvgDeadline = resolvedMvgEnabled && draft.mvgDeadlineDays && startDate ?
-        new Date(startDate.getTime() - (draft.mvgDeadlineDays * 24 * 60 * 60 * 1000)) :
-        undefined;
+      // A zero-day setting stays open through the end of the event's start date.
+      const mvgDeadlineDays = normalizeMvgDeadlineDays(draft.mvgDeadlineDays);
+      const mvgDeadline = resolvedMvgEnabled
+        ? calculateMvgDeadline(startDate, mvgDeadlineDays)
+        : null;
       
       // Check if this is a demo event for placeholder image fallback
       const isDemoEvent = draft.title?.toLowerCase().includes('mystic') && 
@@ -3503,8 +3536,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minimumParticipants: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
         mvgMinimumSize: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
         mvgMin: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
-        // Calculate mvgDeadlineDays from mvgDeadline if provided (use mvgDeadlineDays from draft)
-        mvgDeadlineDays: draft.mvgDeadlineDays || 7,
+        // Persist the absolute deadline used by the scheduler and public countdowns.
+        mvgDeadline,
         mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
         escrowEnabled: resolvedMvgEnabled || false,
         monetisationMode: "creator_led" as const,
@@ -4571,7 +4604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { reviewNotes } = req.body;
-      const experience = await storage.approveExperience(req.params.id, userId, reviewNotes);
+      const experience = await approveExperienceForPublication(req.params.id, userId, reviewNotes);
       res.json(experience);
     } catch (error) {
       console.error("Error approving experience:", error);
@@ -5198,7 +5231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { reviewNotes } = req.body;
-      const experience = await storage.approveExperience(req.params.id, userId, reviewNotes);
+      const experience = await approveExperienceForPublication(req.params.id, userId, reviewNotes);
       res.json(experience);
     } catch (error) {
       console.error("Error approving trip:", error);
@@ -9675,7 +9708,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       let experience;
       if (status === 'approved') {
-        experience = await storage.approveExperience(req.params.id, userId, reviewNotes);
+        experience = await approveExperienceForPublication(req.params.id, userId, reviewNotes);
         console.log(`[Admin] Experience ${req.params.id} approved by ${userId}`);
       } else if (status === 'rejected') {
         experience = await storage.rejectExperience(req.params.id, userId, reviewNotes);
@@ -11124,6 +11157,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const linkedToMyVenue = !!linkedVenue;
       if (!linkedToMyVenue) return res.status(403).json({ message: 'Access denied' });
 
+      const activationBlock = await resolveMvgActivationBlock(experienceId);
+      if (activationBlock) {
+        return res.status(409).json({
+          message: activationBlock.message,
+          status: 'cancelled',
+          mvgStatus: 'failed',
+        });
+      }
+
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
         contract = await storage.upsertVenueContract(buildVenueContractObject(
@@ -11645,6 +11687,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
       if ((experience as any).creatorId !== userId) {
         return res.status(403).json({ message: 'Not your experience' });
+      }
+
+      const activationBlock = await resolveMvgActivationBlock(offer.experienceId);
+      if (activationBlock) {
+        return res.status(409).json({
+          message: activationBlock.message,
+          status: 'cancelled',
+          mvgStatus: 'failed',
+        });
       }
 
       const directContract = await storage.getVenueContractByExperience(offer.experienceId);

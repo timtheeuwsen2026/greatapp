@@ -1038,6 +1038,11 @@ function CreatorDashboardContent() {
                                 Deadline: {experience.mvgDeadlineDays} days before start
                               </span>
                             )}
+                            {experience.cancellationReason && (
+                              <span className="block mt-1 text-red-600" data-testid={`cancellation-reason-${experience.id}`}>
+                                {experience.cancellationReason}
+                              </span>
+                            )}
                           </div>
                         )}
                         <div className="flex gap-2">

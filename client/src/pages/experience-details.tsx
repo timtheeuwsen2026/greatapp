@@ -565,7 +565,9 @@ export default function ExperienceDetails() {
               <AlertCircle className="h-6 w-6 text-gray-300" />
               <div>
                 <p className="font-bold text-gray-100">Trip Cancelled</p>
-                <p className="text-xs text-gray-400">Minimum group size was not reached</p>
+                <p className="text-xs text-gray-300">
+                  {experience.cancellationReason || 'Minimum group size was not reached by the deadline'}
+                </p>
               </div>
             </div>
           </div>

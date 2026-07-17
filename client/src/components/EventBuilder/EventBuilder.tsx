@@ -311,6 +311,7 @@ const eventBuilderSchema = z.object({
   // MVG (Minimum Viable Group) Settings
   requireMinimumParticipants: z.boolean().default(true),
   minimumParticipants: z.number().min(2, "Minimum participants must be at least 2").max(50, "Maximum 50 participants").default(6),
+  mvgDeadlineDays: z.number().int().min(0).max(30).default(7),
   mvgDeadline: z.date().optional(),
 
   // Soft-Hold Reservation Settings
@@ -542,6 +543,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       // MVG fields
       requireMinimumParticipants: true,
       minimumParticipants: 6,
+      mvgDeadlineDays: 7,
       mvgDeadline: undefined,
       
       // Soft-Hold fields
@@ -910,6 +912,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       ...data,
       requireMinimumParticipants: data.mvgEnabled !== undefined ? data.mvgEnabled : true,
       minimumParticipants: data.mvgMinimumSize || data.minimumParticipants || 6,
+      mvgDeadlineDays: data.mvgDeadlineDays ?? 7,
       mvgDeadline: data.mvgDeadline,
       // Ensure Great Pillars array is properly handled
       greatPillars: normalizeGreatPillars(data.greatPillars),
@@ -1127,6 +1130,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         startTime: formData.startTime || '',
         endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
+        mvgDeadlineDays: formData.mvgDeadlineDays,
 
         // Venue/location fields
         location: formData.location || '',
@@ -1644,6 +1648,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         startTime: formData.startTime || '',
         endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
+        mvgDeadlineDays: formData.mvgDeadlineDays,
 
         // Venue/location fields
         location: formData.location || '',
@@ -6290,22 +6295,26 @@ function PricingStep({ form }: { form: any }) {
                       <Input
                         id="mvg-deadline-days"
                         type="number"
-                        min="1"
+                        min="0"
                         max="30"
                         placeholder="7"
+                        value={form.watch('mvgDeadlineDays')}
                         onChange={(e) => {
-                          const days = parseInt(e.target.value) || 7;
+                          const parsedDays = Number.parseInt(e.target.value, 10);
+                          const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 7;
+                          form.setValue('mvgDeadlineDays', days, { shouldDirty: true });
                           const startDate = form.getValues('startDate');
                           if (startDate) {
                             const deadlineDate = new Date(startDate);
                             deadlineDate.setDate(deadlineDate.getDate() - days);
+                            deadlineDate.setHours(23, 59, 59, 999);
                             form.setValue('mvgDeadline', deadlineDate, { shouldDirty: true });
                           }
                         }}
                         data-testid="input-mvg-deadline-days"
                       />
                       <p className="text-xs text-gray-500 mt-1">
-                        Days before start date when MVG status is final
+                        0 means the MVG remains open through the end of the start day
                       </p>
                     </div>
                   </div>

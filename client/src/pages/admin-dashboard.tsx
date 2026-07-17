@@ -195,9 +195,10 @@ export default function AdminDashboard() {
   // Approve/Reject Experience
   const updateExperienceStatus = useMutation({
     mutationFn: async ({ id, status, notes }: { id: string; status: string; notes?: string }) => {
-      return await apiRequest("PATCH", `/api/admin/experiences/${id}`, { status, reviewNotes: notes });
+      const response = await apiRequest("PATCH", `/api/admin/experiences/${id}`, { status, reviewNotes: notes });
+      return response.json();
     },
-    onSuccess: async (_data, variables) => {
+    onSuccess: async (data, variables) => {
       // Comprehensive cache invalidation for experience status change
       const invalidationPromises = [
         // All experiences lists (use new endpoint)
@@ -220,8 +221,9 @@ export default function AdminDashboard() {
       
       setReviewNotes("");
       toast({
-        title: "Experience Updated",
-        description: "Experience status has been updated successfully.",
+        title: data.publicationBlocked ? "MVG Deadline Expired" : "Experience Updated",
+        description: data.message || "Experience status has been updated successfully.",
+        variant: data.publicationBlocked ? "destructive" : "default",
       });
     },
     onError: (error) => {
@@ -635,6 +637,11 @@ export default function AdminDashboard() {
                             {getStatusBadge(experience.status)}
                           </div>
                           <p className="text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">{experience.description}</p>
+                          {experience.cancellationReason && (
+                            <p className="text-sm text-red-700 dark:text-red-300 mb-3" data-testid={`cancellation-reason-${experience.id}`}>
+                              {experience.cancellationReason}
+                            </p>
+                          )}
                           <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
                             <span>Creator: {experience.creatorName}</span>
                             <span>Price: {(() => {

@@ -760,6 +760,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateExperienceStatus(id: string, status: string): Promise<void> {
+    if (status === "approved" || status === "published") {
+      const current = await this.getExperience(id);
+      if (current?.status === "cancelled" || current?.mvgStatus === "failed") {
+        return;
+      }
+    }
     await db.update(experiences).set({ status: status as any, updatedAt: new Date() }).where(eq(experiences.id, id));
     this.syncDirectPromotionDeals(id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
@@ -1056,6 +1062,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async approveExperience(id: string, reviewedBy: string, reviewNotes?: string): Promise<Experience> {
+    const current = await this.getExperience(id);
+    if (!current) {
+      throw new Error("Experience not found");
+    }
+    if (current.status === "cancelled" || current.mvgStatus === "failed") {
+      return current;
+    }
+
     const [experience] = await db
       .update(experiences)
       .set({ 

@@ -3048,7 +3048,7 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     mvgDeadline: z.coerce.date().optional(),
     mvgEnabled: z.boolean().optional(),
     mvgMinimumSize: z.coerce.number().int().min(1).max(10000).optional(),
-    mvgDeadlineDays: z.coerce.number().int().min(1).max(365).optional(),
+    mvgDeadlineDays: z.coerce.number().int().min(0).max(365).optional(),
 
     // Pricing - Base price validation
     price: z.coerce

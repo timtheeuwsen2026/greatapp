@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { db } from './db';
 import { experiences, bookings } from '../shared/schema';
-import { eq, and, lt, isNull, ne, or } from 'drizzle-orm';
+import { eq, and, lte, isNull, ne, or, inArray } from 'drizzle-orm';
 import Stripe from 'stripe';
 import { notificationService } from './notifications';
 import { broadcastMVGUpdate } from './websocket';
@@ -9,6 +9,13 @@ import { storage } from './storage';
 import { scheduleExperiencePayout } from './payout-scheduler';
 import { lockCommissionsForExperience, voidCommissionsForExperience } from './commissionService';
 import { sumBookingPayoutGrossCents } from './payoutRules';
+import {
+  calculateMvgDeadline,
+  DEFAULT_MVG_DEADLINE_DAYS,
+  isMvgDeadlineDue,
+  MVG_DEADLINE_FAILURE_REASON,
+  MVG_PREPUBLICATION_FAILURE_REASON,
+} from './mvgDeadlineRules';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-07-30.basil',
@@ -48,6 +55,39 @@ export async function processMVGDeadlines(): Promise<{
   
   try {
     const now = new Date();
+
+    // Older publish flows dropped the absolute deadline. Restore those records
+    // with the documented seven-day default so they enter the normal lifecycle.
+    const missingDeadlineExperiences = await db
+      .select()
+      .from(experiences)
+      .where(
+        and(
+          eq(experiences.mvgStatus, 'pending'),
+          eq(experiences.requireMinimumParticipants, true),
+          inArray(experiences.status, ['pending_approval', 'approved', 'published'] as any),
+          isNull(experiences.mvgDeadline),
+          isNull(experiences.mvgResolvedAt),
+          isNull(experiences.mvgFailedAt),
+        ),
+      );
+
+    for (const experience of missingDeadlineExperiences) {
+      await db
+        .update(experiences)
+        .set({
+          mvgDeadline: calculateMvgDeadline(
+            experience.startDate,
+            DEFAULT_MVG_DEADLINE_DAYS,
+          ),
+          updatedAt: now,
+        })
+        .where(eq(experiences.id, experience.id));
+    }
+
+    if (missingDeadlineExperiences.length > 0) {
+      console.log(`[MVG Scheduler] Restored ${missingDeadlineExperiences.length} missing deadlines with the ${DEFAULT_MVG_DEADLINE_DAYS}-day default`);
+    }
     
     const eligibleExperiences = await db
       .select()
@@ -56,8 +96,8 @@ export async function processMVGDeadlines(): Promise<{
         and(
           eq(experiences.mvgStatus, 'pending'),
           eq(experiences.requireMinimumParticipants, true),
-          eq(experiences.status, 'approved'),
-          lt(experiences.mvgDeadline, now),
+          inArray(experiences.status, ['pending_approval', 'approved', 'published'] as any),
+          lte(experiences.mvgDeadline, now),
           isNull(experiences.mvgResolvedAt),
           isNull(experiences.mvgFailedAt)
         )
@@ -67,21 +107,15 @@ export async function processMVGDeadlines(): Promise<{
     
     for (const experience of eligibleExperiences) {
       try {
-        await db
-          .update(experiences)
-          .set({ mvgLastCheckedAt: now })
-          .where(eq(experiences.id, experience.id));
-        
-        const mvgProgress = await storage.getMVGProgress(experience.id);
-        
-        console.log(`[MVG Scheduler] Experience ${experience.id}: ${mvgProgress.current_participants}/${mvgProgress.minimum_participants} (MVG ${mvgProgress.mvg_met ? 'MET' : 'NOT MET'})`);
-        
-        if (mvgProgress.mvg_met) {
-          await processMVGSuccess(experience.id);
+        const resolution = await processMVGExperienceDeadline(experience.id, now);
+
+        if (resolution === 'met') {
           results.captured++;
-        } else {
-          await processMVGFailure(experience.id);
+        } else if (resolution === 'failed') {
           results.refunded++;
+        } else {
+          results.skipped++;
+          continue;
         }
         
         results.processed++;
@@ -99,6 +133,41 @@ export async function processMVGDeadlines(): Promise<{
   }
   
   return results;
+}
+
+export async function processMVGExperienceDeadline(
+  experienceId: string,
+  now = new Date(),
+): Promise<'met' | 'failed' | 'skipped'> {
+  const experience = await storage.getExperience(experienceId);
+  const eligibleStatuses = new Set(['pending_approval', 'approved', 'published']);
+
+  if (
+    !experience ||
+    !eligibleStatuses.has(experience.status || '') ||
+    !isMvgDeadlineDue(experience, now)
+  ) {
+    return 'skipped';
+  }
+
+  await db
+    .update(experiences)
+    .set({ mvgLastCheckedAt: now })
+    .where(eq(experiences.id, experience.id));
+
+  const mvgProgress = await storage.getMVGProgress(experience.id);
+  console.log(`[MVG Scheduler] Experience ${experience.id}: ${mvgProgress.current_participants}/${mvgProgress.minimum_participants} (MVG ${mvgProgress.mvg_met ? 'MET' : 'NOT MET'})`);
+
+  if (mvgProgress.mvg_met) {
+    await processMVGSuccess(experience.id);
+    return 'met';
+  }
+
+  const failureReason = experience.status === 'pending_approval'
+    ? MVG_PREPUBLICATION_FAILURE_REASON
+    : MVG_DEADLINE_FAILURE_REASON;
+  await processMVGFailure(experience.id, failureReason);
+  return 'failed';
 }
 
 async function processMVGSuccess(experienceId: string) {
@@ -168,7 +237,7 @@ async function processMVGSuccess(experienceId: string) {
   });
 }
 
-async function processMVGFailure(experienceId: string) {
+async function processMVGFailure(experienceId: string, failureReason: string) {
   console.log(`[MVG Scheduler] Processing MVG FAILURE for experience ${experienceId}`);
   
   const eligibleBookings = await storage.getEligibleBookingsForRefund(experienceId);
@@ -213,7 +282,7 @@ async function processMVGFailure(experienceId: string) {
       status: 'cancelled',
       mvgStatus: 'failed',
       mvgFailedAt: new Date(),
-      cancellationReason: 'MVG Not Reached',
+      cancellationReason: failureReason,
       cancelledAt: new Date(),
       currentParticipants: 0
     })

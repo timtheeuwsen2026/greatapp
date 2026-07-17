@@ -40,6 +40,23 @@ type BookingStatus =
   | "refunded"
   | "failed";
 
+async function notifyCreatorEventPublished(experience: any): Promise<void> {
+  try {
+    if (!experience?.creatorId) return;
+    const creator = await storage.getUser(experience.creatorId);
+    if (!creator?.email) return;
+
+    await notificationService.sendEventPublishedEmail({
+      to: creator.email,
+      creatorName: creator.firstName,
+      eventName: experience.title || "your experience",
+      eventSlugOrId: experience.slug || experience.id,
+    });
+  } catch (error) {
+    console.error("Failed to send event published email:", error);
+  }
+}
+
 // ─── Main dispatcher ─────────────────────────────────────────────────────────
 
 export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): Promise<void> {
@@ -383,6 +400,7 @@ async function handleUpfrontRental(session: Stripe.Checkout.Session): Promise<vo
   if (!experience) return;
 
   await storage.updateExperienceStatus(experienceId, 'approved');
+  await notifyCreatorEventPublished(experience);
   console.log(`[Webhook] Upfront-rental experience ${experienceId} is now Live`);
 
   // 3. Set up split_recipients so the payout goes to the venue, not the creator.
@@ -501,6 +519,7 @@ export async function finalizeVenueSponsorshipSession(session: Stripe.Checkout.S
   if (!experience) return;
 
   await storage.updateExperienceStatus(experienceId, 'approved');
+  await notifyCreatorEventPublished(experience);
   console.log(`[Webhook] Venue-sponsored experience ${experienceId} is now Live`);
 
   // 3. Schedule creator payout 7 days after event end

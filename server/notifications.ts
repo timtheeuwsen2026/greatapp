@@ -223,6 +223,10 @@ function communityHubUrl(): string {
   return `${APP_BASE_URL}/community-hub`;
 }
 
+function creatorDashboardUrl(): string {
+  return `${APP_BASE_URL}/creator-dashboard`;
+}
+
 function bookingTotalPaid(booking: Booking): string | number | null | undefined {
   if (booking.balancePaid || !booking.isDepositOnly) {
     return booking.totalPrice || booking.depositAmount;
@@ -273,6 +277,71 @@ class NotificationService {
     const result = await sendEmail(opts.to, subject, email.text, email.html);
     if (!result.success) {
       throw new Error(result.error || 'Failed to send password reset email');
+    }
+  }
+
+  async sendEventSubmittedForReviewEmail(opts: {
+    to: string;
+    creatorName?: string | null;
+    eventName: string;
+  }): Promise<void> {
+    const subject = 'Your experience is under review! 🚀';
+    const bodyText = `Hey ${opts.creatorName || 'there'}, we received your submission for ${opts.eventName}. Our team is reviewing the details to ensure everything looks perfect. We'll notify you the moment it goes live!`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View My Dashboard', href: creatorDashboardUrl() },
+      preheader: `${opts.eventName} is under review.`,
+      growthFooterContext: 'creator',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send event submitted email');
+    }
+  }
+
+  async sendEventPublishedEmail(opts: {
+    to: string;
+    creatorName?: string | null;
+    eventName: string;
+    eventSlugOrId: string;
+  }): Promise<void> {
+    const subject = `You are Live! ${opts.eventName} is ready for bookings`;
+    const bodyText = `Great news, ${opts.creatorName || 'there'}. ${opts.eventName} is officially live on the platform! It's time to start bringing in your squad.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View Public Page', href: experienceDetailsUrl(opts.eventSlugOrId) },
+      preheader: `${opts.eventName} is live and ready for bookings.`,
+      growthFooterContext: 'creator_venue',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send event published email');
+    }
+  }
+
+  async sendCreatorCommunityHubNudgeEmail(opts: {
+    to: string;
+    creatorName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+  }): Promise<void> {
+    const subject = `Your attendees are chatting in the ${opts.experienceTitle} Hub!`;
+    const bodyText = `Hey ${opts.creatorName || 'there'}, your community is coming alive. There are new messages in the ${opts.experienceTitle} chat. As the host, jumping in to answer questions and welcome new members is the best way to keep the momentum going and hit your minimum group size!`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Join the Conversation', href: communityHubUrl() },
+      preheader: `New messages are waiting in the ${opts.experienceTitle} Hub.`,
+      growthFooterContext: 'creator_venue',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send creator hub nudge email');
     }
   }
 
@@ -638,28 +707,21 @@ The Great. Team
       const newUserName = newUser?.firstName ? `${newUser.firstName}${newUser.lastName ? ' ' + newUser.lastName[0] + '.' : ''}` : 'Someone new';
 
       const currentCount = experience.currentParticipants ?? 0;
-      const minimum = experience.minimumParticipants ?? 0;
-      const remaining = Math.max(0, minimum - currentCount);
+      const targetCapacity = experience.maxParticipants || experience.minimumParticipants || currentCount;
+      const subject = `Cha-ching! New booking for ${experience.title} 🎉`;
+      const bodyText = `Hey ${creator.firstName || 'there'}, ${newUserName} just secured their spot for ${experience.title}. Head over to the Community Hub to welcome them!`;
+      const email = renderBaseEmail({
+        to: creator.email,
+        bodyText,
+        receiptRows: [
+          { label: 'Progress', value: `${currentCount} / ${targetCapacity}` },
+        ],
+        cta: { label: 'Welcome Them in the Hub', href: communityHubUrl() },
+        preheader: `${newUserName} just booked ${experience.title}.`,
+        growthFooterContext: 'creator_venue',
+      });
 
-      const subject = `New member joined "${experience.title}"!`;
-      const textContent = `
-Hi ${creator.firstName || 'there'},
-
-Great news — ${newUserName} just reserved a spot on your trip!
-
-📍 Trip: ${experience.title}
-👥 Participants: ${currentCount}${minimum > 0 ? ` / ${minimum} needed` : ''}
-${remaining > 0 ? `⏳ ${remaining} more needed to confirm` : '✅ Group is confirmed!'}
-
-View your full participant list at:
-https://greatapp.replit.app/creator-dashboard
-
-Keep sharing the link to get this trip confirmed!
-
-The Great. Team
-      `.trim();
-
-      const result = await sendEmail(creator.email, subject, textContent);
+      const result = await sendEmail(creator.email, subject, email.text, email.html);
       if (result.success) {
         console.log(`📧 [CREATOR NOTIF] Sent new-member email to creator ${creator.email} for experience ${experience.id}`);
       }

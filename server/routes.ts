@@ -9,7 +9,7 @@ import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
 import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
-import { eq, and, or, desc, inArray, gt, sql, ilike } from "drizzle-orm";
+import { eq, and, or, desc, inArray, gt, sql, ilike, ne } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
@@ -276,11 +276,43 @@ async function approveExperienceForPublication(
   }
 
   const approved = await storage.approveExperience(experienceId, reviewedBy, reviewNotes);
+  notifyCreatorEventPublished(approved).catch((error) => {
+    console.error("Failed to send event published email:", error);
+  });
   return {
     ...approved,
     publicationBlocked: false,
     message: 'Experience approved and published.',
   };
+}
+
+function publicExperienceSlugOrId(experience: any): string {
+  return String(experience?.slug || experience?.id || "");
+}
+
+async function notifyCreatorEventSubmittedForReview(experience: any): Promise<void> {
+  if (!experience?.creatorId || experience.status === "draft") return;
+  const creator = await storage.getUser(experience.creatorId);
+  if (!creator?.email) return;
+
+  await notificationService.sendEventSubmittedForReviewEmail({
+    to: creator.email,
+    creatorName: creator.firstName,
+    eventName: experience.title || "your experience",
+  });
+}
+
+async function notifyCreatorEventPublished(experience: any): Promise<void> {
+  if (!experience || experience.publicationBlocked || !experience.creatorId) return;
+  const creator = await storage.getUser(experience.creatorId);
+  if (!creator?.email) return;
+
+  await notificationService.sendEventPublishedEmail({
+    to: creator.email,
+    creatorName: creator.firstName,
+    eventName: experience.title || "your experience",
+    eventSlugOrId: publicExperienceSlugOrId(experience),
+  });
 }
 
 async function syncBuilderParticipantRoles(experience: any) {
@@ -576,8 +608,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   ] as const;
   const HUB_UNREAD_EMAIL_DELAY_MS = Number(process.env.HUB_UNREAD_EMAIL_DELAY_MS || 5 * 60 * 1000);
   const HUB_UNREAD_EMAIL_COOLDOWN_MS = Number(process.env.HUB_UNREAD_EMAIL_COOLDOWN_MS || 60 * 60 * 1000);
+  const CREATOR_HUB_NUDGE_DELAY_MS = Number(process.env.CREATOR_HUB_NUDGE_DELAY_MS || 15 * 60 * 1000);
+  const CREATOR_HUB_NUDGE_COOLDOWN_MS = Number(process.env.CREATOR_HUB_NUDGE_COOLDOWN_MS || 6 * 60 * 60 * 1000);
+  const CREATOR_HUB_RECENT_REPLY_MS = Number(process.env.CREATOR_HUB_RECENT_REPLY_MS || 12 * 60 * 60 * 1000);
   const pendingHubUnreadEmailTimers = new Map<string, NodeJS.Timeout>();
   const hubUnreadEmailLastSentAt = new Map<string, number>();
+  const pendingCreatorHubNudgeTimers = new Map<string, NodeJS.Timeout>();
+  const creatorHubNudgeLastSentAt = new Map<string, number>();
   const paginationFrom = (query: any) => {
     const page = Math.max(1, Number.parseInt(String(query.page || "1"), 10) || 1);
     const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(query.pageSize || "10"), 10) || 10));
@@ -657,6 +694,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       pendingHubUnreadEmailTimers.set(key, timer);
     }
+  };
+
+  const hasRecentCreatorReply = async (experienceId: string, creatorId: string): Promise<boolean> => {
+    const since = new Date(Date.now() - CREATOR_HUB_RECENT_REPLY_MS);
+    const recentReply = await db
+      .select({ id: experienceMessages.id })
+      .from(experienceMessages)
+      .where(and(
+        eq(experienceMessages.experienceId, experienceId),
+        eq(experienceMessages.userId, creatorId),
+        gt(experienceMessages.createdAt, since),
+      ))
+      .limit(1);
+    return recentReply.length > 0;
+  };
+
+  const scheduleCreatorHubNudge = async (experienceId: string, senderId: string, isPrivateMessage: boolean): Promise<void> => {
+    if (isPrivateMessage) return;
+    const experience = await storage.getExperience(experienceId);
+    if (!experience?.creatorId || experience.creatorId === senderId) return;
+
+    const key = `${experienceId}:${experience.creatorId}`;
+    const lastSentAt = creatorHubNudgeLastSentAt.get(key) || 0;
+    if (pendingCreatorHubNudgeTimers.has(key) || Date.now() - lastSentAt < CREATOR_HUB_NUDGE_COOLDOWN_MS) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      pendingCreatorHubNudgeTimers.delete(key);
+      try {
+        const latestExperience = await storage.getExperience(experienceId);
+        if (!latestExperience?.creatorId) return;
+        if (await hasRecentCreatorReply(experienceId, latestExperience.creatorId)) return;
+
+        const creator = await storage.getUser(latestExperience.creatorId);
+        if (!creator?.email) return;
+
+        await notificationService.sendCreatorCommunityHubNudgeEmail({
+          to: creator.email,
+          creatorName: creator.firstName,
+          experienceTitle: latestExperience.title,
+          experienceSlugOrId: publicExperienceSlugOrId(latestExperience),
+        });
+        creatorHubNudgeLastSentAt.set(key, Date.now());
+      } catch (error) {
+        console.error(`Failed to send creator hub nudge for ${key}:`, error);
+      }
+    }, CREATOR_HUB_NUDGE_DELAY_MS);
+
+    pendingCreatorHubNudgeTimers.set(key, timer);
   };
   // Auth — Supabase JWT-based (stateless, no sessions)
   app.get("/api/login", (_req, res) => {
@@ -2718,6 +2805,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update draft to pending status (finalizes it)
       const result = await storage.updateExperienceDraft(draftId, userId, eventData);
+      if (existingDraft.status !== 'pending_approval') {
+        notifyCreatorEventSubmittedForReview(result).catch((error) => {
+          console.error("Failed to send event submitted email:", error);
+        });
+      }
 
       let externalVenueInvitationSent = false;
       let externalVenueInvitationWarning: string | undefined;
@@ -3875,6 +3967,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create the published experience
       const experience = await storage.createExperience(experienceData);
       await syncBuilderParticipantRoles(experience);
+      notifyCreatorEventSubmittedForReview(experience).catch((error) => {
+        console.error("Failed to send event submitted email:", error);
+      });
 
       // Manual venues are external by definition. Send the proposal from the
       // active draft-publish flow (the legacy publish endpoint already did
@@ -3940,6 +4035,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const experience = await storage.createExperience(experienceData);
       await syncBuilderParticipantRoles(experience);
+      if (status !== "draft") {
+        notifyCreatorEventSubmittedForReview(experience).catch((error) => {
+          console.error("Failed to send event submitted email:", error);
+        });
+      }
       const selectedVenueId = req.body.selectedVenueId || req.body.linkedVenueId;
       if (status !== "draft" && selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
@@ -3989,6 +4089,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "This experience has been rejected 3 times. Please create a new one." });
       }
       const updated = await storage.resubmitExperience(req.params.id);
+      notifyCreatorEventSubmittedForReview(updated).catch((error) => {
+        console.error("Failed to send event submitted email:", error);
+      });
       res.json(updated);
     } catch (error) {
       console.error("Error resubmitting experience:", error);
@@ -5063,6 +5166,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create the experience from the draft
       const experience = await storage.createExperience(experienceData as any);
       await syncBuilderParticipantRoles(experience);
+      notifyCreatorEventSubmittedForReview(experience).catch((error) => {
+        console.error("Failed to send event submitted email:", error);
+      });
 
       if ((existingDraft as any).selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
@@ -7931,6 +8037,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       broadcastChatMessage(req.params.id, message);
       scheduleHubUnreadEmailNotifications(req.params.id, userId).catch((error) => {
         console.error("Error scheduling unread hub emails:", error);
+      });
+      scheduleCreatorHubNudge(req.params.id, userId, !!recipientId).catch((error) => {
+        console.error("Error scheduling creator hub nudge:", error);
       });
       res.json(message);
     } catch (error) {
@@ -11671,6 +11780,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         linkedVenueId: linkedVenue.id,
       } as any);
       await storage.updateExperienceStatus(experienceId, 'approved');
+      notifyCreatorEventPublished({
+        ...experience,
+        linkedVenueId: linkedVenue.id,
+        venueStatus: 'venue_confirmed',
+        status: 'approved',
+      }).catch((error) => {
+        console.error("Failed to send event published email:", error);
+      });
       notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'accepted');
       res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
     } catch (err: any) {
@@ -12242,6 +12359,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isDirectCounter) {
         await storage.acceptVenueContract(offer.experienceId, offer.venueId);
         await storage.updateExperienceStatus(offer.experienceId, 'approved');
+        const liveExperience = await storage.getExperience(offer.experienceId);
+        notifyCreatorEventPublished(liveExperience).catch((error) => {
+          console.error("Failed to send event published email:", error);
+        });
       }
 
       const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);

@@ -6,6 +6,7 @@ export type GrowthFooterContext =
   | "pre_mvg_participant"
   | "confirmed_participant"
   | "creator"
+  | "creator_venue"
   | "partner";
 
 export interface EmailCta {
@@ -89,6 +90,16 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
       </div>
     `,
     text: (appBaseUrl) => `Build something people can join\nCreate an experience and let Great. help with discovery, bookings, and group momentum.\nCreate an experience: ${appBaseUrl}/event-builder`,
+  },
+  creator_venue: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Keep the momentum moving</p>
+        <p>Track bookings, welcome attendees, and manage venue details from your creator dashboard.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/creator-dashboard`)}">Open Creator Dashboard</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Keep the momentum moving\nTrack bookings, welcome attendees, and manage venue details from your creator dashboard.\nOpen Creator Dashboard: ${appBaseUrl}/creator-dashboard`,
   },
   partner: {
     html: (appBaseUrl) => `

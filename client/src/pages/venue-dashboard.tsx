@@ -41,6 +41,104 @@ import { VenueAvailabilityManager } from "@/components/VenueAvailabilityManager"
 import { VenueGoogleCalendarIntegration } from "@/components/VenueGoogleCalendarIntegration";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
 
+type VenueOfferForm = {
+  venueId: string;
+  model: string;
+  fixedFee: string;
+  perHeadAmount: string;
+  minimumSpend: string;
+  revenueSharePct: string;
+  accessFee: string;
+  message: string;
+};
+
+const emptyVenueOfferForm = (): VenueOfferForm => ({
+  venueId: "",
+  model: "access_only",
+  fixedFee: "",
+  perHeadAmount: "",
+  minimumSpend: "",
+  revenueSharePct: "",
+  accessFee: "",
+  message: "",
+});
+
+function venueOfferFormFromContract(contract: any, venueId: string): VenueOfferForm {
+  const terms = contract?.terms || {};
+  return {
+    ...emptyVenueOfferForm(),
+    venueId,
+    model: contract?.model || "access_only",
+    fixedFee: terms.fixedFee != null ? String(terms.fixedFee) : "",
+    perHeadAmount: terms.perHeadAmount != null ? String(terms.perHeadAmount) : "",
+    minimumSpend: terms.minimumSpend != null ? String(terms.minimumSpend) : "",
+    revenueSharePct: terms.revenueSharePct != null ? String(terms.revenueSharePct) : "",
+    accessFee: terms.accessFee != null ? String(terms.accessFee) : "",
+  };
+}
+
+function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
+  if (form.model === "revenue_share") return { revenueSharePct: Number(form.revenueSharePct) };
+  if (form.model === "per_head") return { perHeadAmount: Number(form.perHeadAmount) };
+  if (form.model === "minimum_spend") return { minimumSpend: Number(form.minimumSpend) };
+  if (form.model === "access_only") return { accessFee: Number(form.accessFee || 0) };
+  return { fixedFee: Number(form.fixedFee) };
+}
+
+function isVenueOfferFormValid(form: VenueOfferForm): boolean {
+  if (!form.model) return false;
+  if (form.model === "access_only") return Number(form.accessFee || 0) >= 0;
+  if (form.model === "revenue_share") {
+    const percentage = Number(form.revenueSharePct);
+    return percentage > 0 && percentage <= 100;
+  }
+  if (form.model === "per_head") return Number(form.perHeadAmount) > 0;
+  if (form.model === "minimum_spend") return Number(form.minimumSpend) > 0;
+  return Number(form.fixedFee) > 0;
+}
+
+function VenueDealFields({ form, setForm, currency }: { form: VenueOfferForm; setForm: any; currency?: string }) {
+  const currencyCode = String(currency || "EUR").toUpperCase();
+  return (
+    <>
+      <div>
+        <Label>Commercial Model</Label>
+        <Select value={form.model} onValueChange={(model) => setForm((current: VenueOfferForm) => ({ ...current, model }))}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="revenue_share">Revenue Split</SelectItem>
+            <SelectItem value="fixed_fee">Ticket Deduction</SelectItem>
+            <SelectItem value="per_head">Per Head</SelectItem>
+            <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
+            <SelectItem value="access_only">Access-Only</SelectItem>
+            <SelectItem value="venue_sponsored">Venue Sponsorship</SelectItem>
+            <SelectItem value="upfront_rental">Upfront Rental</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {form.model === "revenue_share" && (
+        <div><Label>Venue Revenue Share (%)</Label><Input type="number" min="0.01" max="100" value={form.revenueSharePct} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, revenueSharePct: event.target.value }))} /></div>
+      )}
+      {form.model === "per_head" && (
+        <div><Label>Per-Head Amount ({currencyCode})</Label><Input type="number" min="0.01" value={form.perHeadAmount} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, perHeadAmount: event.target.value }))} /></div>
+      )}
+      {form.model === "minimum_spend" && (
+        <div><Label>Minimum Spend ({currencyCode})</Label><Input type="number" min="0.01" value={form.minimumSpend} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, minimumSpend: event.target.value }))} /></div>
+      )}
+      {form.model === "access_only" && (
+        <div><Label>Access Fee ({currencyCode})</Label><Input type="number" min="0" value={form.accessFee} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, accessFee: event.target.value }))} /></div>
+      )}
+      {["fixed_fee", "venue_sponsored", "upfront_rental"].includes(form.model) && (
+        <div>
+          <Label>{form.model === "venue_sponsored" ? "Sponsorship Fee" : form.model === "upfront_rental" ? "Rental Fee" : "Ticket Deduction Amount"} ({currencyCode})</Label>
+          <Input type="number" min="0.01" value={form.fixedFee} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, fixedFee: event.target.value }))} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function VenueDashboardContent() {
   const [, setLocation] = useLocation();
   const { user, isAuthenticated, hasRequiredRole, isLoading: authLoading } = useVenueAuth();
@@ -130,14 +228,16 @@ function VenueDashboardContent() {
 
   // "Offer to Host" modal state
   const [offerModal, setOfferModal] = useState<{ open: boolean; event: any | null }>({ open: false, event: null });
-  const [offerForm, setOfferForm] = useState({ venueId: "", model: "access_only", fixedFee: "", perHeadAmount: "", minimumSpend: "", revenueSharePct: "", accessFee: "", message: "" });
+  const [offerForm, setOfferForm] = useState<VenueOfferForm>(emptyVenueOfferForm);
+  const [counterModal, setCounterModal] = useState<{ open: boolean; offer: any | null }>({ open: false, offer: null });
+  const [counterForm, setCounterForm] = useState<VenueOfferForm>(emptyVenueOfferForm);
 
   const submitOffer = useMutation({
     mutationFn: async ({ experienceId, venueId, model, terms, message }: any) =>
       apiRequest("POST", `/api/venue/open-events/${experienceId}/offer`, { venueId, model, terms, message }),
     onSuccess: () => {
       setOfferModal({ open: false, event: null });
-      setOfferForm({ venueId: "", model: "access_only", fixedFee: "", perHeadAmount: "", minimumSpend: "", revenueSharePct: "", accessFee: "", message: "" });
+      setOfferForm(emptyVenueOfferForm());
       toast({ title: "Offer Submitted", description: "Your offer is awaiting admin approval. Once approved, the creator will be able to see and respond to it." });
     },
     onError: () => toast({ title: "Error", description: "Failed to submit offer", variant: "destructive" }),
@@ -148,11 +248,38 @@ function VenueDashboardContent() {
     const terms: Record<string, number> = {};
     if (offerForm.model === "fixed_fee" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
+    if (offerForm.model === "per_head" && offerForm.perHeadAmount) terms.perHeadAmount = parseFloat(offerForm.perHeadAmount);
+    if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
+    if (offerForm.model === "access_only") terms.accessFee = parseFloat(offerForm.accessFee || "0");
     // venue_sponsored: venue pays creator flat fee — stored as fixedFee
     if (offerForm.model === "venue_sponsored" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     // upfront_rental: creator pays venue flat fee — also stored as fixedFee
     if (offerForm.model === "upfront_rental" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
     submitOffer.mutate({ experienceId: offerModal.event.id, venueId: offerForm.venueId, model: offerForm.model, terms, message: offerForm.message });
+  };
+
+  const counterOffer = useMutation({
+    mutationFn: async ({ experienceId, model, terms, message }: any) => {
+      const response = await apiRequest("POST", `/api/venue/offers/${experienceId}/counter`, { model, terms, message });
+      return response.json();
+    },
+    onSuccess: () => {
+      setCounterModal({ open: false, offer: null });
+      setCounterForm(emptyVenueOfferForm());
+      queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
+      toast({ title: "Counter Offer Sent", description: "The creator can now accept or decline your proposed terms." });
+    },
+    onError: (error: any) => toast({ title: "Counter Offer Failed", description: error?.message || "Failed to submit counter offer", variant: "destructive" }),
+  });
+
+  const handleSubmitCounter = () => {
+    if (!counterModal.offer) return;
+    counterOffer.mutate({
+      experienceId: counterModal.offer.id,
+      model: counterForm.model,
+      terms: venueOfferTerms(counterForm),
+      message: counterForm.message,
+    });
   };
 
   // Accept / Reject offer mutations
@@ -554,7 +681,7 @@ function VenueDashboardContent() {
                                 <Button
                                   className="bg-blue-600 hover:bg-blue-700 text-white w-full md:w-auto disabled:opacity-60"
                                   onClick={() => {
-                                    setOfferForm(f => ({ ...f, venueId: approvedVenues[0]?.id ?? "" }));
+                                    setOfferForm(venueOfferFormFromContract(event.requestedContract, approvedVenues[0]?.id ?? ""));
                                     setOfferModal({ open: true, event });
                                   }}
                                   disabled={!hasApproved}
@@ -640,6 +767,18 @@ function VenueDashboardContent() {
                           >
                             <CheckCircle className="w-4 h-4 mr-1" />
                             Accept
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-1 md:flex-none"
+                            onClick={() => {
+                              setCounterForm(venueOfferFormFromContract(contract, offer.linkedVenueId || offer.venue?.id || ""));
+                              setCounterModal({ open: true, offer });
+                            }}
+                            disabled={counterOffer.isPending}
+                          >
+                            <RefreshCw className="w-4 h-4 mr-1" />
+                            Counter Offer
                           </Button>
                           <Button
                             variant="outline"
@@ -991,6 +1130,18 @@ function VenueDashboardContent() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
+            {offerModal.event?.requestedContract && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/30">
+                <p className="mb-2 text-xs font-semibold text-blue-800 dark:text-blue-200">Creator's requested terms</p>
+                <DigitalHandshakeContract
+                  contract={offerModal.event.requestedContract}
+                  price={offerModal.event.price}
+                  maxParticipants={offerModal.event.maxParticipants}
+                  currency={offerModal.event.currency}
+                  platformPct={offerModal.event.platformPct}
+                />
+              </div>
+            )}
             {/* Venue selector — only approved venues can be offered */}
             {venues.filter((v: any) => v.status === 'approved').length > 1 && (
               <div>
@@ -1014,6 +1165,8 @@ function VenueDashboardContent() {
                 <SelectContent>
                   <SelectItem value="revenue_share">Revenue Split</SelectItem>
                   <SelectItem value="fixed_fee">Ticket Deduction</SelectItem>
+                  <SelectItem value="per_head">Per Head</SelectItem>
+                  <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
                   <SelectItem value="access_only">Access-Only</SelectItem>
                   <SelectItem value="venue_sponsored">Venue Sponsorship</SelectItem>
                   <SelectItem value="upfront_rental">Upfront Rental</SelectItem>
@@ -1024,7 +1177,7 @@ function VenueDashboardContent() {
             {/* Amount field — changes based on selected model */}
             {offerForm.model === "fixed_fee" && (
               <div>
-                <Label>Ticket Deduction Amount (€)</Label>
+                <Label>Ticket Deduction Amount ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
                 <Input type="number" min="0" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
               </div>
             )}
@@ -1034,16 +1187,34 @@ function VenueDashboardContent() {
                 <Input type="number" min="0" max="100" placeholder="e.g. 20" value={offerForm.revenueSharePct} onChange={e => setOfferForm(f => ({ ...f, revenueSharePct: e.target.value }))} />
               </div>
             )}
+            {offerForm.model === "per_head" && (
+              <div>
+                <Label>Per-Head Amount ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
+                <Input type="number" min="0.01" value={offerForm.perHeadAmount} onChange={e => setOfferForm(f => ({ ...f, perHeadAmount: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "minimum_spend" && (
+              <div>
+                <Label>Minimum Spend ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
+                <Input type="number" min="0.01" value={offerForm.minimumSpend} onChange={e => setOfferForm(f => ({ ...f, minimumSpend: e.target.value }))} />
+              </div>
+            )}
+            {offerForm.model === "access_only" && (
+              <div>
+                <Label>Access Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
+                <Input type="number" min="0" value={offerForm.accessFee} onChange={e => setOfferForm(f => ({ ...f, accessFee: e.target.value }))} />
+              </div>
+            )}
             {offerForm.model === "venue_sponsored" && (
               <div>
-                <Label>Sponsorship Fee (€) — amount you pay to the creator</Label>
+                <Label>Sponsorship Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()}) — amount you pay to the creator</Label>
                 <Input type="number" min="1" placeholder="e.g. 200" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
                 <p className="text-xs text-gray-500 mt-1">You will be charged this amount via Stripe when you accept. Paid to the creator 7 days after the event.</p>
               </div>
             )}
             {offerForm.model === "upfront_rental" && (
               <div>
-                <Label>Rental Fee (€) — amount the creator pays you upfront</Label>
+                <Label>Rental Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()}) — amount the creator pays you upfront</Label>
                 <Input type="number" min="1" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
                 <p className="text-xs text-gray-500 mt-1">The creator will be charged this rental fee via Stripe the moment they accept. You receive payment 7 days after the event.</p>
               </div>
@@ -1063,10 +1234,61 @@ function VenueDashboardContent() {
             <Button
               className="w-full bg-blue-600 hover:bg-blue-700 text-white"
               onClick={handleSubmitOffer}
-              disabled={submitOffer.isPending || !offerForm.venueId || !offerForm.model}
+              disabled={submitOffer.isPending || !offerForm.venueId || !isVenueOfferFormValid(offerForm)}
             >
               <Send className="w-4 h-4 mr-2" />
               {submitOffer.isPending ? "Submitting…" : "Submit Offer to Creator"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={counterModal.open} onOpenChange={(open) => setCounterModal((current) => ({ ...current, open }))}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Counter Offer: {counterModal.offer?.title}</DialogTitle>
+            <DialogDescription>
+              Adjust the creator's proposed commercial terms. The creator will review your counter before the venue is confirmed.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {counterModal.offer?.contract && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+                <p className="mb-2 text-xs font-semibold text-amber-800 dark:text-amber-200">Creator's original offer</p>
+                <DigitalHandshakeContract
+                  contract={counterModal.offer.contract}
+                  price={counterModal.offer.price}
+                  maxParticipants={counterModal.offer.maxParticipants}
+                  currency={counterModal.offer.currency}
+                  platformPct={counterModal.offer.platformPct || counterModal.offer.platformRevenuePercentage}
+                />
+              </div>
+            )}
+
+            <VenueDealFields
+              form={counterForm}
+              setForm={setCounterForm}
+              currency={counterModal.offer?.currency}
+            />
+
+            <div>
+              <Label>Message to Creator (optional)</Label>
+              <Textarea
+                placeholder="Explain the terms you are proposing..."
+                rows={3}
+                value={counterForm.message}
+                onChange={(event) => setCounterForm((current) => ({ ...current, message: event.target.value }))}
+              />
+            </div>
+
+            <Button
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSubmitCounter}
+              disabled={counterOffer.isPending || !isVenueOfferFormValid(counterForm)}
+            >
+              <Send className="w-4 h-4 mr-2" />
+              {counterOffer.isPending ? "Sending..." : "Send Counter Offer"}
             </Button>
           </div>
         </DialogContent>

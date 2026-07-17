@@ -303,12 +303,13 @@ export interface IStorage {
   updateVenueContractSponsorshipStatus(contractId: string, status: string, paymentIntentId?: string): Promise<VenueContract>;
 
   // Venue Offers — Reverse Handshake bids (venue owner → creator)
-  createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any>;
+  createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "admin_review" | "pending" }): Promise<any>;
   getVenueOffersForExperience(experienceId: string): Promise<any[]>;
   getVenueOffersForCreator(creatorId: string): Promise<any[]>;
   getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]>;
   getVenueOffer(offerId: string): Promise<any | undefined>;
   updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any>;
+  updateVenueContractProposal(experienceId: string, venueId: string, model: string, terms: object, status: "pending" | "countered"): Promise<VenueContract>;
   
   // Availability checking operations
   getAvailableVenues(options: { startDate?: string; endDate?: string; capacity?: number; venueType?: string }): Promise<Venue[]>;
@@ -789,7 +790,7 @@ export class DatabaseStorage implements IStorage {
 
   // ── Venue Offers (Reverse Handshake) ────────────────────────────────────────
 
-  async createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string }): Promise<any> {
+  async createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "admin_review" | "pending" }): Promise<any> {
     const [offer] = await db.insert(venueOffers).values({
       experienceId: data.experienceId,
       venueId: data.venueId,
@@ -797,7 +798,7 @@ export class DatabaseStorage implements IStorage {
       model: data.model,
       terms: data.terms as any,
       message: data.message || null,
-      status: "admin_review",
+      status: data.status || "admin_review",
     }).returning();
     return offer;
   }
@@ -814,12 +815,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getVenueOffersForCreator(creatorId: string): Promise<any[]> {
-    // Returns all pending offers across all open events the creator owns
+    // Returns pending reverse-market bids and direct-invite counter offers.
     const creatorExperiences = await this.getExperiencesByCreator(creatorId);
-    const openIds = creatorExperiences
-      .filter((e: any) => e.venueStatus === "venue_pending")
-      .map((e: any) => e.id);
-    if (!openIds.length) return [];
+    const experienceIds = creatorExperiences.map((experience: any) => experience.id);
+    if (!experienceIds.length) return [];
     const rows = await db.select({
       offer: venueOffers,
       venue: venues,
@@ -829,7 +828,7 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(venues, eq(venueOffers.venueId, venues.id))
       .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
       .where(and(
-        inArray(venueOffers.experienceId, openIds),
+        inArray(venueOffers.experienceId, experienceIds),
         eq((venueOffers as any).status, "pending"),
         eq((venues as any).status, "approved"),
       ))
@@ -2677,6 +2676,22 @@ export class DatabaseStorage implements IStorage {
         declineReason: reason || null,
         updatedAt: new Date(),
       } as any)
+      .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
+      .returning();
+    if (!contract) throw new Error("Contract not found");
+    return contract;
+  }
+
+  async updateVenueContractProposal(
+    experienceId: string,
+    venueId: string,
+    model: string,
+    terms: object,
+    status: "pending" | "countered",
+  ): Promise<VenueContract> {
+    const [contract] = await db
+      .update(venueContracts)
+      .set({ model, terms: terms as any, status, updatedAt: new Date() } as any)
       .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
       .returning();
     if (!contract) throw new Error("Contract not found");

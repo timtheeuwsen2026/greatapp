@@ -37,6 +37,7 @@ import { scheduleExperiencePayout } from "./payout-scheduler";
 import { sumBookingPayoutGrossCents } from "./payoutRules";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
+import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -55,14 +56,6 @@ function getAppBaseUrl(req: any): string {
 }
 
 const FIXED_PLATFORM_FEE_PCT = 15;
-const UNIFIED_VENUE_DEAL_MODELS = new Set([
-  'revenue_share',
-  'fixed_fee',
-  'access_only',
-  'venue_sponsored',
-  'upfront_rental',
-]);
-
 function applyMarketplaceEconomics(input: any = {}) {
   const model = input.venueCompensationModel || "access_only";
   const revenueSharePct = model === "revenue_share"
@@ -11190,6 +11183,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Venue Ledger — real sales totals broken down by the accepted split
+  // A venue can negotiate a direct creator invitation instead of accepting or rejecting it.
+  // Direct counters bypass marketplace admin review because the creator selected this venue.
+  app.post('/api/venue/offers/:experienceId/counter', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { experienceId } = req.params;
+      const { model, terms, message } = req.body || {};
+
+      if (!isVenueDealModel(model)) {
+        return res.status(400).json({ message: 'Unsupported venue deal model' });
+      }
+
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const linkedVenue = userVenues.find((venue: any) => venue.id === experience.linkedVenueId);
+      if (!linkedVenue) return res.status(403).json({ message: 'Access denied' });
+
+      const contract = await storage.getVenueContractByExperience(experienceId);
+      if (!contract || contract.venueId !== linkedVenue.id) {
+        return res.status(404).json({ message: 'Venue contract not found' });
+      }
+      if (contract.status !== 'pending') {
+        return res.status(409).json({ message: 'This venue invitation is no longer available to counter' });
+      }
+
+      let normalizedTerms;
+      try {
+        normalizedTerms = normalizeVenueDealTerms(model, terms, (experience as any).currency || 'EUR');
+      } catch (error: any) {
+        return res.status(400).json({ message: error.message || 'Invalid venue deal terms' });
+      }
+
+      const offer = await storage.createVenueOffer({
+        experienceId,
+        venueId: linkedVenue.id,
+        venueOwnerId: userId,
+        model,
+        terms: normalizedTerms,
+        message,
+        status: 'pending',
+      });
+      const counteredContract = await storage.updateVenueContractProposal(
+        experienceId,
+        linkedVenue.id,
+        model,
+        normalizedTerms,
+        'countered',
+      );
+
+      (async () => {
+        const creator = await storage.getUser((experience as any).creatorId);
+        if (!creator?.email) return;
+        await notificationService.sendVenueBidReceivedEmail({
+          to: creator.email,
+          recipientName: creator.firstName,
+          venueName: linkedVenue.name,
+          experienceTitle: (experience as any).title,
+          experienceSlugOrId: (experience as any).slug || experienceId,
+          model,
+          terms: normalizedTerms,
+          currency: (experience as any).currency,
+          message,
+        });
+      })().catch((error) => console.error('Venue counter-offer email failed:', error?.message || error));
+
+      res.status(201).json({ offer, contract: counteredContract, message: 'Counter offer sent to creator' });
+    } catch (err: any) {
+      console.error('Error countering venue offer:', err);
+      res.status(500).json({ message: 'Failed to submit counter offer' });
+    }
+  });
+
   app.get('/api/venue/ledger', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -11310,7 +11377,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!venueId || !model) {
         return res.status(400).json({ message: 'venueId and model are required' });
       }
-      if (!UNIFIED_VENUE_DEAL_MODELS.has(model)) {
+      if (!isVenueDealModel(model)) {
         return res.status(400).json({ message: 'Unsupported venue deal model' });
       }
 
@@ -11331,11 +11398,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Your venue must be approved by admin before you can submit offers' });
       }
 
-      const normalizedTerms = model === 'revenue_share'
-        ? { revenueSharePct: numberOrZero(terms?.revenueSharePct) }
-        : model === 'access_only'
-          ? {}
-          : { fixedFee: numberOrZero(terms?.fixedFee) };
+      let normalizedTerms;
+      try {
+        normalizedTerms = normalizeVenueDealTerms(model, terms, (experience as any).currency || 'EUR');
+      } catch (error: any) {
+        return res.status(400).json({ message: error.message || 'Invalid venue deal terms' });
+      }
 
       const offer = await storage.createVenueOffer({
         experienceId,
@@ -11462,6 +11530,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const offer = await storage.getVenueOffer(offerId);
       if (!offer) return res.status(404).json({ message: 'Offer not found' });
+      if (offer.status !== 'pending') {
+        return res.status(409).json({ message: 'This venue offer is no longer pending' });
+      }
 
       // Verify creator owns the experience
       const experience = await storage.getExperience(offer.experienceId);
@@ -11470,6 +11541,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: 'Not your experience' });
       }
 
+      const directContract = await storage.getVenueContractByExperience(offer.experienceId);
+      const isDirectCounter = directContract?.venueId === offer.venueId && directContract.status === 'countered';
+
       // Fetch the venue so we can copy its address onto the experience
       const venue = await storage.getVenue(offer.venueId);
 
@@ -11477,7 +11551,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the webhook can read them when it completes the deal)
       await storage.updateExperience(offer.experienceId, {
         linkedVenueId: offer.venueId,
-        venueStatus: 'venue_confirmed',
+        venueStatus: isDirectCounter && offer.model === 'venue_sponsored' ? 'venue_pending' : 'venue_confirmed',
         venueType: 'catalog',
         location: venue?.location ?? (experience as any).location,
         venueCompensationModel: offer.model,
@@ -11559,7 +11633,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // ── Standard deals: accept immediately → event goes Live ─────────────
+      // The creator accepts the counter first; the venue then sees the agreed
+      // sponsorship in Pending Offers and pays it through the existing Stripe flow.
+      if (isDirectCounter && offer.model === 'venue_sponsored') {
+        const accepted = await storage.updateVenueOfferStatus(offerId, 'accepted');
+        await storage.updateVenueContractProposal(
+          offer.experienceId,
+          offer.venueId,
+          offer.model,
+          offer.terms,
+          'pending',
+        );
+        const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
+        for (const row of otherOffers) {
+          const competingOffer = row.offer ?? row;
+          if (competingOffer.id !== offerId && competingOffer.status === 'pending') {
+            await storage.updateVenueOfferStatus(competingOffer.id, 'declined');
+            notifyVenueOwnerOfBidResolution(competingOffer, 'declined');
+          }
+        }
+        notifyVenueOwnerOfBidResolution(offer, 'accepted');
+        return res.json({
+          accepted,
+          awaitingVenuePayment: true,
+          message: 'Counter accepted. The venue must complete the sponsorship payment.',
+        });
+      }
+
       const accepted = await storage.updateVenueOfferStatus(offerId, 'accepted');
+
+      if (isDirectCounter) {
+        await storage.acceptVenueContract(offer.experienceId, offer.venueId);
+        await storage.updateExperienceStatus(offer.experienceId, 'approved');
+      }
 
       const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
       for (const row of otherOffers) {
@@ -11587,6 +11693,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const offer = await storage.getVenueOffer(offerId);
       if (!offer) return res.status(404).json({ message: 'Offer not found' });
+      if (offer.status !== 'pending') {
+        return res.status(409).json({ message: 'This venue offer is no longer pending' });
+      }
 
       const experience = await storage.getExperience(offer.experienceId);
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
@@ -11595,6 +11704,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const declined = await storage.updateVenueOfferStatus(offerId, 'declined');
+      const directContract = await storage.getVenueContractByExperience(offer.experienceId);
+      if (directContract?.venueId === offer.venueId && directContract.status === 'countered') {
+        await storage.declineVenueContract(offer.experienceId, offer.venueId, 'Creator declined venue counter offer');
+        await storage.updateExperienceStatus(offer.experienceId, 'draft');
+      }
       notifyVenueOwnerOfBidResolution(offer, 'declined');
       res.json(declined);
     } catch (err: any) {

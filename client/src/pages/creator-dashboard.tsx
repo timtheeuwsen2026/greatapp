@@ -329,7 +329,12 @@ function CreatorDashboardContent() {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers/accepted"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
-      toast({ title: "Venue Linked!", description: "The venue has been confirmed for your event." });
+      toast({
+        title: data.awaitingVenuePayment ? "Counter Accepted" : "Venue Linked!",
+        description: data.message || (data.awaitingVenuePayment
+          ? "The venue can now complete its sponsorship payment."
+          : "The venue has been confirmed for your event."),
+      });
     },
     onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
   });
@@ -1125,7 +1130,7 @@ function CreatorDashboardContent() {
           <TabsContent value="venue-offers" className="space-y-4">
             <h2 className="text-xl font-semibold">Incoming Venue Offers</h2>
             <p className="text-sm text-gray-500">
-              Venue owners have submitted proposals for your open events. Review their Commercial Model and accept the one that works for you.
+              Venue owners have submitted proposals for your open events or countered a direct invitation. Review their Commercial Model and accept the one that works for you.
               Accepting an offer links the venue to your event and activates the Stripe payment split.
             </p>
 
@@ -1155,6 +1160,12 @@ function CreatorDashboardContent() {
                   upfront_rental: "Upfront Rental (You pay Venue)",
                 };
                 const terms = offer.terms ?? {};
+                const currency = String(terms.currency || experience.currency || "EUR").toUpperCase();
+                const formatMoney = (value: unknown) => new Intl.NumberFormat(undefined, {
+                  style: "currency",
+                  currency,
+                  minimumFractionDigits: 2,
+                }).format(Number(value || 0));
                 return (
                   <Card key={offer.id} className="border-blue-200 dark:border-blue-800">
                     <CardContent className="p-5">
@@ -1193,14 +1204,14 @@ function CreatorDashboardContent() {
                           <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border text-sm space-y-1">
                             <p className="text-xs font-semibold text-gray-600 mb-1">Proposed Commercial Model</p>
                             <p><span className="text-gray-500">Model:</span> <strong>{modelLabels[offer.model] ?? offer.model}</strong></p>
-                            {offer.model === "fixed_fee" && <p><span className="text-gray-500">Flat Fee:</span> <strong>€{terms.fixedFee ?? 0}</strong></p>}
-                            {offer.model === "per_head" && <p><span className="text-gray-500">Per Head:</span> <strong>€{terms.perHeadAmount ?? 0}</strong></p>}
-                            {offer.model === "minimum_spend" && <p><span className="text-gray-500">Min. Spend:</span> <strong>€{terms.minimumSpend ?? 0}</strong></p>}
+                            {offer.model === "fixed_fee" && <p><span className="text-gray-500">Flat Fee:</span> <strong>{formatMoney(terms.fixedFee)}</strong></p>}
+                            {offer.model === "per_head" && <p><span className="text-gray-500">Per Head:</span> <strong>{formatMoney(terms.perHeadAmount)}</strong></p>}
+                            {offer.model === "minimum_spend" && <p><span className="text-gray-500">Min. Spend:</span> <strong>{formatMoney(terms.minimumSpend)}</strong></p>}
                             {offer.model === "revenue_share" && <p><span className="text-gray-500">Revenue Share:</span> <strong>{terms.revenueSharePct ?? 0}%</strong></p>}
-                            {offer.model === "access_only" && <p><span className="text-gray-500">Access Fee:</span> <strong>€{terms.accessFee ?? 0}</strong></p>}
-                            {offer.model === "venue_sponsored" && <p><span className="text-gray-500">Sponsorship (venue pays you):</span> <strong className="text-green-600">+€{terms.fixedFee ?? 0}</strong></p>}
+                            {offer.model === "access_only" && <p><span className="text-gray-500">Access Fee:</span> <strong>{formatMoney(terms.accessFee)}</strong></p>}
+                            {offer.model === "venue_sponsored" && <p><span className="text-gray-500">Sponsorship (venue pays you):</span> <strong className="text-green-600">+{formatMoney(terms.fixedFee)}</strong></p>}
                             {offer.model === "upfront_rental" && (
-                              <p><span className="text-gray-500">Rental fee (you pay upfront):</span> <strong className="text-orange-600">−€{terms.fixedFee ?? 0}</strong>
+                              <p><span className="text-gray-500">Rental fee (you pay upfront):</span> <strong className="text-orange-600">-{formatMoney(terms.fixedFee)}</strong>
                                 <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Charged on Accept</span>
                               </p>
                             )}

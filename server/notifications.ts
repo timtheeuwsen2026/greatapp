@@ -4,7 +4,7 @@ import { db } from './db';
 import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { Booking, Experience } from '@shared/schema';
-import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext } from './emailTemplates';
+import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext, type GrowthFooterData } from './emailTemplates';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -17,9 +17,14 @@ const FROM_NAME = process.env.RESEND_FROM_NAME || process.env.SENDGRID_FROM_NAME
 // Public base URL used for links inside emails (View Event Details, dashboards).
 const APP_BASE_URL = (process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || 'https://greatapp.replit.app').replace(/\/$/, '');
 const GREAT_LOGO_URL = process.env.GREAT_LOGO_URL || `${APP_BASE_URL}/email-assets/great-logo.jpg`;
+const STRIPE_DASHBOARD_URL = process.env.STRIPE_DASHBOARD_URL || 'https://dashboard.stripe.com/';
 
 function experienceDetailsUrl(slugOrId: string): string {
   return `${APP_BASE_URL}/experience/${slugOrId}`;
+}
+
+function experienceSlugOrId(experience: Experience | any): string {
+  return String(experience?.slug || experience?.id || '');
 }
 
 // Human-readable one-liner for a promotion deal's baseline/counter terms.
@@ -179,6 +184,7 @@ function renderBaseEmail(opts: {
   cta?: { label: string; href: string };
   preheader?: string;
   growthFooterContext?: GrowthFooterContext;
+  growthFooterData?: GrowthFooterData;
 }) {
   return renderMasterEmailTemplate({
     recipientEmail: opts.to,
@@ -187,6 +193,7 @@ function renderBaseEmail(opts: {
     cta: opts.cta,
     preheader: opts.preheader,
     growthFooterContext: opts.growthFooterContext,
+    growthFooterData: opts.growthFooterData,
     logoUrl: GREAT_LOGO_URL,
     appBaseUrl: APP_BASE_URL,
   });
@@ -241,6 +248,37 @@ function bookingTotalPaid(booking: Booking): string | number | null | undefined 
   }
 
   return booking.depositAmount || booking.totalPrice;
+}
+
+function participantPerkSummary(experience: Experience | any): string {
+  if (experience?.participantReferralDealType === 'commission_per_ticket') {
+    const pct = Number(experience.participantReferralCommissionPct || 0);
+    return pct > 0 ? `${pct}% cashback` : 'cashback';
+  }
+  if (experience?.participantReferralDealType === 'milestone_barter') {
+    return experience.participantReferralMilestoneRewardDescription || 'a creator-set reward';
+  }
+  return 'your reward';
+}
+
+function promotionDealValue(dealType?: string | null, terms?: Record<string, any> | null, currency?: string | null): string {
+  const summary = formatPromotionDealSummary(dealType, terms, currency);
+  return summary.replace(/^Commission per Ticket\s+(?:—|â€”)\s+/, '');
+}
+
+async function participantGrowthFooterData(userId: string, experience: Experience): Promise<GrowthFooterData> {
+  const referralCode = await storage.ensureUserReferralCode(userId);
+  const trackedPromotion = await storage.promoteExperience(userId, experience.id, {
+    referralAudience: 'participant',
+  });
+  const params = new URLSearchParams({ ref: referralCode });
+  if (trackedPromotion?.shareToken) {
+    params.set('share', trackedPromotion.shareToken);
+  }
+  return {
+    b2cPerk: participantPerkSummary(experience),
+    participantRefLink: `${APP_BASE_URL}/experience/${experienceSlugOrId(experience)}?${params.toString()}`,
+  };
 }
 
 class NotificationService {
@@ -323,6 +361,7 @@ class NotificationService {
       cta: { label: 'View Public Page', href: experienceDetailsUrl(opts.eventSlugOrId) },
       preheader: `${opts.eventName} is live and ready for bookings.`,
       growthFooterContext: 'creator_venue',
+      growthFooterData: { mainEventUrl: experienceDetailsUrl(opts.eventSlugOrId) },
     });
 
     const result = await sendEmail(opts.to, subject, email.text, email.html);
@@ -353,11 +392,55 @@ class NotificationService {
     }
   }
 
+  async sendAffiliateSaleMadeEmail(opts: {
+    to: string;
+    eventName: string;
+    earnedAmount: string;
+  }): Promise<void> {
+    const subject = 'Cha-ching! Someone booked using your link 💸';
+    const bodyText = `Great work! Someone just booked a spot for ${opts.eventName} using your referral link. You have earned ${opts.earnedAmount}. This will be routed to your connected Stripe account based on the event's payout schedule.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View My Impact Dashboard', href: `${APP_BASE_URL}/my-impact` },
+      preheader: `You earned ${opts.earnedAmount} from a referral booking.`,
+      growthFooterContext: 'none',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send affiliate sale email');
+    }
+  }
+
+  async sendPayoutInitiatedEmail(opts: {
+    to: string;
+    eventName: string;
+    payoutAmount: string;
+    stripeDashboardUrl?: string | null;
+  }): Promise<void> {
+    const subject = `Your payout for ${opts.eventName} is on its way!`;
+    const bodyText = `Your final payout of ${opts.payoutAmount} for ${opts.eventName} has been successfully initiated and is en route to your connected bank account.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View Stripe Dashboard', href: opts.stripeDashboardUrl || STRIPE_DASHBOARD_URL },
+      preheader: `${opts.payoutAmount} payout initiated for ${opts.eventName}.`,
+      growthFooterContext: 'none',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send payout initiated email');
+    }
+  }
+
   private renderBookingConfirmedEmail(opts: {
     to: string;
     userFirstName?: string | null;
     experience: Experience;
     booking: Booking;
+    growthFooterData?: GrowthFooterData;
   }): { subject: string; text: string; html: string } {
     const eventName = opts.experience.title;
     const subject = `It's Happening! You're confirmed for ${eventName} 🔥`;
@@ -372,6 +455,7 @@ class NotificationService {
       cta: { label: 'Meet Your Squad in the Hub', href: communityHubUrl() },
       preheader: `${eventName} is confirmed and your spot is locked in.`,
       growthFooterContext: 'confirmed_participant',
+      growthFooterData: opts.growthFooterData,
     });
 
     return { subject, text: email.text, html: email.html };
@@ -441,6 +525,7 @@ class NotificationService {
       const mvgNotMet = !!experience.requireMinimumParticipants
         && experience.mvgStatus !== 'met'
         && remainingMvgSpots > 0;
+      const growthFooterData = await participantGrowthFooterData(userId, experience);
 
       let subject = `Your deposit is secured - ${experience.title}`;
       let textContent = `
@@ -482,6 +567,7 @@ The Great. Team
           cta: { label: 'Introduce Yourself in the Hub', href: communityHubUrl() },
           preheader: `Your spot is reserved for ${experience.title}. Help unlock the group.`,
           growthFooterContext: 'pre_mvg_participant',
+          growthFooterData,
         });
         textContent = email.text;
         htmlContent = email.html;
@@ -491,6 +577,7 @@ The Great. Team
           userFirstName: user.firstName,
           experience,
           booking,
+          growthFooterData,
         });
         subject = email.subject;
         textContent = email.text;
@@ -557,6 +644,7 @@ The Great. Team
           userFirstName: user.firstName,
           experience,
           booking,
+          growthFooterData: await participantGrowthFooterData(booking.userId, experience),
         });
 
         const result = await sendEmail(user.email, email.subject, email.text, email.html);
@@ -853,7 +941,7 @@ The Great. Team
       receiptRows: opts.proposedTerms ? [{ label: 'Deal Summary', value: opts.proposedTerms }] : undefined,
       cta: { label: 'Review the Offer', href: opts.reviewUrl || (opts.eventSlugOrId ? experienceDetailsUrl(String(opts.eventSlugOrId)) : partnerDashboardUrl()) },
       preheader: `Private invite to partner on ${opts.eventName}.`,
-      growthFooterContext: 'partner',
+      growthFooterContext: 'none',
     });
 
     const result = await sendEmail(opts.to, subject, email.text, email.html);
@@ -980,7 +1068,7 @@ The Great. Team
       receiptRows,
       cta: opts.cta || { label: 'View & Respond to Offer', href: partnerDashboardUrl() },
       preheader: `${opts.experienceTitle} has a pending deal update.`,
-      growthFooterContext: opts.growthFooterContext || 'partner',
+      growthFooterContext: opts.growthFooterContext || 'none',
     });
 
     const result = await sendEmail(opts.to, opts.subject, email.text, email.html);
@@ -1010,7 +1098,7 @@ The Great. Team
       message: opts.message,
       experienceTitle: opts.experienceTitle,
       cta: { label: 'View & Respond to Offer', href: partnerDashboardUrl() },
-      growthFooterContext: 'partner',
+      growthFooterContext: 'none',
     });
   }
 
@@ -1083,7 +1171,7 @@ The Great. Team
         to: opts.to,
         partnerName: opts.recipientName,
         eventName: opts.experienceTitle,
-        dealSummary: formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency),
+        dealSummary: promotionDealValue(opts.dealType, opts.terms, opts.currency),
       });
       return;
     }
@@ -1110,6 +1198,7 @@ The Great. Team
     eventName: string;
     dealSummary?: string | null;
     dashboardUrl?: string | null;
+    trackingLink?: string | null;
   }): Promise<void> {
     const subject = 'Partnership Confirmed! Here is your tracking link 🔗';
     const bodyText = `It's official! Your partnership terms for ${opts.eventName} have been locked in. You are all set to start promoting and earning.`;
@@ -1119,7 +1208,11 @@ The Great. Team
       receiptRows: opts.dealSummary ? [{ label: 'Deal Summary', value: opts.dealSummary }] : undefined,
       cta: { label: 'View My Dashboard', href: opts.dashboardUrl || partnerDashboardUrl() },
       preheader: `Your partnership for ${opts.eventName} is confirmed.`,
-      growthFooterContext: 'partner',
+      growthFooterContext: 'none',
+      growthFooterData: {
+        b2bDealValue: opts.dealSummary || 'agreed',
+        brandRefLink: opts.trackingLink || opts.dashboardUrl || partnerDashboardUrl(),
+      },
     });
 
     const result = await sendEmail(opts.to, subject, email.text, email.html);

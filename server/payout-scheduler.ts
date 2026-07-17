@@ -22,6 +22,7 @@ import { db } from "./db";
 import { experiences, bookings, platformSettings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { storage } from "./storage";
+import { notificationService } from "./notifications";
 import {
   isExperiencePayoutEligible,
   resolvePayoutGrossCents,
@@ -35,6 +36,10 @@ if (!process.env.STRIPE_SECRET_KEY) {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2025-07-30.basil",
 });
+
+function formatPayoutAmount(cents: number, currency: string): string {
+  return `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;
+}
 
 // ─── Scheduler bootstrap ─────────────────────────────────────────────────────
 
@@ -265,6 +270,16 @@ async function executeExperiencePayout(
 
       transferIds[recipient.recipientType] = transfer.id;
       remainingCents -= transferAmountCents;
+      if (recipient.userId) {
+        const user = await storage.getUser(recipient.userId);
+        if (user?.email) {
+          notificationService.sendPayoutInitiatedEmail({
+            to: user.email,
+            eventName: experience.title,
+            payoutAmount: formatPayoutAmount(transferAmountCents, currency),
+          }).catch((error) => console.error('[Payout Scheduler] Payout email failed:', error?.message || error));
+        }
+      }
 
       console.log(
         `[Payout Scheduler] Transferred ${transferAmountCents / 100} ${currency.toUpperCase()} ` +
@@ -313,6 +328,14 @@ async function executeExperiencePayout(
         commissionPaidAt: new Date(),
       })
       .where(inArray(bookings.id, promoterBookings.map(booking => booking.id)));
+    const promoter = await storage.getUser(promoterId);
+    if (promoter?.email) {
+      notificationService.sendPayoutInitiatedEmail({
+        to: promoter.email,
+        eventName: experience.title,
+        payoutAmount: formatPayoutAmount(amount, currency),
+      }).catch((error) => console.error('[Payout Scheduler] Promoter payout email failed:', error?.message || error));
+    }
     promoterReserveRemainingCents -= amount;
     transferIds[`promoter:${promoterId}`] = transfer.id;
   }

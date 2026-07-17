@@ -19,6 +19,14 @@ export interface EmailReceiptRow {
   value: string;
 }
 
+export interface GrowthFooterData {
+  b2cPerk?: string | null;
+  participantRefLink?: string | null;
+  b2bDealValue?: string | null;
+  brandRefLink?: string | null;
+  mainEventUrl?: string | null;
+}
+
 export interface MasterEmailTemplateOptions {
   recipientEmail?: string | null;
   preheader?: string;
@@ -26,6 +34,7 @@ export interface MasterEmailTemplateOptions {
   receiptRows?: EmailReceiptRow[];
   cta?: EmailCta;
   growthFooterContext?: GrowthFooterContext;
+  growthFooterData?: GrowthFooterData;
   logoUrl?: string;
   appBaseUrl: string;
 }
@@ -38,8 +47,8 @@ export interface RenderedEmail {
 const GREAT_LOGO_ALT = "Great.";
 
 const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "security">, {
-  html: (appBaseUrl: string) => string;
-  text: (appBaseUrl: string) => string;
+  html: (appBaseUrl: string, data: GrowthFooterData) => string;
+  text: (appBaseUrl: string, data: GrowthFooterData) => string;
 }> = {
   account: {
     html: (appBaseUrl) => `
@@ -62,24 +71,24 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
     text: (appBaseUrl) => `Find your next group\nSee what is forming now and join the experiences that match your energy.\nExplore trips: ${appBaseUrl}/experiences`,
   },
   pre_mvg_participant: {
-    html: (appBaseUrl) => `
+    html: (_appBaseUrl, data) => `
       <div class="growth-footer">
-        <p class="growth-title">Help your group unlock the experience</p>
-        <p>Every introduction and share helps the community reach the minimum group size faster.</p>
-        <a href="${escapeHtml(`${appBaseUrl}/community-hub`)}">Open the Community Hub</a>
+        <p class="growth-title">Don't let this experience get canceled!</p>
+        <p>We need a few more people to make this happen. Share your personal link to confirm the trip AND earn ${escapeHtml(data.b2cPerk || "your reward")} for every friend who joins.</p>
+        ${data.participantRefLink ? `<a href="${escapeHtml(data.participantRefLink)}">${escapeHtml(data.participantRefLink)}</a>` : ""}
       </div>
     `,
-    text: (appBaseUrl) => `Help your group unlock the experience\nEvery introduction and share helps the community reach the minimum group size faster.\nOpen the Community Hub: ${appBaseUrl}/community-hub`,
+    text: (_appBaseUrl, data) => `Don't let this experience get canceled!\nWe need a few more people to make this happen. Share your personal link to confirm the trip AND earn ${data.b2cPerk || "your reward"} for every friend who joins${data.participantRefLink ? `: ${data.participantRefLink}` : "."}`,
   },
   confirmed_participant: {
-    html: (appBaseUrl) => `
+    html: (_appBaseUrl, data) => `
       <div class="growth-footer">
-        <p class="growth-title">Your squad is open</p>
-        <p>Meet the people joining you, follow trip updates, and keep the momentum going inside the Community Hub.</p>
-        <a href="${escapeHtml(`${appBaseUrl}/community-hub`)}">Meet your squad</a>
+        <p class="growth-title">Bring your squad & unlock rewards!</p>
+        <p>Experiences are better with friends. Share your personal link and you'll earn ${escapeHtml(data.b2cPerk || "your reward")} directly to your account for every friend who books using your link.</p>
+        ${data.participantRefLink ? `<a href="${escapeHtml(data.participantRefLink)}">${escapeHtml(data.participantRefLink)}</a>` : ""}
       </div>
     `,
-    text: (appBaseUrl) => `Your squad is open\nMeet the people joining you, follow trip updates, and keep the momentum going inside the Community Hub.\nMeet your squad: ${appBaseUrl}/community-hub`,
+    text: (_appBaseUrl, data) => `Bring your squad & unlock rewards!\nExperiences are better with friends. Share your personal link and you'll earn ${data.b2cPerk || "your reward"} directly to your account for every friend who books using your link${data.participantRefLink ? `: ${data.participantRefLink}` : "."}`,
   },
   creator: {
     html: (appBaseUrl) => `
@@ -92,24 +101,24 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
     text: (appBaseUrl) => `Build something people can join\nCreate an experience and let Great. help with discovery, bookings, and group momentum.\nCreate an experience: ${appBaseUrl}/event-builder`,
   },
   creator_venue: {
-    html: (appBaseUrl) => `
+    html: (appBaseUrl, data) => `
       <div class="growth-footer">
-        <p class="growth-title">Keep the momentum moving</p>
-        <p>Track bookings, welcome attendees, and manage venue details from your creator dashboard.</p>
-        <a href="${escapeHtml(`${appBaseUrl}/creator-dashboard`)}">Open Creator Dashboard</a>
+        <p class="growth-title">Fill your capacity</p>
+        <p>Copy your event link to share on Instagram, WhatsApp, and your community channels to start driving bookings.</p>
+        <a href="${escapeHtml(data.mainEventUrl || `${appBaseUrl}/creator-dashboard`)}">${escapeHtml(data.mainEventUrl || `${appBaseUrl}/creator-dashboard`)}</a>
       </div>
     `,
-    text: (appBaseUrl) => `Keep the momentum moving\nTrack bookings, welcome attendees, and manage venue details from your creator dashboard.\nOpen Creator Dashboard: ${appBaseUrl}/creator-dashboard`,
+    text: (appBaseUrl, data) => `Fill your capacity\nCopy your event link to share on Instagram, WhatsApp, and your community channels to start driving bookings: ${data.mainEventUrl || `${appBaseUrl}/creator-dashboard`}`,
   },
   partner: {
-    html: (appBaseUrl) => `
+    html: (appBaseUrl, data) => `
       <div class="growth-footer">
-        <p class="growth-title">Grow through trusted partnerships</p>
-        <p>Review opportunities, venue offers, and promotion deals from your dashboard.</p>
-        <a href="${escapeHtml(`${appBaseUrl}/promoter`)}">Open dashboard</a>
+        <p class="growth-title">Your Tracking Link is Live</p>
+        <p>Share this link with your audience to track your conversions and automatically earn your ${escapeHtml(data.b2bDealValue || "agreed")} commission.</p>
+        <a href="${escapeHtml(data.brandRefLink || `${appBaseUrl}/promoter`)}">${escapeHtml(data.brandRefLink || `${appBaseUrl}/promoter`)}</a>
       </div>
     `,
-    text: (appBaseUrl) => `Grow through trusted partnerships\nReview opportunities, venue offers, and promotion deals from your dashboard.\nOpen dashboard: ${appBaseUrl}/promoter`,
+    text: (appBaseUrl, data) => `Your Tracking Link is Live\nShare this link with your audience to track your conversions and automatically earn your ${data.b2bDealValue || "agreed"} commission: ${data.brandRefLink || `${appBaseUrl}/promoter`}`,
   },
 };
 
@@ -118,7 +127,7 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
   const logoUrl = opts.logoUrl || `${appBaseUrl}/email-assets/great-logo.jpg`;
   const unsubscribeUrl = buildFooterUrl(appBaseUrl, "/unsubscribe", opts.recipientEmail);
   const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.recipientEmail);
-  const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl);
+  const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl, opts.growthFooterData || {});
   const bodyHtml = renderBodyText(opts.bodyText);
   const receiptHtml = renderReceiptRows(opts.receiptRows);
   const receiptText = renderReceiptText(opts.receiptRows);
@@ -221,15 +230,15 @@ function renderReceiptText(rows?: EmailReceiptRow[]): string {
   return rows.map((row) => `${row.label}: ${row.value}`).join("\n");
 }
 
-function renderGrowthFooter(context: GrowthFooterContext, appBaseUrl: string): { html: string; text: string } {
+function renderGrowthFooter(context: GrowthFooterContext, appBaseUrl: string, data: GrowthFooterData): { html: string; text: string } {
   if (context === "none" || context === "security") {
     return { html: "", text: "" };
   }
 
   const partial = growthFooterPartials[context];
   return {
-    html: partial.html(appBaseUrl),
-    text: partial.text(appBaseUrl),
+    html: partial.html(appBaseUrl, data),
+    text: partial.text(appBaseUrl, data),
   };
 }
 

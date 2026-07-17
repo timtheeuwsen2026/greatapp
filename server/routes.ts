@@ -102,6 +102,13 @@ function numberOrZero(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatCurrencyForEmail(amount: string | number, currency?: string | null): string {
+  const value = typeof amount === 'number' ? amount : Number(amount);
+  const code = String(currency || 'USD').toUpperCase();
+  if (!Number.isFinite(value)) return `${code} 0.00`;
+  return `${code} ${value.toFixed(2)}`;
+}
+
 function normalizeTicketSkus(ticketSkus: any): any[] {
   if (!Array.isArray(ticketSkus)) return [];
   return ticketSkus.map((sku: any) => sku?.pricingMode === "free_rsvp"
@@ -2054,11 +2061,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
       const to = partner?.email || deal.partnerEmail;
       if (!to || !experience) return;
+      const tracking = deal.partnerId
+        ? await storage.promoteExperience(deal.partnerId, deal.experienceId, {
+            referralAudience: 'official_partner',
+            promotionDealId: deal.id,
+          })
+        : null;
+      const partnerCode = partner?.promoterCode || (deal.partnerId ? await storage.ensureUserReferralCode(deal.partnerId) : null);
+      const trackingParams = partnerCode ? new URLSearchParams({ ref: partnerCode }) : null;
+      if (trackingParams && tracking?.shareToken) trackingParams.set('share', tracking.shareToken);
       await notificationService.sendPartnershipConfirmedEmail({
         to,
         partnerName: partner?.firstName || deal.partnerName,
         eventName: experience.title,
         dealSummary: formatPromotionDealSummary(deal.dealType, deal.terms, (experience as any).currency),
+        trackingLink: trackingParams
+          ? `${publicAppBaseUrl()}/experience/${(experience as any).slug || experience.id}?${trackingParams.toString()}`
+          : undefined,
       });
     })().catch((err) => console.error('Partnership confirmation email failed:', err?.message || err));
   };
@@ -4472,6 +4491,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ticketSkuId: bookingTicketSkuId || null,
         ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
       });
+
+      if (promoterId && commissionAmount && commissionAmount > 0) {
+        const promoter = await storage.getUser(promoterId);
+        if (promoter?.email) {
+          notificationService.sendAffiliateSaleMadeEmail({
+            to: promoter.email,
+            eventName: experience.title,
+            earnedAmount: formatCurrencyForEmail(commissionAmount, commissionCurrency || experience.currency || 'EUR'),
+          }).catch((error) => console.error('Affiliate sale email failed:', error?.message || error));
+        }
+      }
 
       // Check if this booking might trigger MVG completion
       let mvgCheckResult = null;

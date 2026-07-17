@@ -3987,6 +3987,8 @@ export class DatabaseStorage implements IStorage {
         .filter((d) => d.source === "external_direct" && d.partnerEmail)
         .map((d) => d.partnerEmail!.toLowerCase()),
     );
+    const creator = await this.getUser(experience.creatorId);
+    const creatorName = [creator?.firstName, creator?.lastName].filter(Boolean).join(' ') || creator?.email || 'the creator';
 
     for (const partnerId of selectedPartnerIds) {
       if (existingByPartnerId.has(partnerId)) continue;
@@ -4012,6 +4014,7 @@ export class DatabaseStorage implements IStorage {
           await notificationService.sendPromotionOfferReceivedEmail({
             to: partner.email,
             recipientName: partner.firstName,
+            senderName: creatorName,
             experienceTitle: experience.title,
             experienceSlugOrId: (experience as any).slug || experience.id,
             dealType,
@@ -4044,14 +4047,13 @@ export class DatabaseStorage implements IStorage {
       // before the email is sent, so signing up with this address immediately
       // reveals a live offer in their dashboard.
       import('./notifications')
-        .then(({ notificationService }) => notificationService.sendPromotionOfferReceivedEmail({
+        .then(({ notificationService, formatPromotionDealSummary }) => notificationService.sendExternalPartnerInviteEmail({
           to: email,
-          recipientName: matchedUser?.firstName || invite.name,
-          experienceTitle: experience.title,
-          experienceSlugOrId: (experience as any).slug || experience.id,
-          dealType,
-          terms: baselineTerms,
-          currency: (experience as any).currency,
+          partnerName: matchedUser?.firstName || invite.name,
+          creatorName,
+          eventName: experience.title,
+          eventSlugOrId: (experience as any).slug || experience.id,
+          proposedTerms: formatPromotionDealSummary(dealType, baselineTerms, (experience as any).currency),
         }))
         .catch((err) => console.error('External promotion invitation email failed:', err?.message || err));
     }

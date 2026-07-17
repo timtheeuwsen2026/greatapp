@@ -26,7 +26,7 @@ import {
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
-import { notificationService } from "./notifications";
+import { notificationService, formatPromotionDealSummary } from "./notifications";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -581,6 +581,14 @@ export async function finalizePromotionSponsorshipSession(session: Stripe.Checko
       dealType: deal.dealType,
       terms: deal.terms,
       currency: experience.currency,
+    });
+  }
+  if (partner?.email && experience) {
+    await notificationService.sendPartnershipConfirmedEmail({
+      to: partner.email,
+      partnerName: partner.firstName,
+      eventName: experience.title,
+      dealSummary: formatPromotionDealSummary(deal.dealType, deal.terms, experience.currency),
     });
   }
 }

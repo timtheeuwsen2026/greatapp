@@ -8,12 +8,12 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
 import { eq, and, or, desc, inArray, gt, sql, ilike, ne } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
-import { notificationService } from "./notifications";
+import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { registerOGRoutes } from "./og";
 import { 
   insertCommunityApplicationSchema, 
@@ -305,14 +305,98 @@ async function notifyCreatorEventSubmittedForReview(experience: any): Promise<vo
 async function notifyCreatorEventPublished(experience: any): Promise<void> {
   if (!experience || experience.publicationBlocked || !experience.creatorId) return;
   const creator = await storage.getUser(experience.creatorId);
-  if (!creator?.email) return;
+  if (creator?.email) {
+    await notificationService.sendEventPublishedEmail({
+      to: creator.email,
+      creatorName: creator.firstName,
+      eventName: experience.title || "your experience",
+      eventSlugOrId: publicExperienceSlugOrId(experience),
+    });
+  }
 
-  await notificationService.sendEventPublishedEmail({
-    to: creator.email,
-    creatorName: creator.firstName,
-    eventName: experience.title || "your experience",
-    eventSlugOrId: publicExperienceSlugOrId(experience),
+  notifyCommunityOpenRoleAlerts(experience).catch((error) => {
+    console.error("Failed to send open role referral alerts:", error);
   });
+}
+
+const sentOpenRoleAlertKeys = new Set<string>();
+
+function publicAppBaseUrl(): string {
+  return (process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || 'https://greatapp.replit.app').replace(/\/$/, '');
+}
+
+function cityFromLocation(location?: string | null): string {
+  const raw = String(location || '').trim();
+  if (!raw) return 'your area';
+  return raw.split(',')[0]?.trim() || raw;
+}
+
+function normalizedTerms(values: unknown): string[] {
+  return Array.isArray(values)
+    ? values.map((value) => String(value || '').toLowerCase().trim()).filter(Boolean)
+    : [];
+}
+
+function roleMatchesProfile(role: any, profile: any, city: string): boolean {
+  const haystack = [
+    profile.location,
+    ...(profile.skills || []),
+    ...(profile.interests || []),
+    ...(profile.rolePreferences || []),
+    ...(profile.professionalInterests || []),
+  ].join(' ').toLowerCase();
+  const cityMatch = city === 'your area' || haystack.includes(city.toLowerCase());
+  const roleTerms = [
+    role.name,
+    ...normalizedTerms(role.requirements),
+    ...normalizedTerms(role.responsibilities),
+  ].map((value) => String(value || '').toLowerCase());
+  const skillMatch = roleTerms.some((term) => term && haystack.includes(term));
+  return cityMatch && (skillMatch || Boolean(profile.willingToTakeRoles));
+}
+
+async function notifyCommunityOpenRoleAlerts(experience: any): Promise<void> {
+  if (!experience || (experience.status !== 'approved' && experience.status !== 'published')) return;
+  const roles = await syncBuilderParticipantRoles(experience);
+  const openRoles = roles.filter((role: any) => (role.currentCount || 0) < (role.maxCount || 1));
+  if (!openRoles.length) return;
+
+  const city = cityFromLocation(experience.location);
+  const baseUrl = publicAppBaseUrl();
+  const profileRows = await db
+    .select({ user: users, profile: participantProfiles })
+    .from(participantProfiles)
+    .innerJoin(users, eq(participantProfiles.userId, users.id))
+    .where(and(eq(participantProfiles.willingToTakeRoles, true), ne(users.id, experience.creatorId)))
+    .limit(Number(process.env.ROLE_ALERT_MAX_PROFILES || 200));
+
+  for (const role of openRoles) {
+    let sentForRole = 0;
+    for (const row of profileRows) {
+      if (!row.user.email || !roleMatchesProfile(role, row.profile, city)) continue;
+      const key = `${experience.id}:${role.id}:${row.user.id}`;
+      if (sentOpenRoleAlertKeys.has(key)) continue;
+      sentOpenRoleAlertKeys.add(key);
+
+      const referralCode = row.user.promoterCode || await storage.ensureUserReferralCode(row.user.id);
+      const params = new URLSearchParams({ ref: referralCode, role: role.id });
+      if ((experience as any).shareToken) params.set('share', (experience as any).shareToken);
+      const referralUrl = `${baseUrl}/experience/${publicExperienceSlugOrId(experience)}?${params.toString()}`;
+
+      await notificationService.sendOpenRoleReferralAlertEmail({
+        to: row.user.email,
+        userFirstName: row.user.firstName,
+        roleName: role.name,
+        city,
+        eventName: experience.title || 'a new experience',
+        eventSlugOrId: publicExperienceSlugOrId(experience),
+        referralUrl,
+      });
+
+      sentForRole += 1;
+      if (sentForRole >= Number(process.env.ROLE_ALERT_MAX_RECIPIENTS_PER_ROLE || 25)) break;
+    }
+  }
 }
 
 async function syncBuilderParticipantRoles(experience: any) {
@@ -1962,6 +2046,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })().catch((err) => console.error('Counter resolution email failed:', err?.message || err));
   };
 
+  const notifyPartnerOfPartnershipConfirmation = (deal: any) => {
+    (async () => {
+      const [partner, experience] = await Promise.all([
+        deal.partnerId ? storage.getUser(deal.partnerId) : Promise.resolve(undefined),
+        storage.getExperience(deal.experienceId),
+      ]);
+      const to = partner?.email || deal.partnerEmail;
+      if (!to || !experience) return;
+      await notificationService.sendPartnershipConfirmedEmail({
+        to,
+        partnerName: partner?.firstName || deal.partnerName,
+        eventName: experience.title,
+        dealSummary: formatPromotionDealSummary(deal.dealType, deal.terms, (experience as any).currency),
+      });
+    })().catch((err) => console.error('Partnership confirmation email failed:', err?.message || err));
+  };
+
   const createPromotionSponsorshipCheckout = async (req: any, deal: any) => {
     if (deal.dealType !== "financial_sponsorship" || deal.status !== "pending_payment") {
       throw new Error("This deal is not awaiting a sponsorship payment");
@@ -2053,6 +2154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ ...updated, requiresPayment: true, checkoutUrl: session.url });
       }
       notifyCreatorOfPromotionResponse(updated, userId, 'accepted');
+      notifyPartnerOfPartnershipConfirmation(updated);
       res.json({ ...updated, requiresPayment: false });
     } catch (error) {
       console.error("Error accepting offer:", error);
@@ -2094,6 +2196,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ ...deal, requiresPayment: true, checkoutUrl: session.url });
       }
       notifyCreatorOfPromotionResponse(deal, userId, 'accepted');
+      notifyPartnerOfPartnershipConfirmation(deal);
       res.json({ ...deal, requiresPayment: false });
     } catch (error: any) {
       console.error("Error accepting marketplace deal:", error);
@@ -2815,7 +2918,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let externalVenueInvitationWarning: string | undefined;
       if (venueType === 'manual' && existingDraft.status !== 'pending_approval') {
         try {
-          await notificationService.sendExternalVenueInvitation(eventData);
+          await notificationService.sendExternalVenueInvitation({ ...eventData, id: (result as any).id, slug: (result as any).slug });
           externalVenueInvitationSent = true;
         } catch (error: any) {
           externalVenueInvitationWarning = error?.message || 'The venue invitation could not be sent';
@@ -2853,9 +2956,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let externalPromotionInvitationWarning: string | undefined;
       if (Array.isArray((eventData as any).promotionExternalInvites)
         && (eventData as any).promotionExternalInvites.length > 0
-        && existingDraft.status !== 'pending_approval') {
+          && existingDraft.status !== 'pending_approval') {
         try {
-          externalPromotionInvitationsSent = await notificationService.sendPromotionExternalInvitations(eventData as any);
+          externalPromotionInvitationsSent = await notificationService.sendPromotionExternalInvitations({ ...(eventData as any), id: (result as any).id, slug: (result as any).slug });
         } catch (error: any) {
           externalPromotionInvitationWarning = error?.message || 'The promotion invitations could not be sent';
           console.error('External promotion invitations failed:', error);

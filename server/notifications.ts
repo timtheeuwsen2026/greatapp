@@ -4,18 +4,19 @@ import { db } from './db';
 import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { Booking, Experience } from '@shared/schema';
+import { renderMasterEmailTemplate, type GrowthFooterContext } from './emailTemplates';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
-// FROM_EMAIL must be a verified sender in SendGrid
-// Set SENDGRID_FROM_EMAIL environment variable to your verified sender email
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@great.com';
-const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Great. Experiences';
+// FROM_EMAIL must be a verified sender in Resend or SendGrid.
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || process.env.SENDGRID_FROM_EMAIL || 'noreply@great.com';
+const FROM_NAME = process.env.RESEND_FROM_NAME || process.env.SENDGRID_FROM_NAME || 'Great. Experiences';
 
 // Public base URL used for links inside emails (View Event Details, dashboards).
-const APP_BASE_URL = process.env.APP_BASE_URL || 'https://greatapp.replit.app';
+const APP_BASE_URL = (process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || 'https://greatapp.replit.app').replace(/\/$/, '');
+const GREAT_LOGO_URL = process.env.GREAT_LOGO_URL || `${APP_BASE_URL}/email-assets/great-logo.jpg`;
 
 function experienceDetailsUrl(slugOrId: string): string {
   return `${APP_BASE_URL}/experience/${slugOrId}`;
@@ -110,6 +111,37 @@ async function recordEmailSent(
 }
 
 async function sendEmail(to: string, subject: string, textContent: string, htmlContent?: string): Promise<{ success: boolean; error?: string }> {
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: `${FROM_NAME} <${FROM_EMAIL}>`,
+          to: [to],
+          subject,
+          text: textContent,
+          html: htmlContent || textContent.replace(/\n/g, '<br>'),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`📧 [RESEND FAILED] Error sending to ${to}: ${errorBody} (Code: ${response.status})`);
+        return { success: false, error: errorBody };
+      }
+
+      console.log(`📧 [RESEND SENT] Successfully sent to ${to}: ${subject}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error(`📧 [RESEND FAILED] Error sending to ${to}: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
   if (!process.env.SENDGRID_API_KEY) {
     console.log(`📧 [EMAIL - NO API KEY] Would send email to ${to}: ${subject}`);
     return { success: true };
@@ -140,6 +172,24 @@ async function sendEmail(to: string, subject: string, textContent: string, htmlC
   }
 }
 
+function renderBaseEmail(opts: {
+  to: string;
+  bodyText: string;
+  cta?: { label: string; href: string };
+  preheader?: string;
+  growthFooterContext?: GrowthFooterContext;
+}) {
+  return renderMasterEmailTemplate({
+    recipientEmail: opts.to,
+    bodyText: opts.bodyText,
+    cta: opts.cta,
+    preheader: opts.preheader,
+    growthFooterContext: opts.growthFooterContext,
+    logoUrl: GREAT_LOGO_URL,
+    appBaseUrl: APP_BASE_URL,
+  });
+}
+
 function formatDate(date: Date | string | null | undefined): string {
   if (!date) return 'TBD';
   const d = typeof date === 'string' ? new Date(date) : date;
@@ -159,6 +209,48 @@ function formatCurrency(amount: string | number | null | undefined): string {
 
 class NotificationService {
   private logs: NotificationPayload[] = [];
+
+  async sendWelcomeVerifyEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    verifyUrl: string;
+  }): Promise<void> {
+    const firstName = opts.userFirstName?.trim() || 'there';
+    const subject = 'Welcome to the Tribe! Please verify your email ⚡️';
+    const bodyText = `Hey ${firstName}, welcome to the platform. We are thrilled to have you here. To unlock full access to experiences, community hubs, and partner deals, please verify your email address below.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Verify My Email', href: opts.verifyUrl },
+      preheader: 'Verify your email to unlock full access to Great.',
+      growthFooterContext: 'account',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send welcome verification email');
+    }
+  }
+
+  async sendPasswordResetEmail(opts: {
+    to: string;
+    resetUrl: string;
+  }): Promise<void> {
+    const subject = 'Reset your password';
+    const bodyText = `We received a request to reset your password. Click the button below to choose a new one. If you didn't request this, you can safely ignore this email.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Reset Password', href: opts.resetUrl },
+      preheader: 'Use this secure link to reset your Great. password.',
+      growthFooterContext: 'security',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send password reset email');
+    }
+  }
 
   async sendBookingCreatedEmail(userId: string, experience: Experience, booking: Booking): Promise<void> {
     try {

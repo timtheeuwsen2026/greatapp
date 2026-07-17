@@ -3688,6 +3688,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.createExperience(experienceData);
       await syncBuilderParticipantRoles(experience);
 
+      // Manual venues are external by definition. Send the proposal from the
+      // active draft-publish flow (the legacy publish endpoint already did
+      // this, but Event Builder uses this route).
+      if (experience.venueType === "manual" && experience.manualVenueEmail) {
+        notificationService.sendExternalVenueInvitation(experience).catch((error) => {
+          console.error("Failed to send external venue invitation:", error);
+        });
+      }
+
       if ((draft as any).selectedVenueId) {
         await storage.upsertVenueContract(buildVenueContractObject(
           experienceData,
@@ -6306,6 +6315,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
     await lockCommissionsForExperience(experienceId);
     await storage.updateExperienceMVGStatus(experienceId, "met");
+
+    // The booking endpoint reaches this helper directly, bypassing the MVG
+    // scheduler. Notification service records successful sends per booking,
+    // so this remains safe when a later scheduler pass sees the same event.
+    try {
+      await notificationService.sendMVGConfirmedNotification(experience, confirmedBookings);
+    } catch (error) {
+      console.error(`Failed to send MVG confirmation emails for ${experienceId}:`, error);
+    }
   }
 
   // Helper function to confirm MVG event and capture payments
@@ -6412,6 +6430,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Helper function to refund MVG participants
   async function refundMVGParticipants(experienceId: string, bookings: any[]) {
     console.log(`MVG failed for ${experienceId} - refunding ${bookings.length} bookings`);
+    const refundedBookings: any[] = [];
+    const cancelledBookings: any[] = [];
+    const failedRefundBookings: any[] = [];
     
     for (const booking of bookings) {
       if ((booking.status === "pending" || booking.status === "confirmed") && booking.stripePaymentIntentId) {
@@ -6423,6 +6444,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Cancel uncaptured authorization (full payment, no deposit)
             await stripe.paymentIntents.cancel(booking.stripePaymentIntentId);
             console.log(`MVG failed: Cancelled uncaptured authorization for booking ${booking.id}`);
+            cancelledBookings.push(booking);
           } else if (paymentIntent.status === "succeeded") {
             // Refund charged payment (deposit or full payment)
             await stripe.refunds.create({
@@ -6434,13 +6456,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
             } else {
               console.log(`MVG failed: Refunded full payment for booking ${booking.id}`);
             }
+            refundedBookings.push(booking);
+          } else {
+            // No captured payment exists for this booking, so no refund is
+            // required. It still receives the cancellation update below.
+            cancelledBookings.push(booking);
           }
           
           // Update booking status to refunded
           await storage.updateBookingStatus(booking.id, "refunded");
         } catch (error) {
           console.error(`Failed to refund payment for booking ${booking.id}:`, error);
+          failedRefundBookings.push(booking);
         }
+      }
+    }
+
+    const experience = await storage.getExperience(experienceId);
+    if (experience && (refundedBookings.length || cancelledBookings.length || failedRefundBookings.length)) {
+      try {
+        await notificationService.sendMVGFailedNotification(
+          experience,
+          refundedBookings,
+          cancelledBookings,
+          failedRefundBookings,
+        );
+      } catch (error) {
+        console.error(`Failed to send MVG failure emails for ${experienceId}:`, error);
       }
     }
   }

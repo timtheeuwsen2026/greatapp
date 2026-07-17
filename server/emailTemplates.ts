@@ -1,0 +1,189 @@
+export type GrowthFooterContext =
+  | "none"
+  | "account"
+  | "security"
+  | "participant"
+  | "creator"
+  | "partner";
+
+export interface EmailCta {
+  label: string;
+  href: string;
+}
+
+export interface MasterEmailTemplateOptions {
+  recipientEmail?: string | null;
+  preheader?: string;
+  bodyText: string;
+  cta?: EmailCta;
+  growthFooterContext?: GrowthFooterContext;
+  logoUrl?: string;
+  appBaseUrl: string;
+}
+
+export interface RenderedEmail {
+  html: string;
+  text: string;
+}
+
+const GREAT_LOGO_ALT = "Great.";
+
+const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "security">, {
+  html: (appBaseUrl: string) => string;
+  text: (appBaseUrl: string) => string;
+}> = {
+  account: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Ready when you are</p>
+        <p>Explore experiences, community hubs, and partner deals from your Great. account.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/experiences`)}">Browse experiences</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Ready when you are\nExplore experiences, community hubs, and partner deals from your Great. account.\nBrowse experiences: ${appBaseUrl}/experiences`,
+  },
+  participant: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Find your next group</p>
+        <p>See what is forming now and join the experiences that match your energy.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/experiences`)}">Explore trips</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Find your next group\nSee what is forming now and join the experiences that match your energy.\nExplore trips: ${appBaseUrl}/experiences`,
+  },
+  creator: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Build something people can join</p>
+        <p>Create an experience and let Great. help with discovery, bookings, and group momentum.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/event-builder`)}">Create an experience</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Build something people can join\nCreate an experience and let Great. help with discovery, bookings, and group momentum.\nCreate an experience: ${appBaseUrl}/event-builder`,
+  },
+  partner: {
+    html: (appBaseUrl) => `
+      <div class="growth-footer">
+        <p class="growth-title">Grow through trusted partnerships</p>
+        <p>Review opportunities, venue offers, and promotion deals from your dashboard.</p>
+        <a href="${escapeHtml(`${appBaseUrl}/promoter`)}">Open dashboard</a>
+      </div>
+    `,
+    text: (appBaseUrl) => `Grow through trusted partnerships\nReview opportunities, venue offers, and promotion deals from your dashboard.\nOpen dashboard: ${appBaseUrl}/promoter`,
+  },
+};
+
+export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): RenderedEmail {
+  const appBaseUrl = opts.appBaseUrl.replace(/\/$/, "");
+  const logoUrl = opts.logoUrl || `${appBaseUrl}/email-assets/great-logo.jpg`;
+  const unsubscribeUrl = buildFooterUrl(appBaseUrl, "/unsubscribe", opts.recipientEmail);
+  const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.recipientEmail);
+  const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl);
+  const bodyHtml = renderBodyText(opts.bodyText);
+  const ctaHtml = opts.cta
+    ? `<div class="cta-wrap"><a class="button" href="${escapeHtml(opts.cta.href)}">${escapeHtml(opts.cta.label)}</a></div>`
+    : "";
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Great.</title>
+    <style>
+      body { margin: 0; padding: 0; background: #f7f5f0; color: #1f2933; font-family: Arial, Helvetica, sans-serif; }
+      .preheader { display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent; }
+      .shell { width: 100%; padding: 32px 14px; }
+      .container { max-width: 580px; margin: 0 auto; background: #ffffff; border: 1px solid #ece7dc; border-radius: 8px; overflow: hidden; }
+      .header { padding: 30px 28px 22px; text-align: center; border-bottom: 1px solid #f0ece4; }
+      .logo { display: inline-block; max-width: 116px; height: auto; }
+      .content { padding: 34px 32px 12px; font-size: 16px; line-height: 1.68; color: #29323d; }
+      .content p { margin: 0 0 18px; }
+      .cta-wrap { padding: 8px 32px 30px; text-align: center; }
+      .button { display: inline-block; padding: 13px 22px; border-radius: 6px; background: #111827; color: #ffffff !important; font-weight: 700; font-size: 15px; text-decoration: none; }
+      .growth-footer { margin: 4px 32px 30px; padding: 18px; border-radius: 8px; background: #f8faf7; border: 1px solid #e4eadf; color: #364152; font-size: 14px; line-height: 1.55; }
+      .growth-footer p { margin: 0 0 10px; }
+      .growth-footer a { color: #155e75; font-weight: 700; text-decoration: none; }
+      .growth-title { color: #111827; font-weight: 700; }
+      .footer { padding: 24px 32px 32px; text-align: center; border-top: 1px solid #f0ece4; color: #687385; font-size: 12px; line-height: 1.6; }
+      .footer a { color: #4b5563; text-decoration: underline; }
+      @media screen and (max-width: 480px) {
+        .shell { padding: 16px 8px; }
+        .content, .cta-wrap, .footer { padding-left: 22px; padding-right: 22px; }
+        .growth-footer { margin-left: 22px; margin-right: 22px; }
+      }
+    </style>
+  </head>
+  <body>
+    <span class="preheader">${escapeHtml(opts.preheader || "")}</span>
+    <div class="shell">
+      <div class="container">
+        <div class="header">
+          <img class="logo" src="${escapeHtml(logoUrl)}" alt="${GREAT_LOGO_ALT}">
+        </div>
+        <div class="content">
+          ${bodyHtml}
+        </div>
+        ${ctaHtml}
+        ${growthFooter.html}
+        <div class="footer">
+          <p>You are receiving this email from Great. because you have an account or requested an account action.</p>
+          <p><a href="${escapeHtml(preferencesUrl)}">Manage email preferences</a> &nbsp;|&nbsp; <a href="${escapeHtml(unsubscribeUrl)}">Unsubscribe</a></p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+  const textParts = [
+    opts.bodyText.trim(),
+    opts.cta ? `${opts.cta.label}: ${opts.cta.href}` : "",
+    growthFooter.text,
+    `Manage email preferences: ${preferencesUrl}`,
+    `Unsubscribe: ${unsubscribeUrl}`,
+  ].filter(Boolean);
+
+  return {
+    html,
+    text: textParts.join("\n\n"),
+  };
+}
+
+function renderGrowthFooter(context: GrowthFooterContext, appBaseUrl: string): { html: string; text: string } {
+  if (context === "none" || context === "security") {
+    return { html: "", text: "" };
+  }
+
+  const partial = growthFooterPartials[context];
+  return {
+    html: partial.html(appBaseUrl),
+    text: partial.text(appBaseUrl),
+  };
+}
+
+function renderBodyText(bodyText: string): string {
+  return bodyText
+    .trim()
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+}
+
+function buildFooterUrl(appBaseUrl: string, path: string, recipientEmail?: string | null): string {
+  const url = new URL(path, appBaseUrl);
+  if (recipientEmail) {
+    url.searchParams.set("email", recipientEmail);
+  }
+  return url.toString();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}

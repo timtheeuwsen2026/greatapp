@@ -4039,6 +4039,21 @@ export class DatabaseStorage implements IStorage {
         status: "pending",
         pendingActionBy: "partner",
       });
+
+      // External partners may not have an account yet. The deal is persisted
+      // before the email is sent, so signing up with this address immediately
+      // reveals a live offer in their dashboard.
+      import('./notifications')
+        .then(({ notificationService }) => notificationService.sendPromotionOfferReceivedEmail({
+          to: email,
+          recipientName: matchedUser?.firstName || invite.name,
+          experienceTitle: experience.title,
+          experienceSlugOrId: (experience as any).slug || experience.id,
+          dealType,
+          terms: baselineTerms,
+          currency: (experience as any).currency,
+        }))
+        .catch((err) => console.error('External promotion invitation email failed:', err?.message || err));
     }
   }
 

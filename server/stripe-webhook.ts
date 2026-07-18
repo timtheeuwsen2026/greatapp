@@ -27,6 +27,7 @@ import {
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
+import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ async function notifyCreatorEventPublished(experience: any): Promise<void> {
       creatorName: creator.firstName,
       eventName: experience.title || "your experience",
       eventSlugOrId: experience.slug || experience.id,
+      eventKey: `event_published:${experience.id}`,
     });
   } catch (error) {
     console.error("Failed to send event published email:", error);
@@ -189,6 +191,7 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     // Full payment captured — confirm booking
     await storage.updateBookingStatus(booking.id, "fully_paid");
     console.log(`[Webhook] Full payment confirmed for booking ${booking.id}`);
+    await sendBookingNotificationsAfterPayment(booking.id);
   }
 }
 
@@ -208,6 +211,7 @@ async function handleDepositAuthorized(pi: Stripe.PaymentIntent): Promise<void> 
     await storage.updateBookingStatus(booking.id, "deposit_authorized");
     console.log(`[Webhook] Deposit authorized for booking ${booking.id} (PI ${pi.id})`);
   }
+  await sendBookingNotificationsAfterPayment(booking.id);
 }
 
 /**
@@ -589,6 +593,7 @@ export async function finalizePromotionSponsorshipSession(session: Stripe.Checko
       partnerName: partner.firstName,
       eventName: experience.title,
       dealSummary: formatPromotionDealSummary(deal.dealType, deal.terms, experience.currency),
+      eventKey: `partnership_confirmed:${deal.id}`,
     });
   }
 }

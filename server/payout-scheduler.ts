@@ -277,6 +277,7 @@ async function executeExperiencePayout(
             to: user.email,
             eventName: experience.title,
             payoutAmount: formatPayoutAmount(transferAmountCents, currency),
+            eventKey: `payout_initiated:${scheduledPayoutId}:${recipient.id || recipient.stripeAccountId}`,
           }).catch((error) => console.error('[Payout Scheduler] Payout email failed:', error?.message || error));
         }
       }
@@ -334,6 +335,7 @@ async function executeExperiencePayout(
         to: promoter.email,
         eventName: experience.title,
         payoutAmount: formatPayoutAmount(amount, currency),
+        eventKey: `payout_initiated:${scheduledPayoutId}:promoter:${promoterId}`,
       }).catch((error) => console.error('[Payout Scheduler] Promoter payout email failed:', error?.message || error));
     }
     promoterReserveRemainingCents -= amount;

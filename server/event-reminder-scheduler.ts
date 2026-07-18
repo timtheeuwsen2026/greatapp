@@ -6,7 +6,6 @@ import { storage } from "./storage";
 import { notificationService } from "./notifications";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const sentReminderKeys = new Set<string>();
 
 export function startEventReminderScheduler() {
   cron.schedule("0 * * * *", async () => {
@@ -42,12 +41,6 @@ export async function sendDueEvent24HourReminders(now = new Date()): Promise<{ s
   for (const experience of dueExperiences) {
     const confirmedBookings = await storage.getConfirmedBookings(experience.id);
     for (const booking of confirmedBookings) {
-      const key = `${experience.id}:${booking.id}:24h`;
-      if (sentReminderKeys.has(key)) {
-        result.skipped += 1;
-        continue;
-      }
-
       try {
         const user = await storage.getUser(booking.userId);
         if (!user?.email) {
@@ -55,15 +48,18 @@ export async function sendDueEvent24HourReminders(now = new Date()): Promise<{ s
           continue;
         }
 
-        await notificationService.sendEvent24HourReminderEmail({
+        const delivery = await notificationService.sendEvent24HourReminderEmail({
           to: user.email,
+          userId: user.id,
           userFirstName: user.firstName,
           experienceTitle: experience.title,
           experienceSlugOrId: (experience as any).slug || experience.id,
+          experience,
           startTime: experience.startDate,
+          eventKey: `event_24h_reminder:${experience.id}:${booking.id}`,
         });
-        sentReminderKeys.add(key);
-        result.sent += 1;
+        if (delivery.skipped) result.skipped += 1;
+        else result.sent += 1;
       } catch (error) {
         result.errors += 1;
         console.error(`[Event Reminder Scheduler] Failed reminder for booking ${booking.id}:`, error);

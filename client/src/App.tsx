@@ -65,6 +65,8 @@ import { usePromoterAttribution } from "@/hooks/usePromoterAttribution";
 import Navigation from "@/components/navigation";
 import Messages from "@/pages/messages";
 import { PersistentChatDrawer } from "@/components/PersistentChatDrawer";
+import EmailPreferencesPage from "@/pages/email-preferences";
+import UnsubscribePage from "@/pages/unsubscribe";
 
 const VenueProfileSetup = lazy(() => import("@/pages/venue-profile-setup"));
 
@@ -235,6 +237,8 @@ function Router() {
     <Switch>
       <Route path="/login" component={AuthPage} />
       <Route path="/reset-password" component={ResetPasswordPage} />
+      <Route path="/email-preferences" component={EmailPreferencesPage} />
+      <Route path="/unsubscribe" component={UnsubscribePage} />
       <Route path="/" component={Home} />
 
       {/* Homepage CTA Routes - Redirects */}

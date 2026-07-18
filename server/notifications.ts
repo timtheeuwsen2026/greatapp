@@ -1,23 +1,55 @@
 import sgMail from '@sendgrid/mail';
+import { createHash } from 'node:crypto';
 import { storage } from './storage';
 import { db } from './db';
 import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { Booking, Experience } from '@shared/schema';
 import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext, type GrowthFooterData } from './emailTemplates';
+import { createEmailPreferenceToken } from './emailPreferenceTokens';
+import { isEmailCategoryEnabled, type EmailCategory } from './emailPreferences';
+import { claimImmediateEmailEvent, completeEmailEvent, retryOrFailEmailJob } from './emailDeliveryLedger';
+import { resolveBookingEmailDecision } from './emailRules';
+import { getConfiguredPublicAppBaseUrl } from './publicUrl';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
-// FROM_EMAIL must be a verified sender in Resend or SendGrid.
+// Production delivery uses a verified Resend sender. SendGrid remains only as a
+// backward-compatible development fallback for existing environments.
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || process.env.SENDGRID_FROM_EMAIL || 'noreply@great.com';
 const FROM_NAME = process.env.RESEND_FROM_NAME || process.env.SENDGRID_FROM_NAME || 'Great. Experiences';
 
 // Public base URL used for links inside emails (View Event Details, dashboards).
-const APP_BASE_URL = (process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || 'https://greatapp.replit.app').replace(/\/$/, '');
-const GREAT_LOGO_URL = process.env.GREAT_LOGO_URL || `${APP_BASE_URL}/email-assets/great-logo.jpg`;
+const APP_BASE_URL = getConfiguredPublicAppBaseUrl();
 const STRIPE_DASHBOARD_URL = process.env.STRIPE_DASHBOARD_URL || 'https://dashboard.stripe.com/';
+
+export function assertEmailConfiguration(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const errors: string[] = [];
+  if (!process.env.RESEND_API_KEY) {
+    errors.push('RESEND_API_KEY must be configured');
+  }
+  if (!process.env.RESEND_FROM_EMAIL) {
+    errors.push('RESEND_FROM_EMAIL must be configured');
+  }
+  if (!process.env.EMAIL_PREFERENCES_SECRET || process.env.EMAIL_PREFERENCES_SECRET.length < 32) {
+    errors.push('EMAIL_PREFERENCES_SECRET must be at least 32 characters');
+  }
+  if (!process.env.VITE_APP_BASE_URL && !process.env.APP_BASE_URL) {
+    errors.push('APP_BASE_URL or VITE_APP_BASE_URL must be configured');
+  }
+  if (/yourdomain\.com|example\.com/i.test(FROM_EMAIL)) {
+    errors.push('RESEND_FROM_EMAIL must be a verified production sender');
+  }
+  if (/yourwebsite\.com|localhost|greatapp\.replit\.app/i.test(APP_BASE_URL)) {
+    errors.push('APP_BASE_URL must use the canonical production domain');
+  }
+  if (errors.length) {
+    throw new Error(`Invalid production email configuration: ${errors.join('; ')}`);
+  }
+}
 
 function experienceDetailsUrl(slugOrId: string): string {
   return `${APP_BASE_URL}/experience/${slugOrId}`;
@@ -25,6 +57,13 @@ function experienceDetailsUrl(slugOrId: string): string {
 
 function experienceSlugOrId(experience: Experience | any): string {
   return String(experience?.slug || experience?.id || '');
+}
+
+function notificationEventKey(type: string, ...parts: Array<string | number | null | undefined>): string {
+  const digest = createHash('sha256')
+    .update(parts.map((part) => String(part ?? '').trim().toLowerCase()).join('|'))
+    .digest('hex');
+  return `${type}:${digest}`;
 }
 
 // Human-readable one-liner for a promotion deal's baseline/counter terms.
@@ -115,7 +154,34 @@ async function recordEmailSent(
   });
 }
 
-async function sendEmail(to: string, subject: string, textContent: string, htmlContent?: string): Promise<{ success: boolean; error?: string }> {
+export interface EmailSendResult {
+  success: boolean;
+  skipped?: boolean;
+  duplicate?: boolean;
+  simulated?: boolean;
+  error?: string;
+}
+
+interface EmailSendOptions {
+  category?: EmailCategory;
+  preferencesToken?: string;
+}
+
+async function sendEmail(
+  to: string,
+  subject: string,
+  textContent: string,
+  htmlContent?: string,
+  options: EmailSendOptions = {},
+): Promise<EmailSendResult> {
+  const category = options.category || 'transactional';
+  if (!(await isEmailCategoryEnabled(to, category))) {
+    console.log(`[EMAIL SKIPPED] Recipient preferences disabled ${category} email for ${to}`);
+    return { success: true, skipped: true };
+  }
+
+  const preferencesToken = options.preferencesToken || createEmailPreferenceToken(to);
+  const unsubscribeUrl = `${APP_BASE_URL}/api/email-preferences/unsubscribe?token=${encodeURIComponent(preferencesToken)}`;
   if (process.env.RESEND_API_KEY) {
     try {
       const response = await fetch('https://api.resend.com/emails', {
@@ -130,6 +196,10 @@ async function sendEmail(to: string, subject: string, textContent: string, htmlC
           subject,
           text: textContent,
           html: htmlContent || textContent.replace(/\n/g, '<br>'),
+          headers: {
+            'List-Unsubscribe': `<${unsubscribeUrl}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
         }),
       });
 
@@ -148,6 +218,11 @@ async function sendEmail(to: string, subject: string, textContent: string, htmlC
   }
 
   if (!process.env.SENDGRID_API_KEY) {
+    if (process.env.NODE_ENV === 'production') {
+      const error = 'No email provider API key is configured';
+      console.error(`[EMAIL CONFIG] ${error}`);
+      return { success: false, error };
+    }
     console.log(`📧 [EMAIL - NO API KEY] Would send email to ${to}: ${subject}`);
     return { success: true };
   }
@@ -177,6 +252,50 @@ async function sendEmail(to: string, subject: string, textContent: string, htmlC
   }
 }
 
+async function sendEmailOnce(opts: {
+  eventKey: string;
+  emailType: string;
+  category?: EmailCategory;
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}): Promise<EmailSendResult> {
+  const category = opts.category || 'transactional';
+  const claimed = await claimImmediateEmailEvent({
+    eventKey: opts.eventKey,
+    emailType: opts.emailType,
+    category,
+    recipientEmail: opts.to,
+    payload: {
+      kind: 'rendered_email',
+      to: opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      html: opts.html || null,
+      category,
+    },
+  });
+  if (!claimed) return { success: true, skipped: true, duplicate: true };
+
+  const result = await sendEmail(opts.to, opts.subject, opts.text, opts.html, { category });
+  if (result.success) await completeEmailEvent(opts.eventKey, result);
+  else await retryOrFailEmailJob(opts.eventKey, 1, result.error || 'Email provider delivery failed');
+  return result;
+}
+
+export async function sendQueuedRenderedEmail(payload: Record<string, unknown>): Promise<EmailSendResult> {
+  const to = String(payload.to || '');
+  const subject = String(payload.subject || '');
+  const text = String(payload.text || '');
+  const html = typeof payload.html === 'string' ? payload.html : undefined;
+  const category = String(payload.category || 'transactional') as EmailCategory;
+  if (!to || !subject || !text || !['transactional', 'community', 'reminder', 'marketing'].includes(category)) {
+    return { success: false, error: 'Invalid queued email payload' };
+  }
+  return sendEmail(to, subject, text, html, { category });
+}
+
 function renderBaseEmail(opts: {
   to: string;
   bodyText: string;
@@ -188,13 +307,13 @@ function renderBaseEmail(opts: {
 }) {
   return renderMasterEmailTemplate({
     recipientEmail: opts.to,
+    preferencesToken: createEmailPreferenceToken(opts.to),
     bodyText: opts.bodyText,
     receiptRows: opts.receiptRows,
     cta: opts.cta,
     preheader: opts.preheader,
     growthFooterContext: opts.growthFooterContext,
     growthFooterData: opts.growthFooterData,
-    logoUrl: GREAT_LOGO_URL,
     appBaseUrl: APP_BASE_URL,
   });
 }
@@ -300,7 +419,14 @@ class NotificationService {
       growthFooterContext: 'account',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey('welcome_verify', opts.to, opts.verifyUrl),
+      emailType: 'welcome_verify',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send welcome verification email');
     }
@@ -320,7 +446,14 @@ class NotificationService {
       growthFooterContext: 'security',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey('password_reset', opts.to, opts.resetUrl),
+      emailType: 'password_reset',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send password reset email');
     }
@@ -330,6 +463,7 @@ class NotificationService {
     to: string;
     creatorName?: string | null;
     eventName: string;
+    eventKey?: string;
   }): Promise<void> {
     const subject = 'Your experience is under review! 🚀';
     const bodyText = `Hey ${opts.creatorName || 'there'}, we received your submission for ${opts.eventName}. Our team is reviewing the details to ensure everything looks perfect. We'll notify you the moment it goes live!`;
@@ -341,7 +475,14 @@ class NotificationService {
       growthFooterContext: 'creator',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('event_submitted', opts.to, opts.eventName),
+      emailType: 'event_submitted',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send event submitted email');
     }
@@ -352,6 +493,7 @@ class NotificationService {
     creatorName?: string | null;
     eventName: string;
     eventSlugOrId: string;
+    eventKey?: string;
   }): Promise<void> {
     const subject = `You are Live! ${opts.eventName} is ready for bookings`;
     const bodyText = `Great news, ${opts.creatorName || 'there'}. ${opts.eventName} is officially live on the platform! It's time to start bringing in your squad.`;
@@ -364,7 +506,14 @@ class NotificationService {
       growthFooterData: { mainEventUrl: experienceDetailsUrl(opts.eventSlugOrId) },
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('event_published', opts.to, opts.eventSlugOrId),
+      emailType: 'event_published',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send event published email');
     }
@@ -375,7 +524,8 @@ class NotificationService {
     creatorName?: string | null;
     experienceTitle: string;
     experienceSlugOrId: string;
-  }): Promise<void> {
+    experience?: Experience;
+  }): Promise<EmailSendResult> {
     const subject = `Your attendees are chatting in the ${opts.experienceTitle} Hub!`;
     const bodyText = `Hey ${opts.creatorName || 'there'}, your community is coming alive. There are new messages in the ${opts.experienceTitle} chat. As the host, jumping in to answer questions and welcome new members is the best way to keep the momentum going and hit your minimum group size!`;
     const email = renderBaseEmail({
@@ -384,18 +534,21 @@ class NotificationService {
       cta: { label: 'Join the Conversation', href: communityHubUrl() },
       preheader: `New messages are waiting in the ${opts.experienceTitle} Hub.`,
       growthFooterContext: 'creator_venue',
+      growthFooterData: { mainEventUrl: experienceDetailsUrl(opts.experienceSlugOrId) },
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmail(opts.to, subject, email.text, email.html, { category: 'community' });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send creator hub nudge email');
     }
+    return result;
   }
 
   async sendAffiliateSaleMadeEmail(opts: {
     to: string;
     eventName: string;
     earnedAmount: string;
+    eventKey?: string;
   }): Promise<void> {
     const subject = 'Cha-ching! Someone booked using your link 💸';
     const bodyText = `Great work! Someone just booked a spot for ${opts.eventName} using your referral link. You have earned ${opts.earnedAmount}. This will be routed to your connected Stripe account based on the event's payout schedule.`;
@@ -407,7 +560,16 @@ class NotificationService {
       growthFooterContext: 'none',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = opts.eventKey
+      ? await sendEmailOnce({
+          eventKey: opts.eventKey,
+          emailType: 'affiliate_sale',
+          to: opts.to,
+          subject,
+          text: email.text,
+          html: email.html,
+        })
+      : await sendEmail(opts.to, subject, email.text, email.html);
     if (!result.success) {
       throw new Error(result.error || 'Failed to send affiliate sale email');
     }
@@ -418,6 +580,7 @@ class NotificationService {
     eventName: string;
     payoutAmount: string;
     stripeDashboardUrl?: string | null;
+    eventKey?: string;
   }): Promise<void> {
     const subject = `Your payout for ${opts.eventName} is on its way!`;
     const bodyText = `Your final payout of ${opts.payoutAmount} for ${opts.eventName} has been successfully initiated and is en route to your connected bank account.`;
@@ -429,7 +592,16 @@ class NotificationService {
       growthFooterContext: 'none',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = opts.eventKey
+      ? await sendEmailOnce({
+          eventKey: opts.eventKey,
+          emailType: 'payout_initiated',
+          to: opts.to,
+          subject,
+          text: email.text,
+          html: email.html,
+        })
+      : await sendEmail(opts.to, subject, email.text, email.html);
     if (!result.success) {
       throw new Error(result.error || 'Failed to send payout initiated email');
     }
@@ -463,10 +635,12 @@ class NotificationService {
 
   async sendCommunityHubUnreadEmail(opts: {
     to: string;
+    userId?: string | null;
     userFirstName?: string | null;
     experienceTitle: string;
     experienceSlugOrId: string;
-  }): Promise<void> {
+    experience?: Experience;
+  }): Promise<EmailSendResult> {
     const subject = `You have unread messages in the ${opts.experienceTitle} Hub 💬`;
     const bodyText = `Hey ${opts.userFirstName || 'there'}, the squad is talking! There are new messages waiting for you in the ${opts.experienceTitle} Community Hub. Catch up on the conversation and get to know your fellow attendees before the experience begins.`;
     const email = renderBaseEmail({
@@ -475,21 +649,31 @@ class NotificationService {
       cta: { label: 'Reply in the Hub', href: communityHubUrl() },
       preheader: `New messages are waiting in the ${opts.experienceTitle} Hub.`,
       growthFooterContext: 'confirmed_participant',
+      growthFooterData: opts.userId
+        ? await participantGrowthFooterData(opts.userId, opts.experience || {
+            id: opts.experienceSlugOrId,
+            slug: opts.experienceSlugOrId,
+          } as Experience)
+        : undefined,
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmail(opts.to, subject, email.text, email.html, { category: 'community' });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send unread hub email');
     }
+    return result;
   }
 
   async sendEvent24HourReminderEmail(opts: {
     to: string;
+    userId?: string | null;
     userFirstName?: string | null;
     experienceTitle: string;
     experienceSlugOrId: string;
+    experience?: Experience;
     startTime: Date | string;
-  }): Promise<void> {
+    eventKey?: string;
+  }): Promise<EmailSendResult> {
     const subject = `Get ready! ${opts.experienceTitle} starts tomorrow ⏳`;
     const bodyText = `Hey ${opts.userFirstName || 'there'}, your experience is almost here! ${opts.experienceTitle} kicks off tomorrow at ${formatTime(opts.startTime)}. Double-check the location details and jump into the Community Hub if you need to coordinate with the squad.`;
     const email = renderBaseEmail({
@@ -498,12 +682,29 @@ class NotificationService {
       cta: { label: 'View Event Details', href: experienceDetailsUrl(opts.experienceSlugOrId) },
       preheader: `${opts.experienceTitle} starts tomorrow at ${formatTime(opts.startTime)}.`,
       growthFooterContext: 'confirmed_participant',
+      growthFooterData: opts.userId
+        ? await participantGrowthFooterData(opts.userId, opts.experience || {
+            id: opts.experienceSlugOrId,
+            slug: opts.experienceSlugOrId,
+          } as Experience)
+        : undefined,
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = opts.eventKey
+      ? await sendEmailOnce({
+          eventKey: opts.eventKey,
+          emailType: 'event_24h_reminder',
+          category: 'reminder',
+          to: opts.to,
+          subject,
+          text: email.text,
+          html: email.html,
+        })
+      : await sendEmail(opts.to, subject, email.text, email.html, { category: 'reminder' });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send 24-hour event reminder email');
     }
+    return result;
   }
 
   async sendBookingCreatedEmail(userId: string, experience: Experience, booking: Booking): Promise<void> {
@@ -519,12 +720,20 @@ class NotificationService {
         return;
       }
 
-      const currentParticipants = experience.currentParticipants ?? 0;
-      const minimumParticipants = experience.minimumParticipants ?? 0;
-      const remainingMvgSpots = Math.max(0, minimumParticipants - currentParticipants);
-      const mvgNotMet = !!experience.requireMinimumParticipants
-        && experience.mvgStatus !== 'met'
-        && remainingMvgSpots > 0;
+      const bookingDecision = resolveBookingEmailDecision(experience);
+      if (bookingDecision.kind === 'awaiting_confirmation') {
+        console.log(`[EMAIL DEFERRED] Booking ${booking.id} reached MVG but the experience transition is not complete yet`);
+        return;
+      }
+      if (
+        bookingDecision.kind === 'confirmed'
+        && experience.requireMinimumParticipants
+        && await hasEmailBeenSentSuccessfully(booking.id, 'mvg_confirmed')
+      ) {
+        console.log(`[EMAIL SKIPPED] Booking ${booking.id} already received its MVG confirmation`);
+        return;
+      }
+      const remainingMvgSpots = bookingDecision.remainingMvgSpots;
       const growthFooterData = await participantGrowthFooterData(userId, experience);
 
       let subject = `Your deposit is secured - ${experience.title}`;
@@ -553,7 +762,7 @@ The Great. Team
       `.trim();
       let htmlContent: string | undefined;
 
-      if (mvgNotMet) {
+      if (bookingDecision.kind === 'pre_mvg') {
         subject = `Spot reserved! We need ${remainingMvgSpots} more people to confirm ${experience.title}`;
         const bodyText = `Hey ${user.firstName || 'there'}, you are officially on the roster for ${experience.title}! Because this is a community-powered experience, it only happens if we hit our minimum group size. Your spot is reserved, but we still need ${remainingMvgSpots} more people to lock it in. The system just announced your arrival in the Community Hub. Jump in, say hi, and introduce yourself to the squad!`;
         const email = renderBaseEmail({
@@ -584,8 +793,17 @@ The Great. Team
         htmlContent = email.html;
       }
 
-      const result = await sendEmail(user.email, subject, textContent, htmlContent);
-      await recordEmailSent(booking.id, 'booking_created', user.email, result.success, result.error);
+      const result = await sendEmailOnce({
+        eventKey: `booking_created:${booking.id}`,
+        emailType: 'booking_created',
+        to: user.email,
+        subject,
+        text: textContent,
+        html: htmlContent,
+      });
+      if (!result.duplicate) {
+        await recordEmailSent(booking.id, 'booking_created', user.email, result.success, result.error);
+      }
 
       this.logNotification({
         type: 'deposit_created',
@@ -647,9 +865,20 @@ The Great. Team
           growthFooterData: await participantGrowthFooterData(booking.userId, experience),
         });
 
-        const result = await sendEmail(user.email, email.subject, email.text, email.html);
+        const result = await sendEmailOnce({
+          eventKey: `mvg_confirmed:${booking.id}`,
+          emailType: 'mvg_confirmed',
+          to: user.email,
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+        });
+        if (result.duplicate) {
+          emailsSkipped++;
+          continue;
+        }
         await recordEmailSent(booking.id, 'mvg_confirmed', user.email, result.success, result.error);
-        emailsSent++;
+        if (result.success) emailsSent++;
 
         this.logNotification({
           type: 'mvg_confirmed',
@@ -748,9 +977,20 @@ The Great. Team
           htmlContent = email.html;
         }
 
-        const result = await sendEmail(user.email, subject, textContent, htmlContent);
+        const result = await sendEmailOnce({
+          eventKey: `mvg_failed:${booking.id}`,
+          emailType: 'mvg_failed',
+          to: user.email,
+          subject,
+          text: textContent,
+          html: htmlContent,
+        });
+        if (result.duplicate) {
+          emailsSkipped++;
+          return;
+        }
         await recordEmailSent(booking.id, 'mvg_failed', user.email, result.success, result.error);
-        emailsSent++;
+        if (result.success) emailsSent++;
 
         this.logNotification({
           type: 'mvg_failed',
@@ -792,7 +1032,7 @@ The Great. Team
     await this.sendBookingCreatedEmail(userId, experience, booking);
   }
 
-  async sendCreatorNewMemberNotification(creatorId: string, experience: Experience, newUserId: string): Promise<void> {
+  async sendCreatorNewMemberNotification(creatorId: string, experience: Experience, newUserId: string, bookingId?: string): Promise<void> {
     try {
       const creator = await storage.getUser(creatorId);
       if (!creator || !creator.email) {
@@ -817,7 +1057,16 @@ The Great. Team
         growthFooterContext: 'creator_venue',
       });
 
-      const result = await sendEmail(creator.email, subject, email.text, email.html);
+      const result = bookingId
+        ? await sendEmailOnce({
+            eventKey: `creator_new_booking:${bookingId}`,
+            emailType: 'creator_new_booking',
+            to: creator.email,
+            subject,
+            text: email.text,
+            html: email.html,
+          })
+        : await sendEmail(creator.email, subject, email.text, email.html);
       if (result.success) {
         console.log(`📧 [CREATOR NOTIF] Sent new-member email to creator ${creator.email} for experience ${experience.id}`);
       }
@@ -850,7 +1099,19 @@ ${APP_BASE_URL}/creator-dashboard
 
 The Great. Team
     `.trim();
-    await sendEmail(creator.email, subject, textContent);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey(
+        'role_application_received',
+        opts.experience.id,
+        opts.applicantId,
+        opts.roleName,
+      ),
+      emailType: 'role_application_received',
+      to: creator.email,
+      subject,
+      text: textContent,
+    });
+    if (!result.success) throw new Error(result.error || 'Failed to send role application email');
   }
 
   async sendRoleApplicationResolvedEmail(opts: {
@@ -875,7 +1136,20 @@ ${approved ? `${APP_BASE_URL}/experience/${(opts.experience as any).slug || opts
 
 The Great. Team
     `.trim();
-    await sendEmail(applicant.email, subject, textContent);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey(
+        'role_application_resolved',
+        opts.experience.id,
+        opts.applicantId,
+        opts.roleName,
+        opts.status,
+      ),
+      emailType: 'role_application_resolved',
+      to: applicant.email,
+      subject,
+      text: textContent,
+    });
+    if (!result.success) throw new Error(result.error || 'Failed to send role resolution email');
   }
 
   async sendExternalVenueInvitation(event: {
@@ -921,6 +1195,7 @@ The Great. Team
       eventSlugOrId: (event as any).slug || (event as any).id || '',
       proposedTerms: `${deal}${value ? ` (${value})` : ''}`,
       reviewUrl: experienceDetailsUrl(String((event as any).slug || (event as any).id || '')),
+      eventKey: notificationEventKey('external_venue_invite', (event as any).id, event.manualVenueEmail),
     });
   }
 
@@ -932,6 +1207,7 @@ The Great. Team
     eventSlugOrId?: string | null;
     proposedTerms?: string | null;
     reviewUrl?: string | null;
+    eventKey?: string;
   }): Promise<void> {
     const subject = `Private Invite: Partner with us on ${opts.eventName}`;
     const bodyText = `Hello ${opts.partnerName?.trim() || 'there'}, you've been invited by ${opts.creatorName?.trim() || 'the creator'} to partner on an upcoming experience: ${opts.eventName}. They have proposed a specific collaboration deal and would love to work with you. Click below to view the event details and review the offer!`;
@@ -944,7 +1220,15 @@ The Great. Team
       growthFooterContext: 'none',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('external_partner_invite', opts.to, opts.eventSlugOrId, opts.proposedTerms),
+      emailType: 'external_partner_invite',
+      category: 'marketing',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send external partner invitation');
     }
@@ -999,6 +1283,7 @@ The Great. Team
         eventName: event.title || 'A Great. experience',
         eventSlugOrId: (event as any).slug || (event as any).id || '',
         proposedTerms: dealSummary,
+        eventKey: notificationEventKey('external_promotion_invite', (event as any).id, invite.email),
       });
       sentCount += 1;
     }
@@ -1036,7 +1321,20 @@ ${opts.ctaNote || 'Log in to your Great. dashboard to respond.'}
 The Great. Team
     `.trim().replace(/\n{3,}/g, '\n\n');
 
-    const result = await sendEmail(opts.to, opts.subject, textContent);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey(
+        'digital_handshake',
+        opts.to,
+        opts.subject,
+        opts.experienceSlugOrId,
+        details,
+        opts.ctaNote,
+      ),
+      emailType: 'digital_handshake',
+      to: opts.to,
+      subject: opts.subject,
+      text: textContent,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send handshake email');
     }
@@ -1071,7 +1369,21 @@ The Great. Team
       growthFooterContext: opts.growthFooterContext || 'none',
     });
 
-    const result = await sendEmail(opts.to, opts.subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey(
+        'deal_engine',
+        opts.to,
+        opts.subject,
+        opts.bodyText,
+        opts.dealSummary,
+        opts.message,
+      ),
+      emailType: 'deal_engine',
+      to: opts.to,
+      subject: opts.subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send deal engine email');
     }
@@ -1184,7 +1496,7 @@ The Great. Team
       detailLines: [`🤝 Deal: ${formatPromotionDealSummary(opts.dealType, opts.terms, opts.currency)}`],
       experienceTitle: opts.experienceTitle,
       experienceSlugOrId: opts.experienceSlugOrId,
-      ctaNote: opts.action === 'accepted'
+      ctaNote: String(opts.action) === 'accepted'
         ? opts.dealType === 'financial_sponsorship'
           ? 'Your terms are approved. Open the Experience Pool to complete the sponsorship payment.'
           : 'Your tracking link is ready in your dashboard — you can start promoting now.'
@@ -1199,6 +1511,7 @@ The Great. Team
     dealSummary?: string | null;
     dashboardUrl?: string | null;
     trackingLink?: string | null;
+    eventKey?: string;
   }): Promise<void> {
     const subject = 'Partnership Confirmed! Here is your tracking link 🔗';
     const bodyText = `It's official! Your partnership terms for ${opts.eventName} have been locked in. You are all set to start promoting and earning.`;
@@ -1208,14 +1521,21 @@ The Great. Team
       receiptRows: opts.dealSummary ? [{ label: 'Deal Summary', value: opts.dealSummary }] : undefined,
       cta: { label: 'View My Dashboard', href: opts.dashboardUrl || partnerDashboardUrl() },
       preheader: `Your partnership for ${opts.eventName} is confirmed.`,
-      growthFooterContext: 'none',
+      growthFooterContext: 'partner',
       growthFooterData: {
         b2bDealValue: opts.dealSummary || 'agreed',
         brandRefLink: opts.trackingLink || opts.dashboardUrl || partnerDashboardUrl(),
       },
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('partnership_confirmed', opts.to, opts.eventName, opts.dealSummary),
+      emailType: 'partnership_confirmed',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send partnership confirmation email');
     }
@@ -1229,7 +1549,8 @@ The Great. Team
     eventName: string;
     eventSlugOrId: string;
     referralUrl: string;
-  }): Promise<void> {
+    eventKey?: string;
+  }): Promise<EmailSendResult> {
     const subject = `We're looking for a ${opts.roleName} in ${opts.city} 📍 (Know someone?)`;
     const bodyText = `Hey ${opts.userFirstName || 'there'}, a new experience (${opts.eventName}) is happening in ${opts.city} and the host is looking for a ${opts.roleName} to join the crew! Got the skills? Check out the details and submit your offer to take the gig. Not your thing? Share your personal tracking link with a friend who fits the bill—if they take the gig or book a ticket, you'll earn your reward!`;
     const email = renderBaseEmail({
@@ -1240,10 +1561,21 @@ The Great. Team
       growthFooterContext: 'participant',
     });
 
-    const result = await sendEmail(opts.to, subject, email.text, email.html);
+    const result = opts.eventKey
+      ? await sendEmailOnce({
+          eventKey: opts.eventKey,
+          emailType: 'open_role_referral',
+          category: 'marketing',
+          to: opts.to,
+          subject,
+          text: email.text,
+          html: email.html,
+        })
+      : await sendEmail(opts.to, subject, email.text, email.html, { category: 'marketing' });
     if (!result.success) {
       throw new Error(result.error || 'Failed to send open role referral alert');
     }
+    return result;
   }
 
   // Reverse Handshake: an admin-approved venue bid is now visible to the creator.
@@ -1304,7 +1636,7 @@ The Great. Team
       detailLines: [`🏛️ Deal: ${formatVenueDealSummary(opts.model, opts.terms, opts.currency)}`],
       experienceTitle: opts.experienceTitle,
       experienceSlugOrId: opts.experienceSlugOrId,
-      ctaNote: opts.action === 'accepted'
+      ctaNote: String(opts.action) === 'accepted'
         ? 'The event is being linked to your venue — track sales in your venue dashboard.'
         : 'You can bid on other open events from your venue dashboard.',
     });

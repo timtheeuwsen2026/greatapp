@@ -3391,6 +3391,60 @@ export type InsertBookingEmailEvent = z.infer<
   typeof insertBookingEmailEventSchema
 >;
 
+// Recipient-level controls for optional email. Transactional account, booking,
+// deal, and payout messages are always delivered.
+export const emailPreferences = pgTable(
+  "email_preferences",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    email: varchar("email").notNull(),
+    communityEmailsEnabled: boolean("community_emails_enabled").notNull().default(true),
+    reminderEmailsEnabled: boolean("reminder_emails_enabled").notNull().default(true),
+    marketingEmailsEnabled: boolean("marketing_emails_enabled").notNull().default(true),
+    unsubscribedAt: timestamp("unsubscribed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [unique("email_preferences_email_unique").on(table.email)],
+);
+
+export type EmailPreference = typeof emailPreferences.$inferSelect;
+export type InsertEmailPreference = typeof emailPreferences.$inferInsert;
+
+// Durable delivery ledger and delayed-job queue. Unique event keys make
+// retries, scheduler restarts, and multiple application instances safe.
+export const emailNotificationEvents = pgTable(
+  "email_notification_events",
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    eventKey: varchar("event_key").notNull(),
+    emailType: varchar("email_type").notNull(),
+    category: varchar("category").notNull().default("transactional"),
+    recipientEmail: varchar("recipient_email"),
+    status: varchar("status").notNull().default("scheduled"),
+    scheduledFor: timestamp("scheduled_for").notNull().defaultNow(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    attempts: integer("attempts").notNull().default(0),
+    lastAttemptAt: timestamp("last_attempt_at"),
+    sentAt: timestamp("sent_at"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("email_notification_events_event_key_unique").on(table.eventKey),
+    index("email_notification_events_due_idx").on(table.status, table.scheduledFor),
+    index("email_notification_events_recipient_idx").on(table.recipientEmail),
+  ],
+);
+
+export type EmailNotificationEvent = typeof emailNotificationEvents.$inferSelect;
+export type InsertEmailNotificationEvent = typeof emailNotificationEvents.$inferInsert;
+
 // ============================================================================
 // PAYMENT ENGINE — MULTI-PARTY SPLITS & SCHEDULED PAYOUTS
 // ============================================================================

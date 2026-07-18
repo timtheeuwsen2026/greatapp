@@ -76,7 +76,7 @@ export async function createDepositIntent(
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
-      currency: 'usd',
+      currency: String(experience.currency || 'usd').toLowerCase(),
       capture_method: 'manual',
       metadata: {
         userId,

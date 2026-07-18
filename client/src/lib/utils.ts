@@ -15,8 +15,27 @@ export function cn(...inputs: ClassValue[]) {
  */
 export function getBaseUrl(): string {
   const envUrl = import.meta.env.VITE_APP_BASE_URL as string | undefined;
-  if (envUrl && envUrl.trim() !== "") return envUrl.replace(/\/$/, ""); // strip trailing slash
-  return window.location.origin;
+  return resolveBaseUrl(envUrl, window.location.origin, import.meta.env.PROD);
+}
+
+export function resolveBaseUrl(
+  configuredUrl: string | undefined,
+  runtimeOrigin: string,
+  production: boolean,
+): string {
+  const runtime = new URL(runtimeOrigin);
+  if (!configuredUrl?.trim()) return runtime.origin;
+
+  const configured = new URL(configuredUrl.trim());
+  const configuredIsLocal = ['localhost', '127.0.0.1', '::1'].includes(configured.hostname);
+  if (production && (configured.protocol !== 'https:' || configuredIsLocal)) {
+    const runtimeIsPublicHttps = runtime.protocol === 'https:'
+      && !['localhost', '127.0.0.1', '::1'].includes(runtime.hostname);
+    if (runtimeIsPublicHttps) return runtime.origin;
+    throw new Error('VITE_APP_BASE_URL must be a public HTTPS URL in production');
+  }
+
+  return configured.toString().replace(/\/$/, '');
 }
 
 /**

@@ -29,13 +29,13 @@ export interface GrowthFooterData {
 
 export interface MasterEmailTemplateOptions {
   recipientEmail?: string | null;
+  preferencesToken?: string | null;
   preheader?: string;
   bodyText: string;
   receiptRows?: EmailReceiptRow[];
   cta?: EmailCta;
   growthFooterContext?: GrowthFooterContext;
   growthFooterData?: GrowthFooterData;
-  logoUrl?: string;
   appBaseUrl: string;
 }
 
@@ -43,8 +43,6 @@ export interface RenderedEmail {
   html: string;
   text: string;
 }
-
-const GREAT_LOGO_ALT = "Great.";
 
 const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "security">, {
   html: (appBaseUrl: string, data: GrowthFooterData) => string;
@@ -83,7 +81,7 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
   confirmed_participant: {
     html: (_appBaseUrl, data) => `
       <div class="growth-footer">
-        <p class="growth-title">Bring your squad & unlock rewards!</p>
+        <p class="growth-title">Bring your squad &amp; unlock rewards!</p>
         <p>Experiences are better with friends. Share your personal link and you'll earn ${escapeHtml(data.b2cPerk || "your reward")} directly to your account for every friend who books using your link.</p>
         ${data.participantRefLink ? `<a href="${escapeHtml(data.participantRefLink)}">${escapeHtml(data.participantRefLink)}</a>` : ""}
       </div>
@@ -124,9 +122,8 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
 
 export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): RenderedEmail {
   const appBaseUrl = opts.appBaseUrl.replace(/\/$/, "");
-  const logoUrl = opts.logoUrl || `${appBaseUrl}/email-assets/great-logo.jpg`;
-  const unsubscribeUrl = buildFooterUrl(appBaseUrl, "/unsubscribe", opts.recipientEmail);
-  const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.recipientEmail);
+  const unsubscribeUrl = buildFooterUrl(appBaseUrl, "/unsubscribe", opts.preferencesToken);
+  const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.preferencesToken);
   const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl, opts.growthFooterData || {});
   const bodyHtml = renderBodyText(opts.bodyText);
   const receiptHtml = renderReceiptRows(opts.receiptRows);
@@ -147,8 +144,10 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
       .preheader { display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent; }
       .shell { width: 100%; padding: 32px 14px; }
       .container { max-width: 580px; margin: 0 auto; background: #ffffff; border: 1px solid #ece7dc; border-radius: 8px; overflow: hidden; }
-      .header { padding: 30px 28px 22px; text-align: center; border-bottom: 1px solid #f0ece4; }
-      .logo { display: inline-block; max-width: 116px; height: auto; }
+      .header { padding: 28px 28px 25px; text-align: center; background-color: #805ff0; background-image: linear-gradient(180deg, #765ff0 0%, #c35df6 100%); }
+      .brand-dots { margin: 0 auto 5px; border-collapse: separate; border-spacing: 4px 3px; }
+      .brand-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: #ffffff; }
+      .brand-word { color: #ffffff; font-size: 42px; line-height: 1; font-weight: 300; letter-spacing: 0; }
       .content { padding: 34px 32px 12px; font-size: 16px; line-height: 1.68; color: #29323d; }
       .content p { margin: 0 0 18px; }
       .receipt { margin: 4px 32px 28px; border: 1px solid #e6e1d6; border-radius: 8px; overflow: hidden; background: #fffdf8; }
@@ -180,7 +179,12 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
     <div class="shell">
       <div class="container">
         <div class="header">
-          <img class="logo" src="${escapeHtml(logoUrl)}" alt="${GREAT_LOGO_ALT}">
+          <table class="brand-dots" role="presentation" aria-hidden="true">
+            <tr><td></td><td><span class="brand-dot"></span></td><td></td></tr>
+            <tr><td><span class="brand-dot"></span></td><td></td><td><span class="brand-dot"></span></td></tr>
+            <tr><td></td><td><span class="brand-dot"></span></td><td></td></tr>
+          </table>
+          <div class="brand-word">great</div>
         </div>
         <div class="content">
           ${bodyHtml}
@@ -189,7 +193,7 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
         ${ctaHtml}
         ${growthFooter.html}
         <div class="footer">
-          <p>You are receiving this email from Great. because you have an account or requested an account action.</p>
+          <p>You are receiving this email because of your account or activity with Great.</p>
           <p><a href="${escapeHtml(preferencesUrl)}">Manage email preferences</a> &nbsp;|&nbsp; <a href="${escapeHtml(unsubscribeUrl)}">Unsubscribe</a></p>
         </div>
       </div>
@@ -250,10 +254,10 @@ function renderBodyText(bodyText: string): string {
     .join("\n");
 }
 
-function buildFooterUrl(appBaseUrl: string, path: string, recipientEmail?: string | null): string {
+function buildFooterUrl(appBaseUrl: string, path: string, preferencesToken?: string | null): string {
   const url = new URL(path, appBaseUrl);
-  if (recipientEmail) {
-    url.searchParams.set("email", recipientEmail);
+  if (preferencesToken) {
+    url.searchParams.set("token", preferencesToken);
   }
   return url.toString();
 }

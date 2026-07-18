@@ -4,6 +4,8 @@ import { setupVite, serveStatic, log } from "./vite";
 import { startMVGDeadlineScheduler } from "./mvg-scheduler";
 import { startPayoutScheduler } from "./payout-scheduler";
 import { startEventReminderScheduler } from "./event-reminder-scheduler";
+import { startEmailJobScheduler } from "./emailJobScheduler";
+import { assertEmailConfiguration } from "./notifications";
 
 const app = express();
 // Trust Replit's reverse proxy so req.protocol and X-Forwarded-* headers are correct
@@ -42,6 +44,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  assertEmailConfiguration();
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -75,5 +78,7 @@ app.use((req, res, next) => {
     startPayoutScheduler();
     // Start 24-hour pre-event reminder scheduler
     startEventReminderScheduler();
+    // Start durable delayed community-email worker
+    startEmailJobScheduler();
   });
 })();

@@ -45,6 +45,19 @@ import {
 } from "./mvgDeadlineRules";
 import { normalizeBuilderParticipantRoles } from "./participantRoleSync";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
+import { scheduleCommunityHubUnreadJob, scheduleCreatorHubNudgeJob } from "./emailJobScheduler";
+import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
+import {
+  getEmailPreferenceSettings,
+  unsubscribeFromOptionalEmail,
+  updateEmailPreferenceSettings,
+} from "./emailPreferences";
+import { verifyEmailPreferenceToken } from "./emailPreferenceTokens";
+import {
+  getConfiguredPublicAppBaseUrl,
+  getPublicAppBaseUrl,
+  setAuthActionRedirect,
+} from "./publicUrl";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
@@ -57,9 +70,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 //   2. APP_BASE_URL env var       (legacy alias kept for backward compat)
 //   3. Derived from the incoming request (works out of the box in dev)
 function getAppBaseUrl(req: any): string {
-  const env = process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL;
-  if (env && env.trim() !== "") return env.replace(/\/$/, "");
-  return `${req.protocol}://${req.get("host")}`;
+  return getPublicAppBaseUrl(req);
 }
 
 const FIXED_PLATFORM_FEE_PCT = 15;
@@ -100,13 +111,6 @@ function applyMarketplaceEconomics(input: any = {}) {
 function numberOrZero(value: any): number {
   const parsed = parseFloat(String(value ?? 0));
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function formatCurrencyForEmail(amount: string | number, currency?: string | null): string {
-  const value = typeof amount === 'number' ? amount : Number(amount);
-  const code = String(currency || 'USD').toUpperCase();
-  if (!Number.isFinite(value)) return `${code} 0.00`;
-  return `${code} ${value.toFixed(2)}`;
 }
 
 function normalizeTicketSkus(ticketSkus: any): any[] {
@@ -306,6 +310,7 @@ async function notifyCreatorEventSubmittedForReview(experience: any): Promise<vo
     to: creator.email,
     creatorName: creator.firstName,
     eventName: experience.title || "your experience",
+    eventKey: `event_submitted:${experience.id}`,
   });
 }
 
@@ -318,6 +323,7 @@ async function notifyCreatorEventPublished(experience: any): Promise<void> {
       creatorName: creator.firstName,
       eventName: experience.title || "your experience",
       eventSlugOrId: publicExperienceSlugOrId(experience),
+      eventKey: `event_published:${experience.id}`,
     });
   }
 
@@ -326,10 +332,8 @@ async function notifyCreatorEventPublished(experience: any): Promise<void> {
   });
 }
 
-const sentOpenRoleAlertKeys = new Set<string>();
-
 function publicAppBaseUrl(): string {
-  return (process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || 'https://greatapp.replit.app').replace(/\/$/, '');
+  return getConfiguredPublicAppBaseUrl();
 }
 
 function cityFromLocation(location?: string | null): string {
@@ -382,15 +386,13 @@ async function notifyCommunityOpenRoleAlerts(experience: any): Promise<void> {
     for (const row of profileRows) {
       if (!row.user.email || !roleMatchesProfile(role, row.profile, city)) continue;
       const key = `${experience.id}:${role.id}:${row.user.id}`;
-      if (sentOpenRoleAlertKeys.has(key)) continue;
-      sentOpenRoleAlertKeys.add(key);
 
       const referralCode = row.user.promoterCode || await storage.ensureUserReferralCode(row.user.id);
       const params = new URLSearchParams({ ref: referralCode, role: role.id });
       if ((experience as any).shareToken) params.set('share', (experience as any).shareToken);
       const referralUrl = `${baseUrl}/experience/${publicExperienceSlugOrId(experience)}?${params.toString()}`;
 
-      await notificationService.sendOpenRoleReferralAlertEmail({
+      const delivery = await notificationService.sendOpenRoleReferralAlertEmail({
         to: row.user.email,
         userFirstName: row.user.firstName,
         roleName: role.name,
@@ -398,9 +400,10 @@ async function notifyCommunityOpenRoleAlerts(experience: any): Promise<void> {
         eventName: experience.title || 'a new experience',
         eventSlugOrId: publicExperienceSlugOrId(experience),
         referralUrl,
+        eventKey: `open_role_referral:${key}`,
       });
 
-      sentForRole += 1;
+      if (!delivery.duplicate) sentForRole += 1;
       if (sentForRole >= Number(process.env.ROLE_ALERT_MAX_RECIPIENTS_PER_ROLE || 25)) break;
     }
   }
@@ -640,6 +643,61 @@ async function checkIsAdmin(req: any): Promise<boolean> {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const emailFromPreferenceToken = (req: any): string => {
+    const token = String(req.query?.token || req.body?.token || "");
+    if (!token) throw new Error("A valid email preference link is required");
+    return verifyEmailPreferenceToken(token).email;
+  };
+
+  const maskedEmail = (email: string): string => {
+    const [local, domain] = email.split("@");
+    if (!domain) return "your email address";
+    const visible = local.slice(0, Math.min(2, local.length));
+    return `${visible}${"*".repeat(Math.max(2, local.length - visible.length))}@${domain}`;
+  };
+
+  app.get("/api/email-preferences", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const email = emailFromPreferenceToken(req);
+      const preferences = await getEmailPreferenceSettings(email);
+      res.json({ email: maskedEmail(email), preferences });
+    } catch {
+      res.status(400).json({ message: "This email preference link is invalid or has expired." });
+    }
+  });
+
+  app.put("/api/email-preferences", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const email = emailFromPreferenceToken(req);
+      const source = req.body?.preferences || req.body || {};
+      const keys = ["communityEmailsEnabled", "reminderEmailsEnabled", "marketingEmailsEnabled"] as const;
+      if (keys.some((key) => typeof source[key] !== "boolean")) {
+        return res.status(400).json({ message: "All email preference values are required." });
+      }
+      const preferences = await updateEmailPreferenceSettings(email, {
+        communityEmailsEnabled: source.communityEmailsEnabled,
+        reminderEmailsEnabled: source.reminderEmailsEnabled,
+        marketingEmailsEnabled: source.marketingEmailsEnabled,
+      });
+      res.json({ email: maskedEmail(email), preferences });
+    } catch {
+      res.status(400).json({ message: "This email preference link is invalid or has expired." });
+    }
+  });
+
+  app.post("/api/email-preferences/unsubscribe", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const email = emailFromPreferenceToken(req);
+      const preferences = await unsubscribeFromOptionalEmail(email);
+      res.json({ email: maskedEmail(email), preferences, unsubscribed: true });
+    } catch {
+      res.status(400).json({ message: "This unsubscribe link is invalid or has expired." });
+    }
+  });
+
   // Populate req.user from the Bearer token on every API request (non-blocking).
   // Without this, routes that read req.user.claims.sub but lack the isAuthenticated
   // middleware crash in production with "Cannot read properties of undefined
@@ -701,11 +759,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const HUB_UNREAD_EMAIL_COOLDOWN_MS = Number(process.env.HUB_UNREAD_EMAIL_COOLDOWN_MS || 60 * 60 * 1000);
   const CREATOR_HUB_NUDGE_DELAY_MS = Number(process.env.CREATOR_HUB_NUDGE_DELAY_MS || 15 * 60 * 1000);
   const CREATOR_HUB_NUDGE_COOLDOWN_MS = Number(process.env.CREATOR_HUB_NUDGE_COOLDOWN_MS || 6 * 60 * 60 * 1000);
-  const CREATOR_HUB_RECENT_REPLY_MS = Number(process.env.CREATOR_HUB_RECENT_REPLY_MS || 12 * 60 * 60 * 1000);
-  const pendingHubUnreadEmailTimers = new Map<string, NodeJS.Timeout>();
-  const hubUnreadEmailLastSentAt = new Map<string, number>();
-  const pendingCreatorHubNudgeTimers = new Map<string, NodeJS.Timeout>();
-  const creatorHubNudgeLastSentAt = new Map<string, number>();
   const paginationFrom = (query: any) => {
     const page = Math.max(1, Number.parseInt(String(query.page || "1"), 10) || 1);
     const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(query.pageSize || "10"), 10) || 10));
@@ -723,26 +776,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return !!booking && activeChatBookingStatuses.includes(booking.status as any);
   };
 
-  const hasUnreadExperienceMessages = async (experienceId: string, userId: string): Promise<boolean> => {
-    const [readState] = await db
-      .select()
-      .from(experienceChatReads)
-      .where(and(eq(experienceChatReads.experienceId, experienceId), eq(experienceChatReads.userId, userId)))
-      .limit(1);
-    const lastReadAt = readState?.lastReadAt || new Date(0);
-    const unread = await db
-      .select({ id: experienceMessages.id })
-      .from(experienceMessages)
-      .where(and(
-        eq(experienceMessages.experienceId, experienceId),
-        gt(experienceMessages.createdAt, lastReadAt),
-        ne(experienceMessages.userId, userId),
-        or(eq(experienceMessages.isPrivate, false), eq(experienceMessages.recipientId, userId)),
-      ))
-      .limit(1);
-    return unread.length > 0;
-  };
-
   const scheduleHubUnreadEmailNotifications = async (experienceId: string, senderId: string): Promise<void> => {
     const [experience, eventBookings] = await Promise.all([
       storage.getExperience(experienceId),
@@ -758,47 +791,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ));
 
     for (const userId of recipientIds) {
-      const key = `${experienceId}:${userId}`;
-      const lastSentAt = hubUnreadEmailLastSentAt.get(key) || 0;
-      if (pendingHubUnreadEmailTimers.has(key) || Date.now() - lastSentAt < HUB_UNREAD_EMAIL_COOLDOWN_MS) {
-        continue;
-      }
-
-      const timer = setTimeout(async () => {
-        pendingHubUnreadEmailTimers.delete(key);
-        try {
-          if (!(await hasUnreadExperienceMessages(experienceId, userId))) return;
-          const user = await storage.getUser(userId);
-          if (!user?.email) return;
-
-          await notificationService.sendCommunityHubUnreadEmail({
-            to: user.email,
-            userFirstName: user.firstName,
-            experienceTitle: experience.title,
-            experienceSlugOrId: (experience as any).slug || experience.id,
-          });
-          hubUnreadEmailLastSentAt.set(key, Date.now());
-        } catch (error) {
-          console.error(`Failed to send unread hub email for ${key}:`, error);
-        }
-      }, HUB_UNREAD_EMAIL_DELAY_MS);
-
-      pendingHubUnreadEmailTimers.set(key, timer);
+      await scheduleCommunityHubUnreadJob({
+        experienceId,
+        userId,
+        delayMs: HUB_UNREAD_EMAIL_DELAY_MS,
+        cooldownMs: HUB_UNREAD_EMAIL_COOLDOWN_MS,
+      });
     }
-  };
-
-  const hasRecentCreatorReply = async (experienceId: string, creatorId: string): Promise<boolean> => {
-    const since = new Date(Date.now() - CREATOR_HUB_RECENT_REPLY_MS);
-    const recentReply = await db
-      .select({ id: experienceMessages.id })
-      .from(experienceMessages)
-      .where(and(
-        eq(experienceMessages.experienceId, experienceId),
-        eq(experienceMessages.userId, creatorId),
-        gt(experienceMessages.createdAt, since),
-      ))
-      .limit(1);
-    return recentReply.length > 0;
   };
 
   const scheduleCreatorHubNudge = async (experienceId: string, senderId: string, isPrivateMessage: boolean): Promise<void> => {
@@ -806,35 +805,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const experience = await storage.getExperience(experienceId);
     if (!experience?.creatorId || experience.creatorId === senderId) return;
 
-    const key = `${experienceId}:${experience.creatorId}`;
-    const lastSentAt = creatorHubNudgeLastSentAt.get(key) || 0;
-    if (pendingCreatorHubNudgeTimers.has(key) || Date.now() - lastSentAt < CREATOR_HUB_NUDGE_COOLDOWN_MS) {
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      pendingCreatorHubNudgeTimers.delete(key);
-      try {
-        const latestExperience = await storage.getExperience(experienceId);
-        if (!latestExperience?.creatorId) return;
-        if (await hasRecentCreatorReply(experienceId, latestExperience.creatorId)) return;
-
-        const creator = await storage.getUser(latestExperience.creatorId);
-        if (!creator?.email) return;
-
-        await notificationService.sendCreatorCommunityHubNudgeEmail({
-          to: creator.email,
-          creatorName: creator.firstName,
-          experienceTitle: latestExperience.title,
-          experienceSlugOrId: publicExperienceSlugOrId(latestExperience),
-        });
-        creatorHubNudgeLastSentAt.set(key, Date.now());
-      } catch (error) {
-        console.error(`Failed to send creator hub nudge for ${key}:`, error);
-      }
-    }, CREATOR_HUB_NUDGE_DELAY_MS);
-
-    pendingCreatorHubNudgeTimers.set(key, timer);
+    await scheduleCreatorHubNudgeJob({
+      experienceId,
+      creatorId: experience.creatorId,
+      delayMs: CREATOR_HUB_NUDGE_DELAY_MS,
+      cooldownMs: CREATOR_HUB_NUDGE_COOLDOWN_MS,
+    });
   };
   // Auth — Supabase JWT-based (stateless, no sessions)
   app.get("/api/login", (_req, res) => {
@@ -891,10 +867,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message });
       }
 
-      const verifyUrl = data?.properties?.action_link;
-      if (!verifyUrl) {
+      const generatedVerifyUrl = data?.properties?.action_link;
+      if (!generatedVerifyUrl) {
         return res.status(500).json({ message: 'Unable to generate verification link' });
       }
+      const verifyUrl = setAuthActionRedirect(
+        generatedVerifyUrl,
+        `${appBaseUrl}/login?verified=1`,
+      );
 
       await notificationService.sendWelcomeVerifyEmail({
         to: normalizedEmail,
@@ -936,8 +916,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ message: 'If that email exists, a reset link will be sent.' });
       }
 
-      const resetUrl = data?.properties?.action_link;
-      if (resetUrl) {
+      const generatedResetUrl = data?.properties?.action_link;
+      if (generatedResetUrl) {
+        const resetUrl = setAuthActionRedirect(generatedResetUrl, `${appBaseUrl}/reset-password`);
         await notificationService.sendPasswordResetEmail({
           to: normalizedEmail,
           resetUrl,
@@ -2078,6 +2059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         trackingLink: trackingParams
           ? `${publicAppBaseUrl()}/experience/${(experience as any).slug || experience.id}?${trackingParams.toString()}`
           : undefined,
+        eventKey: `partnership_confirmed:${deal.id}`,
       });
     })().catch((err) => console.error('Partnership confirmation email failed:', err?.message || err));
   };
@@ -4394,6 +4376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       let paymentIntentId = stripePaymentIntentId;
+      let paymentReadyForNotifications = fullPrice === 0;
 
       // If no payment intent ID provided, create a new one
       if (!paymentIntentId && (isDepositOnly ? depositAmount : fullPrice) > 0) {
@@ -4416,6 +4399,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
         paymentIntentId = paymentIntent.id;
+      } else if (paymentIntentId) {
+        if (paymentIntentId.startsWith('pi_sandbox_')) {
+          if (process.env.NODE_ENV === 'production') {
+            return res.status(400).json({ message: "Sandbox payments are not accepted in production" });
+          }
+          paymentReadyForNotifications = true;
+        } else {
+          let paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          const expectedAmount = Math.round((isDepositOnly ? depositAmount : fullPrice) * 100);
+          const expectedCurrency = String(experience.currency || 'usd').toLowerCase();
+
+          if (paymentIntent.metadata?.experienceId && paymentIntent.metadata.experienceId !== experienceId) {
+            return res.status(400).json({ message: "Payment does not belong to this experience" });
+          }
+          if (paymentIntent.metadata?.userId && paymentIntent.metadata.userId !== userId) {
+            return res.status(403).json({ message: "Payment does not belong to this account" });
+          }
+          if (paymentIntent.amount !== expectedAmount || paymentIntent.currency !== expectedCurrency) {
+            return res.status(400).json({ message: "Payment amount or currency does not match this booking" });
+          }
+          if (!['processing', 'requires_capture', 'succeeded'].includes(paymentIntent.status)) {
+            return res.status(409).json({
+              message: `Payment is not ready to create a booking (status: ${paymentIntent.status})`,
+            });
+          }
+
+          // Settle non-MVG authorizations immediately. MVG payments remain
+          // authorized until the minimum group transition succeeds.
+          if (
+            paymentIntent.status === 'requires_capture'
+            && !experience.requireMinimumParticipants
+            && !isEscrow
+          ) {
+            paymentIntent = await stripe.paymentIntents.capture(paymentIntent.id);
+          }
+          paymentReadyForNotifications = ['requires_capture', 'succeeded'].includes(paymentIntent.status);
+        }
       }
 
       // Calculate commission if promoter is attached
@@ -4478,7 +4498,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount: balanceAmount.toString(),
         balanceDueDate,
         balancePaid: !isDepositOnly, // True if full payment, false if deposit only
-        status: isEscrow || experience.requireMinimumParticipants ? "pending" : (isDepositOnly ? "deposit_paid" : "fully_paid"),
+        status: !paymentReadyForNotifications
+          ? "pending"
+          : (isEscrow || experience.requireMinimumParticipants
+            ? "pending"
+            : (isDepositOnly ? "deposit_paid" : "fully_paid")),
         stripePaymentIntentId: paymentIntentId,
         // Promoter attribution (null if no referral)
         promoterId,
@@ -4492,21 +4516,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
       });
 
-      if (promoterId && commissionAmount && commissionAmount > 0) {
-        const promoter = await storage.getUser(promoterId);
-        if (promoter?.email) {
-          notificationService.sendAffiliateSaleMadeEmail({
-            to: promoter.email,
-            eventName: experience.title,
-            earnedAmount: formatCurrencyForEmail(commissionAmount, commissionCurrency || experience.currency || 'EUR'),
-          }).catch((error) => console.error('Affiliate sale email failed:', error?.message || error));
-        }
-      }
-
       // Check if this booking might trigger MVG completion
       let mvgCheckResult = null;
-      if (experience.requireMinimumParticipants && experience.mvgStatus === "pending") {
-        const updatedBookings = await storage.getBookingsByExperience(experienceId);
+      const updatedBookings = await storage.getBookingsByExperience(experienceId);
+      const activeBookingCount = updatedBookings.filter((item) =>
+        !['cancelled', 'refunded', 'failed'].includes(String(item.status))
+      ).length;
+      let notificationExperience = {
+        ...experience,
+        currentParticipants: activeBookingCount,
+      };
+      if (paymentReadyForNotifications && experience.requireMinimumParticipants && experience.mvgStatus === "pending") {
         const currentBookings = updatedBookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
         
@@ -4514,6 +4534,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // MVG threshold reached! Auto-confirm
           await completeMVGSuccess(experienceId, updatedBookings);
           mvgCheckResult = { action: "mvg_confirmed", currentBookings, mvgMin };
+          notificationExperience = {
+            ...notificationExperience,
+            mvgStatus: "met",
+          };
           // Broadcast lifecycle flip to all connected browsers immediately
           const mvgParticipants = await storage.getExperienceParticipantAvatars(experienceId);
           broadcastMVGUpdate({
@@ -4526,6 +4550,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             lifecycle_status: 'confirmed',
           });
         }
+      }
+
+      if (paymentReadyForNotifications) {
+        await sendBookingNotificationsAfterPayment(booking.id, {
+          sendParticipant: mvgCheckResult?.action !== "mvg_confirmed",
+        });
       }
 
       // ── Mark referral click as converted ──────────────────────────────────
@@ -4556,7 +4586,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Prepare response message
       let message;
-      if (mvgCheckResult?.action === "mvg_confirmed") {
+      if (!paymentReadyForNotifications) {
+        message = "Your payment is processing. We will email you as soon as it is confirmed.";
+      } else if (mvgCheckResult?.action === "mvg_confirmed") {
         message = `🎉 Great news! Your booking just helped reach the minimum group size. Your payment has been confirmed and your spot is secured!`;
       } else if (experience.requireMinimumParticipants) {
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
@@ -5432,41 +5464,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fundedPercent = mvgTargetAmount > 0 ? (totalFundedAmount / mvgTargetAmount) * 100 : 0;
       const remainingToMvg = Math.max(0, mvgTargetAmount - totalFundedAmount);
 
-      // Send deposit created notification (to participant)
-      try {
-        await notificationService.sendDepositCreatedNotification(userId, experience, booking);
-      } catch (notifError) {
-        console.error('Error sending deposit notification:', notifError);
-      }
-
-      // Send new-member notification to creator
-      if (experience.creatorId && experience.creatorId !== userId) {
-        try {
-          await notificationService.sendCreatorNewMemberNotification(experience.creatorId, experience, userId);
-        } catch (creatorNotifError) {
-          console.error('Error sending creator new-member notification:', creatorNotifError);
-        }
-      }
-
       // Check if MVG is now met and auto-confirm
       let mvgConfirmed = false;
       let mvgMessage = "Deposit created successfully";
+      let notificationExperience = {
+        ...experience,
+        currentParticipants: totalSeats,
+      };
       
-      if (experience.requireMinimumParticipants && totalSeats >= minimumParticipants) {
+      if (
+        sandboxMode
+        && experience.requireMinimumParticipants
+        && experience.mvgStatus !== "met"
+        && totalSeats >= minimumParticipants
+      ) {
         try {
           console.log(`[MVG Auto-Confirm] Minimum participants reached for ${experienceId}. Auto-confirming...`);
-          await storage.processMVGSuccess(experienceId);
+          const mvgResult = await storage.processMVGSuccess(experienceId);
           await lockCommissionsForExperience(experienceId);
           mvgConfirmed = true;
           mvgMessage = "Community Confirmed! The minimum group size has been reached!";
+          notificationExperience = {
+            ...mvgResult.experience,
+            currentParticipants: totalSeats,
+            mvgStatus: "met",
+          };
           
           // Send MVG confirmed notifications to all participants
           const mvgBookings = allBookings.filter(b => b.status === "confirmed" || b.status === "pending");
-          await notificationService.sendMVGConfirmedNotification(experience, mvgBookings);
+          await notificationService.sendMVGConfirmedNotification(notificationExperience, mvgBookings);
           console.log(`[MVG Auto-Confirm] Trip ${experienceId} confirmed - notifications sent to ${mvgBookings.length} participants`);
         } catch (mvgError) {
           console.error(`[MVG Auto-Confirm] Error processing MVG success for ${experienceId}:`, mvgError);
         }
+      }
+
+      // Real Stripe deposits are only announced after the authorization webhook.
+      if (sandboxMode) {
+        await sendBookingNotificationsAfterPayment(booking.id, {
+          sendParticipant: !mvgConfirmed,
+        });
       }
 
       const mvgStatus = {

@@ -10,7 +10,7 @@
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "test": "vitest run",
-    "test:email": "vitest run server/__tests__/emailTemplates.test.ts server/__tests__/emailPreferenceTokens.test.ts server/__tests__/emailRules.test.ts server/__tests__/publicUrl.test.ts client/src/lib/utils.test.ts",
+    "test:email": "vitest run server/__tests__/emailTemplates.test.ts server/__tests__/emailPreferenceTokens.test.ts server/__tests__/emailRules.test.ts server/__tests__/publicUrl.test.ts client/src/lib/utils.test.ts && node --test scripts/postgres-connection-config.test.js",
     "db:migrate:email": "node scripts/migrate-email-delivery.mjs",
     "db:push": "drizzle-kit push",
     "push:db": "drizzle-kit push",

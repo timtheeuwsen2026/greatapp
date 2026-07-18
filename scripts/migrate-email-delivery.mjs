@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import pg from "pg";
+import { createPostgresConnectionConfig } from "./postgres-connection-config.mjs";
 
 const { Client } = pg;
 const migrationUrl = new URL(
@@ -11,10 +12,7 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must be configured before running email migrations");
 }
 
-const client = new Client({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
+const client = new Client(createPostgresConnectionConfig(process.env.DATABASE_URL));
 
 let transactionStarted = false;
 let lockAcquired = false;

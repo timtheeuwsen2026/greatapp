@@ -37,8 +37,3 @@ CREATE INDEX IF NOT EXISTS email_notification_events_due_idx
 
 CREATE INDEX IF NOT EXISTS email_notification_events_recipient_idx
   ON email_notification_events (recipient_email);
-
--- Prevent concurrent checkout retries from creating two bookings for one charge.
-CREATE UNIQUE INDEX IF NOT EXISTS bookings_stripe_payment_intent_unique
-  ON bookings (stripe_payment_intent_id)
-  WHERE stripe_payment_intent_id IS NOT NULL;

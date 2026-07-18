@@ -14,6 +14,8 @@ Production startup fails immediately when required email configuration is missin
 It also rejects HTTP and localhost application URLs, so production email cannot silently contain a development destination.
 Production deployments should configure these values in the hosting provider's environment-variable settings. A physical `.env` file is not expected inside the container.
 
+`npm start` automatically applies the narrowly scoped, idempotent email-delivery migration before starting Express. The migration uses a PostgreSQL advisory lock so concurrent container starts cannot race while creating the email tables and indexes. It does not run a broad schema push or modify unrelated application tables.
+
 In Supabase Authentication URL Configuration, set the Site URL to the same `VITE_APP_BASE_URL` and allow these redirect URLs:
 
 - `${VITE_APP_BASE_URL}/login?verified=1`

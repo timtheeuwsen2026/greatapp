@@ -32,7 +32,12 @@ export function resolveEmailPreferenceSecret(
 }
 
 export function getConfiguredEmailPreferenceSecret(): string | undefined {
-  return resolveEmailPreferenceSecret(process.env);
+  return resolveEmailPreferenceSecret({
+    EMAIL_PREFERENCES_SECRET: process.env.EMAIL_PREFERENCES_SECRET,
+    SESSION_SECRET: process.env.SESSION_SECRET,
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+  });
 }
 
 function tokenSecret(explicitSecret?: string): string {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Compass, Plane } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -37,7 +37,9 @@ const ROLE_OPTIONS = [
 type Role = (typeof ROLE_OPTIONS)[number]["value"];
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(() => (
+    new URLSearchParams(window.location.search).get("mode") === "reset" ? "reset" : "login"
+  ));
   const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,6 +47,33 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenHash = params.get("token_hash");
+    if (!tokenHash || params.get("type") !== "signup") return;
+
+    params.delete("token_hash");
+    params.delete("type");
+    const cleanQuery = params.toString();
+    window.history.replaceState(
+      {},
+      document.title,
+      `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ""}`,
+    );
+
+    void supabase.auth.verifyOtp({ token_hash: tokenHash, type: "signup" }).then(({ error }) => {
+      if (error) {
+        toast({
+          title: "Verification link expired",
+          description: "Please create your account again to receive a new verification link.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Email verified", description: "Your Great. account is ready." });
+    });
+  }, [toast]);
 
   function redirectAfterAuth(userRole: string) {
     // If we were sent here from a specific place (e.g. a booking flow), go back there.

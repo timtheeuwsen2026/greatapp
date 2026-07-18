@@ -54,9 +54,9 @@ import {
 } from "./emailPreferences";
 import { verifyEmailPreferenceToken } from "./emailPreferenceTokens";
 import {
+  buildAppAuthActionUrl,
   getConfiguredPublicAppBaseUrl,
   getPublicAppBaseUrl,
-  setAuthActionRedirect,
 } from "./publicUrl";
 
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -871,9 +871,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!generatedVerifyUrl) {
         return res.status(500).json({ message: 'Unable to generate verification link' });
       }
-      const verifyUrl = setAuthActionRedirect(
+      const verifyUrl = buildAppAuthActionUrl(
         generatedVerifyUrl,
         `${appBaseUrl}/login?verified=1`,
+        'signup',
       );
 
       await notificationService.sendWelcomeVerifyEmail({
@@ -918,7 +919,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const generatedResetUrl = data?.properties?.action_link;
       if (generatedResetUrl) {
-        const resetUrl = setAuthActionRedirect(generatedResetUrl, `${appBaseUrl}/reset-password`);
+        const resetUrl = buildAppAuthActionUrl(
+          generatedResetUrl,
+          `${appBaseUrl}/reset-password`,
+          'recovery',
+        );
         await notificationService.sendPasswordResetEmail({
           to: normalizedEmail,
           resetUrl,

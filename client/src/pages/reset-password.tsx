@@ -11,19 +11,41 @@ export default function ResetPasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
+  const [linkError, setLinkError] = useState(false);
 
   useEffect(() => {
     async function prepareSession() {
-      const code = new URLSearchParams(window.location.search).get("code");
-      if (code) {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const tokenHash = searchParams.get("token_hash");
+      const actionType = searchParams.get("type");
+      const code = searchParams.get("code");
+
+      if (hashParams.has("error")) {
+        setLinkError(true);
+        return;
+      }
+
+      if (tokenHash && actionType === "recovery") {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: "recovery",
+        });
+        window.history.replaceState({}, document.title, window.location.pathname);
+        if (error) {
+          setLinkError(true);
+          return;
+        }
+      } else if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
-          toast({
-            title: "Reset link expired",
-            description: "Please request a new password reset link.",
-            variant: "destructive",
-          });
-          navigate("/login");
+          setLinkError(true);
+          return;
+        }
+      } else {
+        const { data } = await supabase.auth.getSession();
+        if (!data.session) {
+          setLinkError(true);
           return;
         }
       }
@@ -32,6 +54,31 @@ export default function ResetPasswordPage() {
 
     void prepareSession();
   }, [navigate, toast]);
+
+  if (linkError) {
+    return (
+      <div className="min-h-screen bg-[linear-gradient(135deg,var(--primary-99)_0%,var(--secondary-98)_48%,hsl(189,94%,96%)_100%)] px-4 py-8 text-foreground">
+        <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center justify-center">
+          <section className="w-full rounded-2xl border border-primary/10 bg-white/90 p-8 text-center shadow-2xl shadow-primary/10 backdrop-blur-xl">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <LockKeyhole className="h-5 w-5" />
+            </div>
+            <h1 className="text-2xl font-bold text-foreground">Reset link expired</h1>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              This password reset link is invalid or has expired. Request a new secure link to continue.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/login?mode=reset")}
+              className="mt-7 flex w-full items-center justify-center rounded-lg bg-gradient-to-r from-primary to-secondary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-secondary/25"
+            >
+              Request a new link
+            </button>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

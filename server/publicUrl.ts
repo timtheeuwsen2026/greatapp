@@ -53,8 +53,22 @@ export function getPublicAppBaseUrl(req?: RequestOriginLike): string {
   return getConfiguredPublicAppBaseUrl();
 }
 
-export function setAuthActionRedirect(actionLink: string, destination: string): string {
+export function buildAppAuthActionUrl(
+  actionLink: string,
+  destination: string,
+  expectedType: string,
+): string {
   const actionUrl = new URL(actionLink);
-  actionUrl.searchParams.set('redirect_to', destination);
-  return actionUrl.toString();
+  const tokenHash = actionUrl.searchParams.get('token_hash')
+    || actionUrl.searchParams.get('token');
+  const actionType = actionUrl.searchParams.get('type');
+
+  if (!tokenHash || actionType !== expectedType) {
+    throw new Error(`Invalid Supabase ${expectedType} action link`);
+  }
+
+  const appUrl = new URL(destination);
+  appUrl.searchParams.set('token_hash', tokenHash);
+  appUrl.searchParams.set('type', expectedType);
+  return appUrl.toString();
 }

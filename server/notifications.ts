@@ -6,7 +6,7 @@ import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
 import type { Booking, Experience } from '@shared/schema';
 import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext, type GrowthFooterData } from './emailTemplates';
-import { createEmailPreferenceToken } from './emailPreferenceTokens';
+import { createEmailPreferenceToken, getConfiguredEmailPreferenceSecret } from './emailPreferenceTokens';
 import { isEmailCategoryEnabled, type EmailCategory } from './emailPreferences';
 import { claimImmediateEmailEvent, completeEmailEvent, retryOrFailEmailJob } from './emailDeliveryLedger';
 import { resolveBookingEmailDecision } from './emailRules';
@@ -34,8 +34,8 @@ export function assertEmailConfiguration(): void {
   if (!process.env.RESEND_FROM_EMAIL) {
     errors.push('RESEND_FROM_EMAIL must be configured');
   }
-  if (!process.env.EMAIL_PREFERENCES_SECRET || process.env.EMAIL_PREFERENCES_SECRET.length < 32) {
-    errors.push('EMAIL_PREFERENCES_SECRET must be at least 32 characters');
+  if (!getConfiguredEmailPreferenceSecret()) {
+    errors.push('A stable server secret of at least 32 characters must be configured');
   }
   if (!process.env.VITE_APP_BASE_URL && !process.env.APP_BASE_URL) {
     errors.push('APP_BASE_URL or VITE_APP_BASE_URL must be configured');

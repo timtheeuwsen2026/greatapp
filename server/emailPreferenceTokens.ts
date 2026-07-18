@@ -9,15 +9,38 @@ interface EmailPreferenceTokenPayload {
   exp: number;
 }
 
+interface EmailPreferenceSecretEnvironment {
+  EMAIL_PREFERENCES_SECRET?: string;
+  SESSION_SECRET?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  RESEND_API_KEY?: string;
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+export function resolveEmailPreferenceSecret(
+  environment: EmailPreferenceSecretEnvironment,
+): string | undefined {
+  return [
+    environment.EMAIL_PREFERENCES_SECRET,
+    environment.SESSION_SECRET,
+    environment.SUPABASE_SERVICE_ROLE_KEY,
+    environment.RESEND_API_KEY,
+  ].find((candidate) => typeof candidate === "string" && candidate.length >= 32);
+}
+
+export function getConfiguredEmailPreferenceSecret(): string | undefined {
+  return resolveEmailPreferenceSecret(process.env);
+}
+
 function tokenSecret(explicitSecret?: string): string {
   if (explicitSecret) return explicitSecret;
-  if (process.env.EMAIL_PREFERENCES_SECRET) return process.env.EMAIL_PREFERENCES_SECRET;
+  const configured = getConfiguredEmailPreferenceSecret();
+  if (configured) return configured;
   if (process.env.NODE_ENV !== "production") return "great-local-email-preferences-secret";
-  throw new Error("EMAIL_PREFERENCES_SECRET must be configured in production");
+  throw new Error("A stable server secret of at least 32 characters must be configured in production");
 }
 
 function sign(encodedPayload: string, secret: string): string {

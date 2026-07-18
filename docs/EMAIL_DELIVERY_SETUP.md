@@ -8,11 +8,11 @@ The application renders its email HTML in `server/emailTemplates.ts` and sends i
 - `RESEND_FROM_EMAIL`: verified sender address.
 - `RESEND_FROM_NAME`: sender display name, normally `Great. Experiences`.
 - `VITE_APP_BASE_URL`: canonical HTTPS application URL, for example `https://app.yourdomain.com`. `APP_BASE_URL` remains a legacy alias.
-- `EMAIL_PREFERENCES_SECRET`: random secret of at least 32 characters. Changing it invalidates existing preference links.
+- `EMAIL_PREFERENCES_SECRET`: recommended random secret of at least 32 characters. If omitted, the server reuses `SESSION_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, or the required `RESEND_API_KEY`, in that order. Changing the selected secret invalidates existing preference links.
 
 Production startup fails immediately when required email configuration is missing or still contains placeholder domains.
 It also rejects HTTP and localhost application URLs, so production email cannot silently contain a development destination.
-The production `npm start` command loads `.env` when the file exists; platform-provided environment variables continue to take precedence.
+Production deployments should configure these values in the hosting provider's environment-variable settings. A physical `.env` file is not expected inside the container.
 
 In Supabase Authentication URL Configuration, set the Site URL to the same `VITE_APP_BASE_URL` and allow these redirect URLs:
 

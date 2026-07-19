@@ -575,6 +575,68 @@ class NotificationService {
     }
   }
 
+  async sendReferralBookingProgressEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    eventName: string;
+    qualifyingBookings: number;
+    milestoneTarget: number;
+    eventKey: string;
+  }): Promise<void> {
+    const subject = 'Someone booked using your link!';
+    const bodyText = `Hey ${opts.userFirstName || 'there'}, someone just booked a spot for ${opts.eventName} using your referral link. Your milestone progress is now ${opts.qualifyingBookings}/${opts.milestoneTarget} qualifying bookings.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View My Impact', href: `${APP_BASE_URL}/my-impact` },
+      preheader: `Your ${opts.eventName} referral progress just increased.`,
+      growthFooterContext: 'none',
+    });
+
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey,
+      emailType: 'referral_booking_progress',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send referral booking progress email');
+    }
+  }
+
+  async sendMilestonePerkUnlockedEmail(opts: {
+    to: string;
+    userFirstName?: string | null;
+    eventName: string;
+    milestoneTarget: number;
+    rewardDescription: string;
+    eventKey: string;
+  }): Promise<void> {
+    const subject = 'Congrats, you unlocked your perk!';
+    const bodyText = `Congrats ${opts.userFirstName || 'there'}! You reached ${opts.milestoneTarget} qualifying referral bookings for ${opts.eventName} and unlocked ${opts.rewardDescription}. The creator can now see your reward in their Fulfillment dashboard.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View My Impact', href: `${APP_BASE_URL}/my-impact` },
+      preheader: `You unlocked ${opts.rewardDescription} for ${opts.eventName}.`,
+      growthFooterContext: 'none',
+    });
+
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey,
+      emailType: 'milestone_perk_unlocked',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send milestone perk unlocked email');
+    }
+  }
+
   async sendPayoutInitiatedEmail(opts: {
     to: string;
     eventName: string;

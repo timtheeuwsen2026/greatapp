@@ -25,11 +25,11 @@ describe("perk fulfillment rules", () => {
     })).toEqual({ target: 5, rewardDescription: "2 free tickets" });
   });
 
-  it("excludes reversed bookings from milestone counts", () => {
+  it("counts active reservations and excludes reversed bookings", () => {
     expect(isQualifyingReferralBooking("confirmed")).toBe(true);
     expect(isQualifyingReferralBooking("deposit_authorized")).toBe(true);
     expect(isQualifyingReferralBooking("fully_paid")).toBe(true);
-    expect(isQualifyingReferralBooking("pending")).toBe(false);
+    expect(isQualifyingReferralBooking("pending")).toBe(true);
     expect(isQualifyingReferralBooking("refunded")).toBe(false);
     expect(isQualifyingReferralBooking("cancelled")).toBe(false);
   });

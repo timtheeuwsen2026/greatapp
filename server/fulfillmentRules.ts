@@ -46,5 +46,8 @@ export function resolveMilestoneReward(input: {
 }
 
 export function isQualifyingReferralBooking(status?: string | null) {
-  return ["deposit_authorized", "deposit_paid", "confirmed", "fully_paid"].includes(status || "pending");
+  // `pending` is an active reservation in the MVG/escrow flow. It can remain
+  // there until the group threshold is met, so it must count toward referral
+  // milestones until it is cancelled, refunded, or failed.
+  return ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"].includes(status || "pending");
 }

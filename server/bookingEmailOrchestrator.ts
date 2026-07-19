@@ -47,18 +47,47 @@ export async function sendBookingNotificationsAfterPayment(
   }
 
   const commissionAmount = Number(booking.commissionAmount || 0);
-  if (booking.promoterId && commissionAmount > 0) {
-    const promoter = await storage.getUser(booking.promoterId);
+  if (booking.promoterId) {
+    const [promoter, milestoneProgress] = await Promise.all([
+      storage.getUser(booking.promoterId),
+      storage.syncMilestoneFulfillmentForBooking(booking.id),
+    ]);
     if (promoter?.email) {
-      await notificationService.sendAffiliateSaleMadeEmail({
-        to: promoter.email,
-        eventName: experience.title,
-        earnedAmount: formatCurrency(
-          booking.commissionAmount,
-          booking.commissionCurrency || experience.currency,
-        ),
-        eventKey: `affiliate_sale:${booking.id}:${booking.promoterId}`,
-      });
+      if (milestoneProgress) {
+        const milestoneEmails = [
+          notificationService.sendReferralBookingProgressEmail({
+            to: promoter.email,
+            userFirstName: promoter.firstName,
+            eventName: experience.title,
+            qualifyingBookings: milestoneProgress.qualifyingBookings,
+            milestoneTarget: milestoneProgress.milestoneTarget,
+            eventKey: `referral_booking_progress:${booking.id}:${booking.promoterId}`,
+          }),
+        ];
+
+        if (milestoneProgress.unlocked) {
+          milestoneEmails.push(notificationService.sendMilestonePerkUnlockedEmail({
+            to: promoter.email,
+            userFirstName: promoter.firstName,
+            eventName: experience.title,
+            milestoneTarget: milestoneProgress.milestoneTarget,
+            rewardDescription: milestoneProgress.rewardDescription,
+            eventKey: `milestone_perk_unlocked:${milestoneProgress.promoterExperienceId}`,
+          }));
+        }
+
+        await Promise.all(milestoneEmails);
+      } else if (commissionAmount > 0) {
+        await notificationService.sendAffiliateSaleMadeEmail({
+          to: promoter.email,
+          eventName: experience.title,
+          earnedAmount: formatCurrency(
+            booking.commissionAmount,
+            booking.commissionCurrency || experience.currency,
+          ),
+          eventKey: `affiliate_sale:${booking.id}:${booking.promoterId}`,
+        });
+      }
     }
   }
 }

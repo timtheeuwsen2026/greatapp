@@ -141,6 +141,17 @@ type PromoterExperienceRecord = {
   createdAt: Date | null;
 };
 
+export type MilestoneReferralProgress = {
+  promoterExperienceId: string;
+  promoterId: string;
+  referralAudience: string;
+  qualifyingBookings: number;
+  milestoneTarget: number;
+  rewardDescription: string;
+  fulfillmentId: string | null;
+  unlocked: boolean;
+};
+
 export interface IStorage {
   // User operations (mandatory for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
@@ -429,6 +440,7 @@ export interface IStorage {
     conversions: number;
     conversionRate: number;
   }>>;
+  syncMilestoneFulfillmentForBooking(bookingId: string): Promise<MilestoneReferralProgress | undefined>;
   getCreatorPerkFulfillments(creatorId: string): Promise<any[]>;
   updatePerkFulfillmentStatus(
     id: string,
@@ -3574,6 +3586,7 @@ export class DatabaseStorage implements IStorage {
     }>();
 
     for (const booking of promoterBookings) {
+      if (!isQualifyingReferralBooking(booking.status)) continue;
       const expId = booking.experienceId;
       const promotedExperience = promotedExperienceByExperienceId.get(expId);
       const promoterExperienceId = booking.promoterExperienceId || promotedExperience?.id || null;
@@ -4267,6 +4280,109 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(promotionDeals.updatedAt));
 
     return rows;
+  }
+
+  async syncMilestoneFulfillmentForBooking(
+    bookingId: string,
+  ): Promise<MilestoneReferralProgress | undefined> {
+    const [context] = await db
+      .select({
+        bookingStatus: bookings.status,
+        promotion: promoterExperiences,
+        experience: experiences,
+        deal: promotionDeals,
+      })
+      .from(bookings)
+      .innerJoin(promoterExperiences, eq(bookings.promoterExperienceId, promoterExperiences.id))
+      .innerJoin(experiences, eq(promoterExperiences.experienceId, experiences.id))
+      .leftJoin(promotionDeals, eq(promoterExperiences.promotionDealId, promotionDeals.id))
+      .where(eq(bookings.id, bookingId))
+      .limit(1);
+
+    if (!context || !isQualifyingReferralBooking(context.bookingStatus)) return undefined;
+
+    const milestone = resolveMilestoneReward({
+      referralAudience: context.promotion.referralAudience,
+      experience: context.experience,
+      deal: context.deal,
+    });
+    if (!milestone) return undefined;
+
+    const attributedBookings = await db
+      .select({ status: bookings.status })
+      .from(bookings)
+      .where(eq(bookings.promoterExperienceId, context.promotion.id));
+    const qualifyingBookings = attributedBookings.filter((booking) =>
+      isQualifyingReferralBooking(booking.status)
+    ).length;
+
+    let fulfillmentId: string | null = null;
+    const unlocked = qualifyingBookings >= milestone.target;
+    if (unlocked) {
+      const now = new Date();
+      const [existing] = await db
+        .select()
+        .from(perkFulfillments)
+        .where(eq(perkFulfillments.promoterExperienceId, context.promotion.id))
+        .limit(1);
+
+      if (existing) {
+        const [updated] = await db
+          .update(perkFulfillments)
+          .set({
+            promotionDealId: context.promotion.promotionDealId,
+            referralAudience: context.promotion.referralAudience,
+            milestoneTarget: milestone.target,
+            qualifyingBookings,
+            rewardDescription: milestone.rewardDescription,
+            status: existing.status === "fulfilled" ? "fulfilled" : "unlocked",
+            unlockedAt: existing.unlockedAt || now,
+            updatedAt: now,
+          })
+          .where(eq(perkFulfillments.id, existing.id))
+          .returning({ id: perkFulfillments.id });
+        fulfillmentId = updated?.id || existing.id;
+      } else {
+        const [inserted] = await db
+          .insert(perkFulfillments)
+          .values({
+            promoterExperienceId: context.promotion.id,
+            experienceId: context.promotion.experienceId,
+            beneficiaryId: context.promotion.promoterId,
+            promotionDealId: context.promotion.promotionDealId,
+            referralAudience: context.promotion.referralAudience,
+            dealType: "milestone_barter",
+            milestoneTarget: milestone.target,
+            qualifyingBookings,
+            rewardDescription: milestone.rewardDescription,
+            status: "unlocked",
+          })
+          .onConflictDoNothing({ target: perkFulfillments.promoterExperienceId })
+          .returning({ id: perkFulfillments.id });
+
+        if (inserted) {
+          fulfillmentId = inserted.id;
+        } else {
+          const [concurrent] = await db
+            .select({ id: perkFulfillments.id })
+            .from(perkFulfillments)
+            .where(eq(perkFulfillments.promoterExperienceId, context.promotion.id))
+            .limit(1);
+          fulfillmentId = concurrent?.id || null;
+        }
+      }
+    }
+
+    return {
+      promoterExperienceId: context.promotion.id,
+      promoterId: context.promotion.promoterId,
+      referralAudience: context.promotion.referralAudience,
+      qualifyingBookings,
+      milestoneTarget: milestone.target,
+      rewardDescription: milestone.rewardDescription,
+      fulfillmentId,
+      unlocked,
+    };
   }
 
   async getCreatorPerkFulfillments(creatorId: string): Promise<any[]> {

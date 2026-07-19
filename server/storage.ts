@@ -3280,12 +3280,32 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(experiences.createdAt), asc(participantRoles.createdAt));
   }
 
+  async getParticipantRoleApplicationsForUser(userId: string): Promise<any[]> {
+    return await db
+      .select({
+        assignment: participantRoleAssignments,
+        role: participantRoles,
+        experience: experiences,
+      })
+      .from(participantRoleAssignments)
+      .innerJoin(participantRoles, eq(participantRoleAssignments.roleId, participantRoles.id))
+      .innerJoin(experiences, eq(participantRoleAssignments.experienceId, experiences.id))
+      .where(eq(participantRoleAssignments.userId, userId))
+      .orderBy(desc(participantRoleAssignments.appliedAt));
+  }
+
   async getParticipantRoleApplicationsForCreator(creatorId: string): Promise<any[]> {
     return await db
       .select({
         assignment: participantRoleAssignments,
         role: participantRoles,
-        applicant: users,
+        applicant: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+          profileImageUrl: users.profileImageUrl,
+        },
         experience: experiences,
       })
       .from(participantRoleAssignments)
@@ -3297,6 +3317,31 @@ export class DatabaseStorage implements IStorage {
         inArray(participantRoleAssignments.status, ["pending", "applied"]),
       ))
       .orderBy(desc(participantRoleAssignments.appliedAt));
+  }
+
+  async getApprovedParticipantRolesForCreator(creatorId: string): Promise<any[]> {
+    return await db
+      .select({
+        assignment: participantRoleAssignments,
+        role: participantRoles,
+        applicant: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+          profileImageUrl: users.profileImageUrl,
+        },
+        experience: experiences,
+      })
+      .from(participantRoleAssignments)
+      .innerJoin(participantRoles, eq(participantRoleAssignments.roleId, participantRoles.id))
+      .innerJoin(experiences, eq(participantRoleAssignments.experienceId, experiences.id))
+      .innerJoin(users, eq(participantRoleAssignments.userId, users.id))
+      .where(and(
+        eq(experiences.creatorId, creatorId),
+        eq(participantRoleAssignments.status, "confirmed"),
+      ))
+      .orderBy(desc(participantRoleAssignments.confirmedAt));
   }
 
   async resolveParticipantRoleAssignment(

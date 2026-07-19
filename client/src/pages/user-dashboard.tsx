@@ -1,11 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Navigation from "@/components/navigation";
 import DashboardGuard from "@/components/DashboardGuard";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Calendar, MapPin, Users, Star, Loader2 } from "lucide-react";
+import { Briefcase, Calendar, MapPin, Users, Star, Loader2 } from "lucide-react";
 
 const ACTIVE_STATUSES = new Set([
   "pending",
@@ -37,10 +39,27 @@ function formatDateRange(startDate: string | null, endDate: string | null): stri
   return `${fmt(start, { month: "long", day: "numeric", year: "numeric" })} – ${fmt(end, { month: "long", day: "numeric", year: "numeric" })}`;
 }
 
+function gigStatus(status: string | null | undefined) {
+  if (status === "confirmed") {
+    return { label: "Approved", className: "border-green-300 bg-green-100 text-green-800" };
+  }
+  if (status === "declined") {
+    return { label: "Declined", className: "border-red-300 bg-red-100 text-red-800" };
+  }
+  return { label: "Pending Review", className: "border-amber-300 bg-amber-100 text-amber-800" };
+}
+
 function UserDashboardContent() {
   const { user } = useAuth();
+  const defaultDashboardTab = new URLSearchParams(window.location.search).get("tab") === "my-gigs"
+    ? "my-gigs"
+    : "overview";
   const { data: bookings = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/bookings/my-bookings"],
+  });
+  const { data: gigs = [], isLoading: gigsLoading } = useQuery<any[]>({
+    queryKey: ["/api/participant/role-applications"],
+    refetchOnMount: "always",
   });
 
   const now = new Date();
@@ -72,6 +91,9 @@ function UserDashboardContent() {
   const citiesVisited = new Set(
     activeBookings.map((b) => b.experience?.location).filter(Boolean),
   ).size;
+  const pendingGigCount = gigs.filter((row) =>
+    row.assignment?.status === "pending" || row.assignment?.status === "applied",
+  ).length;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -89,8 +111,22 @@ function UserDashboardContent() {
             </p>
           </div>
 
-          {/* Quick Stats */}
-          {isLoading ? (
+          <Tabs defaultValue={defaultDashboardTab} className="space-y-6">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="my-gigs" className="relative">
+                My Gigs
+                {pendingGigCount > 0 && (
+                  <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs text-white">
+                    {pendingGigCount}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview" className="space-y-6">
+              {/* Quick Stats */}
+              {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
             </div>
@@ -302,8 +338,65 @@ function UserDashboardContent() {
                   </CardContent>
                 </Card>
               </div>
-            </>
-          )}
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent value="my-gigs" className="space-y-4">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">My Gigs</h2>
+                <p className="mt-1 text-sm text-gray-500">Track every role application and its latest status.</p>
+              </div>
+
+              {gigsLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading your gigs...
+                </div>
+              ) : gigs.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center text-gray-500">
+                    <Briefcase className="mx-auto mb-3 h-12 w-12 opacity-30" />
+                    <p className="font-medium">No gig applications yet</p>
+                    <p className="mt-1 text-sm">Roles you apply for will appear here.</p>
+                    <Button className="mt-4" asChild>
+                      <Link href="/community-hub?tab=roles">Browse Roles &amp; Gigs</Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {gigs.map((row) => {
+                    const assignment = row.assignment || {};
+                    const role = row.role || {};
+                    const experience = row.experience || {};
+                    const status = gigStatus(assignment.status);
+                    return (
+                      <Card key={assignment.id} data-testid={`card-participant-gig-${assignment.id}`}>
+                        <CardContent className="p-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-gray-900 dark:text-white">{role.name || "Event Role"}</h3>
+                              <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{experience.title}</p>
+                            </div>
+                            <Badge className={status.className}>{status.label}</Badge>
+                          </div>
+                          {role.description && <p className="mt-3 text-sm text-gray-500">{role.description}</p>}
+                          <div className="mt-4 space-y-1 text-xs text-gray-500">
+                            <p>{formatDateRange(experience.startDate, experience.endDate)}</p>
+                            {experience.location && <p>{experience.location}</p>}
+                            {assignment.appliedAt && <p>Applied {new Date(assignment.appliedAt).toLocaleDateString()}</p>}
+                          </div>
+                          <Button className="mt-4 w-full" size="sm" variant="outline" asChild>
+                            <Link href={`/experience/${experience.slug || experience.id}`}>View Experience</Link>
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

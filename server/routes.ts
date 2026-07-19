@@ -8754,11 +8754,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const assignment = await storage.assignParticipantRole(assignmentData);
 
       notificationService.sendRoleApplicationReceivedEmail({
+        assignmentId: assignment.id,
         creatorId: experience.creatorId,
         applicantId: userId,
         experience,
         roleName: role.name,
       }).catch((error) => console.error("Role application notification failed:", error?.message || error));
+
+      notificationService.sendRoleApplicationConfirmationEmail({
+        assignmentId: assignment.id,
+        applicantId: userId,
+        experience,
+        roleName: role.name,
+      }).catch((error) => console.error("Role application confirmation failed:", error?.message || error));
 
       res.status(201).json(assignment);
     } catch (error: any) {
@@ -8798,6 +8806,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/participant/role-applications", isAuthenticated, async (req: any, res) => {
+    try {
+      const applications = await storage.getParticipantRoleApplicationsForUser(req.user.claims.sub);
+      res.json(applications);
+    } catch (error: any) {
+      console.error("Error fetching participant role applications:", error);
+      res.status(500).json({ message: "Failed to fetch your role applications" });
+    }
+  });
+
   app.get("/api/creator/role-applications", isAuthenticated, async (req: any, res) => {
     try {
       const applications = await storage.getParticipantRoleApplicationsForCreator(req.user.claims.sub);
@@ -8805,6 +8823,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error fetching creator role applications:", error);
       res.status(500).json({ message: "Failed to fetch role applications" });
+    }
+  });
+
+  app.get("/api/creator/approved-roles", isAuthenticated, async (req: any, res) => {
+    try {
+      const approvedRoles = await storage.getApprovedParticipantRolesForCreator(req.user.claims.sub);
+      res.json(approvedRoles);
+    } catch (error: any) {
+      console.error("Error fetching creator approved roles:", error);
+      res.status(500).json({ message: "Failed to fetch approved roles" });
     }
   });
 
@@ -8844,6 +8872,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       notificationService.sendRoleApplicationResolvedEmail({
+        assignmentId: assignment.id,
         applicantId: assignment.userId,
         experience,
         roleName: role.name,

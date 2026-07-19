@@ -1076,6 +1076,7 @@ The Great. Team
   }
 
   async sendRoleApplicationReceivedEmail(opts: {
+    assignmentId: string;
     creatorId: string;
     applicantId: string;
     experience: Experience;
@@ -1102,9 +1103,7 @@ The Great. Team
     const result = await sendEmailOnce({
       eventKey: notificationEventKey(
         'role_application_received',
-        opts.experience.id,
-        opts.applicantId,
-        opts.roleName,
+        opts.assignmentId,
       ),
       emailType: 'role_application_received',
       to: creator.email,
@@ -1114,7 +1113,44 @@ The Great. Team
     if (!result.success) throw new Error(result.error || 'Failed to send role application email');
   }
 
+  async sendRoleApplicationConfirmationEmail(opts: {
+    assignmentId: string;
+    applicantId: string;
+    experience: Experience;
+    roleName: string;
+  }): Promise<void> {
+    const applicant = await storage.getUser(opts.applicantId);
+    if (!applicant?.email) return;
+
+    const subject = `Application received - ${opts.roleName} at ${opts.experience.title}`;
+    const bodyText = `Hi ${applicant.firstName || 'there'},\n\nWe've received your application. The creator will review it and you'll receive another email when they make a decision.`;
+    const email = renderBaseEmail({
+      to: applicant.email,
+      bodyText,
+      receiptRows: [
+        { label: 'Experience', value: opts.experience.title },
+        { label: 'Role', value: opts.roleName },
+        { label: 'Status', value: 'Pending review' },
+      ],
+      cta: { label: 'View My Gigs', href: `${APP_BASE_URL}/user-dashboard?tab=my-gigs` },
+      preheader: `Your ${opts.roleName} application is pending review.`,
+    });
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey(
+        'role_application_confirmation',
+        opts.assignmentId,
+      ),
+      emailType: 'role_application_confirmation',
+      to: applicant.email,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) throw new Error(result.error || 'Failed to send role application confirmation');
+  }
+
   async sendRoleApplicationResolvedEmail(opts: {
+    assignmentId: string;
     applicantId: string;
     experience: Experience;
     roleName: string;
@@ -1139,9 +1175,7 @@ The Great. Team
     const result = await sendEmailOnce({
       eventKey: notificationEventKey(
         'role_application_resolved',
-        opts.experience.id,
-        opts.applicantId,
-        opts.roleName,
+        opts.assignmentId,
         opts.status,
       ),
       emailType: 'role_application_resolved',

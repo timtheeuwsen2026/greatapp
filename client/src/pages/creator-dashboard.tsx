@@ -320,6 +320,14 @@ function CreatorDashboardContent() {
     queryKey: ["/api/creator/role-applications"],
     enabled: isAuthenticated && !!creatorProfile,
     retry: false,
+    refetchOnMount: "always",
+  }) as { data: any[]; isLoading: boolean };
+
+  const { data: approvedRoles = [], isLoading: approvedRolesLoading } = useQuery({
+    queryKey: ["/api/creator/approved-roles"],
+    enabled: isAuthenticated && !!creatorProfile,
+    retry: false,
+    refetchOnMount: "always",
   }) as { data: any[]; isLoading: boolean };
 
   const resolveRoleApplication = useMutation({
@@ -329,6 +337,7 @@ function CreatorDashboardContent() {
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/role-applications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/approved-roles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
       toast({
         title: variables.action === "approve" ? "Role Approved" : "Application Declined",
@@ -1293,6 +1302,53 @@ function CreatorDashboardContent() {
                   </Card>
                 );
               })
+            )}
+
+            <div className="pt-4">
+              <h2 className="text-xl font-semibold">Approved Roles</h2>
+              <p className="mt-1 text-sm text-gray-500">Confirmed staff for roles and gigs across your experiences.</p>
+            </div>
+
+            {approvedRolesLoading ? (
+              <div className="py-10 text-center text-gray-500">Loading approved roles...</div>
+            ) : approvedRoles.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-500">
+                  <CheckCircle className="mx-auto mb-3 h-12 w-12 opacity-30" />
+                  <p className="font-medium">No approved staff yet</p>
+                  <p className="mt-1 text-sm">Approved applications will stay visible here.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {approvedRoles.map((row: any) => {
+                  const assignment = row.assignment || {};
+                  const applicant = row.applicant || {};
+                  const role = row.role || {};
+                  const experience = row.experience || {};
+                  const applicantName = [applicant.firstName, applicant.lastName].filter(Boolean).join(" ") || applicant.email || "Participant";
+                  return (
+                    <Card key={assignment.id} className="border-green-200 dark:border-green-800">
+                      <CardContent className="p-5">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-lg font-semibold">{applicantName}</h3>
+                            <Badge className="border-green-300 bg-green-100 text-green-800">Approved</Badge>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            <strong>{role.name}</strong> on <strong>{experience.title}</strong>
+                          </p>
+                          {role.description && <p className="text-sm text-gray-500">{role.description}</p>}
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                            {applicant.email && <span>{applicant.email}</span>}
+                            {assignment.confirmedAt && <span>Approved {new Date(assignment.confirmedAt).toLocaleDateString()}</span>}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </TabsContent>
 

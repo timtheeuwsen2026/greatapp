@@ -207,9 +207,10 @@ export default function ExperienceDetails() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/experiences", experienceId, "role-assignments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/community/role-opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/participant/role-applications"] });
       toast({
         title: "Application sent",
-        description: "The creator has been notified and can now review your application.",
+        description: "A confirmation email is on its way. Track the application under My Gigs in your dashboard.",
       });
     },
     onError: (error: any) => toast({

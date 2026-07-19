@@ -55,7 +55,12 @@ export default function CommunityHub() {
   const [newMessage, setNewMessage] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("groups");
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const [activeTab, setActiveTab] = useState(
+    ["groups", "chat", "events", "roles", "spotlight"].includes(requestedTab || "")
+      ? requestedTab!
+      : "groups",
+  );
 
   // Suggest-an-event form state
   const [createEventOpen, setCreateEventOpen] = useState(false);
@@ -97,9 +102,10 @@ export default function CommunityHub() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/community/role-opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/participant/role-applications"] });
       toast({
         title: "Application sent",
-        description: "The creator has been notified and can review your application.",
+        description: "A confirmation email is on its way. Track the application under My Gigs in your dashboard.",
       });
     },
     onError: (error: any) => toast({

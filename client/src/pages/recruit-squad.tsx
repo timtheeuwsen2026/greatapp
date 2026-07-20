@@ -10,6 +10,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { ensurePostCheckoutReferral, readPostCheckoutReferral } from "@/lib/postCheckoutReferral";
+import ParticipantReferralPerkCard, {
+  hasActiveParticipantReferralPerk,
+} from "@/components/participant-referral-perk-card";
 import {
   Copy,
   CheckCircle,
@@ -37,6 +40,10 @@ type Experience = {
   currentParticipants?: number;
   location?: string;
   startDate?: string;
+  participantReferralDealType?: string | null;
+  participantReferralCommissionPct?: string | number | null;
+  participantReferralMilestoneAttendeeTarget?: string | number | null;
+  participantReferralMilestoneRewardDescription?: string | null;
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -106,6 +113,7 @@ export default function RecruitSquad() {
   };
 
   const experienceTitle = experience?.title || "this experience";
+  const hasParticipantPerk = hasActiveParticipantReferralPerk(experience);
   const userName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || "You"
     : "You";
@@ -397,7 +405,9 @@ export default function RecruitSquad() {
             You're in! Now bring your crew.
           </h1>
           <p className="text-lg text-gray-600">
-            {userName}, your spot is secured. Share your personal link — when friends book using it, you earn cashback on every ticket.
+            {hasParticipantPerk
+              ? `${userName}, your spot is secured. Share your personal link and start earning the participant referral perk shown below.`
+              : `${userName}, your spot is secured. Share your personal link to bring friends into the experience.`}
           </p>
           {experience && (
             <Badge variant="secondary" className="text-sm px-3 py-1">
@@ -413,6 +423,11 @@ export default function RecruitSquad() {
             <ArrowDown className="h-6 w-6 animate-bounce motion-reduce:animate-none" aria-hidden="true" />
           </a>
         </div>
+
+        <ParticipantReferralPerkCard
+          experience={experience}
+          context="post_checkout"
+        />
 
         {experience?.coverImageUrl && (
           <div className="rounded-2xl overflow-hidden shadow-md max-h-52">
@@ -431,7 +446,7 @@ export default function RecruitSquad() {
               <span className="font-semibold text-gray-800">Your personal referral link</span>
             </div>
             <p className="text-sm text-gray-500">
-              When a friend books using this link, the booking is attributed to you and you earn cashback on the ticket — track your earnings any time in your dashboard.
+              When a friend books using this link, the booking is attributed to you automatically. Track referral bookings and unlocked rewards in My Impact.
             </p>
 
             {referralLink && (
@@ -541,16 +556,16 @@ export default function RecruitSquad() {
                 refreshInterval={20000}
               />
               <p className="text-xs text-gray-500 mt-3">
-                Every person who joins using your link helps confirm this experience — and earns you cashback.
+                Every person who joins using your link helps confirm this experience and advances your referral progress.
               </p>
             </CardContent>
           </Card>
         )}
 
         <div className="space-y-3 pt-2" data-testid="continue-actions">
-          <Link href="/promoter">
+          <Link href="/my-impact">
             <Button variant="outline" className="w-full" data-testid="view-earnings-dashboard">
-              View my Cashback / Earnings dashboard
+              View My Impact dashboard
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           </Link>

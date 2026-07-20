@@ -5,6 +5,7 @@ import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-
 import { loadStripe } from '@stripe/stripe-js';
 import Navigation from "@/components/navigation";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
+import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,10 @@ type Experience = {
   currency?: string;
   status?: string;
   lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
+  participantReferralDealType?: string | null;
+  participantReferralCommissionPct?: string | number | null;
+  participantReferralMilestoneAttendeeTarget?: string | number | null;
+  participantReferralMilestoneRewardDescription?: string | null;
 };
 
 type Booking = {
@@ -416,9 +421,13 @@ export default function BookingSuccess() {
           </div>
 
           <div className="space-y-6">
+            <ParticipantReferralPerkCard
+              experience={experience}
+              context="post_checkout"
+            />
             <Card className="border-primary/20 bg-primary/5">
-              <CardHeader><CardTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-primary"/>Help your squad reach the minimum</CardTitle></CardHeader>
-              <CardContent><p className="mb-4 text-sm text-gray-600">Invite friends with your personal referral link and get the group confirmed faster.</p><Link href={`/recruit?experience=${experience.id}${bookingId ? `&booking=${bookingId}` : ""}`}><Button className="w-full">Invite the Squad</Button></Link></CardContent>
+              <CardHeader><CardTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-primary"/>Invite the Squad</CardTitle></CardHeader>
+              <CardContent><p className="mb-4 text-sm text-gray-600">Invite friends with your personal referral link. Their bookings are attributed to you automatically.</p><Link href={`/recruit?experience=${experience.id}${bookingId ? `&booking=${bookingId}` : ""}`}><Button className="w-full">Open My Share Kit</Button></Link></CardContent>
             </Card>
             <Card data-testid="payment-summary" className="border-green-200 bg-green-50/30">
               <CardHeader className="pb-3">

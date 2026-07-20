@@ -26,6 +26,7 @@ import { VenueInfoCard } from "@/components/VenueInfoCard";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
+import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { ChatTeaser } from "@/components/ChatTeaser";
 import { EventSocialProofToast } from "@/components/EventSocialProofToast";
 
@@ -123,6 +124,10 @@ interface PublicEventData {
   stats: any;
   bookings: any[];
   reviews: any[];
+  participantReferralDealType?: string | null;
+  participantReferralCommissionPct?: string | number | null;
+  participantReferralMilestoneAttendeeTarget?: string | number | null;
+  participantReferralMilestoneRewardDescription?: string | null;
 }
 
 export default function PublicEventPage() {
@@ -595,6 +600,11 @@ export default function PublicEventPage() {
             </div>
           </CardContent>
         </Card>
+        <ParticipantReferralPerkCard
+          experience={event}
+          context="public"
+          className="mt-6"
+        />
       </div>
 
       {/* About the Experience Section */}

@@ -13,6 +13,7 @@ import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
+import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1329,7 +1330,13 @@ export default function ExperienceDetails() {
                     </Button>
                   )}
 
-                  {/* Invite the Squad — always visible */}
+                  {/* Participant perk and sharing */}
+                  <ParticipantReferralPerkCard
+                    experience={experience}
+                    context="public"
+                    className="mb-3"
+                  />
+
                   <Button
                     variant="outline"
                     size="lg"

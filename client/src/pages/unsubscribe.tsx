@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, Loader2, MailX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import BrandLogo from "@/components/BrandLogo";
 
 export default function UnsubscribePage() {
   const token = useMemo(() => new URLSearchParams(window.location.search).get("token") || "", []);
@@ -31,7 +32,9 @@ export default function UnsubscribePage() {
     <div className="min-h-screen bg-gray-50 text-gray-950">
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex h-16 max-w-2xl items-center px-4 sm:px-6">
-          <a href="/" className="text-xl font-bold">Great.</a>
+          <a href="/" className="overflow-hidden rounded-md">
+            <BrandLogo className="h-12 w-auto" />
+          </a>
         </div>
       </header>
       <main className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">

@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import logoImage from "@assets/output-onlinepngtools (2)_1754407209260.png";
+import BrandLogo from "@/components/BrandLogo";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -97,7 +97,7 @@ export default function Navigation() {
           {/* Logo */}
           <div className="flex items-center">
             <Link href="/" className="flex items-center space-x-2">
-              <img src={logoImage} alt="Great." className="h-10 w-auto" />
+              <BrandLogo className="h-12 w-auto rounded-md" />
               <span className="text-xl font-bold text-primary">experiences</span>
             </Link>
           </div>

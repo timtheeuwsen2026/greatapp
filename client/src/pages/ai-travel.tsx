@@ -13,6 +13,7 @@ import { useLocation } from 'wouter';
 import Navigation from '@/components/navigation';
 import Breadcrumb from '@/components/Breadcrumb';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
+import BrandLogo from '@/components/BrandLogo';
 
 interface TravelPlan {
   id: string;
@@ -673,9 +674,10 @@ export default function AITravel() {
                 {travelPlan.platformExperiences && travelPlan.platformExperiences.length > 0 && (
                   <Card className="shadow-lg border-primary/20">
                     <CardHeader>
-                      <CardTitle className="flex items-center space-x-2">
+                      <CardTitle className="flex flex-wrap items-center gap-2">
                         <Users className="h-5 w-5 text-primary" />
-                        <span>Great. Experiences in {travelPlan.destination}</span>
+                        <BrandLogo className="h-12 w-auto rounded-md" />
+                        <span>Experiences in {travelPlan.destination}</span>
                         <Badge variant="secondary">Platform Partners</Badge>
                       </CardTitle>
                     </CardHeader>

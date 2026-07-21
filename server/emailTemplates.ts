@@ -122,6 +122,7 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
 
 export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): RenderedEmail {
   const appBaseUrl = opts.appBaseUrl.replace(/\/$/, "");
+  const brandLogoUrl = `${appBaseUrl}/email-assets/email_logo.png`;
   const unsubscribeUrl = buildFooterUrl(appBaseUrl, "/unsubscribe", opts.preferencesToken);
   const preferencesUrl = buildFooterUrl(appBaseUrl, "/email-preferences", opts.preferencesToken);
   const growthFooter = renderGrowthFooter(opts.growthFooterContext || "none", appBaseUrl, opts.growthFooterData || {});
@@ -144,10 +145,8 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
       .preheader { display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent; }
       .shell { width: 100%; padding: 32px 14px; }
       .container { max-width: 580px; margin: 0 auto; background: #ffffff; border: 1px solid #ece7dc; border-radius: 8px; overflow: hidden; }
-      .header { padding: 28px 28px 25px; text-align: center; background-color: #805ff0; background-image: linear-gradient(180deg, #765ff0 0%, #c35df6 100%); }
-      .brand-dots { margin: 0 auto 5px; border-collapse: separate; border-spacing: 4px 3px; }
-      .brand-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: #ffffff; }
-      .brand-word { color: #ffffff; font-size: 42px; line-height: 1; font-weight: 300; letter-spacing: 0; }
+      .header { text-align: center; background: #955cf2; }
+      .brand-logo { display: block; width: 100%; max-width: 580px; height: auto; margin: 0 auto; border: 0; }
       .content { padding: 34px 32px 12px; font-size: 16px; line-height: 1.68; color: #29323d; }
       .content p { margin: 0 0 18px; }
       .receipt { margin: 4px 32px 28px; border: 1px solid #e6e1d6; border-radius: 8px; overflow: hidden; background: #fffdf8; }
@@ -179,12 +178,7 @@ export function renderMasterEmailTemplate(opts: MasterEmailTemplateOptions): Ren
     <div class="shell">
       <div class="container">
         <div class="header">
-          <table class="brand-dots" role="presentation" aria-hidden="true">
-            <tr><td></td><td><span class="brand-dot"></span></td><td></td></tr>
-            <tr><td><span class="brand-dot"></span></td><td></td><td><span class="brand-dot"></span></td></tr>
-            <tr><td></td><td><span class="brand-dot"></span></td><td></td></tr>
-          </table>
-          <div class="brand-word">great</div>
+          <img class="brand-logo" src="${escapeHtml(brandLogoUrl)}" width="580" alt="Great">
         </div>
         <div class="content">
           ${bodyHtml}

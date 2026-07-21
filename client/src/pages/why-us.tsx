@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import SmartCreatorButton from "@/components/smart-creator-button";
+import BrandLogo from "@/components/BrandLogo";
 import { 
   Users, 
   Heart, 
@@ -27,8 +28,9 @@ export default function WhyUs() {
       {/* Hero Section */}
       <section className="gradient-primary text-white py-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h1 className="text-5xl md:text-6xl font-bold mb-6">
-            Why Choose <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">Great.</span>
+          <h1 className="mb-6 flex flex-wrap items-center justify-center gap-3 text-5xl font-bold md:text-6xl">
+            <span>Why Choose</span>
+            <BrandLogo className="h-20 w-auto rounded-xl shadow-xl" />
           </h1>
           <p className="text-xl md:text-2xl mb-8 max-w-4xl mx-auto opacity-90">
             We're not just another booking platform. We're building communities and transforming lives through meaningful connections and experiences.
@@ -332,7 +334,7 @@ export default function WhyUs() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             <div className="col-span-1 md:col-span-2">
               <div className="flex items-center mb-4">
-                <span className="text-3xl font-bold text-white">Great.</span>
+                <BrandLogo className="h-20 w-auto rounded-xl" />
               </div>
               <p className="text-gray-400 mb-6 max-w-md">
                 Discover and create life-changing experiences. Join transformative retreats, adventures, and workations with like-minded people.

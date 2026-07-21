@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Mail, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import BrandLogo from "@/components/BrandLogo";
 
 interface PreferenceSettings {
   communityEmailsEnabled: boolean;
@@ -83,7 +84,9 @@ export default function EmailPreferencesPage() {
     <div className="min-h-screen bg-gray-50 text-gray-950">
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex h-16 max-w-3xl items-center px-4 sm:px-6">
-          <a href="/" className="text-xl font-bold">Great.</a>
+          <a href="/" className="overflow-hidden rounded-md">
+            <BrandLogo className="h-12 w-auto" />
+          </a>
         </div>
       </header>
       <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">

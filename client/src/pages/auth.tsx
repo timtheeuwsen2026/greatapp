@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { Compass, Plane } from "lucide-react";
+import { Compass } from "lucide-react";
+import BrandLogo from "@/components/BrandLogo";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
@@ -197,9 +198,8 @@ export default function AuthPage() {
           <section className="relative hidden min-h-[640px] overflow-hidden bg-gradient-to-br from-primary via-secondary to-accent p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(255,255,255,0.24),transparent_28%),radial-gradient(circle_at_82%_34%,rgba(255,255,255,0.16),transparent_24%),linear-gradient(180deg,rgba(0,0,0,0.06),rgba(0,0,0,0.24))]" />
             <div className="relative">
-              <a href="/" className="inline-flex items-center gap-3 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold backdrop-blur">
-                <Plane className="h-4 w-4" />
-                Great.
+              <a href="/" className="inline-flex overflow-hidden rounded-xl shadow-lg shadow-purple-950/20">
+                <BrandLogo className="h-20 w-auto" />
               </a>
               <div className="mt-16 max-w-md">
                 <p className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-sm font-medium backdrop-blur">
@@ -227,9 +227,8 @@ export default function AuthPage() {
           <section className="flex items-center justify-center p-6 sm:p-10">
             <div className="w-full max-w-md">
               <div className="mb-8 text-center lg:text-left">
-                <a href="/" className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-primary lg:hidden">
-                  <Plane className="h-4 w-4" />
-                  Great.
+                <a href="/" className="mb-6 inline-flex overflow-hidden rounded-lg shadow-sm lg:hidden">
+                  <BrandLogo className="h-16 w-auto" />
                 </a>
                 <p className="mb-2 text-sm font-semibold uppercase text-primary">
                   {mode === "login" ? "Welcome back" : mode === "reset" ? "Account recovery" : "Start your journey"}

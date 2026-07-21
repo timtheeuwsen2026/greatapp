@@ -2,6 +2,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Users, Globe, Heart, Shield } from "lucide-react";
 import Navigation from "@/components/navigation";
+import BrandLogo from "@/components/BrandLogo";
 
 export default function About() {
   const [, setLocation] = useLocation();
@@ -13,8 +14,9 @@ export default function About() {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
         {/* Header */}
         <div className="text-center mb-16" data-testid="about-header">
-          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 dark:text-white mb-6">
-            About Great.
+          <h1 className="mb-6 flex flex-wrap items-center justify-center gap-3 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl">
+            <span>About</span>
+            <BrandLogo className="h-20 w-auto rounded-xl shadow-lg" />
           </h1>
           <p className="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
             The platform for community-backed experiences

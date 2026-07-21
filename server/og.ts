@@ -1,6 +1,25 @@
 import { createCanvas, loadImage, type SKRSContext2D } from "@napi-rs/canvas";
 import type { Express, Request, Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { storage } from "./storage";
+
+const SOURCE_BRAND_LOGO_PATH = path.resolve(process.cwd(), "client", "public", "assets", "email_logo.png");
+const BUILT_BRAND_LOGO_PATH = path.resolve(process.cwd(), "dist", "public", "assets", "email_logo.png");
+const BRAND_LOGO_PATH = fs.existsSync(SOURCE_BRAND_LOGO_PATH)
+  ? SOURCE_BRAND_LOGO_PATH
+  : BUILT_BRAND_LOGO_PATH;
+let cachedBrandLogo: Awaited<ReturnType<typeof loadImage>> | null | undefined;
+
+async function loadBrandLogo() {
+  if (cachedBrandLogo !== undefined) return cachedBrandLogo;
+  try {
+    cachedBrandLogo = await loadImage(BRAND_LOGO_PATH);
+  } catch {
+    cachedBrandLogo = null;
+  }
+  return cachedBrandLogo;
+}
 
 // ─── Social bot user-agent detection ─────────────────────────────────────────
 const BOT_PATTERNS = [
@@ -121,6 +140,7 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   const H = 630;
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d") as SKRSContext2D;
+  const brandLogo = await loadBrandLogo();
 
   // 1. Brand gradient fallback background
   const bg = ctx.createLinearGradient(0, 0, 0, H);
@@ -161,11 +181,15 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   ctx.fillStyle = topScrim;
   ctx.fillRect(0, 0, W, 130);
 
-  // 4. "Great." wordmark — top left
-  ctx.textBaseline = "top";
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.font = "bold 42px sans-serif";
-  ctx.fillText("Great.", 56, 44);
+  // 4. Official Great logo — top left
+  if (brandLogo) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(56, 28, 360, 159, 18);
+    ctx.clip();
+    ctx.drawImage(brandLogo as any, 56, 28, 360, 159);
+    ctx.restore();
+  }
 
   // 5. Lifecycle badge pill
   const state = resolveLifecycle(experience, mvg);
@@ -238,13 +262,7 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
 
   }
 
-  // 8. Right side: subtle Great. logo watermark (large, transparent)
-  ctx.font = "bold 180px sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,0.04)";
-  ctx.textBaseline = "middle";
-  ctx.fillText("Great.", W - 520, H / 2);
-
-  // 9. Bottom brand strip
+  // 8. Bottom brand strip
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, H - 44, W, 44);
   ctx.font = "400 15px sans-serif";
@@ -252,8 +270,8 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   ctx.textBaseline = "middle";
   const footerCategory = categoryLabel(experience.category);
   const footerText = footerCategory
-    ? `Great. - ${footerCategory} - greatapp.ai`
-    : "Great. - greatapp.ai";
+    ? `${footerCategory} - greatapp.ai`
+    : "greatapp.ai";
   ctx.fillText(footerText, 56, H - 22);
 
   return canvas.toBuffer("image/png");

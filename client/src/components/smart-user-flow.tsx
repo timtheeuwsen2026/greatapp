@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sparkles, Users, Plus, MapPin, User, LogOut } from "lucide-react";
 import { useUserFlow } from "@/hooks/useUserFlow";
+import BrandLogo from "@/components/BrandLogo";
 
 interface SmartUserFlowProps {
   children?: React.ReactNode;
@@ -241,7 +242,7 @@ export default function SmartUserFlow({ children }: SmartUserFlowProps) {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">Great.</h1>
+          <BrandLogo className="mx-auto mb-3 h-20 w-auto rounded-xl shadow-md" />
           <p className="text-gray-600">
             Life-changing experiences • Amazing communities • Unforgettable adventures
           </p>

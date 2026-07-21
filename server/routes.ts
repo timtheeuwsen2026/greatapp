@@ -952,11 +952,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Register OG image + social bot prerender routes (must come before Vite catch-all)
   registerOGRoutes(app);
 
-  app.get('/email-assets/great-logo.jpg', (_req, res) => {
-    const logoPath = path.resolve(process.cwd(), 'attached_assets', 'great logo (1) (1)_1753970226148.jpg');
+  app.get('/email-assets/email_logo.png', (_req, res) => {
+    const sourceLogoPath = path.resolve(process.cwd(), 'client', 'public', 'assets', 'email_logo.png');
+    const builtLogoPath = path.resolve(process.cwd(), 'dist', 'public', 'assets', 'email_logo.png');
+    const logoPath = fs.existsSync(sourceLogoPath) ? sourceLogoPath : builtLogoPath;
     try {
+      if (!fs.existsSync(logoPath)) return res.status(404).send('Logo not found');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.sendFile(logoPath);
+      res.type('png');
+      return res.sendFile(logoPath);
     } catch {
       res.status(404).send('Logo not found');
     }

@@ -2,6 +2,7 @@ import AISearchAgent from "@/components/ai-search-agent";
 import { Button } from "@/components/ui/button";
 import SmartCreatorButton from "@/components/smart-creator-button";
 import { Link } from "wouter";
+import BrandLogo from "@/components/BrandLogo";
 
 export default function HeroSection() {
   return (
@@ -14,8 +15,9 @@ export default function HeroSection() {
       
       {/* Hero Content */}
       <div className="relative z-10 text-center text-white max-w-4xl mx-auto px-4">
-        <h1 className="text-4xl md:text-6xl font-bold mb-6 leading-tight">
-          Turn Dreams Into Adventures with <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">Great.</span>
+        <h1 className="mb-6 flex flex-wrap items-center justify-center gap-3 text-4xl font-bold leading-tight md:text-6xl">
+          <span>Turn Dreams Into Adventures with</span>
+          <BrandLogo className="h-20 w-auto rounded-xl shadow-xl md:h-24" />
         </h1>
         <p className="text-xl md:text-2xl mb-8 text-gray-200">
           From mountain retreats to digital nomad workations — discover extraordinary experiences or create your own unforgettable journey.

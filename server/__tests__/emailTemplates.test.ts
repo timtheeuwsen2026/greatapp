@@ -9,12 +9,12 @@ const baseOptions = {
 };
 
 describe("renderMasterEmailTemplate", () => {
-  it("uses the shared purple gradient Great. header", () => {
+  it("uses the official Great logo in the shared email header", () => {
     const rendered = renderMasterEmailTemplate(baseOptions);
 
-    expect(rendered.html).toContain("linear-gradient(180deg, #765ff0 0%, #c35df6 100%)");
-    expect(rendered.html).toContain('<div class="brand-word">great</div>');
-    expect(rendered.html.match(/class="brand-dot"/g)).toHaveLength(4);
+    expect(rendered.html).toContain('src="https://great.example/email-assets/email_logo.png"');
+    expect(rendered.html).toContain('class="brand-logo"');
+    expect(rendered.html).not.toContain('class="brand-word"');
   });
 
   it("uses signed preference links without exposing the recipient address", () => {

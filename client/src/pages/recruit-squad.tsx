@@ -55,6 +55,44 @@ const CATEGORY_LABELS: Record<string, string> = {
   festivals_events: "Festivals & Events",
 };
 
+const BRAND_LOGO_SRC = "/assets/email_logo.png";
+
+function loadCanvasImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+}
+
+function drawRoundedImage(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(image, x, y, width, height);
+  ctx.restore();
+}
+
 function categoryLabel(category?: string | null) {
   if (!category) return null;
   return CATEGORY_LABELS[category] || category
@@ -192,6 +230,7 @@ export default function RecruitSquad() {
       canvas.height = H;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      const brandLogo = await loadCanvasImage(BRAND_LOGO_SRC);
 
       // ── 3. Brand gradient fallback background (deep violet → indigo) ──────
       const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
@@ -243,11 +282,11 @@ export default function RecruitSquad() {
       ctx.fillStyle = topScrim;
       ctx.fillRect(0, 0, W, 160);
 
-      // ── 6. "Great." wordmark — top left ──────────────────────────────────
+      // ── 6. Official Great logo — premium top brand panel ─────────────────
+      if (brandLogo) {
+        drawRoundedImage(ctx, brandLogo, 40, 28, 400, 177, 18);
+      }
       ctx.textBaseline = "top";
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.font = "bold 38px system-ui, -apple-system, sans-serif";
-      ctx.fillText("Great.", 40, 44);
 
       // ── 7. Hero text: "I'm in! 🌴" ───────────────────────────────────────
       const heroY = Math.round(H * 0.50);
@@ -315,11 +354,11 @@ export default function RecruitSquad() {
       // ── 11. Bottom brand strip ────────────────────────────────────────────
       ctx.fillStyle = "rgba(255,255,255,0.07)";
       ctx.fillRect(0, H - 64, W, 64);
-      // Left side: Great. brand
+      // Left side: public brand domain (the official logo is displayed above).
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.font = "500 15px system-ui, -apple-system, sans-serif";
       ctx.textBaseline = "middle";
-      ctx.fillText("Great.  ·  greatapp.ai", 40, H - 32);
+      ctx.fillText("greatapp.ai", 40, H - 32);
       // Right side: event category, when available.
       if (footerCategory) {
         ctx.font = "400 13px system-ui, -apple-system, sans-serif";

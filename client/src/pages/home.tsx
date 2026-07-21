@@ -25,6 +25,7 @@ import { JoinTripModal } from "@/components/JoinTripModal";
 import { useToast } from "@/hooks/use-toast";
 import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
+import BrandLogo from "@/components/BrandLogo";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -1034,7 +1035,7 @@ export default function Home() {
               {/* Brand & Description */}
               <div className="col-span-1 md:col-span-2">
                 <div className="flex items-center mb-4">
-                  <span className="text-3xl font-bold text-white">Great.</span>
+                  <BrandLogo className="h-20 w-auto rounded-xl" />
                 </div>
                 <p className="text-gray-400 mb-6 max-w-md">
                   The platform for community-backed experiences. Create, discover, and fund meaningful local events together.

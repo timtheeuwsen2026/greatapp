@@ -96,7 +96,7 @@ export async function setupAuth(app: Express) {
       .map((d) => d.trim())
       .filter(Boolean),
   );
-  const appBaseUrl = process.env.APP_BASE_URL || "https://greatapp.ai";
+  const appBaseUrl = process.env.APP_BASE_URL || "https://www.greatexperiences.ai";
   try {
     const customHostname = new URL(appBaseUrl).hostname;
     if (customHostname) authDomains.add(customHostname);

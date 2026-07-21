@@ -165,32 +165,24 @@ function BalancePaymentForm({ bookingId, amount, currency, onSuccess }: {
 
 export default function BookingSuccess() {
   const [, setLocation] = useLocation();
-  const [experienceId, setExperienceId] = useState<string | null>(null);
-  const [bookingId, setBookingId] = useState<string | null>(null);
+  const [experienceId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("experience"));
+  const [bookingId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("booking"));
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [balanceJustPaid, setBalanceJustPaid] = useState(false);
   const { toast } = useToast();
-
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const id = urlParams.get('experience');
-    const bId = urlParams.get('booking');
-    setExperienceId(id);
-    setBookingId(bId || null);
-  }, []);
 
   const { data: experience, isLoading } = useQuery<Experience>({
     queryKey: ["/api/experiences", experienceId],
     enabled: !!experienceId,
   });
 
-  const { data: bookingDirect } = useQuery<Booking>({
+  const { data: bookingDirect, isLoading: bookingDirectLoading } = useQuery<Booking>({
     queryKey: ["/api/bookings", bookingId],
     enabled: !!bookingId,
   });
 
-  const { data: myBookings } = useQuery<Array<Booking & { experience?: any }>>({
+  const { data: myBookings, isLoading: myBookingsLoading } = useQuery<Array<Booking & { experience?: any }>>({
     queryKey: ["/api/bookings/my-bookings"],
     enabled: !!experienceId && !bookingId,
   });
@@ -207,6 +199,9 @@ export default function BookingSuccess() {
           .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
       : undefined
   );
+  const bookingLookupLoading = bookingId
+    ? bookingDirectLoading
+    : !!experienceId && myBookingsLoading;
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -252,6 +247,7 @@ export default function BookingSuccess() {
     if (
       !isLoading &&
       experience &&
+      booking &&
       !participantProfileLoading &&
       participantProfileMissing &&
       !isCancelled &&
@@ -276,7 +272,7 @@ export default function BookingSuccess() {
     setLocation,
   ]);
 
-  if (isLoading) {
+  if (isLoading || bookingLookupLoading) {
     return (
       <div className="min-h-screen bg-white">
         <Navigation />
@@ -304,9 +300,34 @@ export default function BookingSuccess() {
     );
   }
 
-  const isDeposit = booking?.isDepositOnly === true && !balanceJustPaid;
-  const isFullyPaid = booking?.balancePaid === true || booking?.status === "fully_paid" || balanceJustPaid;
-  const hasOutstandingBalance = isDeposit && !isFullyPaid && parseFloat(booking?.balanceAmount || "0") > 0;
+  if (!booking) {
+    return (
+      <div className="min-h-screen bg-white">
+        <Navigation />
+        <div className="mx-auto max-w-2xl px-4 py-16 text-center">
+          <XCircle className="mx-auto h-14 w-14 text-amber-500" />
+          <h1 className="mt-5 text-2xl font-bold text-gray-900" data-testid="booking-required-heading">
+            We couldn't verify this booking
+          </h1>
+          <p className="mx-auto mt-3 max-w-lg text-gray-600">
+            This confirmation page is available after a completed checkout. Open your confirmed trip from My Bookings or complete checkout first.
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Link href="/bookings">
+              <Button>My Bookings</Button>
+            </Link>
+            <Link href={`/checkout/${experience.id}`}>
+              <Button variant="outline">Complete Checkout</Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isDeposit = booking.isDepositOnly === true && !balanceJustPaid;
+  const isFullyPaid = booking.balancePaid === true || booking.status === "fully_paid" || balanceJustPaid;
+  const hasOutstandingBalance = isDeposit && !isFullyPaid && parseFloat(booking.balanceAmount || "0") > 0;
   const currency = experience.currency || 'EUR';
 
   if (isCancelled) {

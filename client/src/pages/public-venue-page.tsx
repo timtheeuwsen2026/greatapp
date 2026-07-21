@@ -56,7 +56,7 @@ export default function PublicVenuePage() {
         <Navigation />
         <div className="container mx-auto px-4 py-8">
           <div className="animate-pulse space-y-8">
-            <div className="h-96 bg-muted rounded-lg" />
+            <div className="h-96 bg-muted rounded-lg" data-testid="skeleton-hero" />
             <div className="h-12 bg-muted rounded w-1/2" />
             <div className="h-24 bg-muted rounded" />
           </div>
@@ -72,7 +72,7 @@ export default function PublicVenuePage() {
         <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
           <Card className="max-w-md w-full">
             <CardContent className="pt-6 text-center">
-              <h2 className="text-2xl font-bold mb-2">Venue Not Found</h2>
+              <h2 className="text-2xl font-bold mb-2" data-testid="text-error-title">Venue Not Found</h2>
               <p className="text-muted-foreground mb-4">
                 This venue doesn't exist or hasn't been approved yet.
               </p>

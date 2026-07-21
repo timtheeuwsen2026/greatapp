@@ -13,6 +13,7 @@ import { Progress } from "@/components/ui/progress";
 import Navigation from "@/components/navigation";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import { getParticipantReferralSummary, getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
+import { formatMvgParticipantCount } from "@/lib/participantCounts";
 
 interface EarningsSummary {
   byCurrency: Array<{
@@ -179,8 +180,8 @@ function MVGProgressBar({ experience }: { experience: PromotedExperience["experi
       <div className="mb-2 flex items-center justify-between gap-3 text-sm">
         <span className="font-semibold text-amber-900 dark:text-amber-100">
           {isConfirmed
-            ? `${current}/${target} bookings - confirmed!`
-            : `${current}/${target} bookings to confirm!`}
+            ? formatMvgParticipantCount(current, target, true).replace("joined", "bookings")
+            : formatMvgParticipantCount(current, target, false).replace("joined", "bookings to confirm")}
         </span>
         {!isConfirmed && (
           <span className="text-xs font-medium text-amber-700 dark:text-amber-200">

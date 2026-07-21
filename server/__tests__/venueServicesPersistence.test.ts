@@ -3,7 +3,10 @@ import { db } from '../db';
 import { venues } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 
-describe('Venue Services Persistence', () => {
+const databaseAvailable = !!process.env.DATABASE_URL
+  && !process.env.DATABASE_URL.includes('test:test@localhost');
+
+describe.runIf(databaseAvailable)('Venue Services Persistence', () => {
   const testVenueId = 'test-venue-services-' + Date.now();
   const testUserId = '45788955'; // Development user ID
   

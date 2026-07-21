@@ -270,8 +270,8 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   ctx.textBaseline = "middle";
   const footerCategory = categoryLabel(experience.category);
   const footerText = footerCategory
-    ? `${footerCategory} - greatapp.ai`
-    : "greatapp.ai";
+    ? `${footerCategory} - greatexperiences.ai`
+    : "greatexperiences.ai";
   ctx.fillText(footerText, 56, H - 22);
 
   return canvas.toBuffer("image/png");

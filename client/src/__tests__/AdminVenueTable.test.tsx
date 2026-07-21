@@ -153,7 +153,7 @@ describe('Admin Venue Table', () => {
 
     // Click on Venues tab
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Pending Venue 1')).toBeInTheDocument();
@@ -166,7 +166,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('John Doe')).toBeInTheDocument();
@@ -179,7 +179,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       // Check for status badges
@@ -197,7 +197,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       // Check for formatted dates in the table
@@ -211,7 +211,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Pending Venue 1')).toBeInTheDocument();
@@ -243,7 +243,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Pending Venue 1')).toBeInTheDocument();
@@ -265,7 +265,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Approved Venue 1')).toBeInTheDocument();
@@ -279,7 +279,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Pending Venue 1')).toBeInTheDocument();
@@ -301,7 +301,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText('Pending Venue 1')).toBeInTheDocument();
@@ -334,7 +334,7 @@ describe('Admin Venue Table', () => {
     renderComponent();
 
     const venuesTab = await screen.findByText('Venues');
-    fireEvent.click(venuesTab);
+    fireEvent.mouseDown(venuesTab, { button: 0, ctrlKey: false });
 
     await waitFor(() => {
       expect(screen.getByText(/No venues found/i)).toBeInTheDocument();

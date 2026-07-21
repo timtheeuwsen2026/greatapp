@@ -20,6 +20,7 @@ import { MapPin, Calendar, Users, Lock, Clock, Shield, AlertCircle, CheckCircle,
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
+import { formatCapacityParticipantCount } from "@/lib/participantCounts";
 
 type Experience = {
   id: string;
@@ -147,7 +148,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           });
 
           const bookingId = data.booking?.id || '';
-          await ensurePostCheckoutReferral(experience.id, user?.id).catch((error) => {
+          await ensurePostCheckoutReferral(experience.id, user?.id, bookingId).catch((error) => {
             console.warn("Referral link will be retried on the confirmation page", error);
           });
           const postPaymentPath = isDeposit
@@ -193,7 +194,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
 
           const processingBookingId = processingData.booking?.id || '';
-          await ensurePostCheckoutReferral(experience.id, user?.id).catch((error) => {
+          await ensurePostCheckoutReferral(experience.id, user?.id, processingBookingId).catch((error) => {
             console.warn("Referral link will be retried on the confirmation page", error);
           });
           const processingPostPaymentPath = isDeposit
@@ -808,7 +809,12 @@ export default function Checkout() {
                   </div>
                   <div className="flex items-center">
                     <Users className="h-4 w-4 mr-3 text-gray-400" />
-                    <span>{(bookingStats?.currentBookings || experience.currentParticipants) + 1}/{experience.maxParticipants} participants</span>
+                    <span>
+                      {formatCapacityParticipantCount(
+                        bookingStats?.currentBookings ?? experience.currentParticipants,
+                        experience.maxParticipants,
+                      )}
+                    </span>
                   </div>
                 </div>
 

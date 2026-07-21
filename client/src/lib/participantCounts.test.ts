@@ -12,7 +12,7 @@ describe("participant count displays", () => {
 
   it("separates the achieved MVG from the total attendee count", () => {
     expect(formatMvgParticipantCount(4, 1, true)).toBe(
-      "Minimum of 1 reached · 4 total joined",
+      "Minimum of 1 reached; 4 total joined",
     );
   });
 

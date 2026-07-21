@@ -35,6 +35,7 @@ export interface Room {
   name: string;
   capacity: number;
   quantity: number;
+  pricePerNight?: number;
   description?: string;
   amenities?: string[];
   photos?: string[];
@@ -150,7 +151,7 @@ export function buildSkusFromRooms(rooms: Room[], pricePerPerson: number = 0): S
     id: room.id,
     name: room.name,
     quantity: room.quantity || 1,
-    pricePerPerson: pricePerPerson,
+    pricePerPerson: safeRound(pricePerPerson > 0 ? pricePerPerson : room.pricePerNight || 0),
     gallery: room.photos || [],
     notes: room.description || undefined,
   }));
@@ -166,9 +167,24 @@ export function buildSkusFromRooms(rooms: Room[], pricePerPerson: number = 0): S
 export function getPriceSource(
   hasRooms: boolean, 
   pricePerPerson: number = 0, 
-  maxParticipants?: number
+  maxParticipantsOrRooms?: number | Room[]
 ): PriceSource {
   const perPersonPrice = safeRound(pricePerPerson || 0);
+
+  // Support legacy room-based events while newer events use a single
+  // per-person price. Passing an explicit empty room list means the caller
+  // has no room inventory and should fall back to the base price.
+  if (Array.isArray(maxParticipantsOrRooms)) {
+    if (!hasRooms || maxParticipantsOrRooms.length === 0) {
+      return { source: 'base', totalPrice: perPersonPrice, hasRooms: false };
+    }
+
+    const roomTotal = maxParticipantsOrRooms.reduce(
+      (total, room) => safeAdd(total, safeMultiply(room.pricePerNight || 0, room.quantity || 1)),
+      0,
+    );
+    return { source: 'rooms', totalPrice: safeRound(roomTotal), hasRooms: true };
+  }
   
   if (hasRooms) {
     return {

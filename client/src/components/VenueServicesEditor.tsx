@@ -30,7 +30,18 @@ export function VenueServicesEditor({
   onChange,
   maxServices = 20 
 }: VenueServicesEditorProps) {
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(() => {
+    const incompleteService = services.find((service) =>
+      !service.title
+      || service.title.trim().length < 3
+      || !service.description
+      || service.description.trim().length < 50
+    );
+    return incompleteService?.id ?? null;
+  });
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(services.map((service) => [service.id, service.price?.toString() ?? ""])),
+  );
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   // Generate unique ID for new service
@@ -47,6 +58,7 @@ export function VenueServicesEditor({
       quantity: undefined,
     };
     onChange([...services, newService]);
+    setPriceDrafts((current) => ({ ...current, [newService.id]: "" }));
     setEditingId(newService.id);
   };
 
@@ -235,11 +247,12 @@ export function VenueServicesEditor({
                           type="number"
                           step="0.01"
                           min="0"
-                          defaultValue={service.price ?? ""}
-                          key={`price-${service.id}-${service.price}`}
-                          onBlur={(e) => {
+                          value={priceDrafts[service.id] ?? service.price?.toString() ?? ""}
+                          onChange={(e) => {
+                            const rawValue = e.target.value;
+                            setPriceDrafts((current) => ({ ...current, [service.id]: rawValue }));
                             const val = e.target.valueAsNumber;
-                            if (e.target.value === "" || isNaN(val)) {
+                            if (rawValue === "" || isNaN(val)) {
                               updateService(service.id, "price", undefined);
                             } else {
                               // Round to 2 decimal places to match validation

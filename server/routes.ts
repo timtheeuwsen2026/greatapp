@@ -47,6 +47,7 @@ import { normalizeBuilderParticipantRoles } from "./participantRoleSync";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 import { scheduleCommunityHubUnreadJob, scheduleCreatorHubNudgeJob } from "./emailJobScheduler";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
+import { isActivePostCheckoutBooking } from "./referralBookingRules";
 import {
   getEmailPreferenceSettings,
   unsubscribeFromOptionalEmail,
@@ -1430,7 +1431,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = resolveCurrentUserId(req);
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
-      const { experienceId } = req.body;
+      const { experienceId, bookingId, requireBooking } = req.body ?? {};
+
+      // The post-checkout celebration page must never manufacture a referral
+      // link for somebody who merely opened its URL. Generic share-kit calls
+      // intentionally omit requireBooking and keep their existing behaviour.
+      if (requireBooking === true) {
+        if (!experienceId) {
+          return res.status(400).json({
+            code: "EXPERIENCE_REQUIRED",
+            message: "An experience is required to verify this booking",
+          });
+        }
+
+        const booking = bookingId
+          ? await storage.getBooking(bookingId)
+          : await storage.getBookingByUserAndExperience(userId, experienceId);
+        if (!isActivePostCheckoutBooking(booking, userId, experienceId)) {
+          return res.status(403).json({
+            code: "BOOKING_REQUIRED",
+            message: "A valid booking is required before creating this referral link",
+          });
+        }
+      }
 
       const referralCode = await storage.ensureUserReferralCode(userId);
 

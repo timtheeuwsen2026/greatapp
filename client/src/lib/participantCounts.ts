@@ -12,7 +12,7 @@ export function formatMvgParticipantCount(
 
   if (mvgMet) {
     return minimum > 0
-      ? `Minimum of ${minimum} reached · ${current} total joined`
+      ? `Minimum of ${minimum} reached; ${current} total joined`
       : `${current} total joined`;
   }
 

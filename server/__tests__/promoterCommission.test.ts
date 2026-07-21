@@ -12,7 +12,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { DatabaseStorage } from '../storage';
 
-describe('Promoter Commission Field - Database Persistence Tests', () => {
+const databaseAvailable = !!process.env.DATABASE_URL
+  && !process.env.DATABASE_URL.includes('test:test@localhost');
+
+describe.runIf(databaseAvailable)('Promoter Commission Field - Database Persistence Tests', () => {
   let storage: DatabaseStorage;
   let testUserId: string;
 

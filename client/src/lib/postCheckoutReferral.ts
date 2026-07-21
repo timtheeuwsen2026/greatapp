@@ -27,8 +27,16 @@ export function readPostCheckoutReferral(experienceId: string, userId: string): 
   }
 }
 
-export async function ensurePostCheckoutReferral(experienceId: string, userId?: string): Promise<PostCheckoutReferral> {
-  const response = await apiRequest("POST", "/api/me/ensure-referral-code", { experienceId });
+export async function ensurePostCheckoutReferral(
+  experienceId: string,
+  userId?: string,
+  bookingId?: string,
+): Promise<PostCheckoutReferral> {
+  const response = await apiRequest("POST", "/api/me/ensure-referral-code", {
+    experienceId,
+    bookingId,
+    requireBooking: true,
+  });
   const payload: unknown = await response.json();
   if (!isReferralPayload(payload)) throw new Error("Referral API returned an incomplete link");
 

@@ -42,6 +42,7 @@ import {
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
+import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
 
@@ -99,8 +100,9 @@ function formatCurrency(amount: number | string | null | undefined, currency?: s
   return `${symbol}${numAmount.toFixed(2)}`;
 }
 
-function formatDealType(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function formatDealType(value: unknown): string {
+  const normalized = typeof value === "string" && value.trim() ? value : "unknown";
+  return normalized.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatDealTerms(deal: AdminDealLedgerItem): string {
@@ -238,13 +240,23 @@ export default function AdminDashboard() {
   const registeredUsers = userResponse?.items ?? [];
 
   // All venues query (not just pending)
-  const { data: venueResponse, isLoading: venuesLoading } = useQuery<PaginatedList<VenueWithOwner>>({
+  const { data: venueResponse, isLoading: venuesLoading } = useQuery<PaginatedList<VenueWithOwner> | VenueWithOwner[]>({
     queryKey: ["/api/admin/venues", venuePage, venueStatusFilter, searchTerm],
     queryFn: async () => (await apiRequest("GET", `/api/admin/venues?page=${venuePage}&pageSize=10&status=${venueStatusFilter}&search=${encodeURIComponent(searchTerm)}`)).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
-  const allVenues = venueResponse?.items ?? [];
+  const allVenues = Array.isArray(venueResponse)
+    ? venueResponse
+    : Array.isArray(venueResponse?.items) ? venueResponse.items : [];
+  const venueStats = Array.isArray(venueResponse)
+    ? {
+        total: venueResponse.length,
+        approved: venueResponse.filter((venue) => venue.status === "approved").length,
+        pending: venueResponse.filter((venue) => venue.status === "pending").length,
+      }
+    : venueResponse?.stats;
+  const venuePagination = Array.isArray(venueResponse) ? undefined : venueResponse?.pagination;
 
   // Pending services query
   const { data: serviceResponse, isLoading: servicesLoading} = useQuery<PaginatedList<ServiceProvider>>({
@@ -598,15 +610,15 @@ export default function AdminDashboard() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Venues</p>
-                  <p className="text-2xl font-bold" data-testid="text-venue-total">{venueResponse?.stats?.total ?? 0}</p>
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Venue profiles</p>
+                  <p className="text-2xl font-bold" data-testid="text-venue-total">{venueStats?.total ?? 0}</p>
                   <div className="mt-2 text-xs text-muted-foreground">
                     <span className="text-green-600 dark:text-green-400" data-testid="text-venue-approved">
-                      {venueResponse?.stats?.approved ?? 0} approved
+                      {venueStats?.approved ?? 0} approved
                     </span>
                     {" • "}
                     <span className="text-yellow-600 dark:text-yellow-400" data-testid="text-venue-pending">
-                      {venueResponse?.stats?.pending ?? 0} pending
+                      {venueStats?.pending ?? 0} pending
                     </span>
                   </div>
                 </div>
@@ -744,7 +756,12 @@ export default function AdminDashboard() {
                             {experience.minimumParticipants && experience.minimumParticipants > 0 && (
                               <>
                                 <span data-testid={`mvg-progress-text-${experience.id}`}>
-                                  MVG: {experience.currentParticipants || 0}/{experience.minimumParticipants}
+                                  MVG: {formatMvgParticipantCount(
+                                    experience.currentParticipants || 0,
+                                    experience.minimumParticipants,
+                                    (experience as any).lifecycleStatus === "confirmed"
+                                      || (experience.currentParticipants || 0) >= experience.minimumParticipants,
+                                  )}
                                 </span>
                                 {(experience as any).lifecycleStatus === 'confirmed' ? (
                                   <Badge className="bg-green-100 text-green-800" data-testid={`mvg-reached-badge-${experience.id}`}>
@@ -1143,9 +1160,19 @@ export default function AdminDashboard() {
                 <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
               </div>
             ) : (() => {
+              const ledgerItems = Array.isArray(dealLedger)
+                ? dealLedger.filter((deal): deal is AdminDealLedgerItem => !!(
+                    deal
+                    && typeof deal === "object"
+                    && deal.experience
+                    && deal.creator
+                    && deal.counterparty
+                    && deal.contractType
+                  ))
+                : [];
               const needle = searchTerm.trim().toLowerCase();
               const filteredDeals = needle
-                ? dealLedger.filter((deal) => [
+                ? ledgerItems.filter((deal) => [
                     deal.experience.title,
                     deal.creator.name,
                     deal.creator.email,
@@ -1155,7 +1182,7 @@ export default function AdminDashboard() {
                     deal.contractType,
                     deal.status,
                   ].filter(Boolean).some((value) => String(value).toLowerCase().includes(needle)))
-                : dealLedger;
+                : ledgerItems;
 
               return filteredDeals.length === 0 ? (
                 <Card>
@@ -1476,6 +1503,7 @@ export default function AdminDashboard() {
                         <TableHead>Name</TableHead>
                         <TableHead>Owner</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
                         <TableHead>Pricing</TableHead>
                         <TableHead>Payment Timing</TableHead>
                         <TableHead>Commission</TableHead>
@@ -1495,6 +1523,9 @@ export default function AdminDashboard() {
                           </TableCell>
                           <TableCell>
                             {getStatusBadge(venue.status || 'draft')}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                            {venue.createdAt ? new Date(venue.createdAt).toLocaleDateString() : '-'}
                           </TableCell>
                           <TableCell data-testid={`venue-pricing-${venue.id}`}>
                             {(venue as any).pricingModel ? (
@@ -1608,7 +1639,7 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             )}
-            <PageControls pagination={venueResponse?.pagination} page={venuePage} onPage={setVenuePage} />
+            <PageControls pagination={venuePagination} page={venuePage} onPage={setVenuePage} />
           </TabsContent>
 
           <AdminVenueOffersTab />
@@ -1729,7 +1760,7 @@ function AdminVenueOffersTab() {
     queryKey: ["/api/admin/venue-offers", page],
     queryFn: async () => (await apiRequest("GET", `/api/admin/venue-offers?page=${page}&pageSize=10`)).json(),
   });
-  const rows = response?.items ?? [];
+  const rows = Array.isArray(response?.items) ? response.items : [];
 
   const approveMutation = useMutation({
     mutationFn: (offerId: string) => apiRequest("POST", `/api/admin/venue-offers/${offerId}/approve`),
@@ -1753,7 +1784,7 @@ function AdminVenueOffersTab() {
     <TabsContent value="venue-offers" className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">Venue Offer Approvals</h2>
-        <Badge variant="secondary">{response?.pagination.total ?? 0} pending</Badge>
+        <Badge variant="secondary">{response?.pagination?.total ?? 0} pending</Badge>
       </div>
 
       {isLoading ? (

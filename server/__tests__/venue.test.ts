@@ -20,7 +20,10 @@ const mockNonAdminUser = {
   },
 };
 
-describe('Venue Module - Backend Tests', () => {
+const databaseAvailable = !!process.env.DATABASE_URL
+  && !process.env.DATABASE_URL.includes('test:test@localhost');
+
+describe.runIf(databaseAvailable)('Venue Module - Backend Tests', () => {
   let app: express.Application;
   let storage: DatabaseStorage;
   let testVenueId: string;

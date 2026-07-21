@@ -9,7 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { normalizeImageUrl, getBaseUrl } from "@/lib/utils";
-import { ensurePostCheckoutReferral, readPostCheckoutReferral } from "@/lib/postCheckoutReferral";
+import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
+import { PUBLIC_BRAND_DOMAIN } from "@/lib/brand";
+import { BRAND_LOGO_SRC } from "@/components/BrandLogo";
 import ParticipantReferralPerkCard, {
   hasActiveParticipantReferralPerk,
 } from "@/components/participant-referral-perk-card";
@@ -54,8 +56,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   workations: "Workations",
   festivals_events: "Festivals & Events",
 };
-
-const BRAND_LOGO_SRC = "/assets/email_logo.png";
 
 function loadCanvasImage(src: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -126,10 +126,9 @@ export default function RecruitSquad() {
   });
 
   const referralQuery = useQuery({
-    queryKey: ["post-checkout-referral", experienceId, user?.id],
-    queryFn: () => ensurePostCheckoutReferral(experienceId!, user!.id),
+    queryKey: ["post-checkout-referral", experienceId, bookingId, user?.id],
+    queryFn: () => ensurePostCheckoutReferral(experienceId!, user!.id, bookingId || undefined),
     enabled: !!experienceId && !authLoading && isAuthenticated,
-    initialData: () => experienceId && user?.id ? readPostCheckoutReferral(experienceId, user.id) : undefined,
     staleTime: 5 * 60 * 1000,
     retry: 3,
     retryDelay: (attempt) => Math.min(750 * 2 ** attempt, 4000),
@@ -336,20 +335,11 @@ export default function RecruitSquad() {
 
       // ── 10. Referral link line (bottom) ───────────────────────────────────
       const linkBaseY = tripLineY + lineH + 20;
-      const refCode = referralCode || "";
-      const expId = experienceId || "";
-      const linkText = refCode
-        ? `Link in bio → great.app/experience/${expId}?ref=${refCode}`
-        : `great.app/experience/${expId}`;
-      const linkDisplayMaxW = W - 80;
-      let linkFontSize = 18;
-      ctx.font = `${linkFontSize}px monospace`;
-      while (ctx.measureText(linkText).width > linkDisplayMaxW && linkFontSize > 12) {
-        linkFontSize -= 1;
-        ctx.font = `${linkFontSize}px monospace`;
-      }
+      ctx.font = "600 19px system-ui, -apple-system, sans-serif";
       ctx.fillStyle = "rgba(255,255,255,0.65)";
-      ctx.fillText(linkText, 40, linkBaseY);
+      ctx.fillText("Use my personal link to join", 40, linkBaseY);
+      ctx.font = "16px monospace";
+      ctx.fillText(PUBLIC_BRAND_DOMAIN, 40, linkBaseY + 30);
 
       // ── 11. Bottom brand strip ────────────────────────────────────────────
       ctx.fillStyle = "rgba(255,255,255,0.07)";
@@ -358,7 +348,7 @@ export default function RecruitSquad() {
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.font = "500 15px system-ui, -apple-system, sans-serif";
       ctx.textBaseline = "middle";
-      ctx.fillText("greatapp.ai", 40, H - 32);
+      ctx.fillText(PUBLIC_BRAND_DOMAIN, 40, H - 32);
       // Right side: event category, when available.
       if (footerCategory) {
         ctx.font = "400 13px system-ui, -apple-system, sans-serif";
@@ -412,14 +402,25 @@ export default function RecruitSquad() {
       <div className="min-h-screen bg-white">
         <Navigation />
         <div className="mx-auto flex max-w-2xl flex-col items-center px-4 py-12 text-center">
-          <p className="font-semibold text-gray-900">We couldn't prepare your referral link.</p>
+          <p className="font-semibold text-gray-900">
+            {isAuthenticated ? "A valid booking is required." : "Sign in to continue."}
+          </p>
           <p className="mt-2 text-sm text-gray-500">
-            {isAuthenticated ? "Your booking is safe. Try generating the link again." : "Sign in to access your post-checkout share link."}
+            {isAuthenticated
+              ? "We couldn't verify an active booking for this experience. Complete checkout or open the share link from My Bookings."
+              : "Sign in to access your post-checkout share link."}
           </p>
           {isAuthenticated ? (
-            <Button className="mt-5" onClick={() => referralQuery.refetch()}>
-              Try Again
-            </Button>
+            <div className="mt-5 flex flex-wrap justify-center gap-3">
+              <Link href="/bookings">
+                <Button>My Bookings</Button>
+              </Link>
+              {experienceId && (
+                <Link href={`/checkout/${experienceId}`}>
+                  <Button variant="outline">Complete Checkout</Button>
+                </Link>
+              )}
+            </div>
           ) : (
             <a href={`/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
               <Button className="mt-5">Sign In</Button>

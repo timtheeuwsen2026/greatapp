@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * Returns the canonical base URL for the app.
  * Priority:
- *   1. VITE_APP_BASE_URL env var (set this in .env for production, e.g. https://greatapp.ai)
+ *   1. VITE_APP_BASE_URL env var (set this in .env for production, e.g. https://www.greatexperiences.ai)
  *   2. window.location.origin as automatic fallback (works perfectly in development)
  *
  * Use this everywhere a full URL is needed: referral links, share links, Stripe return URLs, etc.

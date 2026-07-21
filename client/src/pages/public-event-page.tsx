@@ -29,12 +29,18 @@ import PromoterReferralCard, { type PromoterReferralProfile } from "@/components
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { ChatTeaser } from "@/components/ChatTeaser";
 import { EventSocialProofToast } from "@/components/EventSocialProofToast";
+import {
+  calculateMvgPercentage,
+  formatCapacityParticipantCount,
+  formatMvgParticipantCount,
+} from "@/lib/participantCounts";
 
 interface PublicEventData {
   id: string;
   title: string;
   status: string;
   lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
+  maxParticipants?: number | null;
   short_description: string;
   full_description: string;
   start_date: string;
@@ -393,6 +399,11 @@ export default function PublicEventPage() {
   const lowestPrice = getLowestPrice();
   const totalSpots = getTotalAvailableSpots();
   const depositAmount = Number(event.pricing.depositAmount || 0);
+  const mvgMet = event.mvg.status === 'met' || event.lifecycleStatus === 'confirmed';
+  const mvgPercentage = calculateMvgPercentage(
+    event.mvg.current_signups,
+    event.mvg.minimum_required,
+  );
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -590,9 +601,11 @@ export default function PublicEventPage() {
                     <Users className="w-6 h-6 text-primary" />
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Joined</p>
+                    <p className="text-sm text-gray-600">{mvgMet ? 'Participants' : 'MVG Progress'}</p>
                     <p className="text-xl font-bold text-gray-900">
-                      {event.mvg.current_signups} / {event.mvg.minimum_required}
+                      {mvgMet
+                        ? formatCapacityParticipantCount(event.mvg.current_signups, event.maxParticipants)
+                        : formatMvgParticipantCount(event.mvg.current_signups, event.mvg.minimum_required, false)}
                     </p>
                   </div>
                 </div>
@@ -911,17 +924,21 @@ export default function PublicEventPage() {
                   <div className="flex items-center gap-2">
                     <Users className="w-5 h-5 text-primary" />
                     <span className="font-semibold text-gray-900">
-                      {event.mvg.current_signups} of {event.mvg.minimum_required} participants joined
+                      {formatMvgParticipantCount(
+                        event.mvg.current_signups,
+                        event.mvg.minimum_required,
+                        mvgMet,
+                      )}
                     </span>
                   </div>
                   <span className="text-sm text-gray-600">
-                    {Math.round((event.mvg.current_signups / event.mvg.minimum_required) * 100)}%
+                    {mvgPercentage}%
                   </span>
                 </div>
                 
                 {/* Progress Bar */}
                 <Progress 
-                  value={(event.mvg.current_signups / event.mvg.minimum_required) * 100} 
+                  value={mvgPercentage}
                   className="h-3"
                   data-testid="mvg-progress-bar"
                 />

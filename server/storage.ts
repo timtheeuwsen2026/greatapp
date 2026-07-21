@@ -326,7 +326,7 @@ export interface IStorage {
   addServiceToExperience(experienceId: string, serviceId: string, roleDescription?: string): Promise<ExperienceService>;
   getExperienceVenues(experienceId: string): Promise<Venue[]>;
   upsertVenueContract(contract: InsertVenueContract): Promise<VenueContract>;
-  getVenueContractsByVenueIds(venueIds: string[], status?: string): Promise<any[]>;
+  getVenueContractsByVenueIds(venueIds: string[], status?: string | string[]): Promise<any[]>;
   getVenueContractByExperience(experienceId: string): Promise<VenueContract | undefined>;
   getVenueContractById(contractId: string): Promise<VenueContract | undefined>;
   getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
@@ -339,6 +339,7 @@ export interface IStorage {
   getVenueOffersForExperience(experienceId: string): Promise<any[]>;
   getVenueOffersForCreator(creatorId: string): Promise<any[]>;
   getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]>;
+  getAcceptedVenueDealsForVenueOwner(venueOwnerId: string, venueIds: string[]): Promise<any[]>;
   getVenueOffer(offerId: string): Promise<any | undefined>;
   updateVenueOfferStatus(offerId: string, status: "accepted" | "declined"): Promise<any>;
   updateVenueContractProposal(experienceId: string, venueId: string, model: string, terms: object, status: "pending" | "countered"): Promise<VenueContract>;
@@ -899,20 +900,87 @@ export class DatabaseStorage implements IStorage {
     const creatorExperiences = await this.getExperiencesByCreator(creatorId);
     const allIds = creatorExperiences.map((e: any) => e.id);
     if (!allIds.length) return [];
-    const rows = await db.select({
-      offer: venueOffers,
-      venue: venues,
-      experience: experiences,
-    })
-      .from(venueOffers)
-      .leftJoin(venues, eq(venueOffers.venueId, venues.id))
-      .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
-      .where(and(
-        inArray(venueOffers.experienceId, allIds),
-        eq((venueOffers as any).status, "accepted"),
-      ))
-      .orderBy(desc((venueOffers as any).createdAt));
-    return rows;
+    const [offerRows, contractRows] = await Promise.all([
+      db.select({ offer: venueOffers, venue: venues, experience: experiences })
+        .from(venueOffers)
+        .leftJoin(venues, eq(venueOffers.venueId, venues.id))
+        .leftJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+        .where(and(
+          inArray(venueOffers.experienceId, allIds),
+          eq((venueOffers as any).status, "accepted"),
+        )),
+      db.select({ contract: venueContracts, venue: venues, experience: experiences })
+        .from(venueContracts)
+        .leftJoin(venues, eq(venueContracts.venueId, venues.id))
+        .leftJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+        .where(and(
+          eq(venueContracts.creatorId, creatorId),
+          eq(venueContracts.status, "accepted"),
+        )),
+    ]);
+
+    const offerKeys = new Set(offerRows.map(({ offer }) => `${offer.experienceId}:${offer.venueId}`));
+    const normalizedContracts = contractRows
+      .filter(({ contract }) => !offerKeys.has(`${contract.experienceId}:${contract.venueId}`))
+      .map(({ contract, venue, experience }) => ({ offer: contract, venue, experience }));
+
+    return [...offerRows, ...normalizedContracts].sort((left, right) =>
+      new Date((right.offer as any).updatedAt || 0).getTime()
+      - new Date((left.offer as any).updatedAt || 0).getTime(),
+    );
+  }
+
+  async getAcceptedVenueDealsForVenueOwner(venueOwnerId: string, venueIds: string[]): Promise<any[]> {
+    if (!venueIds.length) return [];
+    const [contractRows, offerRows] = await Promise.all([
+      db.select({ contract: venueContracts, venue: venues, experience: experiences })
+        .from(venueContracts)
+        .innerJoin(venues, eq(venueContracts.venueId, venues.id))
+        .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+        .where(and(
+          inArray(venueContracts.venueId, venueIds),
+          eq(venueContracts.status, "accepted"),
+        )),
+      db.select({ offer: venueOffers, venue: venues, experience: experiences })
+        .from(venueOffers)
+        .innerJoin(venues, eq(venueOffers.venueId, venues.id))
+        .innerJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+        .where(and(
+          eq(venueOffers.venueOwnerId, venueOwnerId),
+          inArray(venueOffers.venueId, venueIds),
+          eq((venueOffers as any).status, "accepted"),
+        )),
+    ]);
+
+    const contractKeys = new Set(contractRows.map(({ contract }) => `${contract.experienceId}:${contract.venueId}`));
+    const normalized = [
+      ...contractRows.map(({ contract, venue, experience }) => ({
+        id: contract.id,
+        source: "contract",
+        status: contract.status,
+        model: contract.model,
+        terms: contract.terms || {},
+        acceptedAt: contract.acceptedAt || contract.updatedAt,
+        experience,
+        venue,
+      })),
+      ...offerRows
+        .filter(({ offer }) => !contractKeys.has(`${offer.experienceId}:${offer.venueId}`))
+        .map(({ offer, venue, experience }) => ({
+          id: offer.id,
+          source: "offer",
+          status: offer.status,
+          model: offer.model,
+          terms: offer.terms || {},
+          acceptedAt: offer.updatedAt,
+          experience,
+          venue,
+        })),
+    ];
+
+    return normalized.sort((left, right) =>
+      new Date(right.acceptedAt || 0).getTime() - new Date(left.acceptedAt || 0).getTime(),
+    );
   }
 
   async getVenueOffer(offerId: string): Promise<any | undefined> {
@@ -1819,7 +1887,13 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(bookings.experienceId, experienceId),
-          inArray(bookings.status, ['deposit_authorized', 'confirmed', 'pending']),
+          inArray(bookings.status, [
+            'pending',
+            'deposit_authorized',
+            'deposit_paid',
+            'confirmed',
+            'fully_paid',
+          ]),
           isNull(bookings.cancelledAt)
         )
       );
@@ -2371,9 +2445,9 @@ export class DatabaseStorage implements IStorage {
       }
 
       // Include all active booking statuses — not just "confirmed"
-      const activeStatuses = [
+      const activeStatuses: Array<NonNullable<Booking["status"]>> = [
         'pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid',
-      ] as const;
+      ];
 
       // Join bookings with users to always have name + avatar
       const bookingUsers = await db
@@ -2704,7 +2778,7 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getVenueContractsByVenueIds(venueIds: string[], status?: string): Promise<any[]> {
+  async getVenueContractsByVenueIds(venueIds: string[], status?: string | string[]): Promise<any[]> {
     if (!venueIds.length) return [];
     const rows = await db
       .select({
@@ -2718,8 +2792,11 @@ export class DatabaseStorage implements IStorage {
       .where(inArray(venueContracts.venueId, venueIds))
       .orderBy(desc(venueContracts.createdAt));
 
+    const requestedStatuses = Array.isArray(status) ? status : status ? [status] : [];
+
     return rows
-      .filter((row) => !status || row.contract.status === status)
+      .filter((row) => requestedStatuses.length === 0
+        || (row.contract.status != null && requestedStatuses.includes(row.contract.status)))
       .map((row) => ({
         ...row.experience,
         venue: row.venue,
@@ -4533,23 +4610,35 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAdminDealLedger(): Promise<any[]> {
-    const venueRows = await db
-      .select({ contract: venueContracts, experience: experiences, venue: venues })
-      .from(venueContracts)
-      .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
-      .innerJoin(venues, eq(venueContracts.venueId, venues.id))
-      .where(eq(venueContracts.status, "accepted"));
-
-    const promotionRows = await db
-      .select({ deal: promotionDeals, experience: experiences, partner: users })
-      .from(promotionDeals)
-      .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
-      .leftJoin(users, eq(promotionDeals.partnerId, users.id))
-      .where(inArray(promotionDeals.status, ["accepted", "pending_payment"]));
+    const [venueRows, acceptedVenueOfferRows, promotionRows, bookingRows, payoutRows] = await Promise.all([
+      db.select({ contract: venueContracts, experience: experiences, venue: venues })
+        .from(venueContracts)
+        .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+        .innerJoin(venues, eq(venueContracts.venueId, venues.id)),
+      db.select({ offer: venueOffers, experience: experiences, venue: venues })
+        .from(venueOffers)
+        .innerJoin(experiences, eq(venueOffers.experienceId, experiences.id))
+        .innerJoin(venues, eq(venueOffers.venueId, venues.id))
+        .where(eq(venueOffers.status, "accepted")),
+      db.select({ deal: promotionDeals, experience: experiences, partner: users })
+        .from(promotionDeals)
+        .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
+        .leftJoin(users, eq(promotionDeals.partnerId, users.id)),
+      db.select({ booking: bookings, experience: experiences, participant: users })
+        .from(bookings)
+        .innerJoin(experiences, eq(bookings.experienceId, experiences.id))
+        .innerJoin(users, eq(bookings.userId, users.id)),
+      db.select({ payout: scheduledPayouts, experience: experiences })
+        .from(scheduledPayouts)
+        .innerJoin(experiences, eq(scheduledPayouts.experienceId, experiences.id)),
+    ]);
 
     const creatorIds = Array.from(new Set([
       ...venueRows.map((row) => row.contract.creatorId),
+      ...acceptedVenueOfferRows.map((row) => row.experience.creatorId),
       ...promotionRows.map((row) => row.deal.creatorId),
+      ...bookingRows.map((row) => row.experience.creatorId),
+      ...payoutRows.map((row) => row.experience.creatorId),
     ]));
     const creatorRows = creatorIds.length
       ? await db.select().from(users).where(inArray(users.id, creatorIds))
@@ -4570,7 +4659,10 @@ export class DatabaseStorage implements IStorage {
       contractType: "venue",
       dealType: contract.model,
       status: contract.status,
-      terms: contract.terms || {},
+      terms: {
+        ...(contract.terms || {}),
+        sponsorshipPaymentStatus: contract.sponsorshipPaymentStatus,
+      },
       currency: normalizeCurrency((contract.terms as any)?.currency || experience.currency),
       acceptedAt: contract.acceptedAt || contract.updatedAt,
       updatedAt: contract.updatedAt,
@@ -4584,12 +4676,39 @@ export class DatabaseStorage implements IStorage {
       },
     }));
 
+    const contractedVenueKeys = new Set(
+      venueRows.map(({ contract }) => `${contract.experienceId}:${contract.venueId}`),
+    );
+    const acceptedVenueOfferLedger = acceptedVenueOfferRows
+      .filter(({ offer }) => !contractedVenueKeys.has(`${offer.experienceId}:${offer.venueId}`))
+      .map(({ offer, experience, venue }) => ({
+        id: offer.id,
+        contractType: "venue",
+        dealType: offer.model,
+        status: offer.status || "accepted",
+        terms: offer.terms || {},
+        currency: normalizeCurrency((offer.terms as any)?.currency || experience.currency),
+        acceptedAt: offer.updatedAt || offer.createdAt,
+        updatedAt: offer.updatedAt,
+        experience: { id: experience.id, title: experience.title },
+        creator: creatorSummary(experience.creatorId),
+        counterparty: {
+          id: venue.id,
+          name: venue.name,
+          email: venue.contactEmail || null,
+          role: "venue",
+        },
+      }));
+
     const promotionLedger = promotionRows.map(({ deal, experience, partner }) => ({
       id: deal.id,
       contractType: "promotion",
       dealType: deal.dealType,
       status: deal.status,
-      terms: deal.terms || deal.baselineTerms || {},
+      terms: {
+        ...(deal.terms || deal.baselineTerms || {}),
+        paymentStatus: deal.paymentStatus,
+      },
       currency: normalizeCurrency((deal.terms as any)?.currency || experience.currency),
       acceptedAt: deal.respondedAt || deal.paidAt || deal.updatedAt,
       updatedAt: deal.updatedAt,
@@ -4606,7 +4725,66 @@ export class DatabaseStorage implements IStorage {
       },
     }));
 
-    return [...venueLedger, ...promotionLedger].sort((left, right) =>
+    const bookingLedger = bookingRows.map(({ booking, experience, participant }) => ({
+      id: booking.id,
+      contractType: "booking",
+      dealType: "ticket_booking",
+      status: booking.status || "pending",
+      terms: {
+        amount: Number(booking.amount || 0),
+        totalPrice: Number(booking.totalPrice || 0),
+        depositAmount: Number(booking.depositAmount || 0),
+        balanceAmount: Number(booking.balanceAmount || 0),
+        isDepositOnly: !!booking.isDepositOnly,
+        balancePaid: !!booking.balancePaid,
+        commissionAmount: Number(booking.commissionAmount || 0),
+      },
+      currency: normalizeCurrency(booking.commissionCurrency || experience.currency),
+      acceptedAt: booking.bookingDate || booking.createdAt,
+      updatedAt: booking.createdAt,
+      experience: { id: experience.id, title: experience.title },
+      creator: creatorSummary(experience.creatorId),
+      counterparty: {
+        id: participant.id,
+        name: [participant.firstName, participant.lastName].filter(Boolean).join(" ")
+          || participant.email
+          || "Participant",
+        email: participant.email || null,
+        role: "participant",
+      },
+    }));
+
+    const payoutLedger = payoutRows.map(({ payout, experience }) => ({
+      id: payout.id,
+      contractType: "payout",
+      dealType: "scheduled_payout",
+      status: payout.status || "pending",
+      terms: {
+        totalGross: Number(payout.totalGrossAmountCents || 0) / 100,
+        additionalGross: Number(payout.additionalGrossAmountCents || 0) / 100,
+        platformFee: Number(payout.platformFeeAmountCents || 0) / 100,
+        scheduledFor: payout.scheduledFor,
+      },
+      currency: normalizeCurrency(experience.currency),
+      acceptedAt: payout.processedAt || payout.updatedAt || payout.createdAt,
+      updatedAt: payout.updatedAt,
+      experience: { id: experience.id, title: experience.title },
+      creator: creatorSummary(experience.creatorId),
+      counterparty: {
+        id: null,
+        name: "Platform payout schedule",
+        email: null,
+        role: "platform",
+      },
+    }));
+
+    return [
+      ...venueLedger,
+      ...acceptedVenueOfferLedger,
+      ...promotionLedger,
+      ...bookingLedger,
+      ...payoutLedger,
+    ].sort((left, right) =>
       new Date(right.acceptedAt || 0).getTime() - new Date(left.acceptedAt || 0).getTime(),
     );
   }

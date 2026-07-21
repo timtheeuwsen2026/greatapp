@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Check, Users, Target, CreditCard, Sparkles } from "lucide-react";
 import { FundingProgressBar } from "@/components/funding/FundingProgressBar";
 import { normalizeImageUrl } from "@/lib/utils";
+import { formatMvgParticipantCount } from "@/lib/participantCounts";
 
 interface JoinTripModalProps {
   open: boolean;
@@ -23,6 +24,7 @@ interface JoinTripModalProps {
     minimumParticipants: number;
     isEarlyFounder: boolean;
     currency?: string;
+    lifecycleStatus?: 'forming' | 'confirmed' | 'cancelled';
   };
   onConfirm: () => void | Promise<void>;
 }
@@ -43,6 +45,9 @@ function formatCurrency(amount: number, currency?: string): string {
 
 export function JoinTripModal({ open, onClose, trip, onConfirm }: JoinTripModalProps) {
   const [isProcessing, setIsProcessing] = useState(false);
+  const isMvgMet = trip.lifecycleStatus
+    ? trip.lifecycleStatus === 'confirmed'
+    : trip.currentParticipants >= trip.minimumParticipants;
 
   const handleConfirm = async () => {
     setIsProcessing(true);
@@ -151,7 +156,11 @@ export function JoinTripModal({ open, onClose, trip, onConfirm }: JoinTripModalP
               <div className="flex items-center text-sm">
                 <span className="text-gray-600 dark:text-gray-400">
                   <Users className="h-4 w-4 inline mr-1" />
-                  {trip.currentParticipants} of {trip.minimumParticipants} travelers joined
+                  {formatMvgParticipantCount(
+                    trip.currentParticipants,
+                    trip.minimumParticipants,
+                    isMvgMet,
+                  )}
                 </span>
               </div>
               
@@ -163,6 +172,7 @@ export function JoinTripModal({ open, onClose, trip, onConfirm }: JoinTripModalP
                 fundingGoal={trip.mvgGoal}
                 participantsNeeded={trip.minimumParticipants - trip.currentParticipants}
                 size="md"
+                lifecycleStatus={trip.lifecycleStatus}
               />
               
               <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-700">

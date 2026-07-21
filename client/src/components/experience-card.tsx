@@ -7,6 +7,7 @@ import { SocialProofGallery } from "@/components/SocialProofGallery";
 import { Heart, MapPin, Calendar, Users, Shield, CheckCircle, AlertCircle, Zap } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getCoverImage } from "@/lib/utils";
+import { formatCapacityParticipantCount, formatMvgParticipantCount } from "@/lib/participantCounts";
 
 interface TicketSku {
   id: string;
@@ -299,14 +300,18 @@ export default function ExperienceCard({ experience }: ExperienceCardProps) {
                 )}
               </div>
               <div className={`flex justify-between items-center text-xs ${lifecycleStatus === 'confirmed' ? 'text-green-800' : 'text-amber-800'}`}>
-                <span>{mvgProgress.currentBookings} of {mvgProgress.mvgMin} joined</span>
+                <span>
+                  {lifecycleStatus === 'confirmed'
+                    ? formatCapacityParticipantCount(mvgProgress.currentBookings, experience.maxParticipants)
+                    : formatMvgParticipantCount(mvgProgress.currentBookings, mvgProgress.mvgMin, false)}
+                </span>
               </div>
               <Progress 
                 value={Math.min(mvgProgress.percentage, 100)}
                 className="h-2"
               />
               {/* "X more needed" — emotional nudge, only shown when FORMING */}
-              {lifecycleStatus !== 'confirmed' && lifecycleStatus !== 'cancelled' && (mvgProgress.mvgMin - mvgProgress.currentBookings) > 0 ? (
+              {lifecycleStatus !== 'confirmed' && (mvgProgress.mvgMin - mvgProgress.currentBookings) > 0 ? (
                 <p className="text-xs font-semibold text-amber-700 flex items-center gap-1" data-testid="mvg-more-needed-card">
                   <Zap className="h-3 w-3 flex-shrink-0" />
                   {(mvgProgress.mvgMin - mvgProgress.currentBookings) === 1

@@ -29,6 +29,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Send,
+  Handshake,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useEffect, useState } from "react";
@@ -40,6 +41,10 @@ import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import { VenueAvailabilityManager } from "@/components/VenueAvailabilityManager";
 import { VenueGoogleCalendarIntegration } from "@/components/VenueGoogleCalendarIntegration";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
+import {
+  COUNTER_SENT_STATUS_LABEL,
+  isCounterAwaitingCreator,
+} from "@/lib/venueOfferStatus";
 
 type VenueOfferForm = {
   venueId: string;
@@ -202,6 +207,12 @@ function VenueDashboardContent() {
     retry: false,
   }) as { data: any[], isLoading: boolean };
 
+  const { data: activeVenueDeals = [], isLoading: activeDealsLoading } = useQuery({
+    queryKey: ["/api/venue/active-deals"],
+    enabled: isAuthenticated,
+    retry: false,
+  }) as { data: any[], isLoading: boolean };
+
   // City filter for the Open Events feed
   const [openEventsCityFilter, setOpenEventsCityFilter] = useState("");
 
@@ -296,6 +307,7 @@ function VenueDashboardContent() {
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/venue/active-deals"] });
       toast({ title: "Offer Accepted", description: "The experience is now Live!" });
     },
     onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
@@ -475,7 +487,7 @@ function VenueDashboardContent() {
         </div>
 
         {/* Task 4 — Ledger Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-2">
           <Card>
             <CardContent className="p-5">
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Sales</p>
@@ -498,7 +510,14 @@ function VenueDashboardContent() {
             <CardContent className="p-5">
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Offers</p>
               <p className="text-2xl font-bold text-amber-600">{pendingOffers.length}</p>
-              <p className="text-xs text-gray-500 mt-1">Creator proposals awaiting your decision</p>
+              <p className="text-xs text-gray-500 mt-1">Open venue negotiations</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Active Deals</p>
+              <p className="text-2xl font-bold text-green-600">{activeVenueDeals.length}</p>
+              <p className="text-xs text-gray-500 mt-1">Accepted venue agreements</p>
             </CardContent>
           </Card>
         </div>
@@ -511,6 +530,14 @@ function VenueDashboardContent() {
               {pendingOffers.length > 0 && (
                 <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-amber-500 text-white text-xs w-5 h-5">
                   {pendingOffers.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="active-deals" className="relative">
+              Active Deals
+              {activeVenueDeals.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-xs w-5 h-5">
+                  {activeVenueDeals.length}
                 </span>
               )}
             </TabsTrigger>
@@ -719,15 +746,30 @@ function VenueDashboardContent() {
             ) : (
               pendingOffers.map((offer: any) => {
                 const contract = offer.contract || {};
+                const counterAwaitingCreator = isCounterAwaitingCreator(contract.status);
                 return (
-                  <Card key={offer.id} className="border-amber-200 dark:border-amber-800">
+                  <Card
+                    key={offer.id}
+                    className={counterAwaitingCreator
+                      ? "border-blue-200 dark:border-blue-800"
+                      : "border-amber-200 dark:border-amber-800"}
+                  >
                     <CardContent className="p-5">
                       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                         <div className="flex-1 space-y-2">
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold text-lg">{offer.title}</h3>
-                            <Badge className="bg-amber-100 text-amber-800 border-amber-300">
-                              <Clock className="w-3 h-3 mr-1" />Incoming Offer
+                            <Badge
+                              className={counterAwaitingCreator
+                                ? "bg-blue-100 text-blue-800 border-blue-300"
+                                : "bg-amber-100 text-amber-800 border-amber-300"}
+                              data-testid={`venue-offer-status-${offer.id}`}
+                            >
+                              {counterAwaitingCreator ? (
+                                <><Send className="w-3 h-3 mr-1" />{COUNTER_SENT_STATUS_LABEL}</>
+                              ) : (
+                                <><Clock className="w-3 h-3 mr-1" />Incoming Offer</>
+                              )}
                             </Badge>
                           </div>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -759,42 +801,99 @@ function VenueDashboardContent() {
                           />
                         </div>
 
-                        <div className="flex md:flex-col gap-2 shrink-0">
-                          <Button
-                            className="bg-green-600 hover:bg-green-700 text-white flex-1 md:flex-none"
-                            onClick={() => acceptOffer.mutate(offer.id)}
-                            disabled={acceptOffer.isPending}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1" />
-                            Accept
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-1 md:flex-none"
-                            onClick={() => {
-                              setCounterForm(venueOfferFormFromContract(contract, offer.linkedVenueId || offer.venue?.id || ""));
-                              setCounterModal({ open: true, offer });
-                            }}
-                            disabled={counterOffer.isPending}
-                          >
-                            <RefreshCw className="w-4 h-4 mr-1" />
-                            Counter Offer
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="border-red-300 text-red-600 hover:bg-red-50 flex-1 md:flex-none"
-                            onClick={() => rejectOffer.mutate(offer.id)}
-                            disabled={rejectOffer.isPending}
-                          >
-                            <XCircle className="w-4 h-4 mr-1" />
-                            Reject
-                          </Button>
-                        </div>
+                        {counterAwaitingCreator ? (
+                          <div className="max-w-56 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                            Your counter offer is visible to the creator. No further action is needed while they review it.
+                          </div>
+                        ) : (
+                          <div className="flex md:flex-col gap-2 shrink-0">
+                            <Button
+                              className="bg-green-600 hover:bg-green-700 text-white flex-1 md:flex-none"
+                              onClick={() => acceptOffer.mutate(offer.id)}
+                              disabled={acceptOffer.isPending}
+                            >
+                              <CheckCircle className="w-4 h-4 mr-1" />
+                              Accept
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="border-blue-300 text-blue-700 hover:bg-blue-50 flex-1 md:flex-none"
+                              onClick={() => {
+                                setCounterForm(venueOfferFormFromContract(contract, offer.linkedVenueId || offer.venue?.id || ""));
+                                setCounterModal({ open: true, offer });
+                              }}
+                              disabled={counterOffer.isPending}
+                            >
+                              <RefreshCw className="w-4 h-4 mr-1" />
+                              Counter Offer
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="border-red-300 text-red-600 hover:bg-red-50 flex-1 md:flex-none"
+                              onClick={() => rejectOffer.mutate(offer.id)}
+                              disabled={rejectOffer.isPending}
+                            >
+                              <XCircle className="w-4 h-4 mr-1" />
+                              Reject
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
                 );
               })
+            )}
+          </TabsContent>
+
+          <TabsContent value="active-deals" className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Active Deals</h2>
+              <p className="mt-1 text-sm text-gray-500">Accepted venue agreements remain here for ongoing reference.</p>
+            </div>
+            {activeDealsLoading ? (
+              <div className="text-center py-8 text-gray-500">Loading active deals...</div>
+            ) : activeVenueDeals.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-gray-500">
+                  <Handshake className="mx-auto mb-3 h-12 w-12 opacity-30" />
+                  <p className="font-medium">No active deals yet</p>
+                  <p className="mt-1 text-sm">Accepted creator agreements will move here automatically.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {activeVenueDeals.map((deal: any) => {
+                  const experience = deal.experience || {};
+                  const venue = deal.venue || {};
+                  return (
+                    <Card key={`${deal.source}-${deal.id}`} className="border-green-200 bg-green-50/30 dark:border-green-800 dark:bg-green-950/20">
+                      <CardContent className="p-5">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-semibold text-lg">{experience.title || "Experience"}</h3>
+                            <p className="mt-1 text-sm text-gray-500">{venue.name || "Venue"}</p>
+                          </div>
+                          <Badge className="bg-green-100 text-green-800 border-green-300">
+                            <CheckCircle className="w-3 h-3 mr-1" />Active Deal
+                          </Badge>
+                        </div>
+                        <DigitalHandshakeContract
+                          contract={deal}
+                          price={experience.price}
+                          maxParticipants={experience.maxParticipants}
+                          currency={experience.currency}
+                          platformPct={experience.platformPct || experience.platformRevenuePercentage}
+                          eventUrl={`/experience/${experience.slug || experience.id}`}
+                        />
+                        {deal.acceptedAt && (
+                          <p className="mt-3 text-xs text-gray-500">Accepted {new Date(deal.acceptedAt).toLocaleDateString()}</p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </TabsContent>
 

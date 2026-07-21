@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { CheckCircle, Calendar, MapPin, Users, ArrowLeft, CreditCard, Clock, Ticket, Loader2, XCircle, Share2 } from "lucide-react";
 import { normalizeImageUrl } from "@/lib/utils";
+import { formatCapacityParticipantCount } from "@/lib/participantCounts";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -412,7 +413,7 @@ export default function BookingSuccess() {
                     </div>
                     <div className="flex items-center" data-testid="participants-info">
                       <Users className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0" />
-                      <span>{experience.currentParticipants + 1}/{experience.maxParticipants} participants</span>
+                      <span>{formatCapacityParticipantCount(experience.currentParticipants, experience.maxParticipants)}</span>
                     </div>
                   </div>
                 </div>

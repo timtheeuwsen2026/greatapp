@@ -313,7 +313,8 @@ export default function Home() {
       currentParticipants: experience.currentParticipants,
       minimumParticipants: experience.minimumParticipants,
       isEarlyFounder,
-      currency: experience.currency
+      currency: experience.currency,
+      lifecycleStatus: experience.lifecycleStatus,
     });
   };
 

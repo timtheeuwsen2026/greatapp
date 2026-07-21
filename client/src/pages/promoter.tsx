@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Rocket, AlertTriangle, DollarSign, TrendingUp, Users, Copy, Check, ExternalLink, Clock, CheckCircle, XCircle, Sparkles, Calendar, MapPin, RefreshCw, Send, Trophy } from "lucide-react";
+import { Rocket, AlertTriangle, DollarSign, TrendingUp, Users, Copy, Check, ExternalLink, Clock, CheckCircle, XCircle, Sparkles, Calendar, MapPin, RefreshCw, Send, Trophy, Handshake } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ interface PromotedExperience {
   referralLink: string;
   referralAudience: 'participant' | 'official_partner';
   dealOffer?: any;
+  promotionDeal?: any;
   experience: {
     id: string;
     title: string;
@@ -959,7 +960,7 @@ function PromoterOffersCard({
 
   const pending = offers.filter((o) => o.status === 'pending');
   const awaitingPayment = offers.filter((o) => o.status === 'pending_payment');
-  const resolved = offers.filter((o) => o.status === 'accepted' || o.status === 'declined');
+  const declined = offers.filter((o) => o.status === 'declined');
 
   return (
     <Card className="mb-8" data-testid="card-promoter-offers">
@@ -1056,25 +1057,84 @@ function PromoterOffersCard({
           </div>
         ))}
 
-        {resolved.length > 0 && (
+        {declined.length > 0 && (
           <div className="pt-2 space-y-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Resolved</p>
-            {resolved.map((offer) => (
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Declined History</p>
+            {declined.map((offer) => (
               <div key={offer.id} className="flex items-center justify-between gap-3 text-sm py-1.5 border-b last:border-0">
                 <span className="truncate">{offer.experienceTitle}</span>
-                <Badge
-                  className={offer.status === 'accepted'
-                    ? "bg-green-100 text-green-800 border-green-300"
-                    : "bg-red-100 text-red-800 border-red-300"}
-                >
-                  {offer.status === 'accepted'
-                    ? <><CheckCircle className="h-3 w-3 mr-1" />Accepted</>
-                    : <><XCircle className="h-3 w-3 mr-1" />Declined</>}
+                <Badge className="bg-red-100 text-red-800 border-red-300">
+                  <XCircle className="h-3 w-3 mr-1" />Declined
                 </Badge>
               </div>
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActivePromotionDealsCard({
+  data,
+  isLoading,
+}: {
+  data?: PromotedExperience[];
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <Card className="mb-8">
+        <CardHeader><CardTitle>Active Deals</CardTitle></CardHeader>
+        <CardContent><Skeleton className="h-20 w-full" /></CardContent>
+      </Card>
+    );
+  }
+
+  const activeDeals = (data || []).filter((item) =>
+    item.referralAudience === "official_partner" && item.promotionDeal?.status === "accepted"
+  );
+  if (activeDeals.length === 0) return null;
+
+  return (
+    <Card className="mb-8 border-green-200 dark:border-green-800" data-testid="card-active-promotion-deals">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Handshake className="h-5 w-5 text-green-600" />Active Deals
+        </CardTitle>
+        <CardDescription>Accepted creator agreements remain available with their live tracking links.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 lg:grid-cols-2">
+        {activeDeals.map((item) => {
+          const deal = item.promotionDeal || {};
+          return (
+            <div key={deal.id || item.promoterExperienceId} className="rounded-lg border border-green-200 bg-green-50/40 p-4 dark:border-green-900 dark:bg-green-950/20">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">{item.experience.title}</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">{formatPromotionDealTerms(deal.dealType, deal.terms)}</p>
+                </div>
+                <Badge className="bg-green-100 text-green-800 border-green-300">
+                  <CheckCircle className="h-3 w-3 mr-1" />Active Deal
+                </Badge>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" asChild>
+                  <a href={`/experience/${item.experience.slug || item.experience.id}`} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="mr-1 h-3 w-3" />View Event
+                  </a>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigator.clipboard.writeText(item.referralLink)}
+                >
+                  <Copy className="mr-1 h-3 w-3" />Copy Tracking Link
+                </Button>
+              </div>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -1349,6 +1409,8 @@ export default function PromoterDashboard() {
             respondingId={respondingOfferId}
           />
         )}
+
+        <ActivePromotionDealsCard data={experiences} isLoading={experiencesLoading} />
 
         {/* My Experiences */}
         <PromotedExperiencesCard

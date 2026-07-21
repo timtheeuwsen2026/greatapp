@@ -25,6 +25,7 @@ import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { isMvgStillForming } from "@/lib/experienceAvailability";
+import { formatCapacityParticipantCount, formatMvgParticipantCount } from "@/lib/participantCounts";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { 
   ExperienceWithStats, 
@@ -640,9 +641,9 @@ export default function ExperienceDetails() {
                 <div className="flex items-center">
                   <Users className="h-5 w-5 mr-2" />
                   {isMvgForming ? (
-                    <span>{liveParticipantCount}/{experience.minimumParticipants || 0} joined</span>
+                    <span>{formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)}</span>
                   ) : (
-                    <span>{liveParticipantCount}/{experience.maxParticipants || 0} spots taken</span>
+                    <span>{formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)}</span>
                   )}
                 </div>
               </div>
@@ -696,7 +697,9 @@ export default function ExperienceDetails() {
                   <span className="flex items-center">
                     <Users className="h-5 w-5 mr-2 text-primary" />
                     {experience.requireMinimumParticipants
-                      ? `Meet Your Fellow Travelers (${liveParticipantCount}/${experience.minimumParticipants || 0} joined)`
+                      ? `Meet Your Fellow Travelers (${isMvgForming
+                          ? formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)
+                          : formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)})`
                       : `Meet Your Fellow Travelers (${liveParticipantCount} joined)`}
                   </span>
                   <div className="flex items-center space-x-2">

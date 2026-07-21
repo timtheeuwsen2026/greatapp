@@ -74,6 +74,18 @@ function getAppBaseUrl(req: any): string {
 }
 
 const FIXED_PLATFORM_FEE_PCT = 15;
+const ACTIVE_PARTICIPANT_BOOKING_STATUSES = new Set([
+  "pending",
+  "deposit_authorized",
+  "deposit_paid",
+  "confirmed",
+  "fully_paid",
+]);
+
+function isActiveParticipantBooking(status: string | null | undefined): boolean {
+  return ACTIVE_PARTICIPANT_BOOKING_STATUSES.has(status || "");
+}
+
 function applyMarketplaceEconomics(input: any = {}) {
   const model = input.venueCompensationModel || "access_only";
   const revenueSharePct = model === "revenue_share"
@@ -6170,7 +6182,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experienceId = req.params.id;
       const bookings = await storage.getBookingsByExperience(experienceId);
       
-      const currentBookings = bookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+      const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
       const confirmedBookings = bookings.filter(b => b.status === "confirmed").length;
       
       res.json({ currentBookings, confirmedBookings });
@@ -6192,7 +6204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use getMVGProgress as single source of truth
       const mvgProgress = await storage.getMVGProgress(experienceId);
       const percentage = mvgProgress.minimum_participants > 0 
-        ? Math.round((mvgProgress.current_participants / mvgProgress.minimum_participants) * 100)
+        ? Math.min(100, Math.round((mvgProgress.current_participants / mvgProgress.minimum_participants) * 100))
         : 0;
       
       res.json({ 
@@ -6546,7 +6558,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const bookings = await storage.getBookingsByExperience(experienceId);
-      const currentBookings = bookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+      const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
       const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
       const now = new Date();
       const deadlinePassed = experience.mvgDeadline ? new Date(experience.mvgDeadline) <= now : false;
@@ -6601,7 +6613,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const deadlinePassed = new Date(experience.mvgDeadline) <= now;
         const bookings = await storage.getBookingsByExperience(experience.id);
-        const currentBookings = bookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+        const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
 
         if (deadlinePassed) {
@@ -6663,9 +6675,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fundingSummary = await Promise.all(
         approvedExperiences.map(async (experience) => {
           const bookings = await storage.getBookingsByExperience(experience.id);
-          const currentBookings = bookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+          const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
           const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
-          const fundingPercentage = Math.round((currentBookings / mvgMin) * 100);
+          const fundingPercentage = mvgMin > 0
+            ? Math.min(100, Math.round((currentBookings / mvgMin) * 100))
+            : 0;
           
           // Calculate time remaining (clamped to non-negative)
           const now = new Date();
@@ -11848,7 +11862,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userVenues.length) return res.json([]);
 
       const venueIds = userVenues.map((v: any) => v.id);
-      let offers = await storage.getVenueContractsByVenueIds(venueIds, "pending");
+      // Both sides of an unresolved negotiation belong in the venue inbox:
+      // pending = venue action required, countered = creator action required.
+      let offers = await storage.getVenueContractsByVenueIds(venueIds, ["pending", "countered"]);
 
       // Backfill pending contracts for older linked submissions that predate the contract table.
       const linkedPendingExperiences = await storage.getExperiencesByVenueIds(venueIds);
@@ -11870,6 +11886,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) {
       console.error('Error fetching venue offers:', err);
       res.status(500).json({ message: 'Failed to fetch pending offers' });
+    }
+  });
+
+  // Accepted venue agreements remain visible after leaving the negotiation inbox.
+  app.get('/api/venue/active-deals', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      const venueIds = userVenues.map((venue: any) => venue.id);
+      res.json(await storage.getAcceptedVenueDealsForVenueOwner(userId, venueIds));
+    } catch (err: any) {
+      console.error('Error fetching active venue deals:', err);
+      res.status(500).json({ message: 'Failed to fetch active venue deals' });
     }
   });
 

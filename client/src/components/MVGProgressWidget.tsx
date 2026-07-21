@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Users, Clock, CheckCircle, AlertCircle, Shield, Zap } from "lucide-react";
 import { MVGProgressData } from "@shared/schema";
+import { formatMvgParticipantCount } from "@/lib/participantCounts";
 
 interface MVGProgressWidgetProps {
   experienceId: string;
@@ -141,7 +142,7 @@ export default function MVGProgressWidget({
 
         <div className="flex items-center text-sm">
           <span className={`${colorScheme.textSecondary} font-medium`} data-testid="mvg-progress-count">
-            {currentBookings} of {mvgMin} joined
+            {formatMvgParticipantCount(currentBookings, mvgMin, isComplete)}
           </span>
         </div>
         

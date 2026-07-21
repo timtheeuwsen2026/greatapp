@@ -71,7 +71,7 @@ interface AdminUserInventory {
 
 interface AdminDealLedgerItem {
   id: string;
-  contractType: "venue" | "promotion";
+  contractType: "venue" | "promotion" | "booking" | "payout";
   dealType: string;
   status: string;
   terms: Record<string, any>;
@@ -128,9 +128,33 @@ function formatDealTerms(deal: AdminDealLedgerItem): string {
       return Number(terms.accessFee || 0) > 0
         ? `${formatCurrency(terms.accessFee, deal.currency)} access fee`
         : "Access only";
+    case "ticket_booking":
+      return terms.isDepositOnly
+        ? `${formatCurrency(terms.amount, deal.currency)} deposit · ${formatCurrency(terms.totalPrice, deal.currency)} total`
+        : `${formatCurrency(terms.amount, deal.currency)} booking payment`;
+    case "scheduled_payout":
+      return `${formatCurrency(Number(terms.totalGross || 0) + Number(terms.additionalGross || 0), deal.currency)} gross · ${formatCurrency(terms.platformFee || 0, deal.currency)} platform fee`;
     default:
       return "Terms recorded";
   }
+}
+
+function ledgerTypeLabel(contractType: AdminDealLedgerItem["contractType"]): string {
+  if (contractType === "venue") return "Venue Agreement";
+  if (contractType === "promotion") return "Promotion Agreement";
+  if (contractType === "booking") return "Booking Transaction";
+  return "Platform Payout";
+}
+
+function LedgerStatusBadge({ status }: { status: string }) {
+  const normalized = status || "pending";
+  if (["accepted", "confirmed", "fully_paid", "deposit_paid", "completed", "paid"].includes(normalized)) {
+    return <Badge className="whitespace-nowrap bg-green-100 text-green-800"><CheckCircle className="mr-1 h-3 w-3" />{formatDealType(normalized)}</Badge>;
+  }
+  if (["declined", "cancelled", "refunded", "failed", "voided"].includes(normalized)) {
+    return <Badge className="whitespace-nowrap bg-red-100 text-red-800"><XCircle className="mr-1 h-3 w-3" />{formatDealType(normalized)}</Badge>;
+  }
+  return <Badge className="whitespace-nowrap bg-amber-100 text-amber-800"><Clock className="mr-1 h-3 w-3" />{formatDealType(normalized)}</Badge>;
 }
 
 export default function AdminDashboard() {
@@ -200,7 +224,7 @@ export default function AdminDashboard() {
   const { data: applicationResponse, isLoading: applicationsLoading } = useQuery<PaginatedList<any>>({
     queryKey: ["/api/admin/community-applications", applicationPage, searchTerm],
     queryFn: async () => (await apiRequest("GET", `/api/admin/community-applications?page=${applicationPage}&pageSize=10&search=${encodeURIComponent(searchTerm)}`)).json(),
-    enabled: isAuthenticated && isAdminUser(user),
+    enabled: false,
     retry: false,
   });
   const communityApplications = applicationResponse?.items ?? [];
@@ -226,7 +250,7 @@ export default function AdminDashboard() {
   const { data: serviceResponse, isLoading: servicesLoading} = useQuery<PaginatedList<ServiceProvider>>({
     queryKey: ["/api/admin/services", servicePage, searchTerm],
     queryFn: async () => (await apiRequest("GET", `/api/admin/services?page=${servicePage}&pageSize=10&search=${encodeURIComponent(searchTerm)}`)).json(),
-    enabled: isAuthenticated && isAdminUser(user),
+    enabled: false,
     retry: false,
   });
   const pendingServices = serviceResponse?.items ?? [];
@@ -525,11 +549,11 @@ export default function AdminDashboard() {
             <Shield className="w-8 h-8 text-red-500" />
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
           </div>
-          <p className="text-gray-600 dark:text-gray-400">Manage platform content and community applications</p>
+          <p className="text-gray-600 dark:text-gray-400">Manage platform operations, users, agreements, and transactions</p>
         </div>
 
         {/* Stats Cards */}
-        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-3">
           <Card data-testid="card-experience-stats">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -570,18 +594,6 @@ export default function AdminDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Applications</p>
-                  <p className="text-2xl font-bold">{applicationResponse?.stats?.pending ?? 0}</p>
-                </div>
-                <Users className="w-8 h-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-
           <Card data-testid="card-venue-stats">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -603,17 +615,6 @@ export default function AdminDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Services</p>
-                  <p className="text-2xl font-bold">{serviceResponse?.stats?.pending ?? 0}</p>
-                </div>
-                <Settings className="w-8 h-8 text-orange-500" />
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
         {/* Quick Actions */}
@@ -642,10 +643,8 @@ export default function AdminDashboard() {
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
             <TabsTrigger value="deal-ledger">Deal Ledger</TabsTrigger>
             <TabsTrigger value="users">Users / Participants</TabsTrigger>
-            <TabsTrigger value="applications">Tribe Applications</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
             <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
-            <TabsTrigger value="services">Services</TabsTrigger>
             <TabsTrigger value="venue-calendars">Venue Calendars</TabsTrigger>
           </TabsList>
 
@@ -1135,7 +1134,7 @@ export default function AdminDashboard() {
             <div>
               <h2 className="text-xl font-semibold">Deal Ledger</h2>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                Accepted venue contracts, promotion agreements, and sponsorships awaiting payment.
+                Unified record of venue and promotion agreements, booking transactions, and platform payouts.
               </p>
             </div>
 
@@ -1153,6 +1152,8 @@ export default function AdminDashboard() {
                     deal.counterparty.name,
                     deal.counterparty.email,
                     deal.dealType,
+                    deal.contractType,
+                    deal.status,
                   ].filter(Boolean).some((value) => String(value).toLowerCase().includes(needle)))
                 : dealLedger;
 
@@ -1161,7 +1162,7 @@ export default function AdminDashboard() {
                   <CardContent className="py-12 text-center text-gray-500">
                     <Handshake className="mx-auto mb-4 h-12 w-12 opacity-30" />
                     <p className="font-medium">No matching deals</p>
-                    <p className="mt-1 text-sm">Accepted contracts will appear here automatically.</p>
+                    <p className="mt-1 text-sm">Agreements and platform transactions will appear here automatically.</p>
                   </CardContent>
                 </Card>
               ) : (
@@ -1176,7 +1177,7 @@ export default function AdminDashboard() {
                           <TableHead>Counterparty</TableHead>
                           <TableHead>Agreed Terms</TableHead>
                           <TableHead>Status</TableHead>
-                          <TableHead>Accepted / Updated</TableHead>
+                          <TableHead>Occurred / Updated</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1184,7 +1185,7 @@ export default function AdminDashboard() {
                           <TableRow key={`${deal.contractType}-${deal.id}`} data-testid={`deal-ledger-row-${deal.id}`}>
                             <TableCell>
                               <Badge variant="outline">
-                                {deal.contractType === "venue" ? "Venue" : "Promotion"}
+                                {ledgerTypeLabel(deal.contractType)}
                               </Badge>
                               <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground">{formatDealType(deal.dealType)}</p>
                             </TableCell>
@@ -1199,15 +1200,7 @@ export default function AdminDashboard() {
                             </TableCell>
                             <TableCell className="min-w-52">{formatDealTerms(deal)}</TableCell>
                             <TableCell>
-                              {deal.status === "pending_payment" ? (
-                                <Badge className="whitespace-nowrap bg-amber-100 text-amber-800">
-                                  <Clock className="mr-1 h-3 w-3" />Pending Payment
-                                </Badge>
-                              ) : (
-                                <Badge className="bg-green-100 text-green-800">
-                                  <CheckCircle className="mr-1 h-3 w-3" />Accepted
-                                </Badge>
-                              )}
+                              <LedgerStatusBadge status={deal.status} />
                             </TableCell>
                             <TableCell className="whitespace-nowrap text-muted-foreground">
                               {deal.acceptedAt ? new Date(deal.acceptedAt).toLocaleDateString() : "-"}

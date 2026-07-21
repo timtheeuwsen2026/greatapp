@@ -1,5 +1,6 @@
 import { Progress } from "@/components/ui/progress";
 import { DollarSign, Users } from "lucide-react";
+import { formatMvgParticipantCount } from "@/lib/participantCounts";
 
 interface FundingProgressBarProps {
   currentParticipants: number;
@@ -54,9 +55,8 @@ export function FundingProgressBar({
           {showParticipants && (
             <div className="flex items-center gap-1">
               <Users className="h-3 w-3" aria-hidden="true" />
-              <span>
-                <strong className="text-gray-900 dark:text-white">{currentParticipants}</strong>
-                {" / "}{minimumParticipants} participants
+              <span className="text-gray-900 dark:text-white">
+                {formatMvgParticipantCount(currentParticipants, minimumParticipants, isMVGReached)}
               </span>
             </div>
           )}
@@ -81,7 +81,7 @@ export function FundingProgressBar({
           <Progress 
             value={Math.min(fundingPercentage, 100)} 
             className={`${sizeClasses[size]} transition-all duration-500 ease-out ${isMVGReached ? '[&>div]:bg-green-500' : ''}`}
-            aria-label={`Group progress: ${currentParticipants} of ${minimumParticipants} participants joined`}
+            aria-label={`Group progress: ${formatMvgParticipantCount(currentParticipants, minimumParticipants, isMVGReached)}`}
             aria-valuenow={Math.min(fundingPercentage, 100)}
             aria-valuemin={0}
             aria-valuemax={100}

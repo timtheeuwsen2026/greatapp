@@ -17,7 +17,7 @@ interface RealParticipantAvatarsProps {
   className?: string;
 }
 
-function isAnonymousParticipant(p: ParticipantData): boolean {
+export function isAnonymousParticipant(p: ParticipantData): boolean {
   const combined = `${p.firstName || ''} ${p.displayName || ''}`.toLowerCase().trim();
   if (!combined || combined.replace(/\s/g, '') === '') return !p.avatarUrl;
   if (combined.includes('anonymous')) return true;

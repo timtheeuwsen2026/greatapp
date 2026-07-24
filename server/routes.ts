@@ -6199,6 +6199,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceDueDate: depositSchedule.balanceDueDate,
       });
     } catch (error: any) {
+      // Surface the real Stripe reason in the server logs so a failing checkout is
+      // diagnosable (invalid key, amount below minimum, unsupported currency, …)
+      // instead of showing up only as a generic toast on the client.
+      console.error('[create-payment-intent] failed:', {
+        type: error?.type,
+        code: error?.code,
+        message: error?.message,
+        experienceId: req.body?.experienceId,
+        ticketSkuId: req.body?.ticketSkuId,
+      });
       res.status(500).json({ message: "Error creating payment intent: " + error.message });
     }
   });
@@ -6998,15 +7008,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Stripe Connect routes for creators
+  // Starts (or resumes) Express onboarding and returns a hosted onboarding URL.
+  // Accepts an optional internal `returnPath` so the creator lands back where they
+  // started (e.g. the dashboard) after finishing on Stripe.
   app.post("/api/stripe/connect-url", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const userEmail = req.user.claims.email;
-      
+
+      // Only allow internal same-origin paths to avoid open-redirects.
+      const rawReturn = typeof req.body?.returnPath === 'string' ? req.body.returnPath : '';
+      const returnPath = rawReturn.startsWith('/') && !rawReturn.startsWith('//')
+        ? rawReturn
+        : '/creator-profile-setup';
+
       // First, create or get existing Stripe Connect account
       let account;
       const existingProfile = await storage.getCreatorProfile(userId);
-      
+
       if (existingProfile?.stripeAccountId) {
         account = await stripe.accounts.retrieve(existingProfile.stripeAccountId);
       } else {
@@ -7015,16 +7034,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: userEmail,
           metadata: { userId: userId }
         });
-        
+
         // Update creator profile with Stripe account ID
         await storage.updateCreatorProfileStripe(userId, account.id);
       }
-      
-      // Create account link for onboarding
+
+      // Create account link for onboarding. accountLinks work for both brand-new
+      // accounts and ones resuming an incomplete/pending onboarding.
+      const base = getAppBaseUrl(req);
+      const sep = returnPath.includes('?') ? '&' : '?';
       const accountLink = await stripe.accountLinks.create({
         account: account.id,
-        refresh_url: `${getAppBaseUrl(req)}/creator-profile-setup?stripe_refresh=true`,
-        return_url: `${getAppBaseUrl(req)}/creator-profile-setup?stripe_success=true`,
+        refresh_url: `${base}${returnPath}${sep}stripe_refresh=true`,
+        return_url: `${base}${returnPath}${sep}stripe_success=true`,
         type: 'account_onboarding',
       });
 
@@ -7032,6 +7054,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error creating Stripe Connect URL:", error);
       res.status(500).json({ message: "Error creating Stripe Connect URL: " + error.message });
+    }
+  });
+
+  // Live Stripe Connect status for the current creator. Reads straight from Stripe
+  // (not just the cached DB flag) so the dashboard reflects reality even before the
+  // account.updated webhook lands.
+  app.get("/api/stripe/connect-status", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const profile = await storage.getCreatorProfile(userId);
+
+      if (!profile?.stripeAccountId) {
+        return res.json({ connected: false, status: 'not_connected' });
+      }
+
+      const account = await stripe.accounts.retrieve(profile.stripeAccountId);
+      const chargesEnabled = !!account.charges_enabled;
+      const payoutsEnabled = !!account.payouts_enabled;
+      const detailsSubmitted = !!account.details_submitted;
+      const requirementsDue = Array.from(new Set([
+        ...(account.requirements?.currently_due || []),
+        ...(account.requirements?.past_due || []),
+      ]));
+
+      // verified  → can accept charges AND receive payouts
+      // pending   → details submitted, Stripe still verifying / capabilities not live
+      // incomplete→ account exists but onboarding never finished
+      let status: 'verified' | 'pending' | 'incomplete';
+      if (chargesEnabled && payoutsEnabled) status = 'verified';
+      else if (detailsSubmitted) status = 'pending';
+      else status = 'incomplete';
+
+      res.json({
+        connected: true,
+        accountId: account.id,
+        status,
+        chargesEnabled,
+        payoutsEnabled,
+        detailsSubmitted,
+        requirementsDue,
+      });
+    } catch (error: any) {
+      console.error("Error fetching Stripe Connect status:", error);
+      res.status(500).json({ message: "Failed to fetch Stripe status: " + error.message });
+    }
+  });
+
+  // One-time login link into the creator's Stripe Express dashboard (to see payouts,
+  // update bank details, etc.). Only valid once onboarding is complete.
+  app.post("/api/stripe/dashboard-link", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const profile = await storage.getCreatorProfile(userId);
+
+      if (!profile?.stripeAccountId) {
+        return res.status(400).json({ message: "No Stripe account connected yet. Connect your account first." });
+      }
+
+      const loginLink = await stripe.accounts.createLoginLink(profile.stripeAccountId);
+      res.json({ url: loginLink.url });
+    } catch (error: any) {
+      console.error("Error creating Stripe dashboard link:", error);
+      res.status(500).json({ message: "Couldn't open the Stripe dashboard. Finish onboarding first, then try again." });
     }
   });
 

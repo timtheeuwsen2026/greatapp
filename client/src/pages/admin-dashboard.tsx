@@ -81,6 +81,37 @@ interface AdminDealLedgerItem {
   experience: { id: string; title: string };
   creator: { id: string; name: string; email: string | null };
   counterparty: { id: string | null; name: string; email: string | null; role: string };
+  negotiation?: {
+    isCountered: boolean;
+    pendingActionBy: string | null;
+    originalTerms: Record<string, any>;
+    currentTerms: Record<string, any>;
+    declineReason: string | null;
+    rounds: Array<{
+      from: string;
+      status: string;
+      model: string;
+      terms: Record<string, any>;
+      note: string | null;
+      at: string | null;
+    }>;
+  } | null;
+}
+
+// Renders the headline number of a terms object (%, fee, sponsorship) so the admin
+// can see exactly what each side put on the table during a negotiation.
+function summariseTerms(terms: Record<string, any> | undefined, currency: string): string {
+  const t = terms || {};
+  const parts: string[] = [];
+  if (t.revenueSharePct !== undefined && t.revenueSharePct !== null) parts.push(`${Number(t.revenueSharePct)}% rev share`);
+  if (t.commissionPct !== undefined && t.commissionPct !== null) parts.push(`${Number(t.commissionPct)}% commission`);
+  if (Number(t.fixedFee || 0) > 0) parts.push(`${formatCurrency(t.fixedFee, currency)} fee`);
+  if (Number(t.perHeadAmount || 0) > 0) parts.push(`${formatCurrency(t.perHeadAmount, currency)}/head`);
+  if (Number(t.minimumSpend || 0) > 0) parts.push(`${formatCurrency(t.minimumSpend, currency)} min spend`);
+  if (Number(t.accessFee || 0) > 0) parts.push(`${formatCurrency(t.accessFee, currency)} access`);
+  if (Number(t.sponsorshipAmount || 0) > 0) parts.push(`${formatCurrency(t.sponsorshipAmount, currency)} sponsorship`);
+  if (t.milestoneAttendeeTarget) parts.push(`${Number(t.milestoneAttendeeTarget)} bookings → ${Number(t.milestoneRewardTickets || 0)} ticket(s)`);
+  return parts.join(" · ") || "—";
 }
 
 // Helper to format currency with proper symbol
@@ -1203,6 +1234,7 @@ export default function AdminDashboard() {
                           <TableHead>Creator</TableHead>
                           <TableHead>Counterparty</TableHead>
                           <TableHead>Agreed Terms</TableHead>
+                          <TableHead>Negotiation</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Occurred / Updated</TableHead>
                         </TableRow>
@@ -1226,6 +1258,49 @@ export default function AdminDashboard() {
                               {deal.counterparty.email && <p className="text-xs text-muted-foreground">{deal.counterparty.email}</p>}
                             </TableCell>
                             <TableCell className="min-w-52">{formatDealTerms(deal)}</TableCell>
+                            <TableCell className="min-w-56 align-top text-xs">
+                              {(() => {
+                                const n = deal.negotiation;
+                                if (!n) return <span className="text-muted-foreground">—</span>;
+                                const original = summariseTerms(n.originalTerms, deal.currency);
+                                const current = summariseTerms(n.currentTerms, deal.currency);
+                                const changed = original !== current && original !== "—";
+                                return (
+                                  <div className="space-y-1">
+                                    {n.isCountered && (
+                                      <Badge className="bg-amber-100 text-amber-800 border-amber-300">Countered</Badge>
+                                    )}
+                                    {changed && (
+                                      <p className="text-muted-foreground">
+                                        Opened at <span className="font-medium">{original}</span> → now{" "}
+                                        <span className="font-medium text-foreground">{current}</span>
+                                      </p>
+                                    )}
+                                    {n.rounds.length > 0 && (
+                                      <ul className="space-y-0.5">
+                                        {n.rounds.map((round, i) => (
+                                          <li key={i} className="text-muted-foreground">
+                                            <span className="capitalize">{round.from}</span> proposed{" "}
+                                            <span className="font-medium text-foreground">{summariseTerms(round.terms, deal.currency)}</span>
+                                            {" "}({round.status})
+                                            {round.note && <span className="block italic">"{round.note}"</span>}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                    {n.pendingActionBy && (
+                                      <p className="text-muted-foreground">Awaiting: <span className="font-medium capitalize">{n.pendingActionBy}</span></p>
+                                    )}
+                                    {n.declineReason && (
+                                      <p className="italic text-muted-foreground">Reason: {n.declineReason}</p>
+                                    )}
+                                    {!n.isCountered && !changed && n.rounds.length === 0 && !n.pendingActionBy && (
+                                      <span className="text-muted-foreground">No counter-offers</span>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                            </TableCell>
                             <TableCell>
                               <LedgerStatusBadge status={deal.status} />
                             </TableCell>

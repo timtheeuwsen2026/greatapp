@@ -4395,8 +4395,12 @@ export class DatabaseStorage implements IStorage {
 
     let fulfillmentId: string | null = null;
     const unlocked = qualifyingBookings >= milestone.target;
-    if (unlocked) {
+    // Persist progress as soon as there's at least one qualifying booking so the
+    // creator's Fulfillment tab can show partial milestones (e.g. 1/3), not just
+    // fully unlocked ones. `in_progress` rows carry a null unlockedAt.
+    if (qualifyingBookings > 0) {
       const now = new Date();
+      const progressStatus = unlocked ? "unlocked" : "in_progress";
       const [existing] = await db
         .select()
         .from(perkFulfillments)
@@ -4412,8 +4416,8 @@ export class DatabaseStorage implements IStorage {
             milestoneTarget: milestone.target,
             qualifyingBookings,
             rewardDescription: milestone.rewardDescription,
-            status: existing.status === "fulfilled" ? "fulfilled" : "unlocked",
-            unlockedAt: existing.unlockedAt || now,
+            status: existing.status === "fulfilled" ? "fulfilled" : progressStatus,
+            unlockedAt: unlocked ? (existing.unlockedAt || now) : null,
             updatedAt: now,
           })
           .where(eq(perkFulfillments.id, existing.id))
@@ -4432,7 +4436,8 @@ export class DatabaseStorage implements IStorage {
             milestoneTarget: milestone.target,
             qualifyingBookings,
             rewardDescription: milestone.rewardDescription,
-            status: "unlocked",
+            status: progressStatus,
+            unlockedAt: unlocked ? now : null,
           })
           .onConflictDoNothing({ target: perkFulfillments.promoterExperienceId })
           .returning({ id: perkFulfillments.id });
@@ -4510,7 +4515,9 @@ export class DatabaseStorage implements IStorage {
         const qualifyingBookings = bookingCounts.get(row.promotion.id) || 0;
         const existing = existingByReferral.get(row.promotion.id);
 
-        if (!milestone || qualifyingBookings < milestone.target) {
+        // No milestone configured, or no qualifying bookings yet → nothing to show.
+        // Void any stale record whose bookings were later refunded/cancelled to zero.
+        if (!milestone || qualifyingBookings <= 0) {
           if (existing && existing.status !== "fulfilled" && existing.status !== "voided") {
             await db
               .update(perkFulfillments)
@@ -4519,6 +4526,14 @@ export class DatabaseStorage implements IStorage {
           }
           continue;
         }
+
+        // At least one qualifying booking → show it. `in_progress` below target
+        // (e.g. 1/3), `unlocked` at/above target. Preserve a manual `fulfilled`.
+        const reached = qualifyingBookings >= milestone.target;
+        const nextStatus = existing?.status === "fulfilled"
+          ? "fulfilled"
+          : reached ? "unlocked" : "in_progress";
+        const nextUnlockedAt = reached ? (existing?.unlockedAt || new Date()) : null;
 
         if (existing) {
           await db
@@ -4529,8 +4544,8 @@ export class DatabaseStorage implements IStorage {
               milestoneTarget: milestone.target,
               qualifyingBookings,
               rewardDescription: milestone.rewardDescription,
-              status: existing.status === "fulfilled" ? "fulfilled" : "unlocked",
-              unlockedAt: existing.unlockedAt || new Date(),
+              status: nextStatus,
+              unlockedAt: nextUnlockedAt,
               updatedAt: new Date(),
             })
             .where(eq(perkFulfillments.id, existing.id));
@@ -4545,8 +4560,10 @@ export class DatabaseStorage implements IStorage {
             milestoneTarget: milestone.target,
             qualifyingBookings,
             rewardDescription: milestone.rewardDescription,
-            status: "unlocked",
-          });
+            status: nextStatus,
+            unlockedAt: nextUnlockedAt,
+          })
+          .onConflictDoNothing({ target: perkFulfillments.promoterExperienceId });
         }
       }
     }
@@ -4610,16 +4627,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAdminDealLedger(): Promise<any[]> {
-    const [venueRows, acceptedVenueOfferRows, promotionRows, bookingRows, payoutRows] = await Promise.all([
+    const [venueRows, venueOfferRows, promotionRows, bookingRows, payoutRows] = await Promise.all([
       db.select({ contract: venueContracts, experience: experiences, venue: venues })
         .from(venueContracts)
         .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
         .innerJoin(venues, eq(venueContracts.venueId, venues.id)),
+      // Every venue offer regardless of status. The ledger must show pending,
+      // countered, declined and admin_review deals — not only accepted ones.
       db.select({ offer: venueOffers, experience: experiences, venue: venues })
         .from(venueOffers)
         .innerJoin(experiences, eq(venueOffers.experienceId, experiences.id))
-        .innerJoin(venues, eq(venueOffers.venueId, venues.id))
-        .where(eq(venueOffers.status, "accepted")),
+        .innerJoin(venues, eq(venueOffers.venueId, venues.id)),
       db.select({ deal: promotionDeals, experience: experiences, partner: users })
         .from(promotionDeals)
         .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
@@ -4635,7 +4653,7 @@ export class DatabaseStorage implements IStorage {
 
     const creatorIds = Array.from(new Set([
       ...venueRows.map((row) => row.contract.creatorId),
-      ...acceptedVenueOfferRows.map((row) => row.experience.creatorId),
+      ...venueOfferRows.map((row) => row.experience.creatorId),
       ...promotionRows.map((row) => row.deal.creatorId),
       ...bookingRows.map((row) => row.experience.creatorId),
       ...payoutRows.map((row) => row.experience.creatorId),
@@ -4653,6 +4671,29 @@ export class DatabaseStorage implements IStorage {
         email: creator?.email || null,
       };
     };
+
+    // Group offers by experience+venue so a contract row can carry the full
+    // back-and-forth (creator invite → venue counter → resolution).
+    const offersByVenueKey = new Map<string, any[]>();
+    for (const { offer } of venueOfferRows) {
+      const key = `${offer.experienceId}:${offer.venueId}`;
+      const bucket = offersByVenueKey.get(key) || [];
+      bucket.push(offer);
+      offersByVenueKey.set(key, bucket);
+    }
+    const venueNegotiationRounds = (key: string) =>
+      (offersByVenueKey.get(key) || [])
+        .slice()
+        .sort((left, right) =>
+          new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime())
+        .map((offer) => ({
+          from: "venue",
+          status: offer.status,
+          model: offer.model,
+          terms: offer.terms || {},
+          note: offer.message || null,
+          at: offer.updatedAt || offer.createdAt,
+        }));
 
     const venueLedger = venueRows.map(({ contract, experience, venue }) => ({
       id: contract.id,
@@ -4674,18 +4715,27 @@ export class DatabaseStorage implements IStorage {
         email: venue.contactEmail || null,
         role: "venue",
       },
+      negotiation: {
+        isCountered: contract.status === "countered",
+        pendingActionBy: contract.status === "countered" ? "creator" : null,
+        originalTerms: contract.terms || {},
+        currentTerms: contract.terms || {},
+        declineReason: contract.declineReason || null,
+        rounds: venueNegotiationRounds(`${contract.experienceId}:${contract.venueId}`),
+      },
     }));
 
+    // Offers with no contract row are standalone reverse-marketplace bids.
     const contractedVenueKeys = new Set(
       venueRows.map(({ contract }) => `${contract.experienceId}:${contract.venueId}`),
     );
-    const acceptedVenueOfferLedger = acceptedVenueOfferRows
+    const venueOfferLedger = venueOfferRows
       .filter(({ offer }) => !contractedVenueKeys.has(`${offer.experienceId}:${offer.venueId}`))
       .map(({ offer, experience, venue }) => ({
         id: offer.id,
         contractType: "venue",
         dealType: offer.model,
-        status: offer.status || "accepted",
+        status: offer.status || "pending",
         terms: offer.terms || {},
         currency: normalizeCurrency((offer.terms as any)?.currency || experience.currency),
         acceptedAt: offer.updatedAt || offer.createdAt,
@@ -4697,6 +4747,23 @@ export class DatabaseStorage implements IStorage {
           name: venue.name,
           email: venue.contactEmail || null,
           role: "venue",
+        },
+        negotiation: {
+          isCountered: false,
+          pendingActionBy: offer.status === "pending"
+            ? "creator"
+            : offer.status === "admin_review" ? "admin" : null,
+          originalTerms: offer.terms || {},
+          currentTerms: offer.terms || {},
+          declineReason: null,
+          rounds: [{
+            from: "venue",
+            status: offer.status,
+            model: offer.model,
+            terms: offer.terms || {},
+            note: offer.message || null,
+            at: offer.updatedAt || offer.createdAt,
+          }],
         },
       }));
 
@@ -4722,6 +4789,16 @@ export class DatabaseStorage implements IStorage {
           || "External partner",
         email: partner?.email || deal.partnerEmail || null,
         role: partner?.role || "partner",
+      },
+      // baselineTerms hold the creator's opening offer; terms hold whatever the
+      // latest counter changed them to. Together they are the negotiation trail.
+      negotiation: {
+        isCountered: deal.status === "countered",
+        pendingActionBy: deal.pendingActionBy || null,
+        originalTerms: deal.baselineTerms || {},
+        currentTerms: deal.terms || {},
+        declineReason: null,
+        rounds: [],
       },
     }));
 
@@ -4780,7 +4857,7 @@ export class DatabaseStorage implements IStorage {
 
     return [
       ...venueLedger,
-      ...acceptedVenueOfferLedger,
+      ...venueOfferLedger,
       ...promotionLedger,
       ...bookingLedger,
       ...payoutLedger,

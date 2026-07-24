@@ -107,6 +107,10 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       });
 
       if (error) {
+        // Log the full Stripe error so misconfigurations (e.g. a publishable key
+        // that doesn't match the PaymentIntent's account/mode) are visible in the
+        // browser console instead of just a generic toast.
+        console.error("[Stripe] confirmPayment error:", error);
         toast({
           title: "Payment Failed",
           description: error.message,
@@ -206,6 +210,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
         }
       }
     } catch (err: any) {
+      console.error("[Stripe] unexpected checkout error:", err);
       toast({
         title: "Payment Error",
         description: err.message || "An unexpected error occurred",

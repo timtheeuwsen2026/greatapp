@@ -9,6 +9,68 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2025-07-30.basil',
 });
 
+/** 'test' | 'live' | 'unknown' — derived from a Stripe key prefix. */
+function stripeKeyMode(key: string | undefined): 'test' | 'live' | 'unknown' {
+  if (!key) return 'unknown';
+  if (key.startsWith('sk_test') || key.startsWith('pk_test')) return 'test';
+  if (key.startsWith('sk_live') || key.startsWith('pk_live')) return 'live';
+  return 'unknown';
+}
+
+/**
+ * Validate the Stripe environment at boot and log a clear report. This turns the
+ * single most common "payment fails / 4242 throws an error" cause — a secret key
+ * and publishable key that belong to different modes or accounts — into a loud,
+ * obvious startup error instead of a cryptic failure the buyer hits at checkout.
+ *
+ * Run once on startup. It never throws (so a misconfig doesn't crash the server),
+ * it just makes the problem impossible to miss in the logs.
+ */
+export async function validateStripeConfig(): Promise<void> {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  // Vite exposes the publishable key to the browser at BUILD time. The same value
+  // is available to this server process via process.env when it's in the env file.
+  const publishableKey = process.env.VITE_STRIPE_PUBLIC_KEY;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  const secretMode = stripeKeyMode(secretKey);
+  const publishableMode = stripeKeyMode(publishableKey);
+
+  console.log('[Stripe] ── configuration check ─────────────────────────────');
+  console.log(`[Stripe] secret key      : ${secretKey ? secretMode.toUpperCase() : 'MISSING'}`);
+  console.log(`[Stripe] publishable key : ${publishableKey ? publishableMode.toUpperCase() : 'MISSING (VITE_STRIPE_PUBLIC_KEY)'}`);
+  console.log(`[Stripe] webhook secret  : ${webhookSecret ? 'set' : 'MISSING (STRIPE_WEBHOOK_SECRET)'}`);
+
+  if (publishableKey && secretMode !== 'unknown' && publishableMode !== 'unknown' && secretMode !== publishableMode) {
+    console.error(
+      `[Stripe] ❌ KEY MODE MISMATCH: secret key is ${secretMode.toUpperCase()} but publishable key is ${publishableMode.toUpperCase()}. ` +
+      `Checkout WILL fail ("No such payment_intent") because the browser confirms against a different mode than the server created the PaymentIntent in. ` +
+      `Use a matching pk_/sk_ pair (both test, or both live), then rebuild the client so Vite bakes in the correct VITE_STRIPE_PUBLIC_KEY.`
+    );
+  }
+
+  if (!webhookSecret) {
+    console.warn(
+      '[Stripe] ⚠️  STRIPE_WEBHOOK_SECRET is not set. Webhook events (payment confirmation, refunds, deposit capture, auto-refund) will be rejected. ' +
+      'Set it from the Stripe Dashboard → Developers → Webhooks (or `stripe listen` for local testing).'
+    );
+  }
+
+  // Live probe: confirm the secret key actually authenticates and the account can charge.
+  try {
+    const account = await stripe.accounts.retrieve();
+    console.log(
+      `[Stripe] account         : ${account.id} (${account.country}) charges_enabled=${account.charges_enabled}`
+    );
+    if (!account.charges_enabled) {
+      console.warn('[Stripe] ⚠️  charges_enabled=false on this account — payments will be declined until the account is activated.');
+    }
+  } catch (err: any) {
+    console.error(`[Stripe] ❌ secret key failed to authenticate: ${err?.message || err}. Payments cannot be created.`);
+  }
+  console.log('[Stripe] ────────────────────────────────────────────────────');
+}
+
 export interface PaymentLog {
   timestamp: string;
   action: string;

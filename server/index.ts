@@ -6,12 +6,29 @@ import { startPayoutScheduler } from "./payout-scheduler";
 import { startEventReminderScheduler } from "./event-reminder-scheduler";
 import { startEmailJobScheduler } from "./emailJobScheduler";
 import { assertEmailConfiguration } from "./notifications";
+import { validateStripeConfig } from "./payments";
 
 const app = express();
 // Trust Replit's reverse proxy so req.protocol and X-Forwarded-* headers are correct
 app.set("trust proxy", 1);
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: false, limit: '10mb' }));
+
+// IMPORTANT: Stripe webhook signature verification needs the *raw* request body.
+// If the global express.json() parser runs first it consumes the stream and
+// req.body becomes a parsed object, so stripe.webhooks.constructEvent() can never
+// match the signature — every webhook (payment_intent.succeeded, charge.refunded,
+// deposit capture, auto-refund, …) silently fails. Skip the body parsers for the
+// webhook path so the route's own express.raw() sees the untouched Buffer.
+const STRIPE_WEBHOOK_PATH = '/api/webhooks/stripe';
+const jsonParser = express.json({ limit: '10mb' });
+const urlencodedParser = express.urlencoded({ extended: false, limit: '10mb' });
+app.use((req, res, next) => {
+  if (req.path === STRIPE_WEBHOOK_PATH) return next();
+  return jsonParser(req, res, next);
+});
+app.use((req, res, next) => {
+  if (req.path === STRIPE_WEBHOOK_PATH) return next();
+  return urlencodedParser(req, res, next);
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -45,6 +62,9 @@ app.use((req, res, next) => {
 
 (async () => {
   assertEmailConfiguration();
+  // Fail loud on Stripe misconfiguration (mismatched keys, missing webhook secret)
+  // rather than letting buyers hit a cryptic error at checkout.
+  await validateStripeConfig();
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

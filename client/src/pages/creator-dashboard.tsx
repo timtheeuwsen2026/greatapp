@@ -27,7 +27,7 @@ import {
   AlertCircle,
   Send,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { formatPromotionDealTerms } from "@/lib/promotionDeals";
@@ -81,9 +81,29 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
     },
   });
 
-  const handleStripeConnect = () => {
-    updateStep.mutate({ step: 'payout', data: { initializeStripe: true } });
-  };
+  // Start (or resume) Stripe Connect onboarding and send the creator to Stripe's
+  // hosted flow. The previous implementation only created an account server-side and
+  // never redirected, so verification could never actually complete.
+  const connectStripe = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/stripe/connect-url", {
+        returnPath: "/creator-dashboard?tab=earnings",
+      });
+      return res.json();
+    },
+    onSuccess: (data: { url?: string }) => {
+      if (data?.url) window.location.href = data.url;
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Couldn't open Stripe",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleStripeConnect = () => connectStripe.mutate();
 
   const getStepIcon = (step: string, completed: boolean) => {
     const icons = {
@@ -109,8 +129,8 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">Connected</Badge>
         ) : (
-          <Button size="sm" onClick={handleStripeConnect} disabled={updateStep.isPending}>
-            {updateStep.isPending ? 'Connecting...' : 'Connect Payments'}
+          <Button size="sm" onClick={handleStripeConnect} disabled={connectStripe.isPending}>
+            {connectStripe.isPending ? 'Connecting...' : 'Connect Payments'}
           </Button>
         );
       case 'venue':
@@ -220,6 +240,144 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
             </CardContent>
           </Card>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Payouts: Stripe Connect status + actions ────────────────────────────────
+type ConnectStatus = {
+  connected: boolean;
+  status: 'not_connected' | 'incomplete' | 'pending' | 'verified';
+  chargesEnabled?: boolean;
+  payoutsEnabled?: boolean;
+  detailsSubmitted?: boolean;
+  requirementsDue?: string[];
+};
+
+function PayoutsConnectCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: status, isLoading } = useQuery<ConnectStatus>({
+    queryKey: ["/api/stripe/connect-status"],
+  });
+
+  // Handle the redirect back from Stripe's hosted onboarding and refresh status.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("stripe_success") === "true";
+    const refresh = params.get("stripe_refresh") === "true";
+    if (success || refresh) {
+      queryClient.invalidateQueries({ queryKey: ["/api/stripe/connect-status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/onboard"] });
+      if (success) {
+        toast({ title: "Stripe updated", description: "We've refreshed your payout status." });
+      }
+      params.delete("stripe_success");
+      params.delete("stripe_refresh");
+      const qs = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const connect = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/stripe/connect-url", {
+        returnPath: "/creator-dashboard?tab=earnings",
+      });
+      return res.json();
+    },
+    onSuccess: (data: { url?: string }) => {
+      if (data?.url) window.location.href = data.url;
+    },
+    onError: (error: any) =>
+      toast({ title: "Couldn't open Stripe", description: error?.message || "Please try again.", variant: "destructive" }),
+  });
+
+  const openDashboard = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/stripe/dashboard-link");
+      return res.json();
+    },
+    onSuccess: (data: { url?: string }) => {
+      if (data?.url) window.open(data.url, "_blank", "noopener");
+    },
+    onError: (error: any) =>
+      toast({ title: "Couldn't open Stripe dashboard", description: error?.message || "Please try again.", variant: "destructive" }),
+  });
+
+  const st: ConnectStatus['status'] = status?.status ?? "not_connected";
+  const meta: Record<ConnectStatus['status'], { badge: JSX.Element; icon: JSX.Element; title: string; body: string; cta: string }> = {
+    not_connected: {
+      badge: <Badge className="bg-gray-200 text-gray-800">Not connected</Badge>,
+      icon: <DollarSign className="w-6 h-6 text-purple-600" />,
+      title: "Connect your Stripe account to get paid",
+      body: "Payouts from your experiences are sent to your own Stripe account. Connect it once to start receiving money — it takes about 2 minutes.",
+      cta: "Connect Stripe account",
+    },
+    incomplete: {
+      badge: <Badge className="bg-amber-100 text-amber-800">Setup unfinished</Badge>,
+      icon: <AlertCircle className="w-6 h-6 text-amber-600" />,
+      title: "Finish setting up your payouts",
+      body: "Your Stripe onboarding was started but not completed. Finish it so we can send your earnings.",
+      cta: "Finish Stripe setup",
+    },
+    pending: {
+      badge: <Badge className="bg-blue-100 text-blue-800">Verifying</Badge>,
+      icon: <Clock className="w-6 h-6 text-blue-600" />,
+      title: "Stripe is verifying your details",
+      body: "Your information is submitted and under review by Stripe. This usually clears quickly — add any missing details below if prompted.",
+      cta: "Update details",
+    },
+    verified: {
+      badge: <Badge className="bg-green-100 text-green-800">Connected &amp; ready</Badge>,
+      icon: <CheckCircle className="w-6 h-6 text-green-600" />,
+      title: "You're all set to receive payouts",
+      body: "Your Stripe account is verified and payouts are enabled. Earnings are paid out 7 days after each event ends.",
+      cta: "Open Stripe dashboard",
+    },
+  };
+  const view = meta[st];
+  const isVerified = st === "verified";
+  const busy = connect.isPending || openDashboard.isPending;
+
+  return (
+    <Card className="border-purple-200 bg-purple-50/60 dark:bg-purple-950/30 dark:border-purple-800" data-testid="card-stripe-connect">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            {view.icon}
+            Payouts — Stripe Connect
+          </CardTitle>
+          {isLoading ? <Badge variant="outline">Checking…</Badge> : view.badge}
+        </div>
+        <CardDescription>{view.title}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-300">{view.body}</p>
+
+        {!isVerified && (status?.requirementsDue?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/40 p-3 text-xs text-amber-800 dark:text-amber-200">
+            Stripe still needs: {status!.requirementsDue!.map((r) => r.replace(/[._]/g, " ")).join(", ")}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => (isVerified ? openDashboard.mutate() : connect.mutate())}
+            disabled={busy}
+            data-testid="button-stripe-connect"
+          >
+            {busy ? "Opening…" : view.cta}
+          </Button>
+          {isVerified && (
+            <Button variant="outline" onClick={() => connect.mutate()} disabled={busy}>
+              Update bank details
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -696,7 +854,7 @@ function CreatorDashboardContent() {
           </Card>
         </div>
 
-        <Tabs defaultValue={isFirstTimeCreator ? "setup" : "experiences"} className="space-y-6">
+        <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") || (isFirstTimeCreator ? "setup" : "experiences")} className="space-y-6">
           <TabsList className="h-auto flex-wrap justify-start">
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
             <TabsTrigger value="experiences">My Experiences</TabsTrigger>
@@ -713,6 +871,14 @@ function CreatorDashboardContent() {
               {venueOffers.length > 0 && (
                 <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
                   {venueOffers.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="active-deals" className="relative">
+              Active Deals
+              {acceptedVenueDeals.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-xs w-5 h-5">
+                  {acceptedVenueDeals.length}
                 </span>
               )}
             </TabsTrigger>
@@ -1473,12 +1639,33 @@ function CreatorDashboardContent() {
               })
             )}
 
-            {/* Confirmed Venue Deals */}
+            {/* Accepted deals live in their own tab so an agreed deal visibly leaves
+                the Offers queue instead of lingering underneath it. */}
             {acceptedVenueDeals.length > 0 && (
-              <div className="mt-8 space-y-3">
-                <h3 className="font-semibold text-base flex items-center gap-2">
-                  <CheckCircle className="w-4 h-4 text-green-600" />Confirmed Venue Deals
-                </h3>
+              <p className="mt-6 rounded-lg border border-green-200 bg-green-50/60 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/10 dark:text-green-200">
+                <CheckCircle className="mr-1 inline h-4 w-4" />
+                {acceptedVenueDeals.length} accepted {acceptedVenueDeals.length === 1 ? "deal has" : "deals have"} moved to the <strong>Active Deals</strong> tab.
+              </p>
+            )}
+          </TabsContent>
+
+          {/* ── Active Deals Tab — venue agreements the creator has accepted ── */}
+          <TabsContent value="active-deals" className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Active Deals</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Venue agreements you've accepted. These are locked in and linked to your event — including counter-offers you agreed to.
+              </p>
+            </div>
+
+            {acceptedVenueDeals.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <CheckCircle className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No active deals yet</p>
+                <p className="text-sm mt-1">Accept a venue offer and it will move here automatically.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
                 {acceptedVenueDeals.map((row: any) => {
                   const offer = row.offer ?? row;
                   const venue = row.venue ?? {};
@@ -1715,7 +1902,7 @@ function CreatorDashboardContent() {
             <div>
               <h2 className="text-xl font-semibold">Perk Fulfillment</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Milestone rewards unlocked by attributed ticket sales. Mark each item fulfilled after the reward is delivered.
+                Referral milestones as they progress. A reward becomes fulfillable once its target is reached — mark each item fulfilled after you deliver it.
               </p>
             </div>
 
@@ -1728,8 +1915,8 @@ function CreatorDashboardContent() {
               <Card>
                 <CardContent className="py-12 text-center text-gray-500">
                   <Gift className="mx-auto mb-3 h-12 w-12 opacity-30" />
-                  <p className="font-medium">No unlocked perks yet</p>
-                  <p className="mt-1 text-sm">Users appear here automatically when their qualifying bookings reach a milestone.</p>
+                  <p className="font-medium">No referral milestones yet</p>
+                  <p className="mt-1 text-sm">Participants appear here as soon as their referral link drives a qualifying booking.</p>
                 </CardContent>
               </Card>
             ) : (
@@ -1777,7 +1964,7 @@ function CreatorDashboardContent() {
                                   <Badge className="bg-green-100 text-green-800">
                                     <CheckCircle className="mr-1 h-3 w-3" />Fulfilled
                                   </Badge>
-                                ) : (
+                                ) : item.status === "unlocked" ? (
                                   <Button
                                     size="sm"
                                     onClick={() => updatePerkFulfillment.mutate({ id: item.id, status: "fulfilled" })}
@@ -1785,6 +1972,10 @@ function CreatorDashboardContent() {
                                   >
                                     <Gift className="mr-1 h-4 w-4" />Mark Fulfilled
                                   </Button>
+                                ) : (
+                                  <Badge className="bg-blue-100 text-blue-800">
+                                    <Clock className="mr-1 h-3 w-3" />In progress
+                                  </Badge>
                                 )}
                               </td>
                             </tr>
@@ -1799,6 +1990,9 @@ function CreatorDashboardContent() {
           </TabsContent>
 
           <TabsContent value="earnings" className="space-y-6">
+            {/* Stripe Connect — where the creator sets up / manages payouts */}
+            <PayoutsConnectCard />
+
             {/* Earnings Summary */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card className="md:col-span-2">

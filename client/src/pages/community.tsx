@@ -11,7 +11,6 @@ import type { ParticipantProfile } from "@shared/schema";
 import { useLocation } from "wouter";
 import timothyPhoto from "@assets/c7c9463b-b8d2-494b-abd9-de23ce88f553_1754564401842.jpg";
 import Navigation from "@/components/navigation";
-import BrandLogo from "@/components/BrandLogo";
 
 interface TribeMember {
   id: string;
@@ -153,10 +152,10 @@ export default function Community() {
       {/* Hero */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white py-14">
         <div className="container mx-auto px-4 text-center">
-          <h1 className="mb-4 flex flex-wrap items-center justify-center gap-3 text-4xl font-bold md:text-6xl">
-            <span>Meet the</span>
-            <BrandLogo className="h-20 w-auto rounded-xl shadow-xl md:h-24" />
-            <span>Community</span>
+          {/* Plain wordmark instead of the logo tile — the boxed logo mid-sentence
+              broke the line and looked out of place. */}
+          <h1 className="mb-4 text-4xl font-bold md:text-6xl">
+            Meet the <span className="lowercase">great</span> Community
           </h1>
           <p className="text-xl md:text-2xl mb-2 text-blue-100">
             Dreamers. Explorers. Creators. — That's us!

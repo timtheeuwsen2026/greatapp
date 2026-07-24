@@ -377,14 +377,11 @@ export default function Experiences() {
       <Navigation />
       
       {/* Search-first hero */}
-      <section className="relative isolate overflow-hidden bg-slate-950 text-white py-14 sm:py-20 lg:py-24">
-        <img
-          src="/assets/hero-poster.jpg"
-          alt=""
-          aria-hidden="true"
-          className="absolute inset-0 -z-20 h-full w-full object-cover"
-        />
-        <div className="absolute inset-0 -z-10 bg-gradient-to-r from-slate-950/90 via-slate-900/75 to-primary/55" />
+      {/* Blue/purple gradient matching the homepage hero. This previously used the
+          old video poster image over a near-black slate-950 wash, which made the
+          search bar and its results sit on a black background. */}
+      <section className="relative isolate overflow-hidden bg-gradient-to-br from-blue-600 via-indigo-700 to-purple-800 text-white py-14 sm:py-20 lg:py-24">
+        <div className="absolute inset-0 -z-10 opacity-10 bg-pattern" />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-white/80">
             Find your people. Try something new.
@@ -438,7 +435,7 @@ export default function Experiences() {
                     className={`rounded-full border px-4 py-2 text-sm font-semibold backdrop-blur-md transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
                       isActive
                         ? "border-white bg-white text-slate-950"
-                        : "border-white/50 bg-slate-950/25 text-white hover:border-white hover:bg-white/20"
+                        : "border-white/50 bg-white/10 backdrop-blur-sm text-white hover:border-white hover:bg-white/20"
                     }`}
                     aria-pressed={isActive}
                     data-testid={`quick-category-${category.toLowerCase().replace(/\s+/g, "-")}`}

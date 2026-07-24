@@ -8,9 +8,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import type { CreatorProfile } from "@shared/schema";
 import { 
-  Plus, 
-  User, 
-  Play, 
+  Plus,
+  User,
   DollarSign,
   BarChart3,
   CheckCircle,
@@ -170,45 +169,24 @@ export default function CreatorHome() {
             </Link>
           </Card>
 
-          {/* Demo */}
+          {/* Real earnings live in the Creator Dashboard — the old "Demo" and
+              "Learn about earnings" marketing cards were removed as dummy content. */}
           <Card className="hover:shadow-lg transition-shadow cursor-pointer">
-            <Link href="/creator-demo">
-              <CardHeader className="text-center">
-                <div className="mx-auto mb-4 p-3 bg-green-100 rounded-full w-fit">
-                  <Play className="h-8 w-8 text-green-600" />
-                </div>
-                <CardTitle className="text-xl">Demo</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Button 
-                  variant="outline" 
-                  className="w-full" 
-                  size="lg"
-                  data-testid="button-demo"
-                >
-                  Watch Demo
-                </Button>
-              </CardContent>
-            </Link>
-          </Card>
-
-          {/* Learn about earnings */}
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer">
-            <Link href="/creator/earnings">
+            <Link href="/creator-dashboard?tab=earnings">
               <CardHeader className="text-center">
                 <div className="mx-auto mb-4 p-3 bg-amber-100 rounded-full w-fit">
                   <DollarSign className="h-8 w-8 text-amber-600" />
                 </div>
-                <CardTitle className="text-xl">Learn about earnings</CardTitle>
+                <CardTitle className="text-xl">Earnings &amp; Payouts</CardTitle>
               </CardHeader>
               <CardContent>
-                <Button 
-                  variant="outline" 
-                  className="w-full" 
+                <Button
+                  variant="outline"
+                  className="w-full"
                   size="lg"
                   data-testid="button-earnings"
                 >
-                  View Earnings Info
+                  View Your Earnings
                 </Button>
               </CardContent>
             </Link>

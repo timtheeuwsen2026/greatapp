@@ -6635,25 +6635,37 @@ function PricingStep({ form }: { form: any }) {
       <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950 dark:to-indigo-950">
         <CardContent className="p-6">
           <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-4">
-            Pricing Configuration Summary
+            Your Deal Summary
           </h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Pricing Source:</span>{" "}
-              <span className="text-blue-800 dark:text-blue-200 capitalize">{priceSource.source}</span>
-            </div>
             <div>
               <span className="font-medium text-blue-900 dark:text-blue-100">Currency:</span>{" "}
               <span className="text-blue-800 dark:text-blue-200">{currency?.toUpperCase() || 'Not set'}</span>
             </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Business Model:</span>{" "}
-              <span className="text-blue-800 dark:text-blue-200">Creator-Led</span>
+              <span className="font-medium text-blue-900 dark:text-blue-100">Platform fee:</span>{" "}
+              <span className="text-blue-800 dark:text-blue-200">{platformPct}%</span>
             </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Marketplace Economics:</span>{" "}
+              <span className="font-medium text-blue-900 dark:text-blue-100">Your share:</span>{" "}
+              <span className="text-blue-800 dark:text-blue-200">{creatorPct}%</span>
+            </div>
+            <div>
+              <span className="font-medium text-blue-900 dark:text-blue-100">Venue deal:</span>{" "}
               <span className="text-blue-800 dark:text-blue-200">
-                15% platform fee / {form.watch('venueCompensationModel') || "access_only"} venue terms
+                {({
+                  access_only: "Access only / pay-at-counter",
+                  fixed_fee: "Flat fee",
+                  per_head: "Per head",
+                  minimum_spend: "Minimum spend",
+                  revenue_share: "Revenue share",
+                  venue_sponsored: "Venue-sponsored",
+                  upfront_rental: "Upfront rental",
+                } as Record<string, string>)[venueCompensationModel]
+                  || String(venueCompensationModel).replace(/_/g, " ")}
+                {venueCompensationModel === "revenue_share" && venueRevenueSharePct
+                  ? ` — ${venueRevenueSharePct}% to venue`
+                  : ""}
               </span>
             </div>
           </div>

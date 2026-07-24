@@ -8676,12 +8676,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Real creator analytics. This previously returned the raw experiences array, so
+  // every metric on the dashboard resolved to undefined and rendered as a fake "0".
+  // Only metrics we actually track are returned — no fabricated numbers.
   app.get("/api/creator/analytics/:period", isAuthenticated, async (req: any, res) => {
     try {
       const creatorId = req.user.claims.sub;
-      const { period } = req.params;
-      const analytics = await storage.getExperiencesByCreator(creatorId);
-      res.json(analytics);
+      const experiences = await storage.getExperiencesByCreator(creatorId);
+
+      const perExperience = await Promise.all(
+        (experiences || []).map(async (experience: any) => {
+          const experienceBookings = await storage.getBookingsByExperience(experience.id);
+          const active = (experienceBookings || []).filter((booking: any) =>
+            isActiveParticipantBooking(booking.status));
+          return {
+            id: experience.id,
+            title: experience.title,
+            status: experience.status,
+            bookings: active.length,
+            confirmed: (experienceBookings || []).filter((booking: any) =>
+              booking.status === "confirmed" || booking.status === "fully_paid").length,
+          };
+        }),
+      );
+
+      const totalBookings = perExperience.reduce((sum, row) => sum + row.bookings, 0);
+      const confirmedBookings = perExperience.reduce((sum, row) => sum + row.confirmed, 0);
+
+      res.json({
+        totalExperiences: perExperience.length,
+        publishedExperiences: perExperience.filter((row) => row.status === "approved").length,
+        totalBookings,
+        confirmedBookings,
+        topExperiences: perExperience
+          .filter((row) => row.bookings > 0)
+          .sort((left, right) => right.bookings - left.bookings)
+          .slice(0, 5),
+      });
     } catch (error) {
       console.error("Error fetching creator analytics:", error);
       res.status(500).json({ message: "Failed to fetch creator analytics" });
@@ -10748,13 +10779,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             stripeStatus: profile?.stripeVerificationStatus || 'pending'
           }
         },
-        venue: {
-          completed: venues && venues.length > 0,
-          data: {
-            venuesCreated: venues?.length || 0,
-            venues: venues || []
-          }
-        },
+        // NOTE: the standalone "Venue Setup" step was removed from onboarding —
+        // venues are now linked to an event inside the Event Builder.
         firstEvent: {
           completed: experiences && experiences.length > 0,
           data: {

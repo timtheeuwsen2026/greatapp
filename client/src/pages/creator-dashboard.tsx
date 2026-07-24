@@ -109,7 +109,6 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
     const icons = {
       profile: completed ? <CheckCircle className="w-6 h-6 text-green-500" /> : <Users className="w-6 h-6 text-gray-400" />,
       payout: completed ? <CheckCircle className="w-6 h-6 text-green-500" /> : <DollarSign className="w-6 h-6 text-gray-400" />,
-      venue: completed ? <CheckCircle className="w-6 h-6 text-green-500" /> : <Calendar className="w-6 h-6 text-gray-400" />,
       firstEvent: completed ? <CheckCircle className="w-6 h-6 text-green-500" /> : <Plus className="w-6 h-6 text-gray-400" />
     };
     return icons[step as keyof typeof icons];
@@ -133,14 +132,6 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
             {connectStripe.isPending ? 'Connecting...' : 'Connect Payments'}
           </Button>
         );
-      case 'venue':
-        return stepData.completed ? (
-          <Badge className="bg-green-100 text-green-800">{stepData.data.venuesCreated} Venues</Badge>
-        ) : (
-          <Button size="sm" variant="outline" onClick={() => setLocation('/venues')}>
-            Add Venue
-          </Button>
-        );
       case 'firstEvent':
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">{stepData.data.experiencesCreated} Created</Badge>
@@ -154,17 +145,17 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
     }
   };
 
+  // Venue setup was removed from onboarding — venues are now connected inside the
+  // Event Builder, so a separate "Venue Set Up" step is obsolete.
   const stepTitles = {
     profile: "Creator Profile",
-    payout: "Payment Setup", 
-    venue: "Venue Setup",
+    payout: "Payment Setup",
     firstEvent: "First Experience"
   };
 
   const stepDescriptions = {
     profile: "Complete your basic creator profile with bio and contact details",
     payout: "Connect your Stripe account to receive payments",
-    venue: "Add at least one venue where you'll host experiences",
     firstEvent: "Create your first experience to start accepting bookings"
   };
 
@@ -2010,14 +2001,14 @@ function CreatorDashboardContent() {
                     </div>
                     
                     <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Platform Fee (15%)</span>
+                      <span>Platform Fee</span>
                       <span className="font-semibold text-red-600">
                         -{earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalPlatformFees || 0) / 100, 'EUR')}
                       </span>
                     </div>
-                    
+
                     <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Stripe Processing Fee (2.9% + 30¢)</span>
+                      <span>Stripe Processing Fee</span>
                       <span className="font-semibold text-red-600">
                         -{earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalStripeFees || 0) / 100, 'EUR')}
                       </span>
@@ -2056,7 +2047,7 @@ function CreatorDashboardContent() {
                     </div>
                     <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
                       <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Payouts are processed weekly for amounts over €20
+                        Payouts are released to your connected Stripe account 7 days after each event ends.
                       </p>
                     </div>
                   </div>
@@ -2150,10 +2141,11 @@ function CreatorDashboardContent() {
                         Understanding Our Fee Structure
                       </h4>
                       <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-                        <li>• Platform Fee: 20-34% based on role and support level</li>
-                        <li>• Stripe Processing: 2.9% + 30¢ (secure payment processing)</li>
-                        <li>• Experience Facilitator: 66-80% depending on support level</li>
-                        <li>• Network Influencer: 25% revenue share for bringing community</li>
+                        <li>• Platform fee is set by the platform — the exact rate for your event is shown in the Event Builder pricing step</li>
+                        <li>• Your share is what remains after the platform fee, minus any venue deal you agree to</li>
+                        <li>• A promoter bounty (if you enable one) is deducted from your share, not the platform's</li>
+                        <li>• Stripe payment processing fees are deducted from the gross amount</li>
+                        <li>• Payouts are released 7 days after each event ends</li>
                       </ul>
                     </div>
 
@@ -2239,21 +2231,23 @@ function CreatorDashboardContent() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
+                    {/* Only metrics we actually track. Views/conversion/ratings are
+                        not instrumented yet, so they are omitted rather than shown as 0. */}
                     <div className="flex justify-between">
-                      <span>Total Views</span>
-                      <span className="font-semibold">{typedAnalytics.totalViews || 0}</span>
+                      <span>Experiences Created</span>
+                      <span className="font-semibold">{typedAnalytics.totalExperiences ?? 0}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Booking Conversion</span>
-                      <span className="font-semibold">{typedAnalytics.conversionRate || 0}%</span>
+                      <span>Published (Live)</span>
+                      <span className="font-semibold">{typedAnalytics.publishedExperiences ?? 0}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Avg. Rating</span>
-                      <span className="font-semibold">{typedAnalytics.averageRating || 0}/5</span>
+                      <span>Total Bookings</span>
+                      <span className="font-semibold">{typedAnalytics.totalBookings ?? 0}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Repeat Customers</span>
-                      <span className="font-semibold">{typedAnalytics.repeatCustomers || 0}%</span>
+                      <span>Confirmed Bookings</span>
+                      <span className="font-semibold">{typedAnalytics.confirmedBookings ?? 0}</span>
                     </div>
                   </div>
                 </CardContent>

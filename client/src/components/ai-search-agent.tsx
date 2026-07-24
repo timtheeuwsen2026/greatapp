@@ -353,7 +353,12 @@ export default function AISearchAgent() {
   }
 
   return (
-    <Card id="ai-search-container" className="max-w-4xl mx-auto shadow-2xl border-0">
+    // Pin the panel to a light surface. Inheriting `bg-card` made it render
+    // near-black in dark mode against the blue/purple hero (the old video-era look).
+    <Card
+      id="ai-search-container"
+      className="max-w-4xl mx-auto shadow-2xl border-0 overflow-hidden bg-white dark:bg-white text-gray-900 dark:text-gray-900"
+    >
       <CardContent className="p-0">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b bg-gradient-primary text-white rounded-t-lg">
@@ -372,7 +377,7 @@ export default function AISearchAgent() {
         </div>
 
         {/* Messages */}
-        <div className="h-64 overflow-y-auto p-4 bg-gray-50">
+        <div className="h-64 overflow-y-auto p-4 bg-indigo-50/60">
           {messages.map((message) => (
             <div key={message.id} className={`mb-4 ${message.type === 'user' ? 'text-right' : 'text-left'}`}>
               <div className={`inline-block max-w-[80%] p-3 rounded-lg ${

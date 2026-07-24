@@ -637,6 +637,12 @@ export default function ExperienceDetails() {
                   {experience.startDate !== experience.endDate && experience.endDate && (
                     <span> - {formatDate(experience.endDate.toString())}</span>
                   )}
+                  {(experience as any).startTime && (
+                    <span className="ml-2 text-gray-500">
+                      · {(experience as any).startTime}
+                      {(experience as any).endTime ? ` – ${(experience as any).endTime}` : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center">
                   <Users className="h-5 w-5 mr-2" />
@@ -1513,6 +1519,19 @@ export default function ExperienceDetails() {
                     <span className="text-gray-600">End Date:</span>
                     <span className="font-medium">{formatDate(experience.endDate?.toString() || '')}</span>
                   </div>
+                  {/* Start/end time as set in the event builder — only shown when defined */}
+                  {(experience as any).startTime && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Start Time:</span>
+                      <span className="font-medium">{(experience as any).startTime}</span>
+                    </div>
+                  )}
+                  {(experience as any).endTime && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">End Time:</span>
+                      <span className="font-medium">{(experience as any).endTime}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-600">Location:</span>
                     <span className="font-medium">{experience.location}</span>

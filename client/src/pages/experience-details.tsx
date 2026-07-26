@@ -15,6 +15,7 @@ import CreatorProfileCard from "@/components/creator-profile-card";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -89,6 +90,7 @@ export default function ExperienceDetails() {
 
   // Ticket selection state - auto-select first ticket when available
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [ticketQuantities, setTicketQuantities] = useState<Record<string, number>>({});
   const [showShareModal, setShowShareModal] = useState(false);
 
   const { data: experience, isLoading, error } = useQuery<ExperienceWithStats>({
@@ -1375,6 +1377,10 @@ export default function ExperienceDetails() {
                           const ticketId = ticket.id || ticket.sourceRoomId || `ticket-${index}`;
                           const isSelected = selectedTicketId === ticketId;
                           const isSoldOut = spotsAvailable <= 0;
+                          const selectedQuantity = Math.min(
+                            Math.max(1, ticketQuantities[ticketId] || 1),
+                            Math.max(1, spotsAvailable),
+                          );
                           return (
                             <div 
                               key={ticketId}
@@ -1407,6 +1413,35 @@ export default function ExperienceDetails() {
                                   </div>
                                 )}
                               </div>
+                              {!isSoldOut && (
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <label
+                                    htmlFor={`ticket-quantity-${index}`}
+                                    className="text-sm font-medium text-gray-700 dark:text-gray-300"
+                                  >
+                                    Number of tickets
+                                  </label>
+                                  <Input
+                                    id={`ticket-quantity-${index}`}
+                                    type="number"
+                                    min={1}
+                                    max={spotsAvailable}
+                                    value={selectedQuantity}
+                                    onChange={(event) => {
+                                      const nextQuantity = Math.min(
+                                        spotsAvailable,
+                                        Math.max(1, Number.parseInt(event.target.value, 10) || 1),
+                                      );
+                                      setTicketQuantities((current) => ({
+                                        ...current,
+                                        [ticketId]: nextQuantity,
+                                      }));
+                                    }}
+                                    className="w-24"
+                                    data-testid={`input-ticket-quantity-${index}`}
+                                  />
+                                </div>
+                              )}
                               {/* Explicit Book This Ticket CTA - Professional styling */}
                               <div className="mt-4">
                                 {isSoldOut ? (
@@ -1414,22 +1449,22 @@ export default function ExperienceDetails() {
                                     Sold Out
                                   </Button>
                                 ) : isAuthenticated ? (
-                                  <Link href={`/checkout/${experience.id}?ticketSkuId=${ticketId}`}>
+                                  <Link href={`/checkout/${experience.id}?ticketSkuId=${ticketId}&quantity=${selectedQuantity}`}>
                                     <Button 
                                       className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" 
                                       size="lg"
                                       data-testid={`button-book-ticket-${index}`}
                                     >
-                                      Book Now
+                                      Book {selectedQuantity === 1 ? "Now" : `${selectedQuantity} Tickets`}
                                       {ticketDeposit > 0 && (
                                         <span className="ml-2 text-purple-200">
-                                          · {formatCurrency(ticketDeposit, experience.currency)} deposit
+                                          · {formatCurrency(ticketDeposit * selectedQuantity, experience.currency)} deposit
                                         </span>
                                       )}
                                     </Button>
                                   </Link>
                                 ) : (
-                                  <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}?ticketSkuId=${ticketId}`)}`}>
+                                  <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}?ticketSkuId=${ticketId}&quantity=${selectedQuantity}`)}`}>
                                     <Button className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" size="lg" data-testid={`button-login-ticket-${index}`}>
                                       Sign In to Book
                                     </Button>

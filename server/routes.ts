@@ -35,6 +35,10 @@ import { calculateBookingCommission, lockCommissionsForExperience, voidCommissio
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 import { sumBookingPayoutGrossCents } from "./payoutRules";
+import {
+  calculateTicketDeduction,
+  sumBookingTicketQuantity,
+} from "@shared/ticketDeduction";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
@@ -85,6 +89,35 @@ const ACTIVE_PARTICIPANT_BOOKING_STATUSES = new Set([
 
 function isActiveParticipantBooking(status: string | null | undefined): boolean {
   return ACTIVE_PARTICIPANT_BOOKING_STATUSES.has(status || "");
+}
+
+function parseRequestedTicketQuantity(value: unknown): number | null {
+  const quantity = Number(value ?? 1);
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : null;
+}
+
+async function getAvailableTicketQuantity(
+  experienceId: string,
+  ticketSkuId: string,
+  ticketCapacity: unknown,
+  recordedSoldCount: unknown,
+): Promise<number | null> {
+  const capacity = Number(ticketCapacity);
+  if (!Number.isFinite(capacity) || capacity < 0) return null;
+
+  const existingBookings = await storage.getBookingsByExperience(experienceId);
+  const bookedQuantity = sumBookingTicketQuantity(
+    existingBookings.filter((booking) =>
+      isActiveParticipantBooking(booking.status)
+      && booking.ticketSkuId === ticketSkuId
+    ),
+  );
+  const persistedSoldCount = Number(recordedSoldCount);
+  const soldQuantity = Number.isFinite(persistedSoldCount)
+    ? Math.max(bookedQuantity, persistedSoldCount)
+    : bookedQuantity;
+
+  return Math.max(0, capacity - soldQuantity);
 }
 
 function applyMarketplaceEconomics(input: any = {}) {
@@ -3600,9 +3633,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
             
             // Calculate available spots
-            const bookedCount = bookings.filter((b: any) => 
-              b.status === 'confirmed' && b.roomId === room.id
-            ).length;
+            const bookedCount = sumBookingTicketQuantity(
+              bookings.filter((b: any) =>
+                b.status === 'confirmed' && b.roomId === room.id
+              ),
+            );
             const availableSpots = (room.quantity || 0) - bookedCount;
             
             return {
@@ -4262,6 +4297,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentType,
         ticketSkuId: bookingTicketSkuId,
       } = req.body;
+      const ticketQuantity = parseRequestedTicketQuantity(
+        req.body.ticketQuantity ?? req.body.quantity,
+      );
+      if (ticketQuantity === null) {
+        return res.status(400).json({
+          message: "Ticket quantity must be a positive whole number",
+        });
+      }
 
       // IDEMPOTENCY: If a booking already exists for this payment intent, return it — prevents
       // duplicate bookings (and duplicate commissions) from retries or double-submits
@@ -4347,6 +4390,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       let fullPrice = parseFloat((amount || 0).toString());
+      let unitPrice = ticketQuantity > 0 ? fullPrice / ticketQuantity : fullPrice;
       let isDepositOnly = false;
       let depositAmount = 0;
       let balanceAmount = 0;
@@ -4359,33 +4403,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === bookingTicketSkuId
         );
+        if (!selectedTicket) {
+          return res.status(400).json({ message: "Selected ticket was not found" });
+        }
       } else if (ticketSkus.length === 1) {
         selectedTicket = ticketSkus[0];
+      } else if (ticketSkus.length > 1) {
+        return res.status(400).json({ message: "Select a ticket before booking" });
+      }
+      const resolvedTicketSkuId = selectedTicket
+        ? String(
+            selectedTicket.id
+            || selectedTicket.sourceRoomId
+            || `ticket-${ticketSkus.indexOf(selectedTicket)}`,
+          )
+        : null;
+      if (selectedTicket) {
+        const availableTickets = await getAvailableTicketQuantity(
+          experienceId,
+          resolvedTicketSkuId!,
+          selectedTicket.ticketCapacity,
+          selectedTicket.soldCount,
+        );
+        if (
+          availableTickets !== null
+          && ticketQuantity > availableTickets
+        ) {
+          return res.status(409).json({
+            message: `Only ${availableTickets} ticket(s) remain`,
+            availableTickets,
+          });
+        }
       }
 
       // PWYW: the client sends amount = buyer-chosen price; validate against minPrice
       if (selectedTicket?.pricingMode === 'pwyw') {
         const minPrice = parseFloat(selectedTicket.minPrice ?? 0);
-        const chosenPrice = parseFloat((amount || 0).toString());
-        if (!Number.isFinite(chosenPrice) || chosenPrice < minPrice) {
+        const chosenTotal = parseFloat((amount || 0).toString());
+        const chosenPricePerTicket = chosenTotal / ticketQuantity;
+        if (!Number.isFinite(chosenPricePerTicket) || chosenPricePerTicket < minPrice) {
           return res.status(400).json({ message: `Minimum price for this ticket is ${minPrice}`, minPrice });
         }
-        fullPrice = chosenPrice;
+        unitPrice = chosenPricePerTicket;
+        fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
       } else {
-        const resolvedFullPrice = selectedTicket && selectedTicket.pricePerPerson !== undefined && selectedTicket.pricePerPerson !== null
+        const resolvedUnitPrice = selectedTicket && selectedTicket.pricePerPerson !== undefined && selectedTicket.pricePerPerson !== null
           ? parseFloat(selectedTicket.pricePerPerson.toString())
           : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
             ? parseFloat((experience as any).pricePerPerson.toString())
             : (experience.price ? parseFloat(experience.price.toString()) : fullPrice));
 
-        fullPrice = Number.isFinite(resolvedFullPrice) ? resolvedFullPrice : 0;
+        unitPrice = Number.isFinite(resolvedUnitPrice) ? resolvedUnitPrice : 0;
+        fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
       }
 
       if (fullPrice < 0) {
         return res.status(400).json({ message: "Unable to determine booking price for this experience" });
       }
       
-      const fixedDeposit = selectedTicket?.depositPerPerson
+      const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
       const depositSchedule = getDepositSchedule({
@@ -4393,10 +4469,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate: experience.startDate,
         endDate: experience.endDate,
         balanceDueDays: experience.balanceDueDays,
-        depositAmount: fixedDeposit,
+        depositAmount: fixedDepositPerTicket,
       });
 
-      if (fixedDeposit > fullPrice) {
+      if (fixedDepositPerTicket > unitPrice) {
         return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
       }
 
@@ -4406,10 +4482,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount = 0;
       } else if (depositSchedule.available) {
         isDepositOnly = true;
-        depositAmount = fixedDeposit;
+        depositAmount = Math.round(fixedDepositPerTicket * ticketQuantity * 100) / 100;
         balanceAmount = fullPrice - depositAmount;
         balanceDueDate = depositSchedule.balanceDueDate;
-      } else if (paymentType === 'deposit' && fixedDeposit > 0) {
+      } else if (paymentType === 'deposit' && fixedDepositPerTicket > 0) {
         return res.status(400).json({
           message: "Deposit payment is not available for this event. Please pay the full ticket price.",
           reason: depositSchedule.reason,
@@ -4436,6 +4512,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             isEscrow: (isEscrow || experience.escrowEnabled)?.toString() || "false",
             isDepositPayment: isDepositOnly.toString(),
             fullPrice: fullPrice.toString(),
+            ticketSkuId: resolvedTicketSkuId || "",
+            ticketQuantity: ticketQuantity.toString(),
             depositAmount: depositAmount.toString(),
             balanceAmount: balanceAmount.toString()
           },
@@ -4459,6 +4537,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           if (paymentIntent.metadata?.userId && paymentIntent.metadata.userId !== userId) {
             return res.status(403).json({ message: "Payment does not belong to this account" });
+          }
+          if (
+            paymentIntent.metadata?.ticketSkuId
+            && paymentIntent.metadata.ticketSkuId !== (resolvedTicketSkuId || "")
+          ) {
+            return res.status(400).json({ message: "Payment does not belong to the selected ticket" });
+          }
+          if (
+            paymentIntent.metadata?.ticketQuantity
+            && paymentIntent.metadata.ticketQuantity !== ticketQuantity.toString()
+          ) {
+            return res.status(400).json({ message: "Payment quantity does not match this booking" });
           }
           if (paymentIntent.amount !== expectedAmount || paymentIntent.currency !== expectedCurrency) {
             return res.status(400).json({ message: "Payment amount or currency does not match this booking" });
@@ -4490,10 +4580,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (promoterId && fullPrice > 0) {
         // Commission is calculated on FULL PRICE, not deposit
         // DATA CONTRACT: Price comes from ticketSkus.pricePerPerson, currency from experience.currency
-        const pricePerPerson = selectedTicket?.pricePerPerson
-          ? parseFloat(selectedTicket.pricePerPerson)
-          : parseFloat(fullPrice.toString());
-        const spotsBooked = 1; // For now, 1 spot per booking (can be extended for group bookings)
+        const pricePerPerson = unitPrice;
+        const spotsBooked = ticketQuantity;
         const currency = experience.currency || 'EUR';
         
         let referralCommissionPct = 0;
@@ -4556,22 +4644,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         commissionAmount: commissionAmount?.toString() || null,
         commissionCurrency,
         commissionStatus,
-        ticketSkuId: bookingTicketSkuId || null,
+        ticketSkuId: resolvedTicketSkuId,
         ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
+        ticketQuantity,
       });
 
       // Check if this booking might trigger MVG completion
       let mvgCheckResult = null;
       const updatedBookings = await storage.getBookingsByExperience(experienceId);
-      const activeBookingCount = updatedBookings.filter((item) =>
-        !['cancelled', 'refunded', 'failed'].includes(String(item.status))
-      ).length;
+      const activeBookingCount = sumBookingTicketQuantity(
+        updatedBookings.filter((item) =>
+          !['cancelled', 'refunded', 'failed'].includes(String(item.status))
+        ),
+      );
       let notificationExperience = {
         ...experience,
         currentParticipants: activeBookingCount,
       };
       if (paymentReadyForNotifications && experience.requireMinimumParticipants && experience.mvgStatus === "pending") {
-        const currentBookings = updatedBookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+        const currentBookings = sumBookingTicketQuantity(
+          updatedBookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+        );
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
         
         if (currentBookings >= mvgMin) {
@@ -4636,8 +4729,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message = `🎉 Great news! Your booking just helped reach the minimum group size. Your payment has been confirmed and your spot is secured!`;
       } else if (experience.requireMinimumParticipants) {
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
-        const currentCount = await storage.getBookingsByExperience(experienceId).then(bookings => 
-          bookings.filter(b => b.status === "confirmed" || b.status === "pending").length
+        const currentCount = await storage.getBookingsByExperience(experienceId).then(bookings =>
+          sumBookingTicketQuantity(
+            bookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+          )
         );
         message = `Payment secured! We're at ${currentCount}/${mvgMin} participants. Your payment is held safely until we reach the minimum group size.`;
       } else {
@@ -6041,6 +6136,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // userPrice: buyer-entered amount for PWYW tickets (optional)
       const { amount, experienceId, ticketSkuId, paymentMode, userPrice } = req.body;
+      const ticketQuantity = parseRequestedTicketQuantity(
+        req.body.ticketQuantity ?? req.body.quantity,
+      );
+      if (ticketQuantity === null) {
+        return res.status(400).json({
+          message: "Ticket quantity must be a positive whole number",
+        });
+      }
 
       const experience = await storage.getExperience(experienceId);
       if (!experience) {
@@ -6055,13 +6158,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         selectedTicket = ticketSkus.find((t: any, i: number) =>
           (t.id || t.sourceRoomId || `ticket-${i}`) === ticketSkuId
         );
+        if (!selectedTicket) {
+          return res.status(400).json({ message: "Selected ticket was not found" });
+        }
       } else if (ticketSkus.length === 1) {
         selectedTicket = ticketSkus[0];
+      } else if (ticketSkus.length > 1) {
+        return res.status(400).json({ message: "Select a ticket before checkout" });
+      }
+      const resolvedTicketSkuId = selectedTicket
+        ? String(
+            selectedTicket.id
+            || selectedTicket.sourceRoomId
+            || `ticket-${ticketSkus.indexOf(selectedTicket)}`,
+          )
+        : null;
+      if (selectedTicket) {
+        const availableTickets = await getAvailableTicketQuantity(
+          experienceId,
+          resolvedTicketSkuId!,
+          selectedTicket.ticketCapacity,
+          selectedTicket.soldCount,
+        );
+        if (
+          availableTickets !== null
+          && ticketQuantity > availableTickets
+        ) {
+          return res.status(409).json({
+            message: `Only ${availableTickets} ticket(s) remain`,
+            availableTickets,
+          });
+        }
       }
 
       // ── PWYW handling ────────────────────────────────────────────────────
       const isPWYW = selectedTicket?.pricingMode === 'pwyw';
-      let fullPrice: number;
+      let unitPrice: number;
 
       if (isPWYW) {
         const minPrice = parseFloat(selectedTicket.minPrice ?? 0);
@@ -6072,23 +6204,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
             minPrice,
           });
         }
-        fullPrice = parsed;
+        unitPrice = parsed;
       } else {
-        fullPrice = selectedTicket
+        unitPrice = selectedTicket
           ? parseFloat(selectedTicket.pricePerPerson || 0)
           : ((experience as any).pricePerPerson !== undefined && (experience as any).pricePerPerson !== null
             ? parseFloat((experience as any).pricePerPerson.toString())
             : (experience.price ? parseFloat(experience.price.toString()) : parseFloat((amount || 0).toString())));
       }
 
-      if (!Number.isFinite(fullPrice) || fullPrice < 0) {
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
         return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
       }
+      const fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
 
-      const fixedDeposit = selectedTicket?.depositPerPerson
+      const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
-      if (fixedDeposit > fullPrice) {
+      if (fixedDepositPerTicket > unitPrice) {
         return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
       }
       // A per-ticket fixed deposit is the source of truth. Older builder payloads
@@ -6098,7 +6231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate: experience.startDate,
         endDate: experience.endDate,
         balanceDueDays: experience.balanceDueDays,
-        depositAmount: fixedDeposit,
+        depositAmount: fixedDepositPerTicket,
       });
       const hasDeposit = depositSchedule.available;
 
@@ -6115,8 +6248,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           depositAmount: 0,
           balanceAmount: 0,
           fullPrice: 0,
+          unitPrice: 0,
+          ticketQuantity,
           ticketName,
-          ticketSkuId: ticketSkuId || null,
+          ticketSkuId: resolvedTicketSkuId,
           pricingMode: selectedTicket?.pricingMode || 'fixed',
           suggestedPrice: selectedTicket?.suggestedPrice ?? null,
           minPrice: selectedTicket?.minPrice ?? 0,
@@ -6135,7 +6270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let isDepositPayment = false;
 
       if (hasDeposit) {
-        depositAmount = fixedDeposit;
+        depositAmount = Math.round(fixedDepositPerTicket * ticketQuantity * 100) / 100;
         balanceAmount = fullPrice - depositAmount;
         if (paymentMode === 'full') {
           chargeAmount = fullPrice;
@@ -6154,9 +6289,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         metadata: { 
           experienceId,
-          ticketSkuId: ticketSkuId || "",
+          ticketSkuId: resolvedTicketSkuId || "",
           ticketName: ticketName || "",
           pricingMode: isPWYW ? "pwyw" : "fixed",
+          ticketQuantity: ticketQuantity.toString(),
+          unitPrice: unitPrice.toString(),
           isMVGExperience: isMVGExperience?.toString() || "false",
           isDepositPayment: isDepositPayment.toString(),
           fullPrice: fullPrice.toString(),
@@ -6186,8 +6323,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         depositAmount,
         balanceAmount,
         fullPrice,
+        unitPrice,
+        ticketQuantity,
         ticketName,
-        ticketSkuId: ticketSkuId || null,
+        ticketSkuId: resolvedTicketSkuId,
         pricingMode: isPWYW ? "pwyw" : "fixed",
         suggestedPrice: selectedTicket?.suggestedPrice ?? null,
         minPrice: selectedTicket?.minPrice ?? 0,
@@ -6208,6 +6347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: error?.message,
         experienceId: req.body?.experienceId,
         ticketSkuId: req.body?.ticketSkuId,
+        ticketQuantity: req.body?.ticketQuantity ?? req.body?.quantity,
       });
       res.status(500).json({ message: "Error creating payment intent: " + error.message });
     }
@@ -6219,8 +6359,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experienceId = req.params.id;
       const bookings = await storage.getBookingsByExperience(experienceId);
       
-      const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
-      const confirmedBookings = bookings.filter(b => b.status === "confirmed").length;
+      const currentBookings = sumBookingTicketQuantity(
+        bookings.filter(b => isActiveParticipantBooking(b.status)),
+      );
+      const confirmedBookings = sumBookingTicketQuantity(
+        bookings.filter(b => b.status === "confirmed"),
+      );
       
       res.json({ currentBookings, confirmedBookings });
     } catch (error: any) {
@@ -6595,7 +6739,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const bookings = await storage.getBookingsByExperience(experienceId);
-      const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
+      const currentBookings = sumBookingTicketQuantity(
+        bookings.filter(b => isActiveParticipantBooking(b.status)),
+      );
       const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
       const now = new Date();
       const deadlinePassed = experience.mvgDeadline ? new Date(experience.mvgDeadline) <= now : false;
@@ -6650,7 +6796,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const deadlinePassed = new Date(experience.mvgDeadline) <= now;
         const bookings = await storage.getBookingsByExperience(experience.id);
-        const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
+        const currentBookings = sumBookingTicketQuantity(
+          bookings.filter(b => isActiveParticipantBooking(b.status)),
+        );
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
 
         if (deadlinePassed) {
@@ -6712,7 +6860,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fundingSummary = await Promise.all(
         approvedExperiences.map(async (experience) => {
           const bookings = await storage.getBookingsByExperience(experience.id);
-          const currentBookings = bookings.filter(b => isActiveParticipantBooking(b.status)).length;
+          const currentBookings = sumBookingTicketQuantity(
+            bookings.filter(b => isActiveParticipantBooking(b.status)),
+          );
           const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
           const fundingPercentage = mvgMin > 0
             ? Math.min(100, Math.round((currentBookings / mvgMin) * 100))
@@ -8693,9 +8843,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             id: experience.id,
             title: experience.title,
             status: experience.status,
-            bookings: active.length,
-            confirmed: (experienceBookings || []).filter((booking: any) =>
-              booking.status === "confirmed" || booking.status === "fully_paid").length,
+            bookings: sumBookingTicketQuantity(active),
+            confirmed: sumBookingTicketQuantity(
+              (experienceBookings || []).filter((booking: any) =>
+                booking.status === "confirmed" || booking.status === "fully_paid"),
+            ),
           };
         }),
       );
@@ -12802,10 +12954,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const creatorPct = parseFloat(booking.experience?.creatorPct || '85');
         const platformPct = parseFloat(booking.experience?.platformPct || '15');
         const venuePct = parseFloat(booking.experience?.venueRevenuePercentage || '0');
+        const ticketDeduction = booking.experience?.venueCompensationModel === 'fixed_fee'
+          ? calculateTicketDeduction(
+              booking.experience?.venueFixedFee,
+              booking.ticketQuantity,
+            )
+          : 0;
         totalGross += gross;
         platformFees += gross * (platformPct / 100);
-        spaceShare += gross * (venuePct / 100);
-        myShare += gross * (creatorPct / 100);
+        spaceShare += gross * (venuePct / 100) + ticketDeduction;
+        myShare += Math.max(0, gross * (creatorPct / 100) - ticketDeduction);
       }
 
       res.json({

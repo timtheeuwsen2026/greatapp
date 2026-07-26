@@ -106,6 +106,7 @@ import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } f
 import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillmentRules";
+import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
 
 function withoutSingleDayDeposits(experience: Record<string, any>): any {
   if (!isSingleDayExperience(experience)) return experience;
@@ -1784,7 +1785,9 @@ export class DatabaseStorage implements IStorage {
       .reduce((sum, b) => sum + Number(b.amount), 0);
     
     const totalFunded = confirmedAmount + pendingAmount;
-    const totalSeats = allBookings.filter(b => b.status === "confirmed" || b.status === "pending").length;
+    const totalSeats = sumBookingTicketQuantity(
+      allBookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+    );
     
     const price = Number(experience.price);
     const minimumParticipants = experience.minimumParticipants || 0;
@@ -1898,7 +1901,7 @@ export class DatabaseStorage implements IStorage {
         )
       );
     
-    const current_participants = validBookings.length;
+    const current_participants = sumBookingTicketQuantity(validBookings);
     const minimum_participants = experience.minimumParticipants || 0;
     const mvg_met = current_participants >= minimum_participants;
     

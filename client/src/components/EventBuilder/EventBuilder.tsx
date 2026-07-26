@@ -70,6 +70,7 @@ import {
   safeMultiply,
   safeAdd
 } from '@shared/pricingService';
+import { calculateTicketDeduction } from "@shared/ticketDeduction";
 
 const GREAT_PILLAR_VALUES = ["health", "sports", "wellness", "food"] as const;
 const FIXED_PLATFORM_FEE_PCT = 15;
@@ -5486,9 +5487,13 @@ function PricingStep({ form }: { form: any }) {
   const activeFlatVenueAmount = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueFixedFee;
   const venueRevenueShareAmount = safeMultiply(totalRevenue, activeRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
+  const venueTicketDeductionEstimate = calculateTicketDeduction(
+    activeFlatVenueAmount,
+    effectiveCapacity,
+  );
   const venueCommercialEstimate = (() => {
     switch (activeVenueDeal) {
-      case "fixed_fee": return activeFlatVenueAmount;
+      case "fixed_fee": return venueTicketDeductionEstimate;
       case "per_head": return venuePerHeadEstimate;
       case "minimum_spend": return venueMinimumSpend;
       case "revenue_share": return venueRevenueShareAmount;
@@ -5500,7 +5505,7 @@ function PricingStep({ form }: { form: any }) {
   })();
   const venuePayout = activeVenueDeal === 'venue_sponsored'
     ? activeFlatVenueAmount
-    : activeVenueDeal === 'fixed_fee' || activeVenueDeal === 'upfront_rental'
+    : activeVenueDeal === 'upfront_rental'
       ? -activeFlatVenueAmount
       : -venueCommercialEstimate;
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
@@ -6066,7 +6071,7 @@ function PricingStep({ form }: { form: any }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {venueCompensationModel === "fixed_fee" && (
                 <div>
-                  <Label htmlFor="venue-fixed-fee">Fixed Fee</Label>
+                  <Label htmlFor="venue-fixed-fee">Ticket Deduction per Ticket</Label>
                   <Input
                     id="venue-fixed-fee"
                     type="number"
@@ -6076,6 +6081,9 @@ function PricingStep({ form }: { form: any }) {
                     onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
                     data-testid="input-venue-fixed-fee"
                   />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Multiplied by the number of tickets sold.
+                  </p>
                 </div>
               )}
               {venueCompensationModel === "per_head" && (

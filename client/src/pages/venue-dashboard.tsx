@@ -136,7 +136,7 @@ function VenueDealFields({ form, setForm, currency }: { form: VenueOfferForm; se
       )}
       {["fixed_fee", "venue_sponsored", "upfront_rental"].includes(form.model) && (
         <div>
-          <Label>{form.model === "venue_sponsored" ? "Sponsorship Fee" : form.model === "upfront_rental" ? "Rental Fee" : "Ticket Deduction Amount"} ({currencyCode})</Label>
+          <Label>{form.model === "venue_sponsored" ? "Sponsorship Fee" : form.model === "upfront_rental" ? "Rental Fee" : "Ticket Deduction per Ticket"} ({currencyCode})</Label>
           <Input type="number" min="0.01" value={form.fixedFee} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, fixedFee: event.target.value }))} />
         </div>
       )}
@@ -1276,8 +1276,8 @@ function VenueDashboardContent() {
             {/* Amount field — changes based on selected model */}
             {offerForm.model === "fixed_fee" && (
               <div>
-                <Label>Ticket Deduction Amount ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
-                <Input type="number" min="0" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
+                <Label>Ticket Deduction per Ticket ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
+                <Input type="number" min="0" placeholder="e.g. 0.50" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
               </div>
             )}
             {offerForm.model === "revenue_share" && (

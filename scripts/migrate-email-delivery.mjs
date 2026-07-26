@@ -6,6 +6,7 @@ const { Client } = pg;
 const migrationUrls = [
   new URL("../migrations/20260717_fulfillment_archive_deal_ledger.sql", import.meta.url),
   new URL("../migrations/20260718_production_email_delivery.sql", import.meta.url),
+  new URL("../migrations/20260726_booking_ticket_quantity.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

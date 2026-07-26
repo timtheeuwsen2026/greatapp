@@ -73,6 +73,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
     mvgDeadline?: string;
     ticketSkuId?: string;
     ticketName?: string;
+    ticketQuantity: number;
     hasDeposit?: boolean;
     pricingMode?: 'fixed' | 'pwyw';
     suggestedPrice?: number | null;
@@ -132,6 +133,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             referralCode: attribution.referralCode,
             shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
+            ticketQuantity: paymentInfo?.ticketQuantity || 1,
             paymentType: paymentMode
           });
           
@@ -184,6 +186,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             referralCode: attribution.referralCode,
             shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
+            ticketQuantity: paymentInfo?.ticketQuantity || 1,
             paymentType: paymentMode
           });
           
@@ -325,6 +328,7 @@ export default function Checkout() {
     fullPrice: number;
     ticketSkuId?: string;
     ticketName?: string;
+    ticketQuantity: number;
   } | null>(null);
   const [freeRsvpSubmitting, setFreeRsvpSubmitting] = useState(false);
   const [freeRsvpError, setFreeRsvpError] = useState<string | null>(null);
@@ -339,6 +343,7 @@ export default function Checkout() {
     mvgDeadline?: string;
     ticketSkuId?: string;
     ticketName?: string;
+    ticketQuantity: number;
     hasDeposit?: boolean;
     pricingMode?: 'fixed' | 'pwyw';
     suggestedPrice?: number | null;
@@ -355,6 +360,10 @@ export default function Checkout() {
   
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const ticketSkuId = urlParams.get('ticketSkuId');
+  const requestedTicketQuantity = Number(urlParams.get('quantity') || 1);
+  const ticketQuantity = Number.isInteger(requestedTicketQuantity) && requestedTicketQuantity > 0
+    ? requestedTicketQuantity
+    : 1;
   const initialPaymentMode = urlParams.get('paymentMode') as 'deposit' | 'full' | null;
   
   const [paymentMode, setPaymentMode] = useState<'deposit' | 'full'>(initialPaymentMode || 'deposit');
@@ -380,6 +389,7 @@ export default function Checkout() {
         amount: experience.pricePerPerson || experience.price,
         experienceId: experienceId,
         ticketSkuId: ticketSkuId || undefined,
+        ticketQuantity,
         paymentMode: mode,
       };
       if (userPrice !== undefined) body.userPrice = userPrice;
@@ -389,8 +399,9 @@ export default function Checkout() {
       if (data.freeRsvp) {
         setFreeRsvpInfo({
           fullPrice: 0,
-          ticketSkuId: ticketSkuId || undefined,
+          ticketSkuId: data.ticketSkuId || ticketSkuId || undefined,
           ticketName: data.ticketName,
+          ticketQuantity: data.ticketQuantity || ticketQuantity,
         });
         setPaymentInfo({
           isMVGExperience: data.isMVGExperience || false,
@@ -400,8 +411,9 @@ export default function Checkout() {
           fullPrice: 0,
           mvgMin: data.mvgMin,
           mvgDeadline: data.mvgDeadline,
-          ticketSkuId: ticketSkuId || undefined,
+          ticketSkuId: data.ticketSkuId || ticketSkuId || undefined,
           ticketName: data.ticketName,
+          ticketQuantity: data.ticketQuantity || ticketQuantity,
           hasDeposit: false,
           pricingMode: data.pricingMode || 'fixed',
           suggestedPrice: data.suggestedPrice ?? null,
@@ -425,8 +437,9 @@ export default function Checkout() {
         fullPrice: data.fullPrice || experience.pricePerPerson || experience.price,
         mvgMin: data.mvgMin,
         mvgDeadline: data.mvgDeadline,
-        ticketSkuId: ticketSkuId || undefined,
+        ticketSkuId: data.ticketSkuId || ticketSkuId || undefined,
         ticketName: data.ticketName,
+        ticketQuantity: data.ticketQuantity || ticketQuantity,
         hasDeposit: data.hasDeposit || false,
         pricingMode: data.pricingMode || 'fixed',
         suggestedPrice: data.suggestedPrice ?? null,
@@ -447,7 +460,7 @@ export default function Checkout() {
     } finally {
       setPaymentIntentLoading(false);
     }
-  }, [experience, experienceId, ticketSkuId, toast]);
+  }, [experience, experienceId, ticketSkuId, ticketQuantity, toast]);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -520,6 +533,7 @@ export default function Checkout() {
         referralCode: attribution.referralCode,
         shareToken: attribution.shareToken,
         ticketSkuId: freeRsvpInfo?.ticketSkuId,
+        ticketQuantity: freeRsvpInfo?.ticketQuantity || ticketQuantity,
         paymentType: 'full'
       });
       const data = await response.json();
@@ -549,7 +563,15 @@ export default function Checkout() {
     } finally {
       setFreeRsvpSubmitting(false);
     }
-  }, [experience, experienceId, freeRsvpInfo?.ticketSkuId, freeRsvpSubmitting, toast]);
+  }, [
+    experience,
+    experienceId,
+    freeRsvpInfo?.ticketSkuId,
+    freeRsvpInfo?.ticketQuantity,
+    freeRsvpSubmitting,
+    ticketQuantity,
+    toast,
+  ]);
 
   // Free RSVP: intentionally NOT auto-submitted so the user can see the bypass screen
   // and consciously click "Confirm RSVP" before we create the booking.
@@ -842,6 +864,12 @@ export default function Checkout() {
                       <span className="font-medium text-gray-900">{paymentInfo.ticketName}</span>
                     </div>
                   )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Quantity</span>
+                    <span className="font-medium text-gray-900">
+                      {paymentInfo?.ticketQuantity || ticketQuantity}
+                    </span>
+                  </div>
                   
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Full Price</span>

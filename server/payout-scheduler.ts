@@ -28,6 +28,10 @@ import {
   resolvePayoutGrossCents,
   sumBookingPayoutGrossCents,
 } from "./payoutRules";
+import {
+  calculateTicketDeductionCents,
+  sumBookingTicketQuantity,
+} from "@shared/ticketDeduction";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
@@ -139,6 +143,7 @@ async function executeExperiencePayout(
     );
 
   const bookingGrossCents = sumBookingPayoutGrossCents(confirmedBookings);
+  const ticketQuantity = sumBookingTicketQuantity(confirmedBookings);
 
   // For B2B upfront deals (venue_sponsored, upfront_rental) there are no attendee
   // bookings — use the preset amount stored when the deal payment was confirmed.
@@ -168,7 +173,7 @@ async function executeExperiencePayout(
   // If no recipients configured, fall back to the experience's pct fields
   const effectiveRecipients = recipients.length > 0
     ? recipients
-    : buildDefaultRecipients(experience, platformFeePct);
+    : await buildDefaultRecipients(experience, platformFeePct);
 
   const currency = (experience.currency || "eur").toLowerCase();
   const transferIds: Record<string, string> = {};
@@ -217,15 +222,53 @@ async function executeExperiencePayout(
     ? calculateSplitAmount(platformRecipient, grossAmountCents, grossAmountCents)
     : Math.round(grossAmountCents * (platformFeePct / 100));
 
-  if (platformFeeAmountCents + promoterReserveCents > grossAmountCents) {
-    throw new Error("Platform fee and promoter commissions exceed available event funds");
+  const flatFeeAmounts = new Map<MinimalRecipient, number>();
+  let flatFeeReserveCents = 0;
+  for (const recipient of effectiveRecipients) {
+    if (
+      !recipient.isActive
+      || recipient.recipientType === "platform"
+      || recipient.splitMode !== "flat_fee"
+    ) {
+      continue;
+    }
+
+    const appliesPerTicket = recipient.recipientType === "venue"
+      && experience.venueCompensationModel === "fixed_fee";
+    const amount = calculateTicketDeductionCents(
+      recipient.splitValue,
+      appliesPerTicket ? ticketQuantity : 1,
+    );
+    flatFeeAmounts.set(recipient, amount);
+    flatFeeReserveCents += amount;
   }
 
-  let remainingCents = grossAmountCents - platformFeeAmountCents - promoterReserveCents;
+  if (
+    platformFeeAmountCents
+    + promoterReserveCents
+    + flatFeeReserveCents
+    > grossAmountCents
+  ) {
+    throw new Error(
+      "Platform fee, ticket deductions, and promoter commissions exceed available event funds",
+    );
+  }
+
+  let remainingCents = grossAmountCents
+    - platformFeeAmountCents
+    - promoterReserveCents
+    - flatFeeReserveCents;
+  let flatFeeReserveRemainingCents = flatFeeReserveCents;
   let promoterReserveRemainingCents = promoterReserveCents;
   console.log(
     `[Payout Scheduler] Platform fee: ${platformFeeAmountCents / 100} ${currency.toUpperCase()}`
   );
+  if (flatFeeReserveCents > 0) {
+    console.log(
+      `[Payout Scheduler] Ticket deductions: ${flatFeeReserveCents / 100} `
+      + `${currency.toUpperCase()} across ${ticketQuantity} ticket(s)`,
+    );
+  }
 
   for (const recipient of effectiveRecipients) {
     if (!recipient.isActive) continue;
@@ -242,13 +285,22 @@ async function executeExperiencePayout(
       continue;
     }
 
-    let transferAmountCents = calculateSplitAmount(
-      recipient,
-      grossAmountCents,
-      remainingCents
-    );
+    const isReservedFlatFee = flatFeeAmounts.has(recipient);
+    let transferAmountCents = isReservedFlatFee
+      ? flatFeeAmounts.get(recipient) ?? 0
+      : calculateSplitAmount(
+          recipient,
+          grossAmountCents,
+          remainingCents,
+        );
 
-    transferAmountCents = Math.min(transferAmountCents, Math.max(0, remainingCents));
+    transferAmountCents = Math.min(
+      transferAmountCents,
+      Math.max(
+        0,
+        isReservedFlatFee ? flatFeeReserveRemainingCents : remainingCents,
+      ),
+    );
 
     if (transferAmountCents <= 0) continue;
 
@@ -269,7 +321,11 @@ async function executeExperiencePayout(
       });
 
       transferIds[recipient.recipientType] = transfer.id;
-      remainingCents -= transferAmountCents;
+      if (isReservedFlatFee) {
+        flatFeeReserveRemainingCents -= transferAmountCents;
+      } else {
+        remainingCents -= transferAmountCents;
+      }
       if (recipient.userId) {
         const user = await storage.getUser(recipient.userId);
         if (user?.email) {
@@ -387,10 +443,10 @@ function calculateSplitAmount(
  * the experience's own pct columns (creator_pct, venue_revenue_share_pct, etc).
  * This ensures backward compatibility with events created before the payment engine.
  */
-function buildDefaultRecipients(
+async function buildDefaultRecipients(
   experience: any,
   platformFeePct: number
-): MinimalRecipient[] {
+): Promise<MinimalRecipient[]> {
   const creatorPct = parseFloat(experience.creatorPct?.toString() ?? String(100 - platformFeePct));
   const venuePct = parseFloat(experience.venueRevenueSharePct?.toString() ?? "0");
 
@@ -407,6 +463,27 @@ function buildDefaultRecipients(
       isActive: true,
     },
   ];
+
+  const venueFixedFee = parseFloat(experience.venueFixedFee?.toString() ?? "0");
+  if (
+    experience.venueCompensationModel === "fixed_fee"
+    && venueFixedFee > 0
+    && experience.linkedVenueId
+  ) {
+    const venue = await storage.getVenue(experience.linkedVenueId);
+    const venueOwnerProfile = venue?.createdBy
+      ? await storage.getCreatorProfile(venue.createdBy)
+      : undefined;
+
+    recipients.push({
+      recipientType: "venue",
+      stripeAccountId: venueOwnerProfile?.stripeAccountId ?? null,
+      userId: venue?.createdBy ?? null,
+      splitMode: "flat_fee",
+      splitValue: String(venueFixedFee),
+      isActive: true,
+    });
+  }
 
   if (experience.stripeConnectAccountId) {
     recipients.push({

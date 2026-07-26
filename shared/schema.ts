@@ -928,6 +928,7 @@ export const bookings = pgTable("bookings", {
 
   ticketSkuId: varchar("ticket_sku_id"),
   ticketName: varchar("ticket_name"),
+  ticketQuantity: integer("ticket_quantity").notNull().default(1),
   bookingDate: timestamp("booking_date").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });

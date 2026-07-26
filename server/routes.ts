@@ -7173,12 +7173,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : '/creator-profile-setup';
 
       // First, create or get existing Stripe Connect account
-      let account;
+      let account: Stripe.Account | null = null;
       const existingProfile = await storage.getCreatorProfile(userId);
 
       if (existingProfile?.stripeAccountId) {
-        account = await stripe.accounts.retrieve(existingProfile.stripeAccountId);
-      } else {
+        try {
+          account = await stripe.accounts.retrieve(existingProfile.stripeAccountId);
+        } catch (err: any) {
+          // A stored id from the other Stripe mode (test vs live) no longer
+          // resolves after a key switch; create a fresh account instead of failing.
+          if (err?.code === 'resource_missing' || err?.code === 'account_invalid') {
+            console.warn(`Stripe account ${existingProfile.stripeAccountId} for user ${userId} not found in current mode; creating a new one.`);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      if (!account) {
         account = await stripe.accounts.create({
           type: 'express',
           email: userEmail,
@@ -7203,7 +7215,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ url: accountLink.url });
     } catch (error: any) {
       console.error("Error creating Stripe Connect URL:", error);
-      res.status(500).json({ message: "Error creating Stripe Connect URL: " + error.message });
+      // Platform-level Connect setup problems need a dashboard action, not a retry.
+      const msg: string = error?.message || 'Unknown error';
+      if (msg.includes('signed up for Connect') || msg.includes('platform-profile') || msg.includes('responsibilities of managing losses')) {
+        return res.status(500).json({
+          message: "Stripe Connect isn't fully activated on the platform's live account yet. An admin needs to finish Connect setup at dashboard.stripe.com (Connect → Get started / Platform profile).",
+        });
+      }
+      res.status(500).json({ message: "Error creating Stripe Connect URL: " + msg });
     }
   });
 
@@ -10986,18 +11005,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Trigger Stripe Connect setup
           if (data?.initializeStripe) {
             const user = await storage.getUser(userId);
-            let account;
+            let account: Stripe.Account | null = null;
             const existingProfile = await storage.getCreatorProfileByUserId(userId);
-            
+
             if (existingProfile?.stripeAccountId) {
-              account = await stripe.accounts.retrieve(existingProfile.stripeAccountId);
-            } else {
+              try {
+                account = await stripe.accounts.retrieve(existingProfile.stripeAccountId);
+              } catch (err: any) {
+                // Stored id from the other Stripe mode (test vs live); recreate below.
+                if (err?.code === 'resource_missing' || err?.code === 'account_invalid') {
+                  console.warn(`Stripe account ${existingProfile.stripeAccountId} for user ${userId} not found in current mode; creating a new one.`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            if (!account) {
               account = await stripe.accounts.create({
                 type: 'express',
                 email: user?.email || undefined,
                 metadata: { userId: userId }
               });
-              
+
               // Update creator profile with Stripe account ID
               await storage.updateCreatorProfileStripe(userId, account.id);
             }

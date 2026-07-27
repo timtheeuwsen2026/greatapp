@@ -358,12 +358,22 @@ export function SharedPhotoUpload({
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFiles(e.target.files);
+    const input = e.currentTarget;
+    if (input.files && input.files.length > 0) {
+      // Clear the native input after processing so a failed upload can be
+      // retried with the same file.
+      void handleFiles(input.files).finally(() => {
+        input.value = '';
+      });
     }
   };
 
-  const handleButtonClick = () => {
+  const handleButtonClick = (event?: React.SyntheticEvent) => {
+    // The uploader is commonly rendered inside a larger form. Prevent its
+    // trigger click from bubbling into form controls or firing twice when the
+    // default button is nested inside the clickable drop zone.
+    event?.preventDefault();
+    event?.stopPropagation();
     fileInputRef.current?.click();
   };
 

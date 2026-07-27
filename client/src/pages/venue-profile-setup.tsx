@@ -1330,14 +1330,7 @@ export default function VenueProfileSetup() {
                             />
                           ) : (
                             <SharedPhotoUpload
-                              uploadType="s3"
                               onUploadComplete={field.onChange}
-                              getUploadParameters={async () => {
-                                const response = await apiRequest('POST', '/api/objects/upload');
-                                if (!response.ok) throw new Error('Failed to get upload URL');
-                                const { uploadURL } = await response.json();
-                                return { method: 'PUT' as const, url: uploadURL };
-                              }}
                               maxFileSize={10485760}
                               multiple={false}
                               className="min-h-[200px]"
@@ -1392,16 +1385,9 @@ export default function VenueProfileSetup() {
                           )}
                           
                           <SharedPhotoUpload
-                            uploadType="s3"
                             onUploadComplete={(url: string) => {
                               const currentGallery = field.value || [];
                               field.onChange([...currentGallery, url]);
-                            }}
-                            getUploadParameters={async () => {
-                              const response = await apiRequest('POST', '/api/objects/upload');
-                              if (!response.ok) throw new Error('Failed to get upload URL');
-                              const { uploadURL } = await response.json();
-                              return { method: 'PUT' as const, url: uploadURL };
                             }}
                             maxFileSize={10485760}
                             multiple={false}

@@ -5,7 +5,7 @@ import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { normalizeImageUrl } from "@/lib/utils";
+import { normalizeImageUrl, getVenueImage } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -1576,6 +1576,7 @@ export default function AdminDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-16">Photo</TableHead>
                         <TableHead>Name</TableHead>
                         <TableHead>Owner</TableHead>
                         <TableHead>Status</TableHead>
@@ -1591,6 +1592,20 @@ export default function AdminDashboard() {
                     <TableBody>
                       {allVenues.map((venue) => (
                         <TableRow key={venue.id} data-testid={`venue-row-${venue.id}`}>
+                          <TableCell>
+                            {getVenueImage(venue) ? (
+                              <img
+                                src={getVenueImage(venue) || ''}
+                                alt={venue.name}
+                                className="h-10 w-14 rounded object-cover"
+                                data-testid={`venue-photo-${venue.id}`}
+                              />
+                            ) : (
+                              <div className="flex h-10 w-14 items-center justify-center rounded bg-gray-100 dark:bg-gray-800">
+                                <Building className="h-4 w-4 text-gray-400" />
+                              </div>
+                            )}
+                          </TableCell>
                           <TableCell className="font-medium" data-testid={`venue-name-${venue.id}`}>
                             {venue.name}
                           </TableCell>

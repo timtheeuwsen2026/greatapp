@@ -62,8 +62,29 @@ export function getCoverImage(
       return normalizeImageUrl(firstImage);
     }
   }
-  
+
   return null;
+}
+
+/**
+ * Picks the image to show for a venue.
+ *
+ * The Venue Builder's photo step writes coverImageUrl, but dashboards used to
+ * read logoUrl — a field the builder never fills — so every venue rendered as a
+ * blank tile. Order of preference: cover photo, then the first gallery photo,
+ * then the logo.
+ */
+export function getVenueImage(venue: {
+  coverImageUrl?: string | null;
+  galleryImages?: string[] | null;
+  gallery?: string[] | null;
+  logoUrl?: string | null;
+} | null | undefined): string | null {
+  if (!venue) return null;
+  return (
+    getCoverImage(venue.coverImageUrl, venue.galleryImages ?? venue.gallery)
+    ?? (venue.logoUrl && venue.logoUrl.trim() !== '' ? normalizeImageUrl(venue.logoUrl) : null)
+  );
 }
 
 /**

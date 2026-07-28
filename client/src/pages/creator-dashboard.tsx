@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { getCoverImage, normalizeImageUrl } from "@/lib/utils";
+import { getCoverImage, getVenueImage, normalizeImageUrl } from "@/lib/utils";
 import {
   Plus,
   DollarSign,
@@ -1360,9 +1360,9 @@ function CreatorDashboardContent() {
                 {(venues as any[]).map((venue: any) => (
                   <Card key={venue.id} className="overflow-hidden" data-testid={`card-venue-${venue.id}`}>
                     <div className="aspect-video bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                      {venue.logoUrl ? (
-                        <img 
-                          src={normalizeImageUrl(venue.logoUrl) || ''} 
+                      {getVenueImage(venue) ? (
+                        <img
+                          src={getVenueImage(venue) || ''}
                           alt={venue.name}
                           className="w-full h-full object-cover"
                           data-testid={`img-venue-logo-${venue.id}`}

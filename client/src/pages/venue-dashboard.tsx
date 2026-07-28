@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
+import { getVenueImage } from "@/lib/utils";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Breadcrumb from "@/components/Breadcrumb";
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
@@ -45,7 +46,7 @@ import {
   COUNTER_SENT_STATUS_LABEL,
   isCounterAwaitingCreator,
 } from "@/lib/venueOfferStatus";
-import { getVenueDealOptions, getVenueDealTermsKey, venueDealNeedsValue } from "@shared/venueDealModels";
+import { getVenueDealOptions, getVenueDealTermsKey, getVenueDealLabel, venueDealNeedsValue } from "@shared/venueDealModels";
 import { isSingleDayExperience } from "@shared/depositRules";
 
 type VenueOfferForm = {
@@ -85,6 +86,26 @@ function venueOfferFormFromContract(contract: any, venueId: string): VenueOfferF
     revenueSharePct: terms.revenueSharePct != null ? String(terms.revenueSharePct) : "",
     accessFee: terms.accessFee != null ? String(terms.accessFee) : "",
   };
+}
+
+function formatEventDate(value: string | Date | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+
+// How long the space is committed for — the thing a venue is really agreeing to.
+function describeEventDuration(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
+  if (!start) return "—";
+  const startDate = new Date(start);
+  const endDate = end ? new Date(end) : startDate;
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return "—";
+
+  const days = Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
+  if (days <= 0) return "Single day";
+  return `${days} night${days === 1 ? "" : "s"} (${days + 1} days)`;
 }
 
 // Each model keeps its number under its own terms key; the vocabulary owns
@@ -641,13 +662,6 @@ function VenueDashboardContent() {
                     hotel_conference: "Hotel / Conference Room",
                     other: "Other",
                   };
-                  const targetDealLabels: Record<string, string> = {
-                    revenue_share: "Revenue Split",
-                    fixed_fee: "Ticket Deduction",
-                    access_only: "Access-Only",
-                    venue_sponsored: "Venue Sponsorship",
-                    upfront_rental: "Upfront Rental",
-                  };
                   return openEvents.map((event: any) => (
                     <Card key={event.id} className="border-blue-200 dark:border-blue-800">
                       <CardContent className="p-5">
@@ -719,7 +733,7 @@ function VenueDashboardContent() {
                               <div className="flex items-center gap-2 text-sm">
                                 <span className="text-gray-500">Preferred deal:</span>
                                 <Badge className="bg-green-100 text-green-800 border-green-300">
-                                  {targetDealLabels[event.venueTargetDeal] ?? event.venueTargetDeal}
+                                  {getVenueDealLabel(event.venueTargetDeal)}
                                 </Badge>
                               </div>
                             )}
@@ -955,11 +969,14 @@ function VenueDashboardContent() {
                 {venues.map((venue: any) => (
                   <Card key={venue.id} className="overflow-hidden">
                     <div className="aspect-video bg-gray-200 dark:bg-gray-700">
-                      {venue.images?.length > 0 ? (
-                        <img 
-                          src={venue.images[0]} 
+                      {/* venue.images does not exist on the venues table — the
+                          builder saves coverImageUrl and galleryImages. */}
+                      {getVenueImage(venue) ? (
+                        <img
+                          src={getVenueImage(venue) || ''}
                           alt={venue.name}
                           className="w-full h-full object-cover"
+                          data-testid={`img-venue-${venue.id}`}
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
@@ -1255,6 +1272,47 @@ function VenueDashboardContent() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
+            {/* The dates are the first thing a venue needs — they cannot judge a
+                deal without knowing which days their space would be committed. */}
+            <div className="grid grid-cols-2 gap-3 rounded-md border bg-gray-50 p-3 text-sm dark:bg-gray-900" data-testid="offer-modal-event-summary">
+              <div>
+                <p className="text-xs text-gray-500">Start date</p>
+                <p className="font-medium flex items-center gap-1" data-testid="offer-modal-start-date">
+                  <Calendar className="w-3 h-3 text-gray-400" />
+                  {offerModal.event?.startDate ? formatEventDate(offerModal.event.startDate) : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">End date</p>
+                <p className="font-medium flex items-center gap-1" data-testid="offer-modal-end-date">
+                  <Calendar className="w-3 h-3 text-gray-400" />
+                  {offerModal.event?.endDate ? formatEventDate(offerModal.event.endDate) : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Nights held</p>
+                <p className="font-medium" data-testid="offer-modal-duration">
+                  {describeEventDuration(offerModal.event?.startDate, offerModal.event?.endDate)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Event size</p>
+                <p className="font-medium flex items-center gap-1">
+                  <Users className="w-3 h-3 text-gray-400" />
+                  {offerModal.event?.maxParticipants ? `${offerModal.event.maxParticipants} people` : "—"}
+                </p>
+              </div>
+              {offerModal.event?.location && (
+                <div className="col-span-2">
+                  <p className="text-xs text-gray-500">Location</p>
+                  <p className="font-medium flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-gray-400" />
+                    {offerModal.event.location}
+                  </p>
+                </div>
+              )}
+            </div>
+
             {offerModal.event?.requestedContract && (
               <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/30">
                 <p className="mb-2 text-xs font-semibold text-blue-800 dark:text-blue-200">Creator's requested terms</p>
@@ -1282,67 +1340,28 @@ function VenueDashboardContent() {
               </div>
             )}
 
-            {/* Commercial Model selector */}
-            <div>
-              <Label>Commercial Model</Label>
-              <Select value={offerForm.model} onValueChange={(v) => setOfferForm(f => ({ ...f, model: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="revenue_share">Revenue Split</SelectItem>
-                  <SelectItem value="fixed_fee">Ticket Deduction</SelectItem>
-                  <SelectItem value="per_head">Per Head</SelectItem>
-                  <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
-                  <SelectItem value="access_only">Access-Only</SelectItem>
-                  <SelectItem value="venue_sponsored">Venue Sponsorship</SelectItem>
-                  <SelectItem value="upfront_rental">Upfront Rental</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Same shared vocabulary as the Event Builder, filtered to the
+                deals that make sense for this event's length. */}
+            <VenueDealFields
+              form={offerForm}
+              setForm={setOfferForm}
+              currency={offerModal.event?.currency}
+              isDaytime={isSingleDayExperience({
+                experienceType: offerModal.event?.experienceType,
+                startDate: offerModal.event?.startDate,
+                endDate: offerModal.event?.endDate,
+              })}
+            />
 
-            {/* Amount field — changes based on selected model */}
-            {offerForm.model === "fixed_fee" && (
-              <div>
-                <Label>Ticket Deduction per Ticket ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
-                <Input type="number" min="0" placeholder="e.g. 0.50" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "revenue_share" && (
-              <div>
-                <Label>Revenue Share (%)</Label>
-                <Input type="number" min="0" max="100" placeholder="e.g. 20" value={offerForm.revenueSharePct} onChange={e => setOfferForm(f => ({ ...f, revenueSharePct: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "per_head" && (
-              <div>
-                <Label>Per-Head Amount ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
-                <Input type="number" min="0.01" value={offerForm.perHeadAmount} onChange={e => setOfferForm(f => ({ ...f, perHeadAmount: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "minimum_spend" && (
-              <div>
-                <Label>Minimum Spend ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
-                <Input type="number" min="0.01" value={offerForm.minimumSpend} onChange={e => setOfferForm(f => ({ ...f, minimumSpend: e.target.value }))} />
-              </div>
-            )}
-            {offerForm.model === "access_only" && (
-              <div>
-                <Label>Access Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()})</Label>
-                <Input type="number" min="0" value={offerForm.accessFee} onChange={e => setOfferForm(f => ({ ...f, accessFee: e.target.value }))} />
-              </div>
-            )}
             {offerForm.model === "venue_sponsored" && (
-              <div>
-                <Label>Sponsorship Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()}) — amount you pay to the creator</Label>
-                <Input type="number" min="1" placeholder="e.g. 200" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
-                <p className="text-xs text-gray-500 mt-1">You will be charged this amount via Stripe when you accept. Paid to the creator 7 days after the event.</p>
-              </div>
+              <p className="text-xs text-gray-500">
+                You will be charged this amount via Stripe when the creator accepts. It reaches them 7 days after the event.
+              </p>
             )}
             {offerForm.model === "upfront_rental" && (
-              <div>
-                <Label>Rental Fee ({String(offerModal.event?.currency || "EUR").toUpperCase()}) — amount the creator pays you upfront</Label>
-                <Input type="number" min="1" placeholder="e.g. 500" value={offerForm.fixedFee} onChange={e => setOfferForm(f => ({ ...f, fixedFee: e.target.value }))} />
-                <p className="text-xs text-gray-500 mt-1">The creator will be charged this rental fee via Stripe the moment they accept. You receive payment 7 days after the event.</p>
-              </div>
+              <p className="text-xs text-gray-500">
+                The creator is charged this rental fee the moment they accept. You receive it 7 days after the event.
+              </p>
             )}
 
             {/* Optional message */}

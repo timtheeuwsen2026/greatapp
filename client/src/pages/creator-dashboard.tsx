@@ -423,8 +423,19 @@ function CreatorDashboardContent() {
     retry: false,
   });
 
-  // Task 4 — Creator Ledger (real split-based earnings)
-  const { data: ledger = { totalSales: 0, myShare: 0, platformFees: 0, spaceShare: 0, bookingsCount: 0 } } = useQuery({
+  // Task 4 — Creator Ledger. Same server-side calculation as /api/creator/earnings,
+  // so the strip below and the revenue cards can never disagree.
+  const { data: ledger = {
+    currency: 'eur',
+    totalSales: 0,
+    collected: 0,
+    outstandingBalance: 0,
+    myShare: 0,
+    platformFees: 0,
+    platformFeePct: 0,
+    spaceShare: 0,
+    bookingsCount: 0,
+  } } = useQuery({
     queryKey: ["/api/creator/ledger"],
     enabled: isAuthenticated && !!creatorProfile,
     retry: false,
@@ -678,6 +689,8 @@ function CreatorDashboardContent() {
   const typedAnalytics = analytics as any;
   const typedEarnings = earnings as any;
   const typedRevenueAnalytics = revenueAnalytics as any;
+  // Amounts arrive in the event's own currency, in major units.
+  const earningsCurrency = typedEarnings.summary?.currency || ledger.currency || 'eur';
 
   const isLoading = authLoading || profileLoading || onboardingLoading || experiencesLoading || pendingExperiencesLoading || analyticsLoading || earningsLoading || revenueLoading || draftsLoading;
 
@@ -762,22 +775,30 @@ function CreatorDashboardContent() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 p-4 rounded-xl bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950 border border-green-200 dark:border-green-800">
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Sales</p>
-            <p className="text-2xl font-bold text-gray-900 dark:text-white">${ledger.totalSales?.toFixed(2)}</p>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="ledger-total-sales">
+              {formatCurrency(ledger.totalSales || 0, ledger.currency)}
+            </p>
             <p className="text-xs text-gray-500">{ledger.bookingsCount} booking{ledger.bookingsCount !== 1 ? 's' : ''}</p>
           </div>
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">My Share</p>
-            <p className="text-2xl font-bold text-green-600">${ledger.myShare?.toFixed(2)}</p>
-            <p className="text-xs text-gray-500">Based on accepted creatorPct</p>
+            <p className="text-2xl font-bold text-green-600" data-testid="ledger-my-share">
+              {formatCurrency(ledger.myShare || 0, ledger.currency)}
+            </p>
+            <p className="text-xs text-gray-500">After platform and venue splits</p>
           </div>
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Platform Fees</p>
-            <p className="text-2xl font-bold text-gray-600">${ledger.platformFees?.toFixed(2)}</p>
-            <p className="text-xs text-gray-500">15% fixed fee</p>
+            <p className="text-2xl font-bold text-gray-600" data-testid="ledger-platform-fees">
+              {formatCurrency(ledger.platformFees || 0, ledger.currency)}
+            </p>
+            <p className="text-xs text-gray-500">{ledger.platformFeePct ?? 0}% platform fee</p>
           </div>
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Space Share</p>
-            <p className="text-2xl font-bold text-blue-600">${ledger.spaceShare?.toFixed(2)}</p>
+            <p className="text-2xl font-bold text-blue-600" data-testid="ledger-space-share">
+              {formatCurrency(ledger.spaceShare || 0, ledger.currency)}
+            </p>
             <p className="text-xs text-gray-500">Paid to venue partners</p>
           </div>
         </div>
@@ -790,7 +811,7 @@ function CreatorDashboardContent() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Net Earnings</p>
                   <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalEarnings || 0) / 100, 'EUR')}
+                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
                   </p>
                   <p className="text-xs text-gray-500">After all fees</p>
                 </div>
@@ -805,7 +826,7 @@ function CreatorDashboardContent() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Gross Revenue</p>
                   <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalGross || 0) / 100, 'EUR')}
+                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalGross || 0, earningsCurrency)}
                   </p>
                   <p className="text-xs text-gray-500">{typedEarnings.summary?.bookingsCount || 0} bookings</p>
                 </div>
@@ -820,9 +841,11 @@ function CreatorDashboardContent() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Platform Fees</p>
                   <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalPlatformFees || 0) / 100, 'EUR')}
+                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalPlatformFees || 0, earningsCurrency)}
                   </p>
-                  <p className="text-xs text-gray-500">15% platform fee</p>
+                  <p className="text-xs text-gray-500">
+                    {typedEarnings.summary?.effectivePlatformFeePct ?? ledger.platformFeePct ?? 0}% platform fee
+                  </p>
                 </div>
                 <Calendar className="w-8 h-8 text-purple-500" />
               </div>
@@ -835,7 +858,7 @@ function CreatorDashboardContent() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Avg. Booking</p>
                   <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.averageBookingValue || 0) / 100, 'EUR')}
+                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.averageBookingValue || 0, earningsCurrency)}
                   </p>
                   <p className="text-xs text-gray-500">Per booking value</p>
                 </div>
@@ -1996,30 +2019,30 @@ function CreatorDashboardContent() {
                     <div className="flex justify-between items-center p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
                       <span className="font-medium">Gross Revenue</span>
                       <span className="text-xl font-bold text-blue-600">
-                        {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalGross || 0) / 100, 'EUR')}
+                        {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalGross || 0, earningsCurrency)}
                       </span>
                     </div>
                     
                     <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
                       <span>Platform Fee</span>
                       <span className="font-semibold text-red-600">
-                        -{earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalPlatformFees || 0) / 100, 'EUR')}
+                        -{earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalPlatformFees || 0, earningsCurrency)}
                       </span>
                     </div>
 
                     <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Stripe Processing Fee</span>
+                      <span>Venue Share</span>
                       <span className="font-semibold text-red-600">
-                        -{earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalStripeFees || 0) / 100, 'EUR')}
+                        -{earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalSpaceShare || 0, earningsCurrency)}
                       </span>
                     </div>
-                    
+
                     <hr className="my-4" />
                     
                     <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
                       <span className="font-semibold text-lg">Net Earnings</span>
                       <span className="text-2xl font-bold text-green-600">
-                        {earningsLoading ? '...' : formatCurrency((typedEarnings.summary?.totalEarnings || 0) / 100, 'EUR')}
+                        {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
                       </span>
                     </div>
                   </div>

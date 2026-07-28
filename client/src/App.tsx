@@ -66,6 +66,7 @@ import { PersistentChatDrawer } from "@/components/PersistentChatDrawer";
 import EmailPreferencesPage from "@/pages/email-preferences";
 import UnsubscribePage from "@/pages/unsubscribe";
 import VenueListingTypeGate, { VenueProfileSetupRoute } from "@/components/VenueListingTypeGate";
+import VenueInvitePage from "@/pages/venue-invite";
 
 // Keep routed component types at module scope. Defining them inside Router makes
 // React remount the active page whenever Router rerenders (for example, when the
@@ -122,6 +123,8 @@ function Router() {
       <Route path="/create-trip" component={RedirectToEventBuilder} />
       <Route path="/trips" component={RedirectToExperiences} />
       <Route path="/venues/new" component={VenueListingTypeGate} />
+      {/* Private claim link emailed by "Invite External Venue" */}
+      <Route path="/venue-invite/:token" component={VenueInvitePage} />
 
       <Route path="/experiences" component={Experiences} />
       <Route path="/experience/:id" component={ExperienceDetails} />

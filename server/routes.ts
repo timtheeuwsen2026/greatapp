@@ -3,6 +3,7 @@ import express from "express";
 import { createServer, type Server } from "http";
 import fs from "fs";
 import path from "path";
+import { randomBytes } from "crypto";
 import Stripe from "stripe";
 import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
@@ -52,6 +53,8 @@ import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules"
 import { scheduleCommunityHubUnreadJob, scheduleCreatorHubNudgeJob } from "./emailJobScheduler";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { registerBookingFinalizer } from "./bookingFinalizer";
+import { summarizeCreatorEarnings } from "./creatorEarnings";
+import { persistInlineImageFields } from "./inlineImages";
 import { isActivePostCheckoutBooking } from "./referralBookingRules";
 import {
   getEmailPreferenceSettings,
@@ -240,6 +243,35 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
       softHoldDurationHours: Number(input.softHoldDurationHours ?? 0) || 0,
     },
   };
+}
+
+/**
+ * Creates (or refreshes) the tokenised invite behind an "Invite External Venue"
+ * email. Returns undefined when the creator left the venue email blank.
+ */
+async function createVenueInviteForExperience(experience: any) {
+  const email = String(experience?.manualVenueEmail || '').trim();
+  if (!email) return undefined;
+
+  const INVITE_TTL_DAYS = 60;
+  return storage.upsertVenueInvite({
+    token: randomBytes(24).toString('base64url'),
+    experienceId: experience.id,
+    creatorId: experience.creatorId,
+    email,
+    contactName: experience.manualVenueContactName || null,
+    venueName: experience.manualVenueName || null,
+    venueAddress: experience.manualVenueAddress || null,
+    venueCity: experience.location || null,
+    venueDescription: experience.manualVenueDescription || null,
+    venueCapacity: experience.manualVenueCapacity ?? null,
+    propertyUrl: experience.manualVenuePropertyUrl || null,
+    proposedModel: experience.venueTargetDeal || null,
+    proposedValue: experience.venueTargetDealValue ?? null,
+    currency: (experience.currency || 'eur').toLowerCase(),
+    status: 'pending',
+    expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
+  } as any);
 }
 
 function buildRequestedVenueContractObject(input: any) {
@@ -2997,7 +3029,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let externalVenueInvitationWarning: string | undefined;
       if (venueType === 'manual' && existingDraft.status !== 'pending_approval') {
         try {
-          await notificationService.sendExternalVenueInvitation({ ...eventData, id: (result as any).id, slug: (result as any).slug });
+          // The invite gets its own row and token so the email can link to a
+          // claim screen instead of the public event page.
+          const invite = await createVenueInviteForExperience({
+            ...eventData,
+            id: (result as any).id,
+            creatorId: userId,
+          });
+          await notificationService.sendExternalVenueInvitation({
+            ...eventData,
+            id: (result as any).id,
+            slug: (result as any).slug,
+            inviteToken: invite?.token,
+          });
           externalVenueInvitationSent = true;
         } catch (error: any) {
           externalVenueInvitationWarning = error?.message || 'The venue invitation could not be sent';
@@ -8872,8 +8916,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) {
         return res.status(401).json({ message: "User not authenticated" });
       }
+      // Repair inline base64 avatars from older clients before they reach the DB.
+      const body = await persistInlineImageFields(req.body || {}, ["avatarUrl"], userId);
       const validatedData = insertParticipantProfileSchema.parse({
-        ...req.body,
+        ...body,
         userId,
       });
       const profile = await storage.createOrUpdateProfile(validatedData);
@@ -9079,12 +9125,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * Real money for the creator dashboard, computed from booking rows.
+   *
+   * Both the header ledger strip and the revenue cards read this, so they can no
+   * longer disagree the way they did when one came from a zero stub and the
+   * other summed every booking (cancellations included) in dollars.
+   */
+  async function getCreatorEarningsBreakdown(creatorId: string) {
+    const creatorBookings = await storage.getBookingsByCreator(creatorId);
+    // Platform fee comes from the database, never a constant.
+    const [settings] = await db.select().from(platformSettings).limit(1);
+    const defaultPlatformFeePct = parseFloat(
+      settings?.platformFeePercentage?.toString() ?? String(FIXED_PLATFORM_FEE_PCT),
+    );
+    return summarizeCreatorEarnings(creatorBookings, { defaultPlatformFeePct });
+  }
+
   app.get("/api/creator/earnings/:period", isAuthenticated, async (req: any, res) => {
     try {
-      const creatorId = req.user.claims.sub;
-      const { period } = req.params;
-      const earnings = await storage.getCreatorEarnings(creatorId);
-      res.json(earnings);
+      const { summary, byExperience } = await getCreatorEarningsBreakdown(req.user.claims.sub);
+      res.json({
+        summary,
+        byExperience,
+        period: Number.parseInt(req.params.period, 10) || 30,
+      });
     } catch (error) {
       console.error("Error fetching creator earnings:", error);
       res.status(500).json({ message: "Failed to fetch creator earnings" });
@@ -9167,13 +9232,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/participant-profile", isAuthenticated, async (req: any, res) => {
     try {
-      const validatedData = insertParticipantProfileSchema.partial().parse(req.body);
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user?.claims?.sub;
-      
+      const userId = req.user?.claims?.sub;
+
       if (!userId) {
         return res.status(401).json({ message: "User not authenticated" });
       }
 
+      const body = await persistInlineImageFields(req.body || {}, ["avatarUrl"], userId);
+      const validatedData = insertParticipantProfileSchema.partial().parse(body);
       const profile = await storage.updateParticipantProfile(userId, validatedData);
       res.json(profile);
     } catch (error) {
@@ -12146,118 +12212,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Creator earnings endpoints
-  app.get('/api/creator/earnings/:period', async (req: any, res) => {
+
+  // Detailed earnings breakdown for dashboard — real bookings, same source as
+  // /api/creator/earnings and /api/creator/ledger.
+  app.get('/api/creator/revenue-analytics', isAuthenticated, async (req: any, res) => {
     try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
-      const { period } = req.params; // 7, 30, 90 days
-
-      // Mock data for development - in production this would come from storage
-      const mockEarnings = [
-        {
-          id: 'earning-1',
-          creatorId: userId,
-          experienceId: 'exp-1',
-          bookingId: 'booking-1',
-          grossAmount: 12000, // $120
-          platformFeeAmount: 1800, // 15%
-          platformFeePercentage: 15.00,
-          stripeFeeAmount: 378, // 2.9% + 30¢
-          netAmount: 9822, // $98.22
-          payoutStatus: 'completed',
-          payoutDate: new Date('2024-01-15'),
-          createdAt: new Date('2024-01-10')
-        },
-        {
-          id: 'earning-2',
-          creatorId: userId,
-          experienceId: 'exp-2',
-          bookingId: 'booking-2',
-          grossAmount: 25000, // $250
-          platformFeeAmount: 3750, // 15%
-          platformFeePercentage: 15.00,
-          stripeFeeAmount: 755, // 2.9% + 30¢
-          netAmount: 20495, // $204.95
-          payoutStatus: 'pending',
-          payoutDate: null,
-          createdAt: new Date('2024-01-20')
-        }
-      ];
-      
-      // Calculate summary statistics
-      const summary = {
-        totalEarnings: mockEarnings.reduce((sum, e) => sum + e.netAmount, 0),
-        totalGross: mockEarnings.reduce((sum, e) => sum + e.grossAmount, 0),
-        totalPlatformFees: mockEarnings.reduce((sum, e) => sum + e.platformFeeAmount, 0),
-        totalStripeFees: mockEarnings.reduce((sum, e) => sum + e.stripeFeeAmount, 0),
-        pendingPayouts: mockEarnings.filter(e => e.payoutStatus === 'pending').length,
-        completedPayouts: mockEarnings.filter(e => e.payoutStatus === 'completed').length,
-        bookingsCount: mockEarnings.length,
-        averageBookingValue: mockEarnings.length > 0 ? 
-          mockEarnings.reduce((sum, e) => sum + e.grossAmount, 0) / mockEarnings.length : 0
-      };
-
+      const { summary, byExperience } = await getCreatorEarningsBreakdown(req.user.claims.sub);
       res.json({
-        earnings: mockEarnings,
-        summary,
-        period: parseInt(period)
-      });
-
-    } catch (error: any) {
-      console.error('Earnings fetch error:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Detailed earnings breakdown for dashboard
-  app.get('/api/creator/revenue-analytics', async (req: any, res) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
-
-      // Mock analytics data for development
-      const mockAnalytics = {
-        earningsByExperience: [
-          {
-            experienceId: 'exp-1',
-            experienceTitle: 'Mindful Retreat Weekend',
-            totalBookings: 5,
-            totalGross: 60000, // $600
-            totalNet: 49110, // After fees
-            averageBookingValue: 12000
-          },
-          {
-            experienceId: 'exp-2', 
-            experienceTitle: 'Adventure Hiking Tour',
-            totalBookings: 3,
-            totalGross: 75000, // $750
-            totalNet: 61485, // After fees
-            averageBookingValue: 25000
-          }
-        ],
-        monthlyEarnings: [
-          { month: '2024-01', grossRevenue: 135000, netRevenue: 110595, bookings: 8 },
-          { month: '2023-12', grossRevenue: 98000, netRevenue: 80290, bookings: 6 },
-          { month: '2023-11', grossRevenue: 156000, netRevenue: 127740, bookings: 10 }
-        ],
+        currency: summary.currency,
+        earningsByExperience: byExperience.map((row) => ({
+          experienceId: row.experienceId,
+          experienceTitle: row.title,
+          totalBookings: row.bookingsCount,
+          totalGross: row.grossCents,
+          totalNet: row.netCents,
+          averageBookingValue: row.bookingsCount > 0
+            ? Math.round(row.grossCents / row.bookingsCount)
+            : 0,
+        })),
         feeAnalysis: {
-          averagePlatformFeePercentage: 15.0,
-          totalPlatformFeesLastMonth: 20250,
-          totalStripeFees: 4095,
-          projectedMonthlyFees: 24345
+          averagePlatformFeePercentage: summary.effectivePlatformFeePct,
+          totalPlatformFees: summary.totalPlatformFees,
+          totalSpaceShare: summary.totalSpaceShare,
         },
-        currentPlatformFee: 15
-      };
-
-      res.json(mockAnalytics);
-
+        currentPlatformFee: summary.effectivePlatformFeePct,
+      });
     } catch (error: any) {
       console.error('Revenue analytics error:', error);
       res.status(500).json({ error: error.message });
@@ -12533,6 +12512,223 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
       res.status(500).json({ message: 'Failed to accept offer' });
+    }
+  });
+
+  // ─── External venue invites ───────────────────────────────────────────────
+  // "Invite External Venue" sends a private tokenised link. These routes back
+  // that link: read the offer, claim the space, or turn the deal down. Before
+  // this existed the email dropped the venue on the public event page with no
+  // way to respond.
+
+  function summariseVenueInvite(invite: any, experience: any, creator: any) {
+    return {
+      token: invite.token,
+      status: invite.status,
+      expiresAt: invite.expiresAt,
+      contactName: invite.contactName,
+      email: invite.email,
+      venue: {
+        name: invite.venueName,
+        address: invite.venueAddress,
+        city: invite.venueCity,
+        description: invite.venueDescription,
+        capacity: invite.venueCapacity,
+        propertyUrl: invite.propertyUrl,
+      },
+      deal: {
+        model: invite.proposedModel,
+        value: invite.proposedValue ? Number(invite.proposedValue) : null,
+        currency: invite.currency || experience?.currency || 'eur',
+      },
+      experience: experience ? {
+        id: experience.id,
+        slug: experience.slug,
+        title: experience.title,
+        shortDescription: experience.shortDescription,
+        coverImageUrl: experience.coverImageUrl,
+        startDate: experience.startDate,
+        endDate: experience.endDate,
+        location: experience.location,
+        maxParticipants: experience.maxParticipants,
+        currency: experience.currency,
+        requireMinimumParticipants: experience.requireMinimumParticipants,
+        minimumParticipants: experience.mvgMin || experience.minimumParticipants,
+      } : null,
+      creator: creator ? {
+        firstName: creator.firstName,
+        lastName: creator.lastName,
+      } : null,
+      claimedVenueId: invite.claimedVenueId,
+    };
+  }
+
+  // Public: the recipient has not signed in yet when they first open the link.
+  app.get('/api/venue-invites/:token', async (req, res) => {
+    try {
+      const invite = await storage.getVenueInviteByToken(String(req.params.token));
+      if (!invite) return res.status(404).json({ message: 'This invitation link is not valid' });
+
+      const expired = invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
+      const [experience, creator] = await Promise.all([
+        storage.getExperience(invite.experienceId),
+        storage.getUser(invite.creatorId),
+      ]);
+
+      res.json({
+        ...summariseVenueInvite(invite, experience, creator),
+        status: expired && invite.status === 'pending' ? 'expired' : invite.status,
+      });
+    } catch (error: any) {
+      console.error('Error loading venue invite:', error);
+      res.status(500).json({ message: 'Failed to load this invitation' });
+    }
+  });
+
+  /**
+   * Claim the space: creates the venue from the details the creator typed,
+   * switches the account to the venue role, links it to the event and writes the
+   * proposed contract. Accepting the money terms is the separate, existing
+   * /api/venue/offers/:experienceId/accept step, so venue-sponsored deals still
+   * go through the same Stripe checkout as every other offer.
+   */
+  app.post('/api/venue-invites/:token/claim', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const invite = await storage.getVenueInviteByToken(String(req.params.token));
+      if (!invite) return res.status(404).json({ message: 'This invitation link is not valid' });
+
+      if (invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now()) {
+        return res.status(410).json({ message: 'This invitation has expired. Ask the organiser to resend it.' });
+      }
+      if (invite.status === 'declined') {
+        return res.status(409).json({ message: 'This invitation was already declined' });
+      }
+      if (invite.claimedByUserId && invite.claimedByUserId !== userId) {
+        return res.status(403).json({ message: 'This invitation has already been claimed by another account' });
+      }
+
+      const experience = await storage.getExperience(invite.experienceId);
+      if (!experience) return res.status(404).json({ message: 'This event no longer exists' });
+
+      // Re-claiming is idempotent — the venue may reopen the link mid-flow.
+      let venueId = invite.claimedVenueId || undefined;
+
+      if (!venueId && req.body?.venueId) {
+        // The recipient already runs a space on the platform and picked it.
+        const ownedVenues = await storage.getVenuesByCreator(userId);
+        const chosen = ownedVenues.find((venue: any) => venue.id === req.body.venueId);
+        if (!chosen) return res.status(403).json({ message: 'That venue does not belong to your account' });
+        venueId = chosen.id;
+      }
+
+      if (!venueId) {
+        const venueName = (invite.venueName || '').trim() || 'My venue';
+        const city = (invite.venueCity || '').trim();
+        let baseSlug = generateVenueSlug(venueName, city);
+        let slug = baseSlug;
+        let counter = 1;
+        while (await storage.getVenueBySlug(slug)) {
+          slug = `${baseSlug}-${counter}`;
+          counter += 1;
+        }
+
+        const created = await storage.createVenue({
+          name: venueName,
+          city,
+          description: invite.venueDescription || '',
+          location: invite.venueAddress || '',
+          capacity: invite.venueCapacity ?? 0,
+          website: invite.propertyUrl || null,
+          contactEmail: invite.email,
+          contactPerson: invite.contactName || null,
+          currency: (invite.currency || experience.currency || 'eur').toLowerCase(),
+          venueType: isSingleDayExperience({
+            experienceType: experience.experienceType,
+            startDate: experience.startDate,
+            endDate: experience.endDate,
+          }) ? 'daytime' : 'multi_day',
+          slug,
+          status: 'draft',
+          approved: false,
+          createdBy: userId,
+        } as any);
+        venueId = created.id;
+      }
+
+      // The account now runs a space — give it the venue dashboard.
+      const account = await storage.getUser(userId);
+      if (account && account.role !== 'venue_provider' && account.role !== 'admin') {
+        await storage.updateUserRole(userId, 'venue_provider' as any);
+      }
+
+      // Link the event to this venue and record the deal the creator proposed.
+      await storage.updateExperience(invite.experienceId, {
+        linkedVenueId: venueId,
+        venueStatus: 'venue_pending',
+      } as any);
+
+      const requested = buildRequestedVenueContractObject(experience);
+      const existingContract = await storage.getVenueContractByExperience(invite.experienceId);
+      if (!existingContract) {
+        await storage.upsertVenueContract({
+          experienceId: invite.experienceId,
+          venueId,
+          creatorId: invite.creatorId,
+          model: requested.model,
+          status: 'pending',
+          terms: requested.terms,
+          risk: requested.risk,
+        } as any);
+      }
+
+      const claimed = await storage.updateVenueInvite(invite.id, {
+        status: 'claimed',
+        claimedByUserId: userId,
+        claimedVenueId: venueId,
+        claimedAt: invite.claimedAt ?? new Date(),
+      });
+
+      res.json({
+        success: true,
+        venueId,
+        experienceId: invite.experienceId,
+        invite: summariseVenueInvite(claimed, experience, null),
+        message: 'Space claimed — review the offer to confirm the deal',
+      });
+    } catch (error: any) {
+      console.error('Error claiming venue invite:', error);
+      res.status(500).json({ message: 'Failed to claim this venue', detail: error?.message });
+    }
+  });
+
+  app.post('/api/venue-invites/:token/decline', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const invite = await storage.getVenueInviteByToken(String(req.params.token));
+      if (!invite) return res.status(404).json({ message: 'This invitation link is not valid' });
+      if (invite.claimedByUserId && invite.claimedByUserId !== userId) {
+        return res.status(403).json({ message: 'This invitation belongs to another account' });
+      }
+
+      const declined = await storage.updateVenueInvite(invite.id, {
+        status: 'declined',
+        declineReason: typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 500) : null,
+        claimedByUserId: userId,
+        respondedAt: new Date(),
+      });
+
+      notifyCreatorOfVenueContractResolution(
+        invite.experienceId,
+        invite.venueName || 'The invited venue',
+        'rejected',
+        declined.declineReason,
+      );
+
+      res.json({ success: true, invite: { status: declined.status }, message: 'The organiser has been told' });
+    } catch (error: any) {
+      console.error('Error declining venue invite:', error);
+      res.status(500).json({ message: 'Failed to decline this invitation' });
     }
   });
 
@@ -13156,39 +13352,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Creator Ledger — total sales + My Share based on accepted creatorPct
+  // Header ledger strip. Same numbers as /api/creator/earnings — one source.
   app.get('/api/creator/ledger', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? '45788955' : req.user.claims.sub;
-      const bookings = await storage.getBookingsByCreator(userId);
-
-      let totalGross = 0;
-      let myShare = 0;
-      let platformFees = 0;
-      let spaceShare = 0;
-
-      for (const booking of bookings) {
-        const gross = parseFloat(booking.totalAmount || booking.totalPrice || '0');
-        const creatorPct = parseFloat(booking.experience?.creatorPct || '85');
-        const platformPct = parseFloat(booking.experience?.platformPct || '15');
-        const venuePct = parseFloat(booking.experience?.venueRevenuePercentage || '0');
-        const ticketDeduction = booking.experience?.venueCompensationModel === 'fixed_fee'
-          ? calculateTicketDeduction(
-              booking.experience?.venueFixedFee,
-              booking.ticketQuantity,
-            )
-          : 0;
-        totalGross += gross;
-        platformFees += gross * (platformPct / 100);
-        spaceShare += gross * (venuePct / 100) + ticketDeduction;
-        myShare += Math.max(0, gross * (creatorPct / 100) - ticketDeduction);
-      }
-
+      const { summary } = await getCreatorEarningsBreakdown(req.user.claims.sub);
       res.json({
-        totalSales: Math.round(totalGross * 100) / 100,
-        myShare: Math.round(myShare * 100) / 100,
-        platformFees: Math.round(platformFees * 100) / 100,
-        spaceShare: Math.round(spaceShare * 100) / 100,
-        bookingsCount: bookings.length,
+        currency: summary.currency,
+        totalSales: summary.totalGross,
+        collected: summary.totalCollected,
+        outstandingBalance: summary.outstandingBalance,
+        myShare: summary.totalEarnings,
+        platformFees: summary.totalPlatformFees,
+        platformFeePct: summary.effectivePlatformFeePct,
+        spaceShare: summary.totalSpaceShare,
+        bookingsCount: summary.bookingsCount,
       });
     } catch (err: any) {
       console.error('Error fetching creator ledger:', err);

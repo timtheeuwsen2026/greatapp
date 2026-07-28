@@ -24,25 +24,29 @@ export function useRoleAuth(requiredRole: UserRole) {
         description: error.message || "Unable to verify authentication. Please try again.",
         variant: "destructive",
       });
-      
-      // Only redirect to login if it's an authentication error (401)
-      if (error.message?.includes('401')) {
-        setTimeout(() => {
-          console.log('Redirecting to login due to 401 error');
-          window.location.href = "/api/login";
-        }, 1500);
-      }
-    } else if (!isLoading && !isAuthenticated) {
-      toast({
-        title: "Authentication Required",
-        description: "Please log in to access this page.",
-        variant: "destructive",
-      });
-      setTimeout(() => {
-        console.log('Redirecting to login - not authenticated');
-        window.location.href = "/api/login";
-      }, 1000);
-    } else if (!isLoading && isAuthenticated && !hasRequiredRole) {
+      return;
+    }
+
+    if (!isLoading && !isAuthenticated) {
+      // The session sync briefly reports "signed out" while it revalidates the
+      // token — which happens on every window focus, including when a native
+      // file picker closes. Without the cleanup below this timer still fired
+      // after the session came back, bouncing a signed-in user to /login and
+      // straight back again: the page looked like it was reloading itself.
+      const timer = setTimeout(() => {
+        toast({
+          title: "Authentication Required",
+          description: "Please log in to access this page.",
+          variant: "destructive",
+        });
+        // Return them to this page after signing in rather than a dashboard.
+        const returnTo = window.location.pathname + window.location.search;
+        window.location.href = `/login?returnTo=${encodeURIComponent(returnTo)}`;
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+
+    if (!isLoading && isAuthenticated && !hasRequiredRole) {
       toast({
         title: "Access Denied",
         description: `This page requires ${requiredRole.replace('_', ' ')} access.`,

@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { SharedPhotoUpload } from '@/components/SharedPhotoUpload';
 import { 
   User, Camera, Globe, Heart, Briefcase, Star, MessageCircle, 
   Shield, MapPin, Languages, Utensils, Phone, ArrowLeft, ArrowRight,
@@ -225,17 +226,12 @@ export default function ParticipantProfileSetup() {
     });
   };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const result = e.target?.result as string;
-        setImagePreview(result);
-        form.setValue('avatarUrl', result);
-      };
-      reader.readAsDataURL(file);
-    }
+  // The avatar is uploaded to storage and only its URL is saved. It used to be
+  // read with FileReader and stored as a base64 data URI, which put ~1.5MB of
+  // text in the profile row and on every API response carrying that participant.
+  const handleAvatarUploaded = (url: string) => {
+    setImagePreview(url);
+    form.setValue('avatarUrl', url, { shouldDirty: true });
   };
 
   const nextStep = async () => {
@@ -327,22 +323,25 @@ export default function ParticipantProfileSetup() {
                 <CardContent className="space-y-6">
                   {/* Profile Picture */}
                   <div className="flex flex-col items-center space-y-4">
-                    <div className="relative">
-                      <div className="w-24 h-24 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
-                        {imagePreview ? (
-                          <img src={imagePreview} alt="Profile" className="w-full h-full object-cover" />
-                        ) : (
-                          <Camera className="w-8 h-8 text-gray-400" />
-                        )}
-                      </div>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      />
+                    <div className="w-24 h-24 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
+                      {imagePreview ? (
+                        <img
+                          src={imagePreview}
+                          alt="Profile"
+                          className="w-full h-full object-cover"
+                          data-testid="participant-avatar-preview"
+                        />
+                      ) : (
+                        <Camera className="w-8 h-8 text-gray-400" />
+                      )}
                     </div>
-                    <p className="text-sm text-gray-600">Click to upload profile picture</p>
+                    <SharedPhotoUpload
+                      variant="compact"
+                      onPreviewReady={setImagePreview}
+                      onUploadComplete={handleAvatarUploaded}
+                      maxFileSize={5 * 1024 * 1024}
+                    />
+                    <p className="text-sm text-gray-600">JPG, PNG or WEBP — up to 5MB</p>
                   </div>
 
                   <FormField

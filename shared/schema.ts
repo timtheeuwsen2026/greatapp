@@ -1644,6 +1644,53 @@ export const venueContracts = pgTable("venue_contracts", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Venue Invites — "Invite External Venue" from the event builder.
+//
+// The creator types a venue that is not on the platform yet and proposes a deal.
+// The invite gives that venue a private, tokenised link where they can see the
+// offer, claim their space and accept or decline. Before this table the email
+// only linked to the public event page, which left the venue with no way in.
+export const venueInvites = pgTable("venue_invites", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  // Unguessable value used in the emailed link — the invite's only credential
+  // until the recipient signs in.
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id)
+    .notNull(),
+  creatorId: varchar("creator_id")
+    .references(() => users.id)
+    .notNull(),
+
+  // Venue details as the creator typed them; used to prefill the claimed venue.
+  email: varchar("email").notNull(),
+  contactName: varchar("contact_name"),
+  venueName: varchar("venue_name"),
+  venueAddress: varchar("venue_address"),
+  venueCity: varchar("venue_city"),
+  venueDescription: text("venue_description"),
+  venueCapacity: integer("venue_capacity"),
+  propertyUrl: text("property_url"),
+
+  // Proposed deal, mirroring experiences.venueTargetDeal / venueTargetDealValue.
+  proposedModel: varchar("proposed_model", { length: 50 }),
+  proposedValue: decimal("proposed_value", { precision: 10, scale: 2 }),
+  currency: varchar("currency", { length: 10 }).default("eur"),
+
+  // pending → claimed → accepted | declined, or expired
+  status: varchar("status", { length: 20 }).default("pending"),
+  claimedByUserId: varchar("claimed_by_user_id").references(() => users.id),
+  claimedVenueId: varchar("claimed_venue_id").references(() => venues.id),
+  declineReason: text("decline_reason"),
+  claimedAt: timestamp("claimed_at"),
+  respondedAt: timestamp("responded_at"),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Venue Offers table — Reverse Handshake bids.
 // When a creator publishes an open event (venueStatus="venue_pending"), venue owners
 // can submit an "Offer to Host" here instead of waiting for the creator to approach them.
@@ -2935,6 +2982,8 @@ export type ExperienceVenue = typeof experienceVenues.$inferSelect;
 export type InsertExperienceVenue = z.infer<typeof insertExperienceVenueSchema>;
 export type VenueContract = typeof venueContracts.$inferSelect;
 export type InsertVenueContract = z.infer<typeof insertVenueContractSchema>;
+export type VenueInvite = typeof venueInvites.$inferSelect;
+export type InsertVenueInvite = typeof venueInvites.$inferInsert;
 export type PromotionDeal = typeof promotionDeals.$inferSelect;
 export type InsertPromotionDeal = z.infer<typeof insertPromotionDealSchema>;
 export type PerkFulfillment = typeof perkFulfillments.$inferSelect;

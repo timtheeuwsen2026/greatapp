@@ -12,6 +12,7 @@ import {
   participantRoleAssignments,
   experienceVenues,
   venueContracts,
+  venueInvites,
   venueOffers,
   experienceServices,
   experienceAmenities,
@@ -52,6 +53,8 @@ import {
   type InsertExperienceVenue,
   type VenueContract,
   type InsertVenueContract,
+  type VenueInvite,
+  type InsertVenueInvite,
   type ExperienceService,
   type InsertExperienceService,
   type Amenity,
@@ -2649,14 +2652,16 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /**
+   * @deprecated Never computed anything — it returned zeros, which is why the
+   * dashboard's revenue cards showed €0.00 next to a populated ledger strip.
+   * Creator money now comes from summarizeCreatorEarnings() in
+   * server/creatorEarnings.ts, fed by getBookingsByCreator().
+   */
   async getCreatorEarnings(userId: string): Promise<any> {
-    return {
-      totalEarnings: 0,
-      monthlyEarnings: 0,
-      pendingPayouts: 0,
-      completedPayouts: 0,
-      earningsHistory: [],
-    };
+    throw new Error(
+      "getCreatorEarnings is retired — use summarizeCreatorEarnings(await storage.getBookingsByCreator(userId))",
+    );
   }
 
   // Venue and service operations moved to proper interface implementations below
@@ -2880,6 +2885,74 @@ export class DatabaseStorage implements IStorage {
       .from(venueContracts)
       .where(eq(venueContracts.id, contractId));
     return contract;
+  }
+
+  // ─── External venue invites ───────────────────────────────────────────────
+
+  /**
+   * One pending invite per (experience, email). Re-publishing an event refreshes
+   * the existing invite instead of minting a second token for the same venue.
+   */
+  async upsertVenueInvite(invite: InsertVenueInvite): Promise<VenueInvite> {
+    const [existing] = await db
+      .select()
+      .from(venueInvites)
+      .where(
+        and(
+          eq(venueInvites.experienceId, invite.experienceId),
+          sql`lower(${venueInvites.email}) = lower(${invite.email})`,
+        ),
+      );
+
+    if (existing) {
+      // A venue that already answered keeps its answer; only refresh the details
+      // of an invite still waiting for a response.
+      if (existing.status !== "pending" && existing.status !== "expired") {
+        return existing;
+      }
+      const [updated] = await db
+        .update(venueInvites)
+        .set({
+          ...invite,
+          token: existing.token,
+          status: "pending",
+          updatedAt: new Date(),
+        })
+        .where(eq(venueInvites.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(venueInvites).values(invite).returning();
+    return created;
+  }
+
+  async getVenueInviteByToken(token: string): Promise<VenueInvite | undefined> {
+    const [invite] = await db
+      .select()
+      .from(venueInvites)
+      .where(eq(venueInvites.token, token));
+    return invite;
+  }
+
+  async getVenueInvitesByExperience(experienceId: string): Promise<VenueInvite[]> {
+    return db
+      .select()
+      .from(venueInvites)
+      .where(eq(venueInvites.experienceId, experienceId))
+      .orderBy(desc(venueInvites.createdAt));
+  }
+
+  async updateVenueInvite(
+    inviteId: string,
+    updates: Partial<InsertVenueInvite>,
+  ): Promise<VenueInvite> {
+    const [invite] = await db
+      .update(venueInvites)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(venueInvites.id, inviteId))
+      .returning();
+    return invite;
   }
 
   async updateVenueContractSponsorshipStatus(

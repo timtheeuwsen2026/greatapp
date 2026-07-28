@@ -70,6 +70,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const handledTokenRef = useRef<string | null>(null);
 
   const setCurrentUser = (nextUser: User | null) => {
+    // Keep the existing object when the account is unchanged. A fresh identity
+    // here re-renders every page in the app, and syncVisibleSession runs this on
+    // every tab switch — including the focus event fired when a native file
+    // picker closes, which is constant while filling in a venue or event form.
+    const previous = currentUserRef.current;
+    if (previous && nextUser && JSON.stringify(previous) === JSON.stringify(nextUser)) {
+      return;
+    }
     currentUserRef.current = nextUser;
     setUser(nextUser);
   };
@@ -88,7 +96,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const dbUser = await fetchDbUser(token);
     handledTokenRef.current = token;
     setCurrentUser(dbUser);
-    queryClient.setQueryData(["/api/auth/user"], dbUser);
+    // Only rewrite the cache when the account actually changed — a new object
+    // here invalidates memoisation across every component reading this query.
+    if (JSON.stringify(queryClient.getQueryData(["/api/auth/user"])) !== JSON.stringify(dbUser)) {
+      queryClient.setQueryData(["/api/auth/user"], dbUser);
+    }
     return dbUser;
   }, []);
 

@@ -1261,6 +1261,8 @@ The Great. Team
     venueTargetDeal?: string | null;
     venueTargetDealValue?: string | number | null;
     currency?: string | null;
+    /** Token for the private claim link. Without it there is nowhere to send them. */
+    inviteToken?: string | null;
   }): Promise<void> {
     if (!event.manualVenueEmail) return;
 
@@ -1283,6 +1285,13 @@ The Great. Team
         : `${String(event.currency || 'eur').toUpperCase()} ${event.venueTargetDealValue}`
       : '';
 
+    // The claim screen is the point of the email — it is where the venue signs
+    // up, claims their space and answers the deal. Only fall back to the public
+    // event page if no invite token was created.
+    const reviewUrl = event.inviteToken
+      ? `${APP_BASE_URL}/venue-invite/${event.inviteToken}`
+      : experienceDetailsUrl(String((event as any).slug || (event as any).id || ''));
+
     await this.sendExternalPartnerInviteEmail({
       to: event.manualVenueEmail,
       partnerName,
@@ -1290,7 +1299,8 @@ The Great. Team
       eventName: event.title || 'A Great. experience',
       eventSlugOrId: (event as any).slug || (event as any).id || '',
       proposedTerms: `${deal}${value ? ` (${value})` : ''}`,
-      reviewUrl: experienceDetailsUrl(String((event as any).slug || (event as any).id || '')),
+      reviewUrl,
+      ctaLabel: event.inviteToken ? 'Review & Claim Your Venue' : 'Review the Offer',
       eventKey: notificationEventKey('external_venue_invite', (event as any).id, event.manualVenueEmail),
     });
   }
@@ -1303,6 +1313,7 @@ The Great. Team
     eventSlugOrId?: string | null;
     proposedTerms?: string | null;
     reviewUrl?: string | null;
+    ctaLabel?: string;
     eventKey?: string;
   }): Promise<void> {
     const subject = `Private Invite: Partner with us on ${opts.eventName}`;
@@ -1311,7 +1322,10 @@ The Great. Team
       to: opts.to,
       bodyText,
       receiptRows: opts.proposedTerms ? [{ label: 'Deal Summary', value: opts.proposedTerms }] : undefined,
-      cta: { label: 'Review the Offer', href: opts.reviewUrl || (opts.eventSlugOrId ? experienceDetailsUrl(String(opts.eventSlugOrId)) : partnerDashboardUrl()) },
+      cta: {
+        label: opts.ctaLabel || 'Review the Offer',
+        href: opts.reviewUrl || (opts.eventSlugOrId ? experienceDetailsUrl(String(opts.eventSlugOrId)) : partnerDashboardUrl()),
+      },
       preheader: `Private invite to partner on ${opts.eventName}.`,
       growthFooterContext: 'none',
     });

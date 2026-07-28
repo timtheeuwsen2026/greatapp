@@ -11,6 +11,7 @@ import { isEmailCategoryEnabled, type EmailCategory } from './emailPreferences';
 import { claimImmediateEmailEvent, completeEmailEvent, retryOrFailEmailJob } from './emailDeliveryLedger';
 import { resolveBookingEmailDecision } from './emailRules';
 import { getConfiguredPublicAppBaseUrl } from './publicUrl';
+import { formatVenueDealSummary } from '@shared/venueDealModels';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -88,33 +89,10 @@ export function formatPromotionDealSummary(
   }
 }
 
-// Human-readable one-liner for a venue deal's commercial model.
-export function formatVenueDealSummary(
-  model: string | null | undefined,
-  terms: Record<string, any> | null | undefined,
-  currency?: string | null,
-): string {
-  const t = terms || {};
-  const cur = String(currency || t.currency || 'eur').toUpperCase();
-  switch (model) {
-    case 'fixed_fee':
-      return `Flat Fee — ${cur} ${t.fixedFee ?? 0}`;
-    case 'per_head':
-      return `Per Head — ${cur} ${t.perHeadAmount ?? 0} per participant`;
-    case 'minimum_spend':
-      return `Minimum Spend Guarantee — ${cur} ${t.minimumSpend ?? 0}`;
-    case 'revenue_share':
-      return `Revenue Share — ${t.revenueSharePct ?? 0}% of ticket sales`;
-    case 'venue_sponsored':
-      return `Venue-Sponsored — venue pays ${cur} ${t.fixedFee ?? 0} to the creator`;
-    case 'upfront_rental':
-      return `Upfront Rental — creator pays ${cur} ${t.fixedFee ?? 0} rental fee`;
-    case 'access_only':
-      return `Access-Only / Pay-at-Counter${t.accessFee ? ` — ${cur} ${t.accessFee} access fee` : ''}`;
-    default:
-      return model || 'Venue deal';
-  }
-}
+// Human-readable one-liner for a venue deal's commercial model. Comes from the
+// shared vocabulary so an email, a dashboard card and the invite screen all
+// describe the same deal with the same words.
+export { formatVenueDealSummary };
 
 export interface NotificationPayload {
   type: 'mvg_confirmed' | 'mvg_failed' | 'deposit_created' | 'balance_due';

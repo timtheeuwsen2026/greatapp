@@ -45,6 +45,7 @@ import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
+import { getVenueDealLabel } from "@shared/venueDealModels";
 
 interface VenueWithOwner extends Venue {
   ownerName: string | null;
@@ -1605,9 +1606,7 @@ export default function AdminDashboard() {
                           <TableCell data-testid={`venue-pricing-${venue.id}`}>
                             {(venue as any).pricingModel ? (
                               <span className="text-xs">
-                                {(venue as any).pricingModel === 'whole_venue' ? 'Whole Venue' : 
-                                 (venue as any).pricingModel === 'per_room' ? 'Per Room' : 
-                                 (venue as any).pricingModel}
+                                {getVenueDealLabel((venue as any).pricingModel)}
                               </span>
                             ) : '-'}
                           </TableCell>

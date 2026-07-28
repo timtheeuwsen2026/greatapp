@@ -43,6 +43,7 @@ import {
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
+import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import {
   calculateMvgDeadline,
@@ -146,6 +147,7 @@ function applyMarketplaceEconomics(input: any = {}) {
     venueCompensationModel: model,
     venueFixedFee: input.venueFixedFee ?? "0.00",
     venuePerHeadAmount: input.venuePerHeadAmount ?? "0.00",
+    venuePerRoomPerNight: input.venuePerRoomPerNight ?? "0.00",
     venueMinimumSpend: input.venueMinimumSpend ?? "0.00",
     venueRevenueSharePct: revenueSharePct,
     venueAccessFee: input.venueAccessFee ?? "0.00",
@@ -180,6 +182,7 @@ const DRAFT_NUMERIC_FIELDS = [
   "expectedPayout", "platformCommission", "stripeFee", "influencerCommissionPct",
   "participantReferralCommissionPct",
   "promoterCommission", "creatorPct", "platformPct", "venueFixedFee", "venuePerHeadAmount",
+  "venuePerRoomPerNight",
   "venueMinimumSpend", "venueRevenueSharePct", "venueAccessFee", "venueRevenuePercentage",
   "creatorRevenuePercentage", "platformRevenuePercentage", "promotionSponsorshipAmount",
   "venueTargetDealValue",
@@ -222,6 +225,7 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
     terms: {
       fixedFee: numberOrZero(input.venueFixedFee),
       perHeadAmount: numberOrZero(input.venuePerHeadAmount),
+      perRoomPerNight: numberOrZero(input.venuePerRoomPerNight),
       minimumSpend: numberOrZero(input.venueMinimumSpend),
       revenueSharePct: model === "revenue_share"
         ? numberOrZero(input.venueRevenueSharePct ?? input.venueRevenuePercentage)
@@ -275,23 +279,18 @@ async function createVenueInviteForExperience(experience: any) {
 }
 
 function buildRequestedVenueContractObject(input: any) {
-  const model = input.venueTargetDeal || "access_only";
+  const model = normalizeVenueDealModel(input.venueTargetDeal) || "access_only";
   const targetValue = numberOrZero(input.venueTargetDealValue);
   const terms: Record<string, number | string> = {
     currency: input.currency || "eur",
     platformPct: FIXED_PLATFORM_FEE_PCT,
   };
 
-  if (model === "fixed_fee" || model === "venue_sponsored" || model === "upfront_rental") {
-    terms.fixedFee = targetValue;
-  } else if (model === "per_head") {
-    terms.perHeadAmount = targetValue;
-  } else if (model === "minimum_spend") {
-    terms.minimumSpend = targetValue;
-  } else if (model === "revenue_share") {
-    terms.revenueSharePct = targetValue;
-  } else {
-    terms.accessFee = targetValue;
+  // Each model stores its number under its own key — the vocabulary owns that
+  // mapping so a new deal type cannot be half-wired.
+  const termsKey = getVenueDealTermsKey(model);
+  if (termsKey) {
+    terms[termsKey] = targetValue;
   }
 
   return {
@@ -308,9 +307,10 @@ function buildRequestedVenueContractObject(input: any) {
 function getExperienceUpdatesFromAcceptedContract(contract: any) {
   const terms = contract?.terms || {};
   return applyMarketplaceEconomics({
-    venueCompensationModel: contract.model || "access_only",
+    venueCompensationModel: normalizeVenueDealModel(contract.model) || "access_only",
     venueFixedFee: terms.fixedFee ?? 0,
     venuePerHeadAmount: terms.perHeadAmount ?? 0,
+    venuePerRoomPerNight: terms.perRoomPerNight ?? 0,
     venueMinimumSpend: terms.minimumSpend ?? 0,
     venueRevenueSharePct: terms.revenueSharePct ?? 0,
     venueAccessFee: terms.accessFee ?? 0,

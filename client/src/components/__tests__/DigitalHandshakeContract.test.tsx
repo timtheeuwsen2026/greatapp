@@ -18,10 +18,48 @@ describe("DigitalHandshakeContract", () => {
     );
 
     const content = screen.getByTestId("digital-handshake-contract").textContent || "";
-    expect(content).toContain("Percentage Revenue Share");
+    // V14 vocabulary sync: the model name comes from the shared list both
+    // builders read, so this card says exactly what the dropdowns said.
+    expect(content).toContain("Revenue Split (%)");
     expect(content).toContain("Revenue Share: 20%");
     expect(content).toContain("Platform: 15%");
     expect(content).toContain("Est. venue payout if full: EUR 800.00");
+  });
+
+  it("names a legacy contract using the shared vocabulary", () => {
+    render(
+      <DigitalHandshakeContract
+        contract={{
+          // Saved by the old Venue Builder, before the two lists were merged.
+          model: "flat_rental",
+          status: "pending",
+          terms: { fixedFee: 300, currency: "EUR", platformPct: 15 },
+        }}
+        price={20}
+        maxParticipants={20}
+      />,
+    );
+
+    const content = screen.getByTestId("digital-handshake-contract").textContent || "";
+    expect(content).toContain("Upfront Rental / Flat Fee");
+  });
+
+  it("shows a per room per night deal for a multi-day trip", () => {
+    render(
+      <DigitalHandshakeContract
+        contract={{
+          model: "per_room_night",
+          status: "creator_request",
+          terms: { perRoomPerNight: 120, currency: "EUR", platformPct: 15 },
+        }}
+        price={200}
+        maxParticipants={12}
+      />,
+    );
+
+    const content = screen.getByTestId("digital-handshake-contract").textContent || "";
+    expect(content).toContain("Per Room / Per Night");
+    expect(content).toContain("Per Room / Night: EUR 120.00");
   });
 
   it("shows the creator's requested fixed euro amount", () => {

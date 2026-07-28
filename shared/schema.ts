@@ -490,6 +490,8 @@ export const experienceDrafts = pgTable("experience_drafts", {
   venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
   venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
   venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
+  // Multi-day only: the venue's nightly rate for each room used.
+  venuePerRoomPerNight: decimal("venue_per_room_per_night", { precision: 10, scale: 2 }).default("0.00"),
   venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
   venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
@@ -832,6 +834,8 @@ export const experiences = pgTable("experiences", {
   venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
   venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
   venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
+  // Multi-day only: the venue's nightly rate for each room used.
+  venuePerRoomPerNight: decimal("venue_per_room_per_night", { precision: 10, scale: 2 }).default("0.00"),
   venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
   venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
@@ -3164,6 +3168,7 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     pricePerPerson: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueFixedFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venuePerHeadAmount: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venuePerRoomPerNight: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueMinimumSpend: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueRevenueSharePct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueAccessFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),

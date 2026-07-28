@@ -18,6 +18,7 @@ import { MapPin, Building, Users, ArrowLeft, ArrowRight, Save, DollarSign, Alert
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
+import { getVenueDealOptions, normalizeVenueDealModel } from '@shared/venueDealModels';
 import { Label } from '@/components/ui/label';
 import type { VenueService } from '@/components/VenueServicesEditor';
 import type { Role } from '@/components/RolesEditor';
@@ -413,8 +414,22 @@ const daytimeVenueVibes = [
   'Community Driven', 'Creative', 'High Energy', 'Quiet', 'Late Night', 'Pop-Up Ready'
 ];
 
-const daytimePricingModels = ['minimum_spend', 'access_only', 'flat_rental'];
-const multiDayPricingModels = ['revenue_share', 'per_head_package', 'whole_venue', 'per_room'];
+// Pricing models come from the shared vocabulary so a venue lists itself using
+// exactly the deals the Event Builder can propose to it. The old lists here
+// (minimum_spend/flat_rental, per_head_package/whole_venue/per_room) were a
+// separate vocabulary that never lined up with the creator side.
+const daytimePricingModels = getVenueDealOptions({ isDaytime: true, surface: 'venue' }).map((o) => o.value);
+const multiDayPricingModels = getVenueDealOptions({ isDaytime: false, surface: 'venue' }).map((o) => o.value);
+
+const PRICING_MODEL_ICONS: Record<string, typeof Building> = {
+  revenue_share: DollarSign,
+  fixed_fee: DollarSign,
+  per_head: Users,
+  per_room_night: Users,
+  upfront_rental: Building,
+  access_only: Clock,
+  minimum_spend: Building,
+};
 
 const viewsEnvironment = [
   'Ocean View', 'Lake View', 'Mountain View', 'Forest View',
@@ -426,6 +441,10 @@ const accommodationTypes = [
 ];
 
 const currencies = ['USD', 'EUR', 'GBP', 'IDR', 'THB', 'MXN', 'AUD'];
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', EUR: '€', GBP: '£', IDR: 'Rp', THB: '฿', MXN: 'MX$', AUD: 'A$',
+};
 
 const cancellationPolicies = ['Flexible', 'Moderate', 'Strict'];
 
@@ -537,6 +556,20 @@ export default function VenueProfileSetup() {
   const activeVenueCategories = isDaytime ? daytimeVenueCategories : multiDayVenueCategories;
   const activeVenueVibes = isDaytime ? daytimeVenueVibes : multiDayVenueVibes;
 
+  // The same deal list the Event Builder shows, so a venue prices itself in the
+  // vocabulary creators actually negotiate in.
+  const pricingModelValue = form.watch('pricingModel');
+  const pricingModelOptions = useMemo(
+    () => getVenueDealOptions({
+      isDaytime,
+      surface: 'venue',
+      currencySymbol: CURRENCY_SYMBOLS[(form.watch('currency') || 'eur').toUpperCase()] || '€',
+      currentValue: pricingModelValue,
+    }),
+    [isDaytime, pricingModelValue, form.watch('currency')],
+  );
+  const selectedPricingModel = pricingModelOptions.find((option) => option.value === pricingModelValue);
+
   useEffect(() => {
     const allowedCategories = new Set(activeVenueCategories);
     const allowedVibes = new Set(activeVenueVibes);
@@ -555,11 +588,21 @@ export default function VenueProfileSetup() {
       form.setValue('minimumNights', undefined);
       form.setValue('minStay', undefined);
       form.setValue('paymentTimingModel', 'deposit_balance_arrival');
-      if (!daytimePricingModels.includes(form.getValues('pricingModel') || '')) {
+      // Legacy keys map onto the shared vocabulary before the list is checked,
+      // so an older listing keeps its pricing instead of being blanked.
+      const daytimeModel = normalizeVenueDealModel(form.getValues('pricingModel'));
+      if (!daytimeModel || !daytimePricingModels.includes(daytimeModel)) {
         form.setValue('pricingModel', '');
+      } else if (daytimeModel !== form.getValues('pricingModel')) {
+        form.setValue('pricingModel', daytimeModel);
       }
-    } else if (!multiDayPricingModels.includes(form.getValues('pricingModel') || '')) {
-      form.setValue('pricingModel', '');
+    } else {
+      const multiDayModel = normalizeVenueDealModel(form.getValues('pricingModel'));
+      if (!multiDayModel || !multiDayPricingModels.includes(multiDayModel)) {
+        form.setValue('pricingModel', '');
+      } else if (multiDayModel !== form.getValues('pricingModel')) {
+        form.setValue('pricingModel', multiDayModel);
+      }
     }
   }, [activeVenueCategories, activeVenueVibes, form, isDaytime, step]);
 
@@ -1963,109 +2006,35 @@ export default function VenueProfileSetup() {
                           <FormItem className="space-y-4">
                             <FormControl>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {isDaytime ? (
-                                  [
-                                    {
-                                      value: 'minimum_spend',
-                                      title: 'Minimum Spend Guarantee',
-                                      description: 'Creators must guarantee a minimum total revenue for your space.',
-                                      icon: Building,
-                                      testId: 'card-pricing-minimum-spend',
-                                    },
-                                    {
-                                      value: 'access_only',
-                                      title: 'Access-Only / Pay-at-Counter',
-                                      description: 'Participants pay directly at your counter for F&B. You keep 100% of those sales.',
-                                      icon: Clock,
-                                      testId: 'card-pricing-access-only',
-                                    },
-                                    {
-                                      value: 'flat_rental',
-                                      title: 'Flat Rental Fee',
-                                      description: 'Creators pay a fixed price for the duration of the event.',
-                                      icon: DollarSign,
-                                      testId: 'card-pricing-flat-rental',
-                                    },
-                                  ].map((model) => {
-                                    const Icon = model.icon;
-                                    return (
-                                      <Card
-                                        key={model.value}
-                                        className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                        onClick={() => field.onChange(model.value)}
-                                        data-testid={model.testId}
-                                      >
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <Icon className="h-5 w-5 text-primary" />
-                                          <span className="font-medium">{model.title}</span>
-                                        </div>
-                                        <p className="text-sm text-gray-600">{model.description}</p>
-                                      </Card>
-                                    );
-                                  })
-                                ) : (
-                                  [
-                                    {
-                                      value: 'revenue_share',
-                                      title: 'Percentage Revenue Share',
-                                      description: "You take a percentage of the Creator's total ticket sales.",
-                                      icon: DollarSign,
-                                      testId: 'card-pricing-revenue-share',
-                                    },
-                                    {
-                                      value: 'per_head_package',
-                                      title: 'Per-Head Package',
-                                      description: 'You charge a fixed catering/lodging rate per participant.',
-                                      icon: Users,
-                                      testId: 'card-pricing-per-head-package',
-                                    },
-                                    {
-                                      value: 'whole_venue',
-                                      title: 'Whole Venue Flat Fee',
-                                      description: 'Charge a flat rate for the entire venue per day or event.',
-                                      icon: Building,
-                                      testId: 'card-pricing-whole-venue',
-                                    },
-                                    {
-                                      value: 'per_room',
-                                      title: 'Per Room / Per Night',
-                                      description: 'Charge based on individual room bookings.',
-                                      icon: Users,
-                                      testId: 'card-pricing-per-room',
-                                    },
-                                  ].map((model) => {
-                                    const Icon = model.icon;
-                                    return (
-                                      <Card
-                                        key={model.value}
-                                        className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                        onClick={() => field.onChange(model.value)}
-                                        data-testid={model.testId}
-                                      >
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <Icon className="h-5 w-5 text-primary" />
-                                          <span className="font-medium">{model.title}</span>
-                                        </div>
-                                        <p className="text-sm text-gray-600">{model.description}</p>
-                                      </Card>
-                                    );
-                                  })
-                                )}
+                                {pricingModelOptions.map((model) => {
+                                  const Icon = PRICING_MODEL_ICONS[model.value] || Building;
+                                  return (
+                                    <Card
+                                      key={model.value}
+                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
+                                      onClick={() => field.onChange(model.value)}
+                                      data-testid={`card-pricing-${model.value.replace(/_/g, '-')}`}
+                                    >
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <Icon className="h-5 w-5 text-primary" />
+                                        <span className="font-medium">{model.label}</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600">{model.description}</p>
+                                    </Card>
+                                  );
+                                })}
                               </div>
                             </FormControl>
                           </FormItem>
                         )}
                       />
 
-                      {/* Multi-day pricing fields */}
-                      {!isDaytime && ['whole_venue', 'revenue_share', 'per_head_package'].includes(form.watch('pricingModel') || '') && (
+                      {/* One amount field, labelled by whichever model is selected.
+                          Access-Only still offers an optional space fee. */}
+                      {selectedPricingModel && (
                         <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                           <h4 className="font-medium text-blue-800 dark:text-blue-200">
-                            {{
-                              revenue_share: 'Percentage Revenue Share',
-                              per_head_package: 'Per-Head Package',
-                              whole_venue: 'Whole Venue Flat Fee',
-                            }[form.watch('pricingModel') || '']}
+                            {selectedPricingModel.label}
                           </h4>
                           <FormField
                             control={form.control}
@@ -2073,83 +2042,22 @@ export default function VenueProfileSetup() {
                             render={({ field }) => (
                               <FormItem>
                                 <FormLabel>
-                                  {{
-                                    revenue_share: 'Revenue Share (%)',
-                                    per_head_package: 'Package Amount Per Participant',
-                                    whole_venue: 'Flat Fee Per Day/Event',
-                                  }[form.watch('pricingModel') || '']}
+                                  {selectedPricingModel.valueKind === 'none'
+                                    ? `${selectedPricingModel.valueLabel} (optional)`
+                                    : selectedPricingModel.valueLabel}
                                 </FormLabel>
                                 <FormControl>
                                   <Input
                                     type="number"
                                     min="0"
-                                    max={form.watch('pricingModel') === 'revenue_share' ? '100' : undefined}
-                                    step={form.watch('pricingModel') === 'revenue_share' ? '1' : '0.01'}
-                                    placeholder={{
-                                      revenue_share: 'e.g., 20',
-                                      per_head_package: 'e.g., 95',
-                                      whole_venue: 'e.g., 2500',
-                                    }[form.watch('pricingModel') || '']}
+                                    max={selectedPricingModel.valueKind === 'percent' ? '100' : undefined}
+                                    step={selectedPricingModel.valueKind === 'percent' ? '1' : '0.01'}
+                                    placeholder={selectedPricingModel.valueKind === 'percent' ? 'e.g., 20' : 'e.g., 350'}
                                     {...field}
-                                    data-testid="input-base-price-per-day"
+                                    data-testid="input-pricing-model-value"
                                   />
                                 </FormControl>
-                                <FormDescription>
-                                  {{
-                                    revenue_share: "The venue receives this percentage of the creator's total ticket sales.",
-                                    per_head_package: 'The venue receives this fixed amount per participant.',
-                                    whole_venue: 'The venue receives this flat amount for the venue per day or event.',
-                                  }[form.watch('pricingModel') || '']}
-                                </FormDescription>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      )}
-
-                      {isDaytime && daytimePricingModels.includes(form.watch('pricingModel') || '') && (
-                        <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
-                            {{
-                              minimum_spend: 'Minimum Spend Guarantee',
-                              access_only: 'Access-Only / Pay-at-Counter',
-                              flat_rental: 'Flat Rental Fee',
-                            }[form.watch('pricingModel') || '']}
-                          </h4>
-                          <FormField
-                            control={form.control}
-                            name="basePricePerDay"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>
-                                  {{
-                                    minimum_spend: 'Guaranteed Minimum Spend',
-                                    access_only: 'Flat Space Fee (Optional)',
-                                    flat_rental: 'Flat Rental Fee',
-                                  }[form.watch('pricingModel') || '']}
-                                </FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder={{
-                                      minimum_spend: 'e.g., 750',
-                                      access_only: 'e.g., 0',
-                                      flat_rental: 'e.g., 350',
-                                    }[form.watch('pricingModel') || '']}
-                                    {...field}
-                                    data-testid="input-daytime-pricing-value"
-                                  />
-                                </FormControl>
-                                <FormDescription>
-                                  {{
-                                    minimum_spend: 'The venue receives this guaranteed minimum regardless of final attendance.',
-                                    access_only: 'Participants pay at your counter for F&B; use 0 when there is no space fee.',
-                                    flat_rental: 'The venue receives this fixed amount for the event duration.',
-                                  }[form.watch('pricingModel') || '']}
-                                </FormDescription>
+                                <FormDescription>{selectedPricingModel.description}</FormDescription>
                                 <FormMessage />
                               </FormItem>
                             )}
@@ -2158,7 +2066,7 @@ export default function VenueProfileSetup() {
                       )}
 
                       {/* Per Room Pricing Fields */}
-                      {!isDaytime && form.watch('pricingModel') === 'per_room' && (
+                      {!isDaytime && form.watch('pricingModel') === 'per_room_night' && (
                         <div className="mt-6 space-y-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
                           <h4 className="font-medium text-green-800 dark:text-green-200">Per Room Pricing Options</h4>
                           

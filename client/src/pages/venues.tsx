@@ -7,8 +7,31 @@ import { MapPin, Users, DollarSign, Building, ChevronLeft, ChevronRight } from "
 import Navigation from "@/components/navigation";
 import { Link } from "wouter";
 import { normalizeImageUrl } from "@/lib/utils";
+import { normalizeVenueDealModel } from "@shared/venueDealModels";
 
 const VENUES_PER_PAGE = 9;
+
+// What the listed base price is charged per, by pricing model.
+const PRICING_UNIT_LABELS: Record<string, string> = {
+  per_room_night: 'room / night',
+  per_head: 'participant',
+  fixed_fee: 'ticket',
+  upfront_rental: 'event',
+  revenue_share: 'ticket',
+  access_only: 'event',
+  minimum_spend: 'event',
+};
+
+const VENUE_CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', EUR: '€', GBP: '£', IDR: 'Rp', THB: '฿', MXN: 'MX$', AUD: 'A$',
+};
+
+// Venues default to EUR on this platform; never assume dollars.
+function formatVenueBasePrice(basePrice: string, currency?: string | null): string {
+  const code = String(currency || 'EUR').toUpperCase();
+  const symbol = VENUE_CURRENCY_SYMBOLS[code] || `${code} `;
+  return `${symbol}${parseFloat(basePrice).toLocaleString()}`;
+}
 
 type Venue = {
   id: string;
@@ -21,6 +44,7 @@ type Venue = {
   coverImageUrl?: string;
   pricingModel?: string;
   basePrice?: string;
+  currency?: string;
   categories?: string[];
   vibes?: string[];
   amenities?: string[];
@@ -228,8 +252,8 @@ function VenueCard({ venue }: { venue: Venue }) {
               {venue.basePrice && (
                 <div className="flex items-center">
                   <DollarSign className="w-4 h-4 mr-1" />
-                  ${parseFloat(venue.basePrice).toLocaleString()}
-                  {venue.pricingModel && `/${venue.pricingModel === 'whole_venue' ? 'venue' : 'room'}`}
+                  {formatVenueBasePrice(venue.basePrice, venue.currency)}
+                  {venue.pricingModel && `/${PRICING_UNIT_LABELS[normalizeVenueDealModel(venue.pricingModel) || ''] || 'event'}`}
                 </div>
               )}
             </div>

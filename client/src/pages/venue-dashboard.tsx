@@ -45,12 +45,15 @@ import {
   COUNTER_SENT_STATUS_LABEL,
   isCounterAwaitingCreator,
 } from "@/lib/venueOfferStatus";
+import { getVenueDealOptions, getVenueDealTermsKey, venueDealNeedsValue } from "@shared/venueDealModels";
+import { isSingleDayExperience } from "@shared/depositRules";
 
 type VenueOfferForm = {
   venueId: string;
   model: string;
   fixedFee: string;
   perHeadAmount: string;
+  perRoomPerNight: string;
   minimumSpend: string;
   revenueSharePct: string;
   accessFee: string;
@@ -62,6 +65,7 @@ const emptyVenueOfferForm = (): VenueOfferForm => ({
   model: "access_only",
   fixedFee: "",
   perHeadAmount: "",
+  perRoomPerNight: "",
   minimumSpend: "",
   revenueSharePct: "",
   accessFee: "",
@@ -76,68 +80,90 @@ function venueOfferFormFromContract(contract: any, venueId: string): VenueOfferF
     model: contract?.model || "access_only",
     fixedFee: terms.fixedFee != null ? String(terms.fixedFee) : "",
     perHeadAmount: terms.perHeadAmount != null ? String(terms.perHeadAmount) : "",
+    perRoomPerNight: terms.perRoomPerNight != null ? String(terms.perRoomPerNight) : "",
     minimumSpend: terms.minimumSpend != null ? String(terms.minimumSpend) : "",
     revenueSharePct: terms.revenueSharePct != null ? String(terms.revenueSharePct) : "",
     accessFee: terms.accessFee != null ? String(terms.accessFee) : "",
   };
 }
 
+// Each model keeps its number under its own terms key; the vocabulary owns
+// that mapping so the venue's counter-offer stores what the creator's builder
+// and the payout engine expect to read.
+const OFFER_FIELD_BY_TERMS_KEY: Record<string, keyof VenueOfferForm> = {
+  revenueSharePct: "revenueSharePct",
+  perHeadAmount: "perHeadAmount",
+  perRoomPerNight: "perRoomPerNight",
+  minimumSpend: "minimumSpend",
+  accessFee: "accessFee",
+  fixedFee: "fixedFee",
+};
+
 function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
-  if (form.model === "revenue_share") return { revenueSharePct: Number(form.revenueSharePct) };
-  if (form.model === "per_head") return { perHeadAmount: Number(form.perHeadAmount) };
-  if (form.model === "minimum_spend") return { minimumSpend: Number(form.minimumSpend) };
-  if (form.model === "access_only") return { accessFee: Number(form.accessFee || 0) };
-  return { fixedFee: Number(form.fixedFee) };
+  const termsKey = getVenueDealTermsKey(form.model);
+  if (!termsKey) return {};
+  const field = OFFER_FIELD_BY_TERMS_KEY[termsKey];
+  return { [termsKey]: Number(form[field] || 0) };
 }
 
 function isVenueOfferFormValid(form: VenueOfferForm): boolean {
   if (!form.model) return false;
-  if (form.model === "access_only") return Number(form.accessFee || 0) >= 0;
-  if (form.model === "revenue_share") {
-    const percentage = Number(form.revenueSharePct);
-    return percentage > 0 && percentage <= 100;
-  }
-  if (form.model === "per_head") return Number(form.perHeadAmount) > 0;
-  if (form.model === "minimum_spend") return Number(form.minimumSpend) > 0;
-  return Number(form.fixedFee) > 0;
+  const termsKey = getVenueDealTermsKey(form.model);
+  if (!termsKey) return false;
+  const value = Number(form[OFFER_FIELD_BY_TERMS_KEY[termsKey]] || 0);
+
+  // Access-Only may legitimately be free; every other model needs a real number.
+  if (!venueDealNeedsValue(form.model)) return value >= 0;
+  if (form.model === "revenue_share") return value > 0 && value <= 100;
+  return value > 0;
 }
 
-function VenueDealFields({ form, setForm, currency }: { form: VenueOfferForm; setForm: any; currency?: string }) {
+function VenueDealFields({ form, setForm, currency, isDaytime }: {
+  form: VenueOfferForm;
+  setForm: any;
+  currency?: string;
+  isDaytime: boolean;
+}) {
   const currencyCode = String(currency || "EUR").toUpperCase();
+  const symbol = ({ USD: "$", EUR: "€", GBP: "£" } as Record<string, string>)[currencyCode] || currencyCode;
+  // The same list the creator saw for this event length — a counter-offer can
+  // only ever be made in the vocabulary the deal was proposed in.
+  const options = getVenueDealOptions({
+    isDaytime,
+    surface: "venue",
+    currencySymbol: symbol,
+    currentValue: form.model,
+  });
+  const selected = options.find((option) => option.value === form.model);
+  const field = selected?.termsKey ? OFFER_FIELD_BY_TERMS_KEY[selected.termsKey] : null;
+
   return (
     <>
       <div>
         <Label>Commercial Model</Label>
         <Select value={form.model} onValueChange={(model) => setForm((current: VenueOfferForm) => ({ ...current, model }))}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectTrigger data-testid="select-venue-offer-model"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="revenue_share">Revenue Split</SelectItem>
-            <SelectItem value="fixed_fee">Ticket Deduction</SelectItem>
-            <SelectItem value="per_head">Per Head</SelectItem>
-            <SelectItem value="minimum_spend">Minimum Spend</SelectItem>
-            <SelectItem value="access_only">Access-Only</SelectItem>
-            <SelectItem value="venue_sponsored">Venue Sponsorship</SelectItem>
-            <SelectItem value="upfront_rental">Upfront Rental</SelectItem>
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        {selected && <p className="mt-1 text-xs text-gray-500">{selected.description}</p>}
       </div>
 
-      {form.model === "revenue_share" && (
-        <div><Label>Venue Revenue Share (%)</Label><Input type="number" min="0.01" max="100" value={form.revenueSharePct} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, revenueSharePct: event.target.value }))} /></div>
-      )}
-      {form.model === "per_head" && (
-        <div><Label>Per-Head Amount ({currencyCode})</Label><Input type="number" min="0.01" value={form.perHeadAmount} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, perHeadAmount: event.target.value }))} /></div>
-      )}
-      {form.model === "minimum_spend" && (
-        <div><Label>Minimum Spend ({currencyCode})</Label><Input type="number" min="0.01" value={form.minimumSpend} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, minimumSpend: event.target.value }))} /></div>
-      )}
-      {form.model === "access_only" && (
-        <div><Label>Access Fee ({currencyCode})</Label><Input type="number" min="0" value={form.accessFee} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, accessFee: event.target.value }))} /></div>
-      )}
-      {["fixed_fee", "venue_sponsored", "upfront_rental"].includes(form.model) && (
+      {selected && field && (
         <div>
-          <Label>{form.model === "venue_sponsored" ? "Sponsorship Fee" : form.model === "upfront_rental" ? "Rental Fee" : "Ticket Deduction per Ticket"} ({currencyCode})</Label>
-          <Input type="number" min="0.01" value={form.fixedFee} onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, fixedFee: event.target.value }))} />
+          <Label>{selected.valueKind === "none" ? `${selected.valueLabel} (optional)` : selected.valueLabel}</Label>
+          <Input
+            type="number"
+            min={selected.valueKind === "none" ? "0" : "0.01"}
+            max={selected.valueKind === "percent" ? "100" : undefined}
+            step={selected.valueKind === "percent" ? "1" : "0.01"}
+            value={form[field] as string}
+            onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, [field]: event.target.value }))}
+            data-testid="input-venue-offer-value"
+          />
         </div>
       )}
     </>
@@ -1369,6 +1395,11 @@ function VenueDashboardContent() {
               form={counterForm}
               setForm={setCounterForm}
               currency={counterModal.offer?.currency}
+              isDaytime={isSingleDayExperience({
+                experienceType: counterModal.offer?.experienceType,
+                startDate: counterModal.offer?.startDate,
+                endDate: counterModal.offer?.endDate,
+              })}
             />
 
             <div>

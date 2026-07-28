@@ -71,6 +71,7 @@ import {
   safeAdd
 } from '@shared/pricingService';
 import { calculateTicketDeduction } from "@shared/ticketDeduction";
+import { getVenueDealOptions } from "@shared/venueDealModels";
 
 const GREAT_PILLAR_VALUES = ["health", "sports", "wellness", "food"] as const;
 const FIXED_PLATFORM_FEE_PCT = 15;
@@ -5241,32 +5242,46 @@ function PricingStep({ form }: { form: any }) {
             ? "marketplace_day"
             : "marketplace_retreat";
 
-  // All available target deal options grouped by flow (for "open" bidding mode)
-  const openTargetDealOptions = {
-    flowA: [
-      { value: "revenue_share", label: "Revenue Split — Venue % of ticket sales" },
-      { value: "fixed_fee", label: "Ticket Deduction — flat amount per ticket sale" },
-      { value: "access_only", label: "Access-Only — venue keeps F&B, no ticket split" },
-    ],
-    flowB: [
-      { value: "venue_sponsored", label: "Venue Sponsorship — venue pays you a flat fee" },
-      { value: "upfront_rental", label: "Upfront Rental — you pay venue a flat fee" },
-    ],
-  };
+  // Deal options come from the shared vocabulary so the Venue Builder offers the
+  // same list, and so a multi-day retreat is never asked to run Access-Only /
+  // Pay-at-Counter while a one-day pop-up is never offered Per Room / Per Night.
+  const dealCurrencySymbol =
+    CURRENCY_CONFIG[(form.watch('currency') || 'EUR').toUpperCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€';
+  const isDaytimeDeal = !isMultiDayEvent;
 
-  // Flow A = Attendee-Funded (platform collects tickets, splits on payout)
-  // Flow B = B2B Upfront (Stripe charges the business immediately on Accept)
-  const venueDealOptions = useMemo(() => ({
-    flowA: [
-      { value: "revenue_share", label: "Revenue Split" },
-      { value: "fixed_fee", label: "Ticket Deduction" },
-      { value: "access_only", label: "Access-Only" },
-    ],
-    flowB: [
-      { value: "venue_sponsored", label: "Venue Sponsorship" },
-      { value: "upfront_rental", label: "Upfront Rental" },
-    ],
-  }), []);
+  const targetDealOptions = useMemo(
+    () => getVenueDealOptions({
+      isDaytime: isDaytimeDeal,
+      surface: "event",
+      currencySymbol: dealCurrencySymbol,
+      currentValue: form.watch('venueTargetDeal'),
+    }),
+    [isDaytimeDeal, dealCurrencySymbol, form.watch('venueTargetDeal')],
+  );
+
+  const venueDealOptions = useMemo(
+    () => getVenueDealOptions({
+      isDaytime: isDaytimeDeal,
+      surface: "event",
+      currencySymbol: dealCurrencySymbol,
+      currentValue: form.watch('venueCompensationModel'),
+    }),
+    [isDaytimeDeal, dealCurrencySymbol, form.watch('venueCompensationModel')],
+  );
+
+  const selectedTargetDeal = targetDealOptions.find(
+    (option) => option.value === form.watch('venueTargetDeal'),
+  );
+
+  // A target deal that no longer applies (e.g. the creator switched a day event
+  // to multi-day) is swapped for a valid one so the saved terms stay coherent.
+  useEffect(() => {
+    const current = form.getValues('venueTargetDeal');
+    if (current && !targetDealOptions.some((option) => option.value === current)) {
+      form.setValue('venueTargetDeal', targetDealOptions[0]?.value || '', { shouldDirty: true });
+      form.setValue('venueTargetDealValue', undefined, { shouldDirty: true });
+    }
+  }, [targetDealOptions, form]);
 
   useEffect(() => {
     if (venueDealContext === "external" || venueDealContext === "open" || venueDealContext === "invited") {
@@ -5283,9 +5298,10 @@ function PricingStep({ form }: { form: any }) {
       return;
     }
 
-    const allOptions = [...venueDealOptions.flowA, ...venueDealOptions.flowB];
-    if (!allOptions.some((option) => option.value === venueCompensationModel)) {
-      form.setValue('venueCompensationModel', 'access_only', { shouldDirty: true });
+    // A model that isn't valid for this event length falls back to the first
+    // one that is — a retreat has no Access-Only option to fall back to.
+    if (!venueDealOptions.some((option) => option.value === venueCompensationModel)) {
+      form.setValue('venueCompensationModel', venueDealOptions[0]?.value || 'revenue_share', { shouldDirty: true });
     }
   }, [form, venueDealContext, venueDealOptions, venueCompensationModel]);
 
@@ -5964,48 +5980,31 @@ function PricingStep({ form }: { form: any }) {
                       <SelectValue placeholder="Select preferred deal type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel className="text-xs font-bold text-blue-600 uppercase tracking-wide">
-                          Flow A — Attendee-Funded
-                        </SelectLabel>
-                        {openTargetDealOptions.flowA.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                      <SelectSeparator />
-                      <SelectGroup>
-                        <SelectLabel className="text-xs font-bold text-purple-600 uppercase tracking-wide">
-                          Flow B — B2B Upfront
-                        </SelectLabel>
-                        {openTargetDealOptions.flowB.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                        ))}
-                      </SelectGroup>
+                      {targetDealOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {selectedTargetDeal?.description}
+                  </p>
                   <p className="text-xs text-amber-600 mt-1">
                     {venueDealContext === "invited"
                       ? "Your invited venue will see this proposed deal when they review the invite."
                       : "Venues will see this preference when they bid to host your event."}
                   </p>
-                  {/* Value input: only shown for deal types that carry a number.
-                      access_only has no target amount, so it is excluded from the list.
-                      Label and constraints differ by type: % for revenue_share, € for the rest. */}
-                  {(['fixed_fee', 'per_head', 'minimum_spend', 'revenue_share', 'venue_sponsored', 'upfront_rental'].includes(form.watch('venueTargetDeal') || '')) && (
+                  {/* Only the deals that carry a number get an amount input —
+                      Access-Only / Pay-at-Counter has no target amount. */}
+                  {selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
                     <div className="mt-3">
-                      <Label htmlFor="venue-target-deal-value">
-                        {form.watch('venueTargetDeal') === 'revenue_share' ? 'Target Share (%)' :
-                         form.watch('venueTargetDeal') === 'venue_sponsored' ? 'Sponsorship Amount (Venue pays you)' :
-                         form.watch('venueTargetDeal') === 'upfront_rental' ? 'Rental Amount (you pay venue)' :
-                         'Target Amount'}
-                      </Label>
+                      <Label htmlFor="venue-target-deal-value">{selectedTargetDeal.valueLabel}</Label>
                       <Input
                         id="venue-target-deal-value"
                         type="number"
                         min="0"
-                        max={form.watch('venueTargetDeal') === 'revenue_share' ? 100 : undefined}
-                        step={form.watch('venueTargetDeal') === 'revenue_share' ? 1 : 0.01}
-                        placeholder={form.watch('venueTargetDeal') === 'revenue_share' ? 'e.g. 20' : 'e.g. 500'}
+                        max={selectedTargetDeal.valueKind === 'percent' ? 100 : undefined}
+                        step={selectedTargetDeal.valueKind === 'percent' ? 1 : 0.01}
+                        placeholder={selectedTargetDeal.valueKind === 'percent' ? 'e.g. 20' : 'e.g. 500'}
                         value={form.watch('venueTargetDealValue') ?? ''}
                         onChange={(e) => form.setValue('venueTargetDealValue', e.target.value ? parseFloat(e.target.value) : undefined, { shouldDirty: true })}
                         data-testid="input-venue-target-deal-value"
@@ -6024,26 +6023,15 @@ function PricingStep({ form }: { form: any }) {
                       <SelectValue placeholder="Select model" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel className="text-xs font-bold text-blue-600 uppercase tracking-wide">
-                          Flow A — Attendee-Funded Deals
-                        </SelectLabel>
-                        {venueDealOptions.flowA.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                      <SelectSeparator />
-                      <SelectGroup>
-                        <SelectLabel className="text-xs font-bold text-purple-600 uppercase tracking-wide">
-                          Flow B — B2B Upfront Deals
-                        </SelectLabel>
-                        {venueDealOptions.flowB.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                        ))}
-                      </SelectGroup>
+                      {venueDealOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-gray-500 mt-1">Propose a commercial deal to your venue partner.</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {venueDealOptions.find((opt) => opt.value === venueCompensationModel)?.description
+                      || 'Propose a commercial deal to your venue partner.'}
+                  </p>
                 </div>
               )}
               <div>

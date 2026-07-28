@@ -1,6 +1,9 @@
+import { getVenueDealLabel, normalizeVenueDealModel } from "@shared/venueDealModels";
+
 interface DigitalHandshakeTerms {
   fixedFee?: number;
   perHeadAmount?: number;
+  perRoomPerNight?: number;
   minimumSpend?: number;
   revenueSharePct?: number;
   accessFee?: number;
@@ -32,15 +35,6 @@ interface DigitalHandshakeContractProps {
   eventUrl?: string | null;
 }
 
-const modelLabels: Record<string, string> = {
-  fixed_fee: "Flat Fee Offer",
-  per_head: "Per Head",
-  minimum_spend: "Minimum Spend Guarantee",
-  revenue_share: "Percentage Revenue Share",
-  access_only: "Access-Only / Pay-at-Counter",
-  venue_sponsored: "Venue-Sponsored (You Pay Creator)",
-  upfront_rental: "Upfront Rental (Creator Pays You)",
-};
 
 export function DigitalHandshakeContract({
   contract = {},
@@ -53,7 +47,8 @@ export function DigitalHandshakeContract({
 }: DigitalHandshakeContractProps) {
   const terms = contract?.terms || {};
   const risk = contract?.risk || {};
-  const model = contract?.model || "access_only";
+  // Legacy contracts carry the old venue-builder keys; normalise before display.
+  const model = normalizeVenueDealModel(contract?.model) || "access_only";
   const resolvedPlatformPct = Number(terms.platformPct ?? platformPct ?? 15);
   const resolvedCurrency = String(terms.currency || currency || "EUR").toUpperCase();
 
@@ -69,6 +64,9 @@ export function DigitalHandshakeContract({
         return Number(terms.fixedFee || 0);
       case "per_head":
         return Number(terms.perHeadAmount || 0) * Number(maxParticipants || 0);
+      case "per_room_night":
+        // Rooms and nights are not known until the trip is booked out.
+        return 0;
       case "minimum_spend":
         return Number(terms.minimumSpend || 0);
       case "revenue_share":
@@ -104,7 +102,7 @@ export function DigitalHandshakeContract({
       </div>
       <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
         <span className="text-gray-500">
-          Model: <strong className="text-gray-900 dark:text-white">{modelLabels[model] || model}</strong>
+          Model: <strong className="text-gray-900 dark:text-white">{getVenueDealLabel(model, resolvedCurrency === "EUR" ? "€" : resolvedCurrency)}</strong>
         </span>
         <span className="text-gray-500">
           Status: <strong className="capitalize">{String(contract?.status || "pending").replace(/_/g, " ")}</strong>
@@ -116,7 +114,8 @@ export function DigitalHandshakeContract({
 
       <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-500 md:grid-cols-2">
         {model === "fixed_fee" && <span>Flat Fee: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
-        {model === "per_head" && <span>Per Head: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
+        {model === "per_head" && <span>Per Participant: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
+        {model === "per_room_night" && <span>Per Room / Night: <strong>{formatMoney(terms.perRoomPerNight)}</strong></span>}
         {model === "minimum_spend" && <span>Minimum Spend: <strong>{formatMoney(terms.minimumSpend)}</strong></span>}
         {model === "revenue_share" && <span>Revenue Share: <strong>{Number(terms.revenueSharePct || 0)}%</strong></span>}
         {model === "access_only" && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}

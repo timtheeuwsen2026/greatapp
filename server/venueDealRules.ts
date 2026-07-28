@@ -1,27 +1,30 @@
-export const VENUE_DEAL_MODELS = [
-  "revenue_share",
-  "fixed_fee",
-  "per_head",
-  "minimum_spend",
-  "access_only",
-  "venue_sponsored",
-  "upfront_rental",
-] as const;
+/**
+ * Server-side validation for venue deal terms.
+ *
+ * The vocabulary itself (which models exist, their labels, which list a day
+ * event or a multi-day trip sees) lives in @shared/venueDealModels so the two
+ * builders and the server cannot drift apart.
+ */
 
-export type VenueDealModel = typeof VENUE_DEAL_MODELS[number];
+import {
+  VENUE_DEAL_MODELS,
+  type VenueDealModel,
+  isVenueDealModel,
+  normalizeVenueDealModel,
+} from "@shared/venueDealModels";
+
+export { VENUE_DEAL_MODELS, isVenueDealModel, normalizeVenueDealModel };
+export type { VenueDealModel };
 
 export type VenueDealTerms = {
   fixedFee?: number;
   perHeadAmount?: number;
+  perRoomPerNight?: number;
   minimumSpend?: number;
   revenueSharePct?: number;
   accessFee?: number;
   currency?: string;
 };
-
-export function isVenueDealModel(value: unknown): value is VenueDealModel {
-  return typeof value === "string" && VENUE_DEAL_MODELS.includes(value as VenueDealModel);
-}
 
 function positiveNumber(value: unknown, label: string): number {
   const parsed = Number(value);
@@ -51,6 +54,11 @@ export function normalizeVenueDealTerms(
       return { fixedFee: positiveNumber(terms.fixedFee, "Fixed fee"), currency };
     case "per_head":
       return { perHeadAmount: positiveNumber(terms.perHeadAmount, "Per-head amount"), currency };
+    case "per_room_night":
+      return {
+        perRoomPerNight: positiveNumber(terms.perRoomPerNight, "Per room per night rate"),
+        currency,
+      };
     case "minimum_spend":
       return { minimumSpend: positiveNumber(terms.minimumSpend, "Minimum spend"), currency };
     case "access_only": {

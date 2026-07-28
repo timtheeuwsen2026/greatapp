@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
@@ -14,7 +14,10 @@ import { CheckCircle, Calendar, MapPin, Users, ArrowLeft, CreditCard, Clock, Tic
 import { normalizeImageUrl } from "@/lib/utils";
 import { formatCapacityParticipantCount } from "@/lib/participantCounts";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
+import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
@@ -58,6 +61,21 @@ type Booking = {
   ticketSkuId: string | null;
   ticketName: string | null;
   createdAt: string;
+};
+
+// apiRequest rejects with "<status>: <raw body>"; pull the human message back out.
+const readableApiError = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const jsonStart = raw.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (typeof parsed?.message === "string") return parsed.message;
+    } catch {
+      // fall through to the raw string
+    }
+  }
+  return raw || "We could not confirm this payment.";
 };
 
 const formatCurrency = (amount: number | string | undefined | null, currency?: string | null) => {
@@ -166,11 +184,26 @@ function BalancePaymentForm({ bookingId, amount, currency, onSuccess }: {
 export default function BookingSuccess() {
   const [, setLocation] = useLocation();
   const [experienceId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("experience"));
-  const [bookingId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("booking"));
+  const [bookingId, setBookingId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("booking"));
+  // Stripe appends these when a redirect-based payment method (iDEAL, Bancontact,
+  // full-page 3DS) sends the buyer back here. In that flow the checkout tab was
+  // unloaded before it could create the booking, so we rebuild it from the payment.
+  const [redirectPayment] = useState<{ paymentIntentId: string | null; clientSecret: string | null; status: string | null }>(() => {
+    const search = new URLSearchParams(window.location.search);
+    return {
+      paymentIntentId: search.get("payment_intent"),
+      clientSecret: search.get("payment_intent_client_secret"),
+      status: search.get("redirect_status"),
+    };
+  });
+  const [finalizeState, setFinalizeState] = useState<'idle' | 'working' | 'failed'>('idle');
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const finalizeStartedRef = useRef(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [balanceJustPaid, setBalanceJustPaid] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const { data: experience, isLoading } = useQuery<Experience>({
     queryKey: ["/api/experiences", experienceId],
@@ -202,6 +235,60 @@ export default function BookingSuccess() {
   const bookingLookupLoading = bookingId
     ? bookingDirectLoading
     : !!experienceId && myBookingsLoading;
+
+  // ── Recover a booking after a redirect-based payment ────────────────────
+  // The buyer was sent to their bank / iDEAL and came back to this page, so the
+  // checkout tab never got to POST /api/bookings. The money is already captured,
+  // and everything needed to rebuild the booking is on the PaymentIntent.
+  useEffect(() => {
+    const paymentWasDeclined = redirectPayment.status === 'failed' || redirectPayment.status === 'canceled';
+    if (
+      booking
+      || bookingLookupLoading
+      || !redirectPayment.paymentIntentId
+      || paymentWasDeclined
+      || finalizeStartedRef.current
+    ) {
+      return;
+    }
+
+    finalizeStartedRef.current = true;
+    setFinalizeState('working');
+
+    (async () => {
+      try {
+        const attribution = getAttribution();
+        const response = await apiRequest("POST", "/api/bookings/finalize-payment", {
+          paymentIntentId: redirectPayment.paymentIntentId,
+          clientSecret: redirectPayment.clientSecret,
+          promoterId: attribution.promoterId,
+          referralCode: attribution.referralCode,
+          shareToken: attribution.shareToken,
+        });
+        const data = await response.json();
+        const recoveredId = data?.booking?.id;
+        if (!recoveredId) throw new Error(data?.message || "Booking could not be confirmed");
+
+        clearAttribution();
+        queryClient.invalidateQueries({ queryKey: ["/api/bookings/my-bookings"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/experiences", experienceId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/experiences", experienceId, "booking-stats"] });
+
+        if (experienceId) {
+          await ensurePostCheckoutReferral(experienceId, user?.id, recoveredId).catch((error) => {
+            console.warn("Referral link will be retried later", error);
+          });
+        }
+
+        setBookingId(recoveredId);
+        setFinalizeState('idle');
+      } catch (error: any) {
+        console.error("[booking-success] could not finalize redirect payment:", error);
+        setFinalizeError(readableApiError(error));
+        setFinalizeState('failed');
+      }
+    })();
+  }, [booking, bookingLookupLoading, redirectPayment, experienceId, user?.id]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -300,6 +387,25 @@ export default function BookingSuccess() {
     );
   }
 
+  const paymentWasDeclined = redirectPayment.status === 'failed' || redirectPayment.status === 'canceled';
+
+  if (!booking && finalizeState === 'working') {
+    return (
+      <div className="min-h-screen bg-white">
+        <Navigation />
+        <div className="mx-auto max-w-2xl px-4 py-20 text-center">
+          <Loader2 className="mx-auto h-12 w-12 animate-spin text-primary" />
+          <h1 className="mt-6 text-2xl font-bold text-gray-900" data-testid="finalizing-heading">
+            Confirming your payment…
+          </h1>
+          <p className="mx-auto mt-3 max-w-lg text-gray-600">
+            Your payment went through. We're finishing your booking now — this only takes a moment.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!booking) {
     return (
       <div className="min-h-screen bg-white">
@@ -307,13 +413,21 @@ export default function BookingSuccess() {
         <div className="mx-auto max-w-2xl px-4 py-16 text-center">
           <XCircle className="mx-auto h-14 w-14 text-amber-500" />
           <h1 className="mt-5 text-2xl font-bold text-gray-900" data-testid="booking-required-heading">
-            We couldn't verify this booking
+            {paymentWasDeclined
+              ? "Your payment didn't go through"
+              : finalizeState === 'failed'
+                ? "We couldn't finish this booking"
+                : "We couldn't verify this booking"}
           </h1>
           <p className="mx-auto mt-3 max-w-lg text-gray-600">
-            This confirmation page is available after a completed checkout. Open your confirmed trip from My Bookings or complete checkout first.
+            {paymentWasDeclined
+              ? "Your bank didn't complete the payment, so nothing was charged and no spot was reserved. You can try again below."
+              : finalizeState === 'failed'
+                ? `Your payment was received but we couldn't attach it to a booking. ${finalizeError ?? ''} Please contact support with this reference: ${redirectPayment.paymentIntentId} — we can see the payment and will confirm your spot.`
+                : "This confirmation page is available after a completed checkout. Open your confirmed trip from My Bookings or complete checkout first."}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <Link href="/bookings">
+            <Link href="/my-bookings">
               <Button>My Bookings</Button>
             </Link>
             <Link href={`/checkout/${experience.id}`}>
@@ -359,7 +473,7 @@ export default function BookingSuccess() {
                   Browse other experiences
                 </Button>
               </Link>
-              <Link href="/bookings">
+              <Link href="/my-bookings">
                 <Button variant="outline" className="w-full">
                   View all my bookings
                 </Button>
@@ -610,7 +724,7 @@ export default function BookingSuccess() {
                   View Experience Details
                 </Button>
               </Link>
-              <Link href="/bookings">
+              <Link href="/my-bookings">
                 <Button className="w-full" variant="outline">
                   View My Bookings
                 </Button>

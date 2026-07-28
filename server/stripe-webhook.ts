@@ -28,6 +28,7 @@ import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
+import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -164,6 +165,34 @@ export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /**
+ * A PaymentIntent reached a payable state but no booking is attached to it.
+ * That means the buyer's browser left the checkout before it could create the
+ * booking — the usual cause is a redirect-based payment method (iDEAL,
+ * Bancontact, full-page 3DS) plus a closed tab. Everything needed is stamped on
+ * the PaymentIntent metadata, so rebuild the booking server-side rather than
+ * leaving a captured payment with nothing behind it.
+ */
+async function rebuildMissingBooking(pi: Stripe.PaymentIntent, source: string): Promise<void> {
+  if (!pi.metadata?.experienceId || !pi.metadata?.userId) {
+    console.warn(
+      `[Webhook] ${source}: no booking for PI ${pi.id} and not enough metadata to rebuild one`,
+    );
+    return;
+  }
+
+  try {
+    const result = await finalizeBookingFromPaymentIntent(pi.id);
+    if (result.created) {
+      console.log(`[Webhook] Rebuilt missing booking ${result.bookingId} from PI ${pi.id} (${source})`);
+    } else {
+      console.error(`[Webhook] Could not rebuild booking for PI ${pi.id}: ${result.message}`);
+    }
+  } catch (error: any) {
+    console.error(`[Webhook] Rebuilding booking for PI ${pi.id} threw:`, error?.message);
+  }
+}
+
+/**
  * Mode A / D: PaymentIntent captured immediately (capture_method=automatic).
  * Mark booking as fully_paid. If it was a balance payment, mark balance paid.
  */
@@ -176,9 +205,14 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     if (byBalance) {
       await storage.updateBookingBalancePaid(byBalance.id, true);
       console.log(`[Webhook] Balance paid for booking ${byBalance.id}`);
-    } else {
-      console.warn(`[Webhook] payment_intent.succeeded: no booking found for PI ${pi.id}`);
+      return;
     }
+
+    // Money captured with no booking behind it — the buyer paid with a
+    // redirect-based method and never returned to the confirmation page.
+    // Rebuilding also sets the final status and sends the confirmation emails,
+    // so there is nothing left to do here.
+    await rebuildMissingBooking(pi, "payment_intent.succeeded");
     return;
   }
 
@@ -203,7 +237,9 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
 async function handleDepositAuthorized(pi: Stripe.PaymentIntent): Promise<void> {
   const booking = await storage.getBookingByPaymentIntent(pi.id);
   if (!booking) {
-    console.warn(`[Webhook] amount_capturable_updated: no booking for PI ${pi.id}`);
+    // Same redirect/closed-tab case as above — rebuild instead of stranding the
+    // authorization. Booking creation sets the status and sends the emails.
+    await rebuildMissingBooking(pi, "payment_intent.amount_capturable_updated");
     return;
   }
 

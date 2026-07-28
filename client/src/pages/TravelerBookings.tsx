@@ -13,10 +13,15 @@ interface EnrichedBooking {
   experienceId: string;
   userId: string;
   status: string;
+  amount: string | null;
+  isDepositOnly: boolean | null;
+  balancePaid: boolean | null;
   depositAmount: string | null;
   balanceAmount: string | null;
   balanceDueDate: string | null;
   totalPrice: string | null;
+  ticketName: string | null;
+  ticketQuantity: number | null;
   createdAt: string;
   bookingDate?: string;
   experience: {
@@ -28,6 +33,8 @@ interface EnrichedBooking {
     location: string | null;
     venue: string | null;
     price: string | null;
+    currency: string | null;
+    requireMinimumParticipants?: boolean | null;
     minimumParticipants: number;
     currentParticipants: number;
     mvgMet: boolean;
@@ -35,22 +42,58 @@ interface EnrichedBooking {
   } | null;
 }
 
-const statusConfig: Record<string, { label: string; description: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+const formatCurrency = (amount: number | string | undefined | null, currency?: string | null) => {
+  const numAmount = typeof amount === 'string' ? parseFloat(amount) : (amount || 0);
+  const currencyCode = (currency || 'EUR').toUpperCase();
+  const symbols: Record<string, string> = {
+    USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'C$', AUD: 'A$', CHF: 'CHF ',
+  };
+  const symbol = symbols[currencyCode] || currencyCode + ' ';
+  return `${symbol}${(Number.isFinite(numAmount) ? numAmount : 0).toFixed(2)}`;
+};
+
+type StatusInfo = { label: string; description: string; variant: "default" | "secondary" | "destructive" | "outline" };
+
+const statusConfig: Record<string, StatusInfo> = {
   pending: { label: "Pending", description: "Awaiting confirmation", variant: "secondary" },
   deposit_authorized: { label: "Deposit Held", description: "Deposit held - awaiting trip confirmation", variant: "default" },
+  deposit_paid: { label: "Deposit Paid", description: "Spot secured - balance due before the trip", variant: "default" },
   confirmed: { label: "Confirmed", description: "Trip confirmed!", variant: "default" },
+  fully_paid: { label: "Paid", description: "Paid in full - your spot is confirmed", variant: "default" },
   cancelled: { label: "Cancelled", description: "Group not formed - deposit released", variant: "destructive" },
   refunded: { label: "Refunded", description: "Deposit refunded", variant: "outline" },
   failed: { label: "Failed", description: "Payment failed", variant: "destructive" },
 };
 
+// A "pending" booking on a minimum-group event is not awaiting payment — the
+// money is already held and released only if the group never forms.
+function resolveStatusInfo(booking: EnrichedBooking): StatusInfo {
+  if (booking.status === 'pending' && booking.experience?.requireMinimumParticipants) {
+    return {
+      label: "Payment Held",
+      description: "Paid and held until the minimum group size is reached",
+      variant: "secondary",
+    };
+  }
+  return statusConfig[booking.status] || { label: booking.status, description: "", variant: "secondary" as const };
+}
+
 function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBooking | null; open: boolean; onClose: () => void }) {
   if (!booking) return null;
 
-  const statusInfo = statusConfig[booking.status] || { label: booking.status, description: "", variant: "secondary" as const };
+  const statusInfo = resolveStatusInfo(booking);
+  const currency = booking.experience?.currency;
   const depositAmount = parseFloat(booking.depositAmount || "0");
   const totalPrice = parseFloat(booking.totalPrice || booking.experience?.price || "0");
-  const balanceAmount = parseFloat(booking.balanceAmount || "0") || (totalPrice - depositAmount);
+  // Only a deposit booking has an outstanding balance. Deriving one from
+  // total - deposit made fully paid bookings look like they still owed the
+  // whole ticket price.
+  const balanceAmount = parseFloat(booking.balanceAmount || "0");
+  const isDepositBooking = booking.isDepositOnly === true && depositAmount > 0;
+  const hasOutstandingBalance = isDepositBooking && !booking.balancePaid && balanceAmount > 0;
+  const amountPaid = parseFloat(
+    booking.amount || (isDepositBooking ? booking.depositAmount : booking.totalPrice) || "0",
+  );
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -109,23 +152,50 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
 
           <div className="border-t pt-4 space-y-3">
             <h4 className="font-medium">Payment Summary</h4>
-            
-            <div className="flex justify-between text-sm" data-testid="text-detail-deposit">
-              <span className="text-gray-600">Deposit Paid</span>
-              <span className="font-medium">${depositAmount.toFixed(2)}</span>
-            </div>
-            
-            <div className="flex justify-between text-sm" data-testid="text-detail-balance">
-              <span className="text-gray-600">Remaining Balance</span>
-              <span className="font-medium">${balanceAmount.toFixed(2)}</span>
-            </div>
-            
+
+            {booking.ticketName && (
+              <div className="flex justify-between text-sm" data-testid="text-detail-ticket">
+                <span className="text-gray-600">Ticket</span>
+                <span className="font-medium">
+                  {booking.ticketName}
+                  {booking.ticketQuantity && booking.ticketQuantity > 1 ? ` × ${booking.ticketQuantity}` : ''}
+                </span>
+              </div>
+            )}
+
+            {isDepositBooking ? (
+              <>
+                <div className="flex justify-between text-sm" data-testid="text-detail-deposit">
+                  <span className="text-gray-600">Deposit Paid</span>
+                  <span className="font-medium text-green-700">{formatCurrency(depositAmount, currency)}</span>
+                </div>
+
+                <div className="flex justify-between text-sm" data-testid="text-detail-balance">
+                  <span className="text-gray-600">{booking.balancePaid ? 'Balance Paid' : 'Remaining Balance'}</span>
+                  <span className={`font-medium ${booking.balancePaid ? 'text-green-700' : 'text-amber-700'}`}>
+                    {formatCurrency(balanceAmount, currency)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-sm" data-testid="text-detail-deposit">
+                <span className="text-gray-600">Amount Paid</span>
+                <span className="font-medium text-green-700">{formatCurrency(amountPaid, currency)}</span>
+              </div>
+            )}
+
             <div className="flex justify-between text-sm border-t pt-2" data-testid="text-detail-total">
               <span className="font-medium">Total Price</span>
-              <span className="font-semibold">${totalPrice.toFixed(2)}</span>
+              <span className="font-semibold">{formatCurrency(totalPrice, currency)}</span>
             </div>
-            
-            {booking.balanceDueDate && (
+
+            {!isDepositBooking && (
+              <p className="text-sm text-green-700" data-testid="text-detail-no-balance">
+                Paid in full — no remaining balance.
+              </p>
+            )}
+
+            {hasOutstandingBalance && booking.balanceDueDate && (
               <div className="flex items-center gap-2 text-sm text-orange-600 mt-2" data-testid="text-detail-due-date">
                 <Clock className="h-4 w-4" />
                 <span>Balance due by {new Date(booking.balanceDueDate).toLocaleDateString()}</span>
@@ -258,9 +328,13 @@ export default function TravelerBookings() {
           ) : (
             <div className="space-y-4">
               {bookings.map((booking) => {
-                const statusInfo = statusConfig[booking.status] || { label: booking.status, description: "", variant: "secondary" as const };
-                const depositAmount = parseFloat(booking.depositAmount || "0");
-                
+                const statusInfo = resolveStatusInfo(booking);
+                const isDepositBooking = booking.isDepositOnly === true && parseFloat(booking.depositAmount || "0") > 0;
+                const paidLabel = isDepositBooking ? 'Deposit' : 'Paid';
+                const paidAmount = parseFloat(
+                  booking.amount || (isDepositBooking ? booking.depositAmount : booking.totalPrice) || "0",
+                );
+
                 return (
                   <Card 
                     key={booking.id} 
@@ -300,7 +374,7 @@ export default function TravelerBookings() {
                             <div className="text-right">
                               <div className="flex items-center gap-1 text-sm text-gray-600" data-testid={`text-booking-deposit-${booking.id}`}>
                                 <CreditCard className="h-4 w-4" />
-                                <span>Deposit: ${depositAmount.toFixed(2)}</span>
+                                <span>{paidLabel}: {formatCurrency(paidAmount, booking.experience?.currency)}</span>
                               </div>
                             </div>
                           </div>

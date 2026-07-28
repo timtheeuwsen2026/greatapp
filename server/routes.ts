@@ -51,6 +51,7 @@ import { normalizeBuilderParticipantRoles } from "./participantRoleSync";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 import { scheduleCommunityHubUnreadJob, scheduleCreatorHubNudgeJob } from "./emailJobScheduler";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
+import { registerBookingFinalizer } from "./bookingFinalizer";
 import { isActivePostCheckoutBooking } from "./referralBookingRules";
 import {
   getEmailPreferenceSettings,
@@ -4283,11 +4284,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Booking routes
-  app.post("/api/bookings", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
+  /**
+   * Shared booking-creation core. Callers:
+   *  - POST /api/bookings                  — in-page checkout (no redirect)
+   *  - POST /api/bookings/finalize-payment — buyer returned from a redirect-based
+   *    payment method (iDEAL, Bancontact, full-page 3DS) where the SPA was unloaded
+   *    before it could create the booking
+   *  - the Stripe webhook backstop         — buyer paid but never came back
+   *
+   * Returns an HTTP-shaped result instead of writing to the response so every
+   * caller shares identical pricing, ticket, MVG and commission handling.
+   */
+  type BookingCreationInput = {
+    experienceId?: string;
+    amount?: unknown;
+    isEscrow?: boolean;
+    stripePaymentIntentId?: string | null;
+    promoterId?: string | null;
+    referralCode?: string | null;
+    shareToken?: string | null;
+    paymentType?: string;
+    ticketSkuId?: string | null;
+    ticketQuantity?: unknown;
+    quantity?: unknown;
+    /** Set only when rebuilding a booking for a payment Stripe has already taken. */
+    paymentAlreadyCaptured?: boolean;
+  };
+
+  async function createBookingForUser(
+    userId: string,
+    input: BookingCreationInput,
+  ): Promise<{ status: number; body: any }> {
       const {
-        experienceId,
         amount,
         isEscrow,
         stripePaymentIntentId,
@@ -4296,14 +4324,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         shareToken: providedShareToken,
         paymentType,
         ticketSkuId: bookingTicketSkuId,
-      } = req.body;
+      } = input;
+      const experienceId = typeof input.experienceId === 'string' ? input.experienceId : '';
       const ticketQuantity = parseRequestedTicketQuantity(
-        req.body.ticketQuantity ?? req.body.quantity,
+        input.ticketQuantity ?? input.quantity,
       );
       if (ticketQuantity === null) {
-        return res.status(400).json({
-          message: "Ticket quantity must be a positive whole number",
-        });
+        return {
+          status: 400,
+          body: { message: "Ticket quantity must be a positive whole number" },
+        };
       }
 
       // IDEMPOTENCY: If a booking already exists for this payment intent, return it — prevents
@@ -4312,20 +4342,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const existingBookingForPI = await storage.getBookingByPaymentIntent(stripePaymentIntentId);
         if (existingBookingForPI) {
           console.log(`[Booking] Idempotency hit: booking ${existingBookingForPI.id} already exists for PI ${stripePaymentIntentId}`);
-          return res.status(200).json({
-            booking: existingBookingForPI,
-            message: "Booking already exists for this payment",
-            mvgResult: null
-          });
+          return {
+            status: 200,
+            body: {
+              booking: existingBookingForPI,
+              message: "Booking already exists for this payment",
+              mvgResult: null,
+            },
+          };
         }
       }
 
       // Get experience details to check if MVG/escrow is enabled
-      const experience = await storage.getExperience(experienceId);
-      if (!experience) {
-        return res.status(404).json({ message: "Experience not found" });
+      const experience = experienceId ? await storage.getExperience(experienceId) : undefined;
+      if (!experienceId || !experience) {
+        return { status: 404, body: { message: "Experience not found" } };
       }
-      
+
       // PROMOTER ATTRIBUTION - Priority order:
       // 1. Provided values from session/local storage (client sends with booking)
       // 2. User's referred_by_promoter_id (persisted at signup)
@@ -4340,7 +4373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         trackedPromotion = await storage.getPromoterExperienceByShareToken(providedShareToken);
         if (trackedPromotion) {
           if (trackedPromotion.experienceId !== experienceId) {
-            return res.status(400).json({ message: "Referral link does not match this experience" });
+            return { status: 400, body: { message: "Referral link does not match this experience" } };
           }
           promoterExperienceId = trackedPromotion.id;
           referralAudience = trackedPromotion.referralAudience === 'official_partner'
@@ -4404,12 +4437,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           (t.id || t.sourceRoomId || `ticket-${i}`) === bookingTicketSkuId
         );
         if (!selectedTicket) {
-          return res.status(400).json({ message: "Selected ticket was not found" });
+          return { status: 400, body: { message: "Selected ticket was not found" } };
         }
       } else if (ticketSkus.length === 1) {
         selectedTicket = ticketSkus[0];
       } else if (ticketSkus.length > 1) {
-        return res.status(400).json({ message: "Select a ticket before booking" });
+        return { status: 400, body: { message: "Select a ticket before booking" } };
       }
       const resolvedTicketSkuId = selectedTicket
         ? String(
@@ -4429,10 +4462,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           availableTickets !== null
           && ticketQuantity > availableTickets
         ) {
-          return res.status(409).json({
-            message: `Only ${availableTickets} ticket(s) remain`,
-            availableTickets,
-          });
+          if (input.paymentAlreadyCaptured) {
+            // The buyer was charged before we got here (they came back from a
+            // redirect-based payment, or the webhook is rebuilding the booking).
+            // Refusing now would strand a captured payment with no booking, so
+            // record the overbooking instead and let the organiser resolve it.
+            console.warn(
+              `[Booking] Over-capacity booking accepted for an already-captured payment — experience ${experienceId}, ticket ${resolvedTicketSkuId}, requested ${ticketQuantity}, available ${availableTickets}`,
+            );
+          } else {
+            return {
+              status: 409,
+              body: {
+                message: `Only ${availableTickets} ticket(s) remain`,
+                availableTickets,
+              },
+            };
+          }
         }
       }
 
@@ -4442,7 +4488,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const chosenTotal = parseFloat((amount || 0).toString());
         const chosenPricePerTicket = chosenTotal / ticketQuantity;
         if (!Number.isFinite(chosenPricePerTicket) || chosenPricePerTicket < minPrice) {
-          return res.status(400).json({ message: `Minimum price for this ticket is ${minPrice}`, minPrice });
+          return {
+            status: 400,
+            body: { message: `Minimum price for this ticket is ${minPrice}`, minPrice },
+          };
         }
         unitPrice = chosenPricePerTicket;
         fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
@@ -4458,7 +4507,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (fullPrice < 0) {
-        return res.status(400).json({ message: "Unable to determine booking price for this experience" });
+        return { status: 400, body: { message: "Unable to determine booking price for this experience" } };
       }
       
       const fixedDepositPerTicket = selectedTicket?.depositPerPerson
@@ -4473,7 +4522,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if (fixedDepositPerTicket > unitPrice) {
-        return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
+        return { status: 400, body: { message: "Ticket deposit cannot exceed the full ticket price" } };
       }
 
       if (paymentType === 'full') {
@@ -4486,10 +4535,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount = fullPrice - depositAmount;
         balanceDueDate = depositSchedule.balanceDueDate;
       } else if (paymentType === 'deposit' && fixedDepositPerTicket > 0) {
-        return res.status(400).json({
-          message: "Deposit payment is not available for this event. Please pay the full ticket price.",
-          reason: depositSchedule.reason,
-        });
+        return {
+          status: 400,
+          body: {
+            message: "Deposit payment is not available for this event. Please pay the full ticket price.",
+            reason: depositSchedule.reason,
+          },
+        };
       } else {
         depositAmount = 0;
         balanceAmount = 0;
@@ -4524,39 +4576,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (paymentIntentId) {
         if (paymentIntentId.startsWith('pi_sandbox_')) {
           if (process.env.NODE_ENV === 'production') {
-            return res.status(400).json({ message: "Sandbox payments are not accepted in production" });
+            return { status: 400, body: { message: "Sandbox payments are not accepted in production" } };
           }
           paymentReadyForNotifications = true;
         } else {
           let paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
           const expectedAmount = Math.round((isDepositOnly ? depositAmount : fullPrice) * 100);
-          const expectedCurrency = String(experience.currency || 'usd').toLowerCase();
+          // Must match the fallback used when the PaymentIntent was created in
+          // /api/create-payment-intent, otherwise a currency-less experience
+          // fails this check after the buyer has already been charged.
+          const expectedCurrency = String(experience.currency || 'eur').toLowerCase();
 
           if (paymentIntent.metadata?.experienceId && paymentIntent.metadata.experienceId !== experienceId) {
-            return res.status(400).json({ message: "Payment does not belong to this experience" });
+            return { status: 400, body: { message: "Payment does not belong to this experience" } };
           }
           if (paymentIntent.metadata?.userId && paymentIntent.metadata.userId !== userId) {
-            return res.status(403).json({ message: "Payment does not belong to this account" });
+            return { status: 403, body: { message: "Payment does not belong to this account" } };
           }
           if (
             paymentIntent.metadata?.ticketSkuId
             && paymentIntent.metadata.ticketSkuId !== (resolvedTicketSkuId || "")
           ) {
-            return res.status(400).json({ message: "Payment does not belong to the selected ticket" });
+            return { status: 400, body: { message: "Payment does not belong to the selected ticket" } };
           }
           if (
             paymentIntent.metadata?.ticketQuantity
             && paymentIntent.metadata.ticketQuantity !== ticketQuantity.toString()
           ) {
-            return res.status(400).json({ message: "Payment quantity does not match this booking" });
+            return { status: 400, body: { message: "Payment quantity does not match this booking" } };
           }
           if (paymentIntent.amount !== expectedAmount || paymentIntent.currency !== expectedCurrency) {
-            return res.status(400).json({ message: "Payment amount or currency does not match this booking" });
+            return { status: 400, body: { message: "Payment amount or currency does not match this booking" } };
           }
           if (!['processing', 'requires_capture', 'succeeded'].includes(paymentIntent.status)) {
-            return res.status(409).json({
-              message: `Payment is not ready to create a booking (status: ${paymentIntent.status})`,
-            });
+            return {
+              status: 409,
+              body: { message: `Payment is not ready to create a booking (status: ${paymentIntent.status})` },
+            };
           }
 
           // Settle non-MVG authorizations immediately. MVG payments remain
@@ -4739,15 +4795,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message = "Booking confirmed successfully!";
       }
 
-      res.json({
-        booking,
-        message,
-        mvgResult: mvgCheckResult
-      });
+      return {
+        status: 200,
+        body: {
+          booking,
+          message,
+          mvgResult: mvgCheckResult,
+        },
+      };
+  }
+
+  app.post("/api/bookings", isAuthenticated, async (req: any, res) => {
+    try {
+      // paymentAlreadyCaptured is server-only — never let a client set it and
+      // skip the ticket-capacity check.
+      const { paymentAlreadyCaptured, ...bookingInput } = req.body || {};
+      const result = await createBookingForUser(req.user.claims.sub, bookingInput);
+      res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error("Error creating booking:", error);
       res.status(500).json({ message: "Failed to create booking", detail: error?.message });
     }
+  });
+
+  /**
+   * Rebuild a booking from a PaymentIntent alone.
+   *
+   * Redirect-based payment methods (iDEAL, Bancontact, full-page 3DS) unload the
+   * checkout SPA before it can POST /api/bookings, so the money is captured with
+   * no booking behind it. Everything needed to rebuild the booking is stamped on
+   * the PaymentIntent metadata at creation time, so this reconstructs it.
+   *
+   * Idempotent: createBookingForUser returns the existing booking when one is
+   * already attached to the PaymentIntent.
+   */
+  async function finalizeBookingFromPaymentIntentId(
+    paymentIntentId: string,
+    options: {
+      requestUserId?: string;
+      clientSecret?: string;
+      attribution?: { promoterId?: string | null; referralCode?: string | null; shareToken?: string | null };
+    } = {},
+  ): Promise<{ status: number; body: any }> {
+    if (!paymentIntentId || typeof paymentIntentId !== 'string') {
+      return { status: 400, body: { message: "A payment reference is required" } };
+    }
+
+    const existing = await storage.getBookingByPaymentIntent(paymentIntentId);
+    if (existing) {
+      if (options.requestUserId && existing.userId !== options.requestUserId) {
+        return { status: 403, body: { message: "Payment does not belong to this account" } };
+      }
+      return {
+        status: 200,
+        body: { booking: existing, message: "Booking already exists for this payment", mvgResult: null },
+      };
+    }
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const metadata = paymentIntent.metadata || {};
+    const ownerId = metadata.userId || options.requestUserId;
+
+    if (!ownerId) {
+      return { status: 422, body: { message: "This payment is not linked to an account" } };
+    }
+
+    // Ownership proof: either the PaymentIntent is stamped with this user, or the
+    // caller can present the client secret Stripe handed back on the redirect.
+    if (options.requestUserId && metadata.userId && metadata.userId !== options.requestUserId) {
+      return { status: 403, body: { message: "Payment does not belong to this account" } };
+    }
+    if (options.requestUserId && !metadata.userId && options.clientSecret !== paymentIntent.client_secret) {
+      return { status: 403, body: { message: "Payment could not be verified for this account" } };
+    }
+
+    if (!['processing', 'requires_capture', 'succeeded'].includes(paymentIntent.status)) {
+      return {
+        status: 409,
+        body: { message: `Payment is not ready to create a booking (status: ${paymentIntent.status})` },
+      };
+    }
+
+    if (!metadata.experienceId) {
+      return { status: 422, body: { message: "This payment is not linked to an experience" } };
+    }
+
+    const isDepositPayment = metadata.isDepositPayment === 'true';
+    return createBookingForUser(ownerId, {
+      paymentAlreadyCaptured: paymentIntent.status !== 'processing',
+      experienceId: metadata.experienceId,
+      amount: metadata.fullPrice ? parseFloat(metadata.fullPrice) : undefined,
+      isEscrow: metadata.isMVGExperience === 'true',
+      stripePaymentIntentId: paymentIntent.id,
+      ticketSkuId: metadata.ticketSkuId || undefined,
+      ticketQuantity: metadata.ticketQuantity || 1,
+      paymentType: isDepositPayment ? 'deposit' : 'full',
+      promoterId: metadata.promoterId || options.attribution?.promoterId || null,
+      referralCode: metadata.referralCode || options.attribution?.referralCode || null,
+      shareToken: metadata.shareToken || options.attribution?.shareToken || null,
+    });
+  }
+
+  app.post("/api/bookings/finalize-payment", isAuthenticated, async (req: any, res) => {
+    try {
+      const { paymentIntentId, clientSecret, promoterId, referralCode, shareToken } = req.body || {};
+      const result = await finalizeBookingFromPaymentIntentId(paymentIntentId, {
+        requestUserId: req.user.claims.sub,
+        clientSecret,
+        attribution: { promoterId, referralCode, shareToken },
+      });
+      res.status(result.status).json(result.body);
+    } catch (error: any) {
+      console.error("[finalize-payment] failed:", error?.message);
+      res.status(500).json({ message: "Failed to finalize booking", detail: error?.message });
+    }
+  });
+
+  // Webhook backstop: buyer paid but never returned to the site (closed the tab
+  // mid-redirect). Lets stripe-webhook.ts rebuild the booking server-side.
+  registerBookingFinalizer(async (paymentIntentId: string) => {
+    const result = await finalizeBookingFromPaymentIntentId(paymentIntentId);
+    return {
+      created: result.status === 200,
+      bookingId: result.body?.booking?.id,
+      message: result.body?.message,
+    };
   });
 
   app.get("/api/bookings/user", isAuthenticated, async (req: any, res) => {
@@ -4761,53 +4933,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * The one place a participant's bookings get their event details attached.
+   * Every participant-facing bookings list reads through this, so the pages
+   * can't drift apart on currency, dates or group progress.
+   */
+  async function getEnrichedBookingsForUser(userId: string) {
+    const userBookings = await storage.getBookingsByUser(userId);
+
+    const enrichedBookings = await Promise.all(
+      userBookings.map(async (booking) => {
+        const experience = await storage.getExperience(booking.experienceId);
+        const mvgProgress = await storage.getMVGProgress(booking.experienceId);
+        return {
+          ...booking,
+          experience: experience ? {
+            id: experience.id,
+            title: experience.title,
+            shortDescription: experience.shortDescription,
+            coverImageUrl: experience.coverImageUrl,
+            startDate: experience.startDate,
+            endDate: experience.endDate,
+            location: experience.location,
+            venue: experience.venue,
+            price: experience.price,
+            // The dashboard renders booking amounts — it needs the event's
+            // currency, not a hardcoded symbol.
+            currency: experience.currency,
+            requireMinimumParticipants: experience.requireMinimumParticipants,
+            minimumParticipants: mvgProgress.minimum_participants,
+            currentParticipants: mvgProgress.current_participants,
+            mvgMet: mvgProgress.mvg_met,
+            lifecycleStatus: computeLifecycleStatus({
+              status: experience.status || '',
+              mvgStatus: mvgProgress.mvg_met ? 'met' : (experience.mvgStatus || 'pending'),
+              requireMinimumParticipants: experience.requireMinimumParticipants,
+              mvgMet: mvgProgress.mvg_met,
+            }),
+          } : null
+        };
+      })
+    );
+
+    // Most recent booking first
+    return enrichedBookings.sort((a, b) => {
+      const dateA = new Date(a.bookingDate || a.createdAt || 0).getTime();
+      const dateB = new Date(b.bookingDate || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+  }
+
   // Milestone 2 Step 2: Traveler Booking Visibility (Read-Only)
   // Get user's own bookings with experience details enriched
   app.get('/api/bookings/my-bookings', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      
-      // Get user's bookings
-      const userBookings = await storage.getBookingsByUser(userId);
-      
-      // Enrich with experience details and MVG progress
-      const enrichedBookings = await Promise.all(
-        userBookings.map(async (booking) => {
-          const experience = await storage.getExperience(booking.experienceId);
-          const mvgProgress = await storage.getMVGProgress(booking.experienceId);
-          return {
-            ...booking,
-            experience: experience ? {
-              id: experience.id,
-              title: experience.title,
-              coverImageUrl: experience.coverImageUrl,
-              startDate: experience.startDate,
-              endDate: experience.endDate,
-              location: experience.location,
-              venue: experience.venue,
-              price: experience.price,
-              minimumParticipants: mvgProgress.minimum_participants,
-              currentParticipants: mvgProgress.current_participants,
-              mvgMet: mvgProgress.mvg_met,
-              lifecycleStatus: computeLifecycleStatus({
-                status: experience.status || '',
-                mvgStatus: mvgProgress.mvg_met ? 'met' : (experience.mvgStatus || 'pending'),
-                requireMinimumParticipants: experience.requireMinimumParticipants,
-                mvgMet: mvgProgress.mvg_met,
-              }),
-            } : null
-          };
-        })
-      );
-      
-      // Sort by most recent booking date
-      enrichedBookings.sort((a, b) => {
-        const dateA = new Date(a.bookingDate || a.createdAt || 0).getTime();
-        const dateB = new Date(b.bookingDate || b.createdAt || 0).getTime();
-        return dateB - dateA;
-      });
-      
-      res.json(enrichedBookings);
+      res.json(await getEnrichedBookingsForUser(req.user.claims.sub));
     } catch (error) {
       console.error("Error fetching user bookings:", error);
       res.status(500).json({ message: "Failed to fetch bookings" });
@@ -6132,10 +6312,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Stripe payment routes
-  app.post("/api/create-payment-intent", async (req, res) => {
+  app.post("/api/create-payment-intent", async (req: any, res) => {
     try {
       // userPrice: buyer-entered amount for PWYW tickets (optional)
       const { amount, experienceId, ticketSkuId, paymentMode, userPrice } = req.body;
+      // Stamped onto the PaymentIntent so the booking can be rebuilt from the
+      // payment alone if the browser never makes it back from a redirect-based
+      // payment method (iDEAL, Bancontact, full-page 3DS).
+      const buyerUserId: string | undefined = req.user?.claims?.sub;
+      const { promoterId: attributionPromoterId, referralCode: attributionReferralCode, shareToken: attributionShareToken } = req.body || {};
       const ticketQuantity = parseRequestedTicketQuantity(
         req.body.ticketQuantity ?? req.body.quantity,
       );
@@ -6287,8 +6472,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         automatic_payment_methods: {
           enabled: true,
         },
-        metadata: { 
+        metadata: {
           experienceId,
+          userId: buyerUserId || "",
           ticketSkuId: resolvedTicketSkuId || "",
           ticketName: ticketName || "",
           pricingMode: isPWYW ? "pwyw" : "fixed",
@@ -6299,6 +6485,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fullPrice: fullPrice.toString(),
           depositAmount: depositAmount.toString(),
           balanceAmount: balanceAmount.toString(),
+          promoterId: attributionPromoterId || "",
+          referralCode: attributionReferralCode || "",
+          shareToken: attributionShareToken || "",
           venueContractId: acceptedVenueContract?.id || "",
           venueContractModel: acceptedVenueContract?.model || "",
           mvgMin: (experience.mvgMin || experience.minimumParticipants || 0).toString(),
@@ -10868,13 +11057,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // User bookings route
-  app.get("/api/user/bookings", async (req: any, res) => {
+  // Legacy alias for /api/bookings/my-bookings. Same shape (booking rows with a
+  // nested `experience`) so callers can move between them without surprises.
+  app.get("/api/user/bookings", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
-      console.log(`Fetching bookings for user: ${userId}`);
-      const bookings = await storage.getUserBookings(userId);
-      console.log(`Found ${bookings?.length || 0} bookings for user`);
-      res.json(bookings || []);
+      res.json(await getEnrichedBookingsForUser(req.user.claims.sub));
     } catch (error) {
       console.error("Error fetching user bookings:", error);
       res.status(500).json({ message: "Failed to fetch bookings" });
@@ -10882,9 +11069,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // User reservations route (soft-hold system)
-  app.get("/api/user/reservations", async (req: any, res) => {
+  app.get("/api/user/reservations", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      const userId = req.user.claims.sub;
       console.log(`Fetching reservations for user: ${userId}`);
       
       // Get reservations

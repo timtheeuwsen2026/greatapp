@@ -17,13 +17,60 @@ function formatCurrency(amount: string | number | null, currency: string = 'EUR'
   }).format(numAmount);
 }
 
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
+// A paid spot unlocks the community, whichever paid state it landed in.
+const COMMUNITY_UNLOCKED_STATUSES = new Set([
+  "confirmed",
+  "fully_paid",
+  "deposit_paid",
+  "deposit_authorized",
+]);
+
+// Booking statuses are: pending | deposit_authorized | deposit_paid | confirmed
+// | fully_paid | cancelled | refunded | failed. Anything not spelled out here
+// used to fall through to "Pending", so a paid booking read as unpaid.
+function getBookingBadge(booking: any): { label: string; variant: BadgeVariant } {
+  const hasDeposit = parseFloat(booking.depositAmount || "0") > 0;
+
+  switch (booking.status) {
+    case "refunded":
+      return { label: "Refunded", variant: "outline" };
+    case "failed":
+      return { label: "Failed", variant: "destructive" };
+    case "cancelled":
+      return { label: "Cancelled", variant: "destructive" };
+    case "fully_paid":
+      return { label: "Paid", variant: "default" };
+    case "deposit_paid":
+      return booking.balancePaid
+        ? { label: "Balance Paid", variant: "default" }
+        : { label: "Deposit Paid", variant: "secondary" };
+    case "deposit_authorized":
+      return { label: "Deposit Held", variant: "secondary" };
+    case "confirmed":
+      if (booking.balancePaid) return { label: "Balance Paid", variant: "default" };
+      if (hasDeposit) return { label: "Deposit Paid", variant: "secondary" };
+      return { label: "Confirmed", variant: "default" };
+    case "pending":
+      // On a minimum-group event the money is already taken and simply held.
+      return booking.stripePaymentIntentId
+        ? { label: "Payment Held", variant: "secondary" }
+        : { label: "Pending", variant: "secondary" };
+    default:
+      return { label: booking.status || "Pending", variant: "secondary" };
+  }
+}
+
 export default function Bookings() {
   const { data: user } = useQuery<any>({
     queryKey: ["/api/auth/user"],
   });
 
+  // Same endpoint as /my-bookings so both participant views show identical
+  // event details, currency and group progress.
   const { data: bookings, isLoading } = useQuery<any[]>({
-    queryKey: ["/api/user/bookings"],
+    queryKey: ["/api/bookings/my-bookings"],
     enabled: !!user
   });
 
@@ -214,33 +261,24 @@ export default function Bookings() {
             </Card>
           ) : (
             <div className="space-y-6">
-              {bookings.map((booking: any) => (
+              {bookings.map((booking: any) => {
+                const experience = booking.experience || {};
+                const currency = experience.currency || booking.currency || 'EUR';
+
+                return (
                 <Card key={booking.id} className="overflow-hidden">
                   <CardContent className="p-6">
                     <div className="flex flex-col lg:flex-row lg:items-center gap-6">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <h3 className="text-xl font-semibold text-gray-900" data-testid={`text-booking-title-${booking.id}`}>
-                            {booking.experienceTitle || "Experience Booking"}
+                            {experience.title || "Experience Booking"}
                           </h3>
-                          <Badge 
-                            variant={
-                              booking.status === "confirmed" && booking.balancePaid ? "default" :
-                              booking.status === "confirmed" && !booking.balancePaid && parseFloat(booking.depositAmount || "0") > 0 ? "secondary" :
-                              booking.status === "confirmed" ? "default" :
-                              booking.status === "pending" ? "secondary" : 
-                              booking.status === "refunded" ? "outline" :
-                              "destructive"
-                            }
+                          <Badge
+                            variant={getBookingBadge(booking).variant}
                             data-testid={`badge-status-${booking.id}`}
                           >
-                            {booking.status === "refunded" ? "Refunded" :
-                             booking.status === "failed" ? "Failed" :
-                             booking.status === "cancelled" ? "Cancelled" :
-                             booking.status === "confirmed" && booking.balancePaid ? "Balance Paid" :
-                             booking.status === "confirmed" && !booking.balancePaid && parseFloat(booking.depositAmount || "0") > 0 ? "Deposit Paid" :
-                             booking.status === "confirmed" ? "Confirmed" :
-                             "Pending"}
+                            {getBookingBadge(booking).label}
                           </Badge>
                         </div>
                         
@@ -248,28 +286,28 @@ export default function Bookings() {
                           <div className="flex items-center gap-2">
                             <Calendar className="h-4 w-4" />
                             <span data-testid={`text-booking-date-${booking.id}`}>
-                              {booking.experienceStartDate ? 
-                                new Date(booking.experienceStartDate).toLocaleDateString() : 
-                                "Date TBD"
+                              {experience.startDate
+                                ? new Date(experience.startDate).toLocaleDateString()
+                                : "Date TBD"
                               }
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <MapPin className="h-4 w-4" />
                             <span data-testid={`text-booking-location-${booking.id}`}>
-                              {booking.experienceLocation || "Location TBD"}
+                              {experience.venue || experience.location || "Location TBD"}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <Clock className="h-4 w-4" />
                             <span data-testid={`text-booking-time-${booking.id}`}>
-                              Booked {new Date(booking.bookingDate).toLocaleDateString()}
+                              Booked {new Date(booking.bookingDate || booking.createdAt).toLocaleDateString()}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <CreditCard className="h-4 w-4" />
                             <span className="font-medium" data-testid={`text-booking-amount-${booking.id}`}>
-                              {formatCurrency(booking.amount, booking.currency || booking.experienceCurrency || 'EUR')}
+                              {formatCurrency(booking.amount, currency)}
                             </span>
                           </div>
                         </div>
@@ -280,17 +318,17 @@ export default function Bookings() {
                             <div className="grid grid-cols-2 gap-2 text-sm">
                               <div className="flex justify-between">
                                 <span className="text-gray-600">Total Price:</span>
-                                <span className="font-medium" data-testid={`text-total-price-${booking.id}`}>{formatCurrency(booking.totalPrice, booking.currency || booking.experienceCurrency || 'EUR')}</span>
+                                <span className="font-medium" data-testid={`text-total-price-${booking.id}`}>{formatCurrency(booking.totalPrice, currency)}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-gray-600">Deposit Paid:</span>
-                                <span className="font-medium text-green-700" data-testid={`text-deposit-paid-${booking.id}`}>{formatCurrency(booking.depositAmount, booking.currency || booking.experienceCurrency || 'EUR')}</span>
+                                <span className="font-medium text-green-700" data-testid={`text-deposit-paid-${booking.id}`}>{formatCurrency(booking.depositAmount, currency)}</span>
                               </div>
                               {!booking.balancePaid && parseFloat(booking.balanceAmount || "0") > 0 && (
                                 <>
                                   <div className="flex justify-between">
                                     <span className="text-gray-600">Balance Due:</span>
-                                    <span className="font-semibold text-orange-700" data-testid={`text-balance-due-${booking.id}`}>{formatCurrency(booking.balanceAmount, booking.currency || booking.experienceCurrency || 'EUR')}</span>
+                                    <span className="font-semibold text-orange-700" data-testid={`text-balance-due-${booking.id}`}>{formatCurrency(booking.balanceAmount, currency)}</span>
                                   </div>
                                   {booking.balanceDueDate && (
                                     <div className="flex justify-between">
@@ -305,16 +343,16 @@ export default function Bookings() {
                               {booking.balancePaid && (
                                 <div className="flex justify-between col-span-2">
                                   <span className="text-gray-600">Balance Paid:</span>
-                                  <span className="font-medium text-green-700" data-testid={`text-balance-paid-${booking.id}`}>{formatCurrency(booking.balanceAmount, booking.currency || booking.experienceCurrency || 'EUR')}</span>
+                                  <span className="font-medium text-green-700" data-testid={`text-balance-paid-${booking.id}`}>{formatCurrency(booking.balanceAmount, currency)}</span>
                                 </div>
                               )}
                             </div>
                           </div>
                         )}
-                        
-                        {booking.experienceShortDescription && (
+
+                        {experience.shortDescription && (
                           <p className="mt-3 text-gray-600" data-testid={`text-booking-description-${booking.id}`}>
-                            {booking.experienceShortDescription}
+                            {experience.shortDescription}
                           </p>
                         )}
                       </div>
@@ -325,7 +363,7 @@ export default function Bookings() {
                             View Experience
                           </Link>
                         </Button>
-                        {booking.status === "confirmed" && (
+                        {COMMUNITY_UNLOCKED_STATUSES.has(booking.status) && (
                           <Button asChild variant="outline" size="sm" data-testid={`button-join-community-${booking.id}`}>
                             <Link href="/community-hub">
                               Join Community
@@ -336,7 +374,8 @@ export default function Bookings() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
 

@@ -357,15 +357,22 @@ export default function Checkout() {
   const [pwywMin, setPwywMin] = useState<number>(0);
   const [pwywSubmitted, setPwywSubmitted] = useState(false);
   const experienceId = params?.id;
-  
+
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
-  const ticketSkuId = urlParams.get('ticketSkuId');
   const requestedTicketQuantity = Number(urlParams.get('quantity') || 1);
-  const ticketQuantity = Number.isInteger(requestedTicketQuantity) && requestedTicketQuantity > 0
-    ? requestedTicketQuantity
-    : 1;
   const initialPaymentMode = urlParams.get('paymentMode') as 'deposit' | 'full' | null;
-  
+
+  // Ticket selection lives in state, not just the URL: plenty of entry points
+  // (chat teaser, invite links, share kit, "complete checkout" fallbacks) link
+  // straight to /checkout/:id with no ticketSkuId. When the event sells more
+  // than one ticket type we ask here instead of failing the payment setup.
+  const [ticketSkuId, setTicketSkuId] = useState<string | null>(() => urlParams.get('ticketSkuId'));
+  const [ticketQuantity, setTicketQuantity] = useState<number>(
+    Number.isInteger(requestedTicketQuantity) && requestedTicketQuantity > 0
+      ? requestedTicketQuantity
+      : 1,
+  );
+
   const [paymentMode, setPaymentMode] = useState<'deposit' | 'full'>(initialPaymentMode || 'deposit');
 
   const { data: experience, isLoading: experienceLoading } = useQuery<Experience>({
@@ -385,12 +392,19 @@ export default function Checkout() {
     setPaymentIntentLoading(true);
     setPaymentInitError(null);
     try {
+      // Attribution travels with the PaymentIntent so a redirect-based payment
+      // method (iDEAL, Bancontact, full-page 3DS) can still be attributed even
+      // if this tab never comes back.
+      const attribution = getAttribution();
       const body: Record<string, any> = {
         amount: experience.pricePerPerson || experience.price,
         experienceId: experienceId,
         ticketSkuId: ticketSkuId || undefined,
         ticketQuantity,
         paymentMode: mode,
+        promoterId: attribution.promoterId,
+        referralCode: attribution.referralCode,
+        shareToken: attribution.shareToken,
       };
       if (userPrice !== undefined) body.userPrice = userPrice;
 
@@ -451,6 +465,15 @@ export default function Checkout() {
       }
     } catch (error: any) {
       const message = error?.message || "Failed to initialize payment. Please try again.";
+      // A stale or missing ticket reference is recoverable — drop back to the
+      // picker instead of dead-ending on "Select a ticket before checkout".
+      if (/Selected ticket was not found|Select a ticket before checkout/i.test(message)) {
+        setTicketSkuId(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('ticketSkuId');
+        window.history.replaceState({}, '', url.toString());
+        return;
+      }
       setPaymentInitError(message);
       toast({
         title: "Payment setup failed",
@@ -478,11 +501,16 @@ export default function Checkout() {
     }
 
     if (experience && experienceId && !clientSecret && !pwywReady) {
-      // Check if the selected ticket is PWYW before auto-creating the PaymentIntent
       const ticketSkus: any[] = (experience as any).ticketSkus || [];
+
+      // Several ticket types and none picked yet — show the picker instead of
+      // asking the server to guess (it answers "Select a ticket before checkout").
+      if (!ticketSkuId && ticketSkus.length > 1) return;
+
+      // Check if the selected ticket is PWYW before auto-creating the PaymentIntent
       const selectedTicket = ticketSkuId
         ? ticketSkus.find((t: any, i: number) => (t.id || t.sourceRoomId || `ticket-${i}`) === ticketSkuId)
-        : null;
+        : (ticketSkus.length === 1 ? ticketSkus[0] : null);
 
       if (selectedTicket?.pricingMode === 'pwyw') {
         const suggested = parseFloat(selectedTicket.suggestedPrice ?? selectedTicket.pricePerPerson ?? 0) || 0;
@@ -494,7 +522,7 @@ export default function Checkout() {
         createPaymentIntent(paymentMode);
       }
     }
-  }, [experience, experienceId, isAuthenticated, authLoading, toast, pwywReady, pwywSubmitted]);
+  }, [experience, experienceId, isAuthenticated, authLoading, toast, pwywReady, pwywSubmitted, ticketSkuId]);
 
   // Once PWYW user has submitted their price, create the PaymentIntent with it
   useEffect(() => {
@@ -672,6 +700,101 @@ export default function Checkout() {
               >
                 {freeRsvpSubmitting ? "Confirming..." : freeRsvpError ? "Try Again" : "Confirm RSVP"}
               </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Ticket picker ─────────────────────────────────────────────────────
+  // Reached whenever the event sells more than one ticket type and the link
+  // that brought the buyer here carried no ticketSkuId.
+  const availableTicketSkus: any[] = (experience as any).ticketSkus || [];
+  if (!ticketSkuId && availableTicketSkus.length > 1) {
+    const currency = experience.currency;
+    const chooseTicket = (id: string, quantity: number) => {
+      setTicketQuantity(quantity);
+      setTicketSkuId(id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('ticketSkuId', id);
+      url.searchParams.set('quantity', String(quantity));
+      window.history.replaceState({}, '', url.toString());
+    };
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navigation />
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <Card>
+            <CardHeader>
+              <CardTitle>Choose your ticket</CardTitle>
+              <p className="text-sm text-gray-500 mt-1">
+                {experience.title} — pick a ticket type to continue to payment.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {availableTicketSkus.map((ticket: any, index: number) => {
+                const id = ticket.id || ticket.sourceRoomId || `ticket-${index}`;
+                const capacity = Number(ticket.ticketCapacity);
+                const spotsLeft = Number.isFinite(capacity) ? capacity - (Number(ticket.soldCount) || 0) : null;
+                const isSoldOut = spotsLeft !== null && spotsLeft <= 0;
+                const maxQuantity = spotsLeft !== null ? Math.max(1, spotsLeft) : undefined;
+                const quantity = Math.min(ticketQuantity, maxQuantity ?? ticketQuantity);
+                const isPwyw = ticket.pricingMode === 'pwyw';
+
+                return (
+                  <div
+                    key={id}
+                    className={`rounded-lg border-2 p-4 ${isSoldOut ? 'border-gray-200 bg-gray-50 opacity-60' : 'border-gray-200 bg-white'}`}
+                    data-testid={`checkout-ticket-option-${index}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-gray-900">{ticket.ticketName || ticket.name || `Ticket ${index + 1}`}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {isPwyw ? 'Pay what you want' : 'per person'}
+                          {spotsLeft !== null && !isSoldOut && ` · ${spotsLeft} ${spotsLeft === 1 ? 'spot' : 'spots'} left`}
+                          {isSoldOut && ' · Sold out'}
+                        </p>
+                      </div>
+                      <span className="font-bold text-primary whitespace-nowrap">
+                        {isPwyw
+                          ? formatCurrency(ticket.suggestedPrice ?? ticket.minPrice ?? 0, currency) + '+'
+                          : formatCurrency(ticket.pricePerPerson || 0, currency)}
+                      </span>
+                    </div>
+
+                    {!isSoldOut && (
+                      <div className="mt-3 flex items-center gap-3">
+                        <Label htmlFor={`checkout-quantity-${index}`} className="text-sm text-gray-600">
+                          Tickets
+                        </Label>
+                        <Input
+                          id={`checkout-quantity-${index}`}
+                          type="number"
+                          min={1}
+                          max={maxQuantity}
+                          value={quantity}
+                          onChange={(event) => {
+                            const next = Math.max(1, Number.parseInt(event.target.value, 10) || 1);
+                            setTicketQuantity(maxQuantity ? Math.min(maxQuantity, next) : next);
+                          }}
+                          className="w-24"
+                          data-testid={`checkout-quantity-input-${index}`}
+                        />
+                        <Button
+                          className="ml-auto"
+                          onClick={() => chooseTicket(id, quantity)}
+                          data-testid={`checkout-select-ticket-${index}`}
+                        >
+                          Select
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </CardContent>
           </Card>
         </div>

@@ -1857,9 +1857,17 @@ function AdminVenueOffersTab() {
   return (
     <TabsContent value="venue-offers" className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Venue Offer Approvals</h2>
-        <Badge variant="secondary">{response?.pagination?.total ?? 0} pending</Badge>
+        <h2 className="text-xl font-semibold">Venue Offer Backlog</h2>
+        <Badge variant="secondary">{response?.pagination?.total ?? 0} queued</Badge>
       </div>
+
+      <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30">
+        <CardContent className="py-4 text-sm text-blue-900 dark:text-blue-100">
+          Venue bids now go straight to the creator — admins no longer approve negotiations.
+          Anything listed here was submitted before that change and is still hidden from its
+          creator. Release it to put it in their Venue Offers tab.
+        </CardContent>
+      </Card>
 
       {isLoading ? (
         <div className="text-center py-8">
@@ -1869,7 +1877,9 @@ function AdminVenueOffersTab() {
         <Card>
           <CardContent className="text-center py-12">
             <CheckCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 dark:text-gray-400">No venue offers awaiting review.</p>
+            <p className="text-gray-600 dark:text-gray-400">
+              Nothing queued — venue bids reach creators directly.
+            </p>
           </CardContent>
         </Card>
       ) : (
@@ -1886,8 +1896,8 @@ function AdminVenueOffersTab() {
                     <div className="flex-1 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold">{venue?.name ?? "Unknown Venue"}</span>
-                        <Badge variant="outline" className="text-xs">{offer.model?.replace(/_/g, " ")}</Badge>
-                        <Badge variant="secondary" className="text-xs">Awaiting Review</Badge>
+                        <Badge variant="outline" className="text-xs">{getVenueDealLabel(offer.model)}</Badge>
+                        <Badge variant="secondary" className="text-xs">Hidden from creator</Badge>
                       </div>
                       <p className="text-sm text-gray-500">
                         Bidding on: <span className="font-medium text-gray-700 dark:text-gray-300">{experience?.title ?? offer.experienceId}</span>
@@ -1917,7 +1927,7 @@ function AdminVenueOffersTab() {
                         onClick={() => approveMutation.mutate(offer.id)}
                       >
                         <CheckCircle className="w-4 h-4 mr-1" />
-                        Approve
+                        Send to Creator
                       </Button>
                       <Button
                         size="sm"

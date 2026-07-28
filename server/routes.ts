@@ -13035,6 +13035,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message,
       });
 
+      // The bid lands in the creator's Venue Offers tab straight away, so the
+      // Digital Handshake email goes out now rather than after an admin step.
+      (async () => {
+        const creator = await storage.getUser((experience as any).creatorId);
+        if (!creator?.email) return;
+        await notificationService.sendVenueBidReceivedEmail({
+          to: creator.email,
+          recipientName: creator.firstName,
+          venueName: (ownedVenue as any)?.name,
+          experienceTitle: (experience as any).title,
+          experienceSlugOrId: (experience as any).slug || experienceId,
+          model,
+          terms: normalizedTerms,
+          currency: (experience as any).currency,
+          message,
+        });
+      })().catch((err) => console.error('Venue bid email failed:', err?.message || err));
+
       res.status(201).json(offer);
     } catch (err: any) {
       console.error('Error creating venue offer:', err);
@@ -13042,7 +13060,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/admin/venue-offers — list all offers awaiting admin review
+  // GET /api/admin/venue-offers — bids still queued from before bids went
+  // straight to creators. Empties out as they are released; nothing refills it.
   app.get('/api/admin/venue-offers', isAuthenticated, async (req: any, res) => {
     try {
       const isAdmin = await checkIsAdmin(req);
@@ -13061,7 +13080,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // POST /api/admin/venue-offers/:offerId/approve — admin approves, makes offer visible to creator
+  /**
+   * POST /api/admin/venue-offers/:offerId/approve — release a legacy queued bid.
+   *
+   * New bids never enter this queue: they go straight to the creator's Venue
+   * Offers tab. This only exists to release bids submitted before that change,
+   * which would otherwise stay invisible to the creator forever.
+   */
   app.post('/api/admin/venue-offers/:offerId/approve', isAuthenticated, async (req: any, res) => {
     try {
       const isAdmin = await checkIsAdmin(req);

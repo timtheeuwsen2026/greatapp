@@ -339,7 +339,7 @@ export interface IStorage {
   updateVenueContractSponsorshipStatus(contractId: string, status: string, paymentIntentId?: string): Promise<VenueContract>;
 
   // Venue Offers — Reverse Handshake bids (venue owner → creator)
-  createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "admin_review" | "pending" }): Promise<any>;
+  createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "pending" }): Promise<any>;
   getVenueOffersForExperience(experienceId: string): Promise<any[]>;
   getVenueOffersForCreator(creatorId: string): Promise<any[]>;
   getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]>;
@@ -853,7 +853,7 @@ export class DatabaseStorage implements IStorage {
 
   // ── Venue Offers (Reverse Handshake) ────────────────────────────────────────
 
-  async createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "admin_review" | "pending" }): Promise<any> {
+  async createVenueOffer(data: { experienceId: string; venueId: string; venueOwnerId: string; model: string; terms: object; message?: string; status?: "pending" }): Promise<any> {
     const [offer] = await db.insert(venueOffers).values({
       experienceId: data.experienceId,
       venueId: data.venueId,
@@ -861,7 +861,9 @@ export class DatabaseStorage implements IStorage {
       model: data.model,
       terms: data.terms as any,
       message: data.message || null,
-      status: data.status || "admin_review",
+      // A venue's bid reaches the creator's Venue Offers tab immediately — the
+      // platform does not sit in the middle of every negotiation.
+      status: data.status || "pending",
     }).returning();
     return offer;
   }

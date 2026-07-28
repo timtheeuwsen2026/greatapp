@@ -1713,7 +1713,9 @@ export const venueOffers = pgTable("venue_offers", {
   venueOwnerId: varchar("venue_owner_id")
     .references(() => users.id)
     .notNull(),
-  status: varchar("status", { length: 20 }).default("admin_review"), // "admin_review" | "pending" | "accepted" | "declined"
+  // Bids go straight to the creator. "admin_review" only appears on rows
+  // created before that change; nothing writes it any more.
+  status: varchar("status", { length: 20 }).default("pending"), // "pending" | "accepted" | "declined" | (legacy) "admin_review"
   model: varchar("model", { length: 50 }).notNull(), // same values as venueContracts.model
   terms: jsonb("terms")
     .$type<{

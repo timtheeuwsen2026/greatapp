@@ -4766,34 +4766,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Create booking with deposit tracking information and promoter attribution
-      const booking = await storage.createBooking({
-        experienceId,
-        userId,
-        amount: (isDepositOnly ? depositAmount : fullPrice).toString(), // Amount actually charged
-        totalPrice: fullPrice.toString(), // Full experience price
-        isDepositOnly,
-        depositAmount: depositAmount.toString(),
-        balanceAmount: balanceAmount.toString(),
-        balanceDueDate,
-        balancePaid: !isDepositOnly, // True if full payment, false if deposit only
-        status: !paymentReadyForNotifications
-          ? "pending"
-          : (isEscrow || experience.requireMinimumParticipants
+      let booking;
+      try {
+        booking = await storage.createBooking({
+          experienceId,
+          userId,
+          amount: (isDepositOnly ? depositAmount : fullPrice).toString(), // Amount actually charged
+          totalPrice: fullPrice.toString(), // Full experience price
+          isDepositOnly,
+          depositAmount: depositAmount.toString(),
+          balanceAmount: balanceAmount.toString(),
+          balanceDueDate,
+          balancePaid: !isDepositOnly, // True if full payment, false if deposit only
+          status: !paymentReadyForNotifications
             ? "pending"
-            : (isDepositOnly ? "deposit_paid" : "fully_paid")),
-        stripePaymentIntentId: paymentIntentId,
-        // Promoter attribution (null if no referral)
-        promoterId,
-        referralCode,
-        promoterExperienceId,
-        // Commission fields (null if no promoter)
-        commissionAmount: commissionAmount?.toString() || null,
-        commissionCurrency,
-        commissionStatus,
-        ticketSkuId: resolvedTicketSkuId,
-        ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
-        ticketQuantity,
-      });
+            : (isEscrow || experience.requireMinimumParticipants
+              ? "pending"
+              : (isDepositOnly ? "deposit_paid" : "fully_paid")),
+          stripePaymentIntentId: paymentIntentId,
+          // Promoter attribution (null if no referral)
+          promoterId,
+          referralCode,
+          promoterExperienceId,
+          // Commission fields (null if no promoter)
+          commissionAmount: commissionAmount?.toString() || null,
+          commissionCurrency,
+          commissionStatus,
+          ticketSkuId: resolvedTicketSkuId,
+          ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
+          ticketQuantity,
+        });
+      } catch (insertError: any) {
+        // The idempotency check above is read-then-insert, so two concurrent
+        // creators (in-page checkout, the confirmation page's recovery, the
+        // reconciler) can both pass it. The partial unique index on
+        // stripe_payment_intent_id makes the loser land here — return the
+        // winner's booking instead of a 500 for a payment that IS booked.
+        const uniqueViolation = insertError?.code === "23505"
+          || /bookings_stripe_payment_intent_unique/.test(String(insertError?.message));
+        if (uniqueViolation && paymentIntentId) {
+          const winner = await storage.getBookingByPaymentIntent(paymentIntentId);
+          if (winner) {
+            console.log(`[Booking] Concurrent create for PI ${paymentIntentId} — returning existing booking ${winner.id}`);
+            return {
+              status: 200,
+              body: { booking: winner, message: "Booking already exists for this payment", mvgResult: null },
+            };
+          }
+        }
+        throw insertError;
+      }
 
       // Check if this booking might trigger MVG completion
       let mvgCheckResult = null;

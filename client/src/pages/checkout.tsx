@@ -162,11 +162,20 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             : `/booking-success?experience=${experience.id}&booking=${bookingId}`;
           window.location.href = postPaymentPath;
         } catch (bookingError) {
-          toast({
-            title: "Booking Error", 
-            description: "Payment processed but booking creation failed. Please contact support.",
-            variant: "destructive",
+          // The money is already captured. Hand the buyer to the confirmation
+          // page's recovery loop (it rebuilds the booking from the
+          // PaymentIntent, and the server-side reconciler backstops it) rather
+          // than stranding a paid customer on the checkout with a toast.
+          console.error("Booking creation failed after payment — entering recovery:", bookingError);
+          const recovery = new URLSearchParams({
+            experience: experience.id,
+            payment_intent: paymentIntent.id,
+            redirect_status: "succeeded",
           });
+          if (paymentIntent.client_secret) {
+            recovery.set("payment_intent_client_secret", paymentIntent.client_secret);
+          }
+          window.location.href = `/booking-success?${recovery.toString()}`;
         }
       } else if (paymentIntent && paymentIntent.status === "processing") {
         toast({
@@ -209,7 +218,18 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             : `/booking-success?experience=${experience.id}&booking=${processingBookingId}`;
           window.location.href = processingPostPaymentPath;
         } catch (bookingError) {
-          console.error("Failed to create booking for processing payment:", bookingError);
+          // Same recovery as above: the payment is in flight with Stripe, so
+          // let the confirmation page (and the reconciler) finish the booking.
+          console.error("Failed to create booking for processing payment — entering recovery:", bookingError);
+          const recovery = new URLSearchParams({
+            experience: experience.id,
+            payment_intent: paymentIntent.id,
+            redirect_status: "succeeded",
+          });
+          if (paymentIntent.client_secret) {
+            recovery.set("payment_intent_client_secret", paymentIntent.client_secret);
+          }
+          window.location.href = `/booking-success?${recovery.toString()}`;
         }
       }
     } catch (err: any) {

@@ -18,8 +18,10 @@ vi.mock('@/components/navigation', () => ({ default: () => <nav /> }));
 vi.mock('@/components/MVGProgressWidget', () => ({ default: () => <div /> }));
 vi.mock('@/components/participant-referral-perk-card', () => ({ default: () => <div /> }));
 
+let mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } as any };
+
 vi.mock('@/hooks/useAuth', () => ({
-  useAuth: () => ({ isAuthenticated: true, isLoading: false, user: { id: 'user-1' } }),
+  useAuth: () => mockAuth,
 }));
 
 vi.mock('@/hooks/usePromoterAttribution', () => ({
@@ -91,6 +93,7 @@ describe('Booking confirmation after a redirect payment', () => {
 
   beforeEach(() => {
     finalizeCalls = [];
+    mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } };
     window.history.replaceState(
       {},
       '',
@@ -153,6 +156,34 @@ describe('Booking confirmation after a redirect payment', () => {
 
     const paid = await screen.findByTestId('amount-paid');
     expect(paid).toHaveTextContent('€10.00');
+  });
+
+  it('offers sign-in with the recovery URL preserved when there is no session', async () => {
+    // The redirect from the bank can land in a context where the login has not
+    // rehydrated (or was lost). A paid buyer must get a way back in — not
+    // "we couldn't verify this booking".
+    mockAuth = { isAuthenticated: false, isLoading: false, user: null };
+
+    renderPage();
+
+    expect(await screen.findByTestId('signin-required-heading')).toHaveTextContent(
+      'Payment received — sign in to finish',
+    );
+    expect(screen.getByTestId('signin-required-button')).toBeInTheDocument();
+    // Never fires a doomed 401 finalize before the session exists.
+    expect(finalizeCalls).toHaveLength(0);
+  });
+
+  it('waits for the session to load before deciding anything', async () => {
+    mockAuth = { isAuthenticated: false, isLoading: true, user: null };
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('booking-required-heading')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('signin-required-heading')).not.toBeInTheDocument();
+    });
+    expect(finalizeCalls).toHaveLength(0);
   });
 
   it('does not try to rebuild a booking when the bank declined the payment', async () => {

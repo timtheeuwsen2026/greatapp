@@ -203,25 +203,29 @@ export default function BookingSuccess() {
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [balanceJustPaid, setBalanceJustPaid] = useState(false);
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   const { data: experience, isLoading } = useQuery<Experience>({
     queryKey: ["/api/experiences", experienceId],
     enabled: !!experienceId,
   });
 
+  // Booking lookups only run once the session is loaded. Firing them during
+  // auth hydration cached a 401 and the page declared "we couldn't verify this
+  // booking" to a buyer who was merely half a second early.
   const { data: bookingDirect, isLoading: bookingDirectLoading } = useQuery<Booking>({
     queryKey: ["/api/bookings", bookingId],
-    enabled: !!bookingId,
+    enabled: !!bookingId && isAuthenticated,
   });
 
   const { data: myBookings, isLoading: myBookingsLoading } = useQuery<Array<Booking & { experience?: any }>>({
     queryKey: ["/api/bookings/my-bookings"],
-    enabled: !!experienceId && !bookingId,
+    enabled: !!experienceId && !bookingId && isAuthenticated,
   });
 
   const { data: participantProfileStatus, isLoading: participantProfileLoading } = useQuery<{ hasProfile: boolean }>({
     queryKey: ["/api/participant-profile/status"],
+    enabled: isAuthenticated,
     retry: false,
   });
 
@@ -245,6 +249,10 @@ export default function BookingSuccess() {
     if (
       booking
       || bookingLookupLoading
+      // Wait for the session — finalizing before the token is loaded turned a
+      // successful payment into a 401 "we couldn't finish this booking".
+      || authLoading
+      || !isAuthenticated
       || !redirectPayment.paymentIntentId
       || paymentWasDeclined
       || finalizeStartedRef.current
@@ -288,7 +296,7 @@ export default function BookingSuccess() {
         setFinalizeState('failed');
       }
     })();
-  }, [booking, bookingLookupLoading, redirectPayment, experienceId, user?.id]);
+  }, [booking, bookingLookupLoading, authLoading, isAuthenticated, redirectPayment, experienceId, user?.id]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -359,7 +367,7 @@ export default function BookingSuccess() {
     setLocation,
   ]);
 
-  if (isLoading || bookingLookupLoading) {
+  if (isLoading || bookingLookupLoading || authLoading) {
     return (
       <div className="min-h-screen bg-white">
         <Navigation />
@@ -367,6 +375,38 @@ export default function BookingSuccess() {
           <div className="animate-pulse space-y-6">
             <div className="h-8 bg-gray-200 rounded w-1/2"></div>
             <div className="h-64 bg-gray-200 rounded"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // No session — the buyer may have paid in another tab, or the redirect from
+  // the bank came back to a browser context without their login. Send them
+  // through sign-in and back to this exact URL so the recovery still runs;
+  // never show a paid customer a dead end.
+  if (!isAuthenticated) {
+    const returnTo = window.location.pathname + window.location.search;
+    return (
+      <div className="min-h-screen bg-white">
+        <Navigation />
+        <div className="mx-auto max-w-2xl px-4 py-16 text-center">
+          <CheckCircle className="mx-auto h-14 w-14 text-green-500" />
+          <h1 className="mt-5 text-2xl font-bold text-gray-900" data-testid="signin-required-heading">
+            {redirectPayment.paymentIntentId ? "Payment received — sign in to finish" : "Sign in to see your booking"}
+          </h1>
+          <p className="mx-auto mt-3 max-w-lg text-gray-600">
+            {redirectPayment.paymentIntentId
+              ? "Your payment went through. Sign in with the account you used to book and we'll attach it automatically."
+              : "This page shows your booking once you're signed in."}
+          </p>
+          <div className="mt-6">
+            <Button
+              onClick={() => { window.location.href = `/login?returnTo=${encodeURIComponent(returnTo)}`; }}
+              data-testid="signin-required-button"
+            >
+              Sign in to continue
+            </Button>
           </div>
         </div>
       </div>

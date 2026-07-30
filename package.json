@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development PORT=4000 node --env-file=.env --import tsx server/index.ts",
+    "dev": "cross-env NODE_ENV=development PORT=4000 node --env-file=.env --import tsx --watch server/index.ts",
     "build": "vite build && cross-env esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "prestart": "node scripts/migrate-email-delivery.mjs",
     "start": "cross-env NODE_ENV=production node dist/index.js",

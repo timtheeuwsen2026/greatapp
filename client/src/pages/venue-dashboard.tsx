@@ -1363,6 +1363,28 @@ function VenueDashboardContent() {
                 The creator is charged this rental fee the moment they accept. You receive it 7 days after the event.
               </p>
             )}
+            {offerForm.model === "per_room_night" && (() => {
+              // Show the bidding venue's own room rates so the number they quote
+              // matches what their profile promises the creator.
+              const offeringVenue = venues.find((v: any) => v.id === offerForm.venueId);
+              const rooms: any[] = offeringVenue?.venueRoomTypes || [];
+              return rooms.length > 0 ? (
+                <div className="rounded-md border bg-gray-50 p-3 text-xs dark:bg-gray-900" data-testid="offer-room-rates">
+                  <p className="mb-1 font-semibold text-gray-700 dark:text-gray-300">Your published room rates</p>
+                  {rooms.map((room: any, index: number) => (
+                    <div key={index} className="flex justify-between text-gray-600 dark:text-gray-400">
+                      <span>{room.name || room.type || `Room ${index + 1}`}</span>
+                      <span>€{Number(room.pricePerNight || 0).toFixed(2)}/night</span>
+                    </div>
+                  ))}
+                  <p className="mt-1 text-gray-500">The creator sees these rates on your bid.</p>
+                </div>
+              ) : (
+                <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  Your venue profile has no room rates yet — complete the Rooms step so the creator can see what they're agreeing to.
+                </p>
+              );
+            })()}
 
             {/* Optional message */}
             <div>

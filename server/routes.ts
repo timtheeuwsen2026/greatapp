@@ -4353,12 +4353,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     quantity?: unknown;
     /** Set only when rebuilding a booking for a payment Stripe has already taken. */
     paymentAlreadyCaptured?: boolean;
+    /** The buyer's email from their auth session — used to self-heal a missing users row. */
+    buyerEmail?: string | null;
   };
+
+  /**
+   * Returns a user id that is guaranteed to have a users row.
+   *
+   * A brand-new account exists in Supabase Auth the moment it signs up, but its
+   * local users row is only written when /api/auth/user happens to run. A buyer
+   * who goes straight into checkout can reach booking creation before that —
+   * and the bookings.user_id foreign key then rejects the insert AFTER Stripe
+   * has already taken the money. Booking creation must never depend on another
+   * endpoint having run first.
+   */
+  async function ensureBookingAccount(userId: string, email?: string | null): Promise<string> {
+    const existing = await storage.getUser(userId);
+    if (existing) return existing.id;
+
+    const normalizedEmail = email?.trim().toLowerCase() || undefined;
+    if (normalizedEmail) {
+      // The same person may already have a row under an older auth id.
+      const byEmail = await storage.getUserByEmail(normalizedEmail);
+      if (byEmail) return byEmail.id;
+    }
+
+    const created = await storage.upsertUser({
+      id: userId,
+      email: normalizedEmail,
+      firstName: null,
+      lastName: null,
+      profileImageUrl: null,
+      role: 'participant' as any,
+    });
+    console.log(`[Booking] Created missing users row for buyer ${userId}`);
+    return created.id;
+  }
 
   async function createBookingForUser(
     userId: string,
     input: BookingCreationInput,
   ): Promise<{ status: number; body: any }> {
+      // The buyer has paid (or is about to). Make sure the account row the
+      // booking references actually exists before anything else can fail.
+      userId = await ensureBookingAccount(userId, input.buyerEmail);
       const {
         amount,
         isEscrow,
@@ -4415,10 +4453,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (providedShareToken) {
         trackedPromotion = await storage.getPromoterExperienceByShareToken(providedShareToken);
+        if (trackedPromotion && trackedPromotion.experienceId !== experienceId) {
+          // The browser kept a referral token from a DIFFERENT event (attribution
+          // lives in localStorage and survives across events). By the time this
+          // runs the buyer has usually already been charged — rejecting the
+          // booking over marketing attribution stranded the payment. Ignore the
+          // stale token instead; the purchase simply is not attributed to it.
+          console.warn(
+            `[Booking] Ignoring stale share token for experience ${trackedPromotion.experienceId} on a booking for ${experienceId}`,
+          );
+          trackedPromotion = null;
+        }
         if (trackedPromotion) {
-          if (trackedPromotion.experienceId !== experienceId) {
-            return { status: 400, body: { message: "Referral link does not match this experience" } };
-          }
           promoterExperienceId = trackedPromotion.id;
           referralAudience = trackedPromotion.referralAudience === 'official_partner'
             ? 'official_partner'
@@ -4854,7 +4900,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // paymentAlreadyCaptured is server-only — never let a client set it and
       // skip the ticket-capacity check.
       const { paymentAlreadyCaptured, ...bookingInput } = req.body || {};
-      const result = await createBookingForUser(req.user.claims.sub, bookingInput);
+      const result = await createBookingForUser(req.user.claims.sub, {
+        ...bookingInput,
+        buyerEmail: req.user.email || req.user.claims?.email,
+      });
       res.status(result.status).json(result.body);
     } catch (error: any) {
       console.error("Error creating booking:", error);
@@ -4877,6 +4926,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     paymentIntentId: string,
     options: {
       requestUserId?: string;
+      requestUserEmail?: string | null;
       clientSecret?: string;
       attribution?: { promoterId?: string | null; referralCode?: string | null; shareToken?: string | null };
     } = {},
@@ -4927,6 +4977,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const isDepositPayment = metadata.isDepositPayment === 'true';
     return createBookingForUser(ownerId, {
       paymentAlreadyCaptured: paymentIntent.status !== 'processing',
+      buyerEmail: ownerId === options.requestUserId ? options.requestUserEmail : undefined,
       experienceId: metadata.experienceId,
       amount: metadata.fullPrice ? parseFloat(metadata.fullPrice) : undefined,
       isEscrow: metadata.isMVGExperience === 'true',
@@ -4945,6 +4996,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { paymentIntentId, clientSecret, promoterId, referralCode, shareToken } = req.body || {};
       const result = await finalizeBookingFromPaymentIntentId(paymentIntentId, {
         requestUserId: req.user.claims.sub,
+        requestUserEmail: req.user.email || req.user.claims?.email,
         clientSecret,
         attribution: { promoterId, referralCode, shareToken },
       });
@@ -12729,6 +12781,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error declining venue invite:', error);
       res.status(500).json({ message: 'Failed to decline this invitation' });
+    }
+  });
+
+  // ─── External partner (promoter) invites ────────────────────────────────
+  // The B2B promotion invite email links here. The deal row already exists
+  // (promotion_deals, source external_direct, partnerEmail set); these routes
+  // let the invited brand read the offer, claim it after signing up, and then
+  // answer it through the existing /api/promoter/offers endpoints.
+
+  app.get('/api/partner-invites/:token', async (req, res) => {
+    try {
+      const deal = await storage.getPromotionDealByInviteToken(String(req.params.token));
+      if (!deal) return res.status(404).json({ message: 'This invitation link is not valid' });
+
+      const [experience, creator] = await Promise.all([
+        storage.getExperience(deal.experienceId),
+        storage.getUser(deal.creatorId),
+      ]);
+
+      res.json({
+        status: deal.status,
+        pendingActionBy: deal.pendingActionBy,
+        dealType: deal.dealType,
+        terms: deal.terms || {},
+        partnerName: deal.partnerName,
+        email: deal.partnerEmail,
+        claimed: !!deal.partnerId,
+        dealSummary: formatPromotionDealSummary(deal.dealType, deal.terms, (experience as any)?.currency),
+        experience: experience ? {
+          id: experience.id,
+          slug: experience.slug,
+          title: experience.title,
+          shortDescription: experience.shortDescription,
+          coverImageUrl: experience.coverImageUrl,
+          startDate: experience.startDate,
+          endDate: experience.endDate,
+          location: experience.location,
+          currency: experience.currency,
+        } : null,
+        creator: creator ? { firstName: creator.firstName, lastName: creator.lastName } : null,
+      });
+    } catch (error: any) {
+      console.error('Error loading partner invite:', error);
+      res.status(500).json({ message: 'Failed to load this invitation' });
+    }
+  });
+
+  app.post('/api/partner-invites/:token/claim', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const deal = await storage.getPromotionDealByInviteToken(String(req.params.token));
+      if (!deal) return res.status(404).json({ message: 'This invitation link is not valid' });
+      if (deal.partnerId && deal.partnerId !== userId) {
+        return res.status(403).json({ message: 'This invitation has already been claimed by another account' });
+      }
+
+      const claimed = deal.partnerId === userId
+        ? deal
+        : await storage.claimPromotionDealInvite(String(req.params.token), userId);
+      if (!claimed) return res.status(409).json({ message: 'This invitation could not be claimed' });
+
+      // Partners share referral links — make sure the account has a code ready.
+      await storage.ensureUserReferralCode(userId).catch(() => {});
+
+      res.json({
+        success: true,
+        dealId: claimed.id,
+        message: 'Offer linked to your account — accept or decline below',
+      });
+    } catch (error: any) {
+      console.error('Error claiming partner invite:', error);
+      res.status(500).json({ message: 'Failed to claim this invitation', detail: error?.message });
     }
   });
 

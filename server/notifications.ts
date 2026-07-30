@@ -56,11 +56,16 @@ function experienceDetailsUrl(slugOrId: string): string {
   return `${APP_BASE_URL}/experience/${slugOrId}`;
 }
 
+// The private claim link an invited external partner receives.
+export function partnerInviteUrl(token: string): string {
+  return `${APP_BASE_URL}/partner-invite/${token}`;
+}
+
 function experienceSlugOrId(experience: Experience | any): string {
   return String(experience?.slug || experience?.id || '');
 }
 
-function notificationEventKey(type: string, ...parts: Array<string | number | null | undefined>): string {
+export function notificationEventKey(type: string, ...parts: Array<string | number | null | undefined>): string {
   const digest = createHash('sha256')
     .update(parts.map((part) => String(part ?? '').trim().toLowerCase()).join('|'))
     .digest('hex');
@@ -1364,6 +1369,14 @@ The Great. Team
     const creatorName = [creator?.firstName, creator?.lastName].filter(Boolean).join(' ') || 'the creator';
     let sentCount = 0;
     for (const invite of invites) {
+      // The deal row (and its claim token) is created by syncDirectPromotionDeals
+      // before publish reaches this point. Link the email at the claim page —
+      // dropping the partner on the public event page gave them nothing to do
+      // but buy a ticket.
+      const deal = (event as any).id
+        ? await storage.getPromotionDealForExperienceEmail((event as any).id, invite.email!)
+        : undefined;
+
       await this.sendExternalPartnerInviteEmail({
         to: invite.email!,
         partnerName: invite.name,
@@ -1371,6 +1384,8 @@ The Great. Team
         eventName: event.title || 'A Great. experience',
         eventSlugOrId: (event as any).slug || (event as any).id || '',
         proposedTerms: dealSummary,
+        reviewUrl: deal?.inviteToken ? partnerInviteUrl(deal.inviteToken) : undefined,
+        ctaLabel: deal?.inviteToken ? 'Review & Accept the Deal' : undefined,
         eventKey: notificationEventKey('external_promotion_invite', (event as any).id, invite.email),
       });
       sentCount += 1;

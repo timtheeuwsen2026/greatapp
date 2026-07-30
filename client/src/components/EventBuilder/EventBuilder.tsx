@@ -5993,9 +5993,17 @@ function PricingStep({ form }: { form: any }) {
                       ? "Your invited venue will see this proposed deal when they review the invite."
                       : "Venues will see this preference when they bid to host your event."}
                   </p>
-                  {/* Only the deals that carry a number get an amount input —
-                      Access-Only / Pay-at-Counter has no target amount. */}
-                  {selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
+                  {/* Per Room / Per Night carries no target number — the venue's
+                      own room rates apply. Those rates arrive with the venue's
+                      bid (or its profile), so say that instead of asking the
+                      creator to invent a figure. */}
+                  {selectedTargetDeal?.value === 'per_room_night' ? (
+                    <div className="mt-3 rounded-md border bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300" data-testid="target-deal-room-rates-note">
+                      The venue's own room rates apply for this deal. Each bidding venue's
+                      per-room, per-night prices come from the Rooms step of their venue
+                      profile — you'll see the exact rates on their bid before you accept.
+                    </div>
+                  ) : selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
                     <div className="mt-3">
                       <Label htmlFor="venue-target-deal-value">{selectedTargetDeal.valueLabel}</Label>
                       <Input
@@ -6072,6 +6080,39 @@ function PricingStep({ form }: { form: any }) {
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     Multiplied by the number of tickets sold.
                   </p>
+                </div>
+              )}
+              {venueCompensationModel === "per_room_night" && (
+                <div data-testid="venue-room-rates">
+                  <Label>Venue Room Rates (per night)</Label>
+                  {/* The venue's own room pricing applies — the creator agrees to
+                      those rates, not a number typed here. Surface them so the
+                      deal is never agreed blind. */}
+                  {(selectedMarketplaceVenue?.venueRoomTypes || []).length > 0 ? (
+                    <div className="mt-1 space-y-1 rounded-md border bg-gray-50 p-3 text-sm dark:bg-gray-900">
+                      {(selectedMarketplaceVenue.venueRoomTypes as any[]).map((room: any, index: number) => (
+                        <div key={index} className="flex items-center justify-between" data-testid={`venue-room-rate-${index}`}>
+                          <span className="text-gray-700 dark:text-gray-300">
+                            {room.name || room.type || `Room ${index + 1}`}
+                            {room.capacity ? ` · sleeps ${room.capacity}` : ''}
+                            {room.quantity > 1 ? ` · ×${room.quantity}` : ''}
+                          </span>
+                          <span className="font-semibold">
+                            {dealCurrencySymbol}{Number(room.pricePerNight || 0).toFixed(2)}/night
+                          </span>
+                        </div>
+                      ))}
+                      <p className="pt-1 text-xs text-gray-500">
+                        These rates come from the venue's profile and apply per room, per night.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                      {selectedMarketplaceVenue
+                        ? "This venue hasn't published room rates yet — ask them to complete the Rooms step of their venue profile before agreeing to this deal."
+                        : "Room rates come from the venue's profile once a venue is linked to this event."}
+                    </p>
+                  )}
                 </div>
               )}
               {venueCompensationModel === "per_head" && (

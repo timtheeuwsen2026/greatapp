@@ -105,6 +105,7 @@ import {
   type InsertScheduledPayout,
 } from "@shared/schema";
 import { db } from "./db";
+import { randomBytes } from "crypto";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
 import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
@@ -4242,6 +4243,10 @@ export class DatabaseStorage implements IStorage {
       const email = invite?.email?.toLowerCase().trim();
       if (!email || existingByEmail.has(email)) continue;
       const matchedUser = await this.getUserByEmail(email);
+      // The token is the invite's front door: the emailed link opens
+      // /partner-invite/:token where the brand sees the deal, signs up and
+      // accepts — instead of being dropped on the public event page.
+      const inviteToken = randomBytes(24).toString("base64url");
       await db.insert(promotionDeals).values({
         experienceId,
         creatorId: experience.creatorId,
@@ -4254,22 +4259,69 @@ export class DatabaseStorage implements IStorage {
         terms: baselineTerms,
         status: "pending",
         pendingActionBy: "partner",
+        inviteToken,
       });
 
       // External partners may not have an account yet. The deal is persisted
       // before the email is sent, so signing up with this address immediately
-      // reveals a live offer in their dashboard.
+      // reveals a live offer in their dashboard. The eventKey matches the one
+      // used by the publish-time invitation path, so the partner gets ONE email
+      // no matter which path runs first.
       import('./notifications')
-        .then(({ notificationService, formatPromotionDealSummary }) => notificationService.sendExternalPartnerInviteEmail({
+        .then(({ notificationService, formatPromotionDealSummary, notificationEventKey, partnerInviteUrl }) => notificationService.sendExternalPartnerInviteEmail({
           to: email,
           partnerName: matchedUser?.firstName || invite.name,
           creatorName,
           eventName: experience.title,
           eventSlugOrId: (experience as any).slug || experience.id,
           proposedTerms: formatPromotionDealSummary(dealType, baselineTerms, (experience as any).currency),
+          reviewUrl: partnerInviteUrl(inviteToken),
+          ctaLabel: 'Review & Accept the Deal',
+          eventKey: notificationEventKey('external_promotion_invite', experienceId, email),
         }))
         .catch((err) => console.error('External promotion invitation email failed:', err?.message || err));
     }
+  }
+
+  async getPromotionDealForExperienceEmail(
+    experienceId: string,
+    email: string,
+  ): Promise<PromotionDeal | undefined> {
+    const [row] = await db
+      .select()
+      .from(promotionDeals)
+      .where(and(
+        eq(promotionDeals.experienceId, experienceId),
+        sql`lower(${promotionDeals.partnerEmail}) = lower(${email})`,
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getPromotionDealByInviteToken(token: string): Promise<PromotionDeal | undefined> {
+    const [row] = await db
+      .select()
+      .from(promotionDeals)
+      .where(eq(promotionDeals.inviteToken, token))
+      .limit(1);
+    return row;
+  }
+
+  /**
+   * Attaches an invited external deal to the account that opened the claim
+   * link. Token possession is the credential — the invite may have been
+   * forwarded to whoever actually runs the brand's account.
+   */
+  async claimPromotionDealInvite(token: string, userId: string): Promise<PromotionDeal | undefined> {
+    const [row] = await db
+      .update(promotionDeals)
+      .set({ partnerId: userId, updatedAt: new Date() })
+      .where(and(
+        eq(promotionDeals.inviteToken, token),
+        or(isNull(promotionDeals.partnerId), eq(promotionDeals.partnerId, userId)),
+      ))
+      .returning();
+    return row;
   }
 
   async getPromotionDeal(dealId: string): Promise<PromotionDeal | undefined> {

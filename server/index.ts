@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { startMVGDeadlineScheduler } from "./mvg-scheduler";
 import { startPayoutScheduler } from "./payout-scheduler";
+import { startPaymentReconciler } from "./payment-reconciler";
 import { startEventReminderScheduler } from "./event-reminder-scheduler";
 import { startEmailJobScheduler } from "./emailJobScheduler";
 import { assertEmailConfiguration } from "./notifications";
@@ -100,5 +101,7 @@ app.use((req, res, next) => {
     startEventReminderScheduler();
     // Start durable delayed community-email worker
     startEmailJobScheduler();
+    // Rebuild bookings for payments Stripe captured but nothing recorded
+    startPaymentReconciler();
   });
 })();

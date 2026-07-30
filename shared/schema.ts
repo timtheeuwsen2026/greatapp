@@ -1031,6 +1031,10 @@ export const promotionDeals = pgTable("promotion_deals", {
   stripeCheckoutSessionId: varchar("stripe_checkout_session_id"),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   paidAt: timestamp("paid_at"),
+  // External invites only: unguessable value backing the /partner-invite/:token
+  // claim link — the invited brand has no account yet, so the emailed token is
+  // how they reach their offer.
+  inviteToken: varchar("invite_token", { length: 64 }).unique(),
   counterMessage: text("counter_message"),
   respondedAt: timestamp("responded_at"),
   createdAt: timestamp("created_at").defaultNow(),

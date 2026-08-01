@@ -379,9 +379,14 @@ export default function RecruitSquad() {
     }
   };
 
+  // "A valid booking is required" must only appear once we actually know there
+  // isn't one. Landing here straight from checkout, the session and the referral
+  // lookup are both still in flight — showing the failure state during that
+  // window flashed an error over a payment that had just succeeded.
+  const referralSettled = referralQuery.isSuccess || referralQuery.isError;
   const linkLoading = authLoading
     || !experienceId
-    || (isAuthenticated && (referralQuery.isPending || referralQuery.isFetching));
+    || (isAuthenticated && !referralSettled);
 
   if (expLoading || linkLoading) {
     return (

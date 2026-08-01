@@ -5460,21 +5460,50 @@ function PricingStep({ form }: { form: any }) {
     form.setValue('ticketSkus', updated, { shouldDirty: true });
   };
 
-  // Calculate totals from ticket SKUs
-  const ticketTotalCapacity = ticketSkus.reduce((total: number, sku: any) => total + (sku.ticketCapacity || 0), 0);
+  // ── Ticket maths ────────────────────────────────────────────────────────
+  // One definition of a ticket's price and capacity, used by both the per-ticket
+  // subtotal and the grand total. They were computed separately before, so a
+  // combi or pay-what-you-want ticket could show one number per row and add up
+  // to a different one.
+  const toNumber = (value: unknown): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    // Inputs arrive as strings, sometimes with thousands separators.
+    const parsed = parseFloat(String(value ?? '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const skuEffectivePrice = (sku: any): number => {
+    switch (sku?.pricingMode) {
+      case 'free_rsvp': return 0;
+      case 'pwyw': return toNumber(sku.suggestedPrice ?? sku.minPrice);
+      case 'combi': return safeAdd(toNumber(sku.pricePerPerson), toNumber(sku.addonPrice));
+      default: return toNumber(sku.pricePerPerson);
+    }
+  };
+
+  // A single ticket with no capacity of its own covers the whole event: a
+  // creator who sets 20 spots on the Dates step and adds one €1,000 ticket
+  // means 20 × €1,000, not zero.
+  const skuEffectiveCapacity = (sku: any): number => {
+    const own = toNumber(sku?.ticketCapacity);
+    if (own > 0) return own;
+    return ticketSkus.length === 1 ? toNumber(maxParticipants) : 0;
+  };
+
+  const skuRevenueOf = (sku: any): number =>
+    safeMultiply(skuEffectivePrice(sku), skuEffectiveCapacity(sku));
+
+  const ticketTotalCapacity = ticketSkus.reduce(
+    (total: number, sku: any) => total + skuEffectiveCapacity(sku),
+    0,
+  );
   const mvgExceedsTicketCapacity = requireMinimumParticipants
     && ticketTotalCapacity > 0
     && minimumParticipants > ticketTotalCapacity;
-  const ticketTotalRevenue = ticketSkus.reduce((total: number, sku: any) => {
-    let effectivePrice: number;
-    switch (sku.pricingMode) {
-      case 'free_rsvp': effectivePrice = 0; break;
-      case 'pwyw': effectivePrice = sku.suggestedPrice ?? sku.minPrice ?? 0; break;
-      case 'combi': effectivePrice = (sku.pricePerPerson || 0) + (sku.addonPrice || 0); break;
-      default: effectivePrice = sku.pricePerPerson || 0;
-    }
-    return safeAdd(total, safeMultiply(effectivePrice, sku.ticketCapacity || 0));
-  }, 0);
+  const ticketTotalRevenue = ticketSkus.reduce(
+    (total: number, sku: any) => safeAdd(total, skuRevenueOf(sku)),
+    0,
+  );
 
   useEffect(() => {
     if (isNonRoomEvent && ticketTotalCapacity > 0 && ticketTotalCapacity !== maxParticipants) {
@@ -5679,7 +5708,7 @@ function PricingStep({ form }: { form: any }) {
 
                 <div className="space-y-3">
                   {ticketSkus.map((sku: any, index: number) => {
-                    const skuRevenue = safeMultiply(sku.pricePerPerson || 0, sku.ticketCapacity || 0);
+                    const skuRevenue = skuRevenueOf(sku);
                     return (
                       <div 
                         key={sku.id} 
@@ -5909,7 +5938,9 @@ function PricingStep({ form }: { form: any }) {
                     </div>
                     <div className="flex justify-between font-semibold text-green-700 dark:text-green-400">
                       <span>Total Revenue Potential</span>
-                      <span data-testid="text-total-revenue">{formatPriceByCurrency(ticketTotalRevenue, currency)}</span>
+                      {/* totalRevenue, not the raw ticket sum: it falls back to
+                          price × capacity when no ticket carries its own. */}
+                      <span data-testid="text-total-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
                     </div>
                   </div>
                 </div>

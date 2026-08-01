@@ -150,7 +150,13 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
           
           toast({
             title: data.mvgResult?.action === "mvg_confirmed" ? "🎉 Group Complete!" : "Booking Confirmed!",
-            description: data.message,
+            // When the recovery path or the reconciler already created this
+            // booking the server replies "Booking already exists for this
+            // payment" — accurate internally, alarming to the buyer who just
+            // paid. Their booking is fine either way, so say so.
+            description: /already exists/i.test(data.message || "")
+              ? "Your spot is secured."
+              : data.message,
           });
 
           const bookingId = data.booking?.id || '';

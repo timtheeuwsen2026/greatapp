@@ -215,27 +215,42 @@ describe('Booking confirmation after a redirect payment', () => {
 
     expect(await screen.findByTestId('confirmation-heading')).toHaveTextContent('Booking Confirmed!');
     expect(screen.getByText('Invite the Squad')).toBeInTheDocument();
-    // Invited to finish the profile, not redirected away from the share moment.
-    expect(screen.getByTestId('complete-profile-prompt')).toBeInTheDocument();
+    // Never navigated away from the share moment.
     expect(navigate).not.toHaveBeenCalledWith(expect.stringContaining('/participant-profile-setup'));
   });
 
-  it('opens profile setup only when the buyer chooses to, returning them here after', async () => {
+  it('raises the profile step over the confirmation so it cannot be scrolled past', async () => {
+    hasParticipantProfile = false;
+
+    renderPage();
+
+    // The confirmation lands first...
+    expect(await screen.findByTestId('confirmation-heading')).toBeInTheDocument();
+    // ...then the ask comes up on top of it a beat later.
+    expect(await screen.findByTestId('profile-prompt-dialog', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByTestId('profile-prompt-start')).toBeInTheDocument();
+    expect(screen.getByTestId('profile-prompt-later')).toBeInTheDocument();
+  });
+
+  it('leaves a pinned reminder when the buyer chooses to do it later', async () => {
     hasParticipantProfile = false;
     const user = userEvent.setup();
 
     renderPage();
 
-    await user.click(await screen.findByTestId('button-complete-profile'));
+    await user.click(await screen.findByTestId('profile-prompt-later', {}, { timeout: 4000 }));
 
-    expect(navigate).toHaveBeenCalledWith(expect.stringContaining('/participant-profile-setup'));
-    expect(sessionStorage.getItem('postParticipantOnboardingRedirect')).toContain('/booking-success');
+    // Dialog closes, but the step stays in reach while they use the share kit.
+    expect(screen.queryByTestId('profile-prompt-dialog')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('profile-prompt-bar')).toBeInTheDocument();
+    expect(screen.getByText('Invite the Squad')).toBeInTheDocument();
   });
 
   it('does not nag a buyer who already has a profile', async () => {
     renderPage();
 
     await screen.findByTestId('confirmation-heading');
-    expect(screen.queryByTestId('complete-profile-prompt')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('profile-prompt-dialog')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('profile-prompt-bar')).not.toBeInTheDocument();
   });
 });

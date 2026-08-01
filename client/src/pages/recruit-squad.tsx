@@ -125,6 +125,31 @@ export default function RecruitSquad() {
     enabled: !!experienceId,
   });
 
+  // Deposit buyers land here rather than the confirmation page, so the same
+  // "finish your profile" invitation belongs on this screen — after the share
+  // kit, never instead of it.
+  const { data: participantProfileStatus } = useQuery<{ hasProfile: boolean }>({
+    queryKey: ["/api/participant-profile/status"],
+    enabled: isAuthenticated,
+    retry: false,
+  });
+  const profileMissing = participantProfileStatus?.hasProfile === false;
+
+  const openProfileSetup = () => {
+    try {
+      sessionStorage.setItem(
+        "postParticipantOnboardingRedirect",
+        window.location.pathname + window.location.search,
+      );
+    } catch {
+      // Storage can be disabled; onboarding falls back to its default landing.
+    }
+    const params = new URLSearchParams({ afterCheckout: "true" });
+    if (experienceId) params.set("experience", experienceId);
+    if (bookingId) params.set("booking", bookingId);
+    window.location.href = `/participant-profile-setup?${params.toString()}`;
+  };
+
   const referralQuery = useQuery({
     queryKey: ["post-checkout-referral", experienceId, bookingId, user?.id],
     queryFn: () => ensurePostCheckoutReferral(experienceId!, user!.id, bookingId || undefined),
@@ -468,6 +493,26 @@ export default function RecruitSquad() {
             <ArrowDown className="h-6 w-6 animate-bounce motion-reduce:animate-none" aria-hidden="true" />
           </a>
         </div>
+
+        {profileMissing && (
+          <Card className="border-emerald-300 bg-emerald-50" data-testid="complete-profile-prompt">
+            <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold text-gray-900">One last step — complete your attendee profile</p>
+                <p className="mt-1 text-sm text-gray-600">
+                  It unlocks the community hub and group chat. Share your link first — this will still be here.
+                </p>
+              </div>
+              <Button
+                onClick={openProfileSetup}
+                className="shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white"
+                data-testid="button-complete-profile"
+              >
+                Complete my profile
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <ParticipantReferralPerkCard
           experience={experience}

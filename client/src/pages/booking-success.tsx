@@ -338,34 +338,34 @@ export default function BookingSuccess() {
 
   const participantProfileMissing = participantProfileStatus?.hasProfile === false;
 
-  useEffect(() => {
-    if (
-      !isLoading &&
-      experience &&
-      booking &&
-      !participantProfileLoading &&
-      participantProfileMissing &&
-      !isCancelled &&
-      !balanceJustPaid
-    ) {
-      sessionStorage.setItem("postParticipantOnboardingRedirect", "/community-hub");
-      const params = new URLSearchParams();
-      params.set("afterCheckout", "true");
-      if (experienceId) params.set("experience", experienceId);
-      if (booking?.id) params.set("booking", booking.id);
-      setLocation(`/participant-profile-setup?${params.toString()}`);
+  // A first-time buyer used to be redirected straight into profile onboarding
+  // from here, so they never saw their confirmation, their referral link or the
+  // share card — at the exact moment they were most likely to share. They land
+  // on this page now and are invited to finish the profile from it instead.
+  const profileSetupHref = (() => {
+    const params = new URLSearchParams();
+    params.set("afterCheckout", "true");
+    if (experienceId) params.set("experience", experienceId);
+    if (booking?.id) params.set("booking", booking.id);
+    return `/participant-profile-setup?${params.toString()}`;
+  })();
+
+  const showProfilePrompt =
+    !participantProfileLoading && participantProfileMissing && !isCancelled && !!booking;
+
+  // Finishing the profile brings them back here rather than dropping them
+  // somewhere else, so the share kit is still one tap away afterwards.
+  const openProfileSetup = () => {
+    try {
+      sessionStorage.setItem(
+        "postParticipantOnboardingRedirect",
+        window.location.pathname + window.location.search,
+      );
+    } catch {
+      // Storage can be disabled; onboarding just falls back to its default.
     }
-  }, [
-    isLoading,
-    experience,
-    participantProfileLoading,
-    participantProfileMissing,
-    isCancelled,
-    balanceJustPaid,
-    experienceId,
-    booking?.id,
-    setLocation,
-  ]);
+    setLocation(profileSetupHref);
+  };
 
   if (isLoading || bookingLookupLoading || authLoading) {
     return (
@@ -551,6 +551,32 @@ export default function BookingSuccess() {
             }
           </p>
         </div>
+
+        {/* Share first, profile second. A first-time buyer sees their booking
+            and their referral link straight away; the profile is invited here
+            rather than forced in front of it. */}
+        {showProfilePrompt && (
+          <Card
+            className="mb-8 border-primary/30 bg-primary/5"
+            data-testid="complete-profile-prompt"
+          >
+            <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold text-gray-900">One last step — complete your attendee profile</p>
+                <p className="mt-1 text-sm text-gray-600">
+                  It unlocks the community hub and group chat, and lets the other participants know who's coming.
+                </p>
+              </div>
+              <Button
+                onClick={openProfileSetup}
+                className="shrink-0"
+                data-testid="button-complete-profile"
+              >
+                Complete my profile
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">

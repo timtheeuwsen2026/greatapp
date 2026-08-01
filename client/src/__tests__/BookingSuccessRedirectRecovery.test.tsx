@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import BookingSuccess from '../pages/booking-success';
 
@@ -9,8 +10,9 @@ import BookingSuccess from '../pages/booking-success';
 // "We couldn't verify this booking". The page must rebuild the booking from
 // the PaymentIntent Stripe hands back on the return URL.
 
+const navigate = vi.fn();
 vi.mock('wouter', () => ({
-  useLocation: () => ['/booking-success', vi.fn()],
+  useLocation: () => ['/booking-success', navigate],
   Link: ({ children, href }: any) => <a href={href}>{children}</a>,
 }));
 
@@ -90,9 +92,12 @@ function renderPage() {
 
 describe('Booking confirmation after a redirect payment', () => {
   let finalizeCalls: any[];
+  let hasParticipantProfile = true;
 
   beforeEach(() => {
     finalizeCalls = [];
+    hasParticipantProfile = true;
+    navigate.mockClear();
     mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } };
     window.history.replaceState(
       {},
@@ -119,7 +124,7 @@ describe('Booking confirmation after a redirect payment', () => {
         return { ok: true, json: async () => experience } as any;
       }
       if (url.includes('/api/participant-profile/status')) {
-        return { ok: true, json: async () => ({ hasProfile: true }) } as any;
+        return { ok: true, json: async () => ({ hasProfile: hasParticipantProfile }) } as any;
       }
       if (url.includes('/api/me/ensure-referral-code')) {
         return {
@@ -199,5 +204,38 @@ describe('Booking confirmation after a redirect payment', () => {
       "Your payment didn't go through",
     );
     expect(finalizeCalls).toHaveLength(0);
+  });
+
+  it('shows the confirmation and share kit to a brand-new buyer instead of forcing onboarding', async () => {
+    // V14 #6: a first-time buyer was redirected straight into profile setup and
+    // never saw their booking, referral link or share card.
+    hasParticipantProfile = false;
+
+    renderPage();
+
+    expect(await screen.findByTestId('confirmation-heading')).toHaveTextContent('Booking Confirmed!');
+    expect(screen.getByText('Invite the Squad')).toBeInTheDocument();
+    // Invited to finish the profile, not redirected away from the share moment.
+    expect(screen.getByTestId('complete-profile-prompt')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalledWith(expect.stringContaining('/participant-profile-setup'));
+  });
+
+  it('opens profile setup only when the buyer chooses to, returning them here after', async () => {
+    hasParticipantProfile = false;
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await user.click(await screen.findByTestId('button-complete-profile'));
+
+    expect(navigate).toHaveBeenCalledWith(expect.stringContaining('/participant-profile-setup'));
+    expect(sessionStorage.getItem('postParticipantOnboardingRedirect')).toContain('/booking-success');
+  });
+
+  it('does not nag a buyer who already has a profile', async () => {
+    renderPage();
+
+    await screen.findByTestId('confirmation-heading');
+    expect(screen.queryByTestId('complete-profile-prompt')).not.toBeInTheDocument();
   });
 });

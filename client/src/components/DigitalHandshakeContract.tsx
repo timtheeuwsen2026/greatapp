@@ -4,6 +4,8 @@ interface DigitalHandshakeTerms {
   fixedFee?: number;
   perHeadAmount?: number;
   perRoomPerNight?: number;
+  /** Per Room / Per Night: the venue's published room table, copied at contract time. */
+  roomRates?: Array<{ name: string; quantity: number; capacity?: number | null; pricePerNight: number }>;
   minimumSpend?: number;
   revenueSharePct?: number;
   accessFee?: number;
@@ -33,6 +35,8 @@ interface DigitalHandshakeContractProps {
   // Lets the receiving party (Creator, Venue, or Promoter) click through and read the
   // full event page before accepting the terms.
   eventUrl?: string | null;
+  /** Nights the space is held — turns a per-night rate into a real payout figure. */
+  nights?: number | null;
 }
 
 
@@ -44,6 +48,7 @@ export function DigitalHandshakeContract({
   platformPct,
   title = "Digital Handshake Contract",
   eventUrl,
+  nights,
 }: DigitalHandshakeContractProps) {
   const terms = contract?.terms || {};
   const risk = contract?.risk || {};
@@ -58,6 +63,15 @@ export function DigitalHandshakeContract({
   };
 
   const gross = Number(price || 0) * Number(maxParticipants || 0);
+  const roomRates = Array.isArray(terms.roomRates) ? terms.roomRates : [];
+  // Every room, one night. Multiplied by the stay this is the venue's take if
+  // the trip fills the property.
+  const allRoomsPerNight = roomRates.reduce(
+    (sum, room) => sum + Number(room.pricePerNight || 0) * (Number(room.quantity) || 1),
+    0,
+  );
+  const heldNights = Number(nights) > 0 ? Number(nights) : 1;
+
   const venuePayoutPreview = (() => {
     switch (model) {
       case "fixed_fee":
@@ -65,8 +79,8 @@ export function DigitalHandshakeContract({
       case "per_head":
         return Number(terms.perHeadAmount || 0) * Number(maxParticipants || 0);
       case "per_room_night":
-        // Rooms and nights are not known until the trip is booked out.
-        return 0;
+        // Every room for the length of the stay.
+        return allRoomsPerNight * heldNights;
       case "minimum_spend":
         return Number(terms.minimumSpend || 0);
       case "revenue_share":
@@ -115,7 +129,11 @@ export function DigitalHandshakeContract({
       <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-500 md:grid-cols-2">
         {model === "fixed_fee" && <span>Flat Fee: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
         {model === "per_head" && <span>Per Participant: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
-        {model === "per_room_night" && <span>Per Room / Night: <strong>{formatMoney(terms.perRoomPerNight)}</strong></span>}
+        {model === "per_room_night" && (
+          <span>
+            Per Room / Night: <strong>{roomRates.length > 1 ? `from ${formatMoney(terms.perRoomPerNight)}` : formatMoney(terms.perRoomPerNight)}</strong>
+          </span>
+        )}
         {model === "minimum_spend" && <span>Minimum Spend: <strong>{formatMoney(terms.minimumSpend)}</strong></span>}
         {model === "revenue_share" && <span>Revenue Share: <strong>{Number(terms.revenueSharePct || 0)}%</strong></span>}
         {model === "access_only" && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}
@@ -130,13 +148,41 @@ export function DigitalHandshakeContract({
         </span>
       </div>
 
+      {/* The venue's own room table, copied onto the contract, so both sides
+          read the same numbers even if the profile changes later. */}
+      {model === "per_room_night" && roomRates.length > 0 && (
+        <div className="mt-2 rounded border bg-white p-2 text-xs dark:bg-gray-800" data-testid="handshake-room-rates">
+          {roomRates.map((room, index) => (
+            <div key={index} className="flex justify-between text-gray-600 dark:text-gray-300">
+              <span>
+                {room.name}
+                {room.quantity > 1 ? ` ×${room.quantity}` : ""}
+                {room.capacity ? ` · sleeps ${room.capacity}` : ""}
+              </span>
+              <span className="font-medium">{formatMoney(room.pricePerNight)}/night</span>
+            </div>
+          ))}
+          <div className="mt-1 flex justify-between border-t pt-1 font-semibold text-gray-800 dark:text-gray-100">
+            <span>All rooms, one night</span>
+            <span>{formatMoney(allRoomsPerNight)}</span>
+          </div>
+        </div>
+      )}
+
       <p className="mt-2 text-xs text-gray-500">
         {model === "venue_sponsored" ? (
           <>Sponsorship cost to you: <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></>
         ) : model === "upfront_rental" ? (
           <>Rental income from creator: <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></>
         ) : (
-          <>Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong></>
+          <>
+            Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong>
+            {model === "per_room_night" && roomRates.length > 0 && (
+              <span className="text-gray-400">
+                {" "}(all rooms × {heldNights} night{heldNights === 1 ? "" : "s"})
+              </span>
+            )}
+          </>
         )}
       </p>
     </div>

@@ -5994,14 +5994,14 @@ function PricingStep({ form }: { form: any }) {
                       : "Venues will see this preference when they bid to host your event."}
                   </p>
                   {/* Per Room / Per Night carries no target number — the venue's
-                      own room rates apply. Those rates arrive with the venue's
-                      bid (or its profile), so say that instead of asking the
-                      creator to invent a figure. */}
+                      own room rates apply. An invited external venue has no
+                      profile yet, so there is nothing to fetch: say so plainly
+                      instead of leaving the creator staring at a blank field. */}
                   {selectedTargetDeal?.value === 'per_room_night' ? (
                     <div className="mt-3 rounded-md border bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300" data-testid="target-deal-room-rates-note">
-                      The venue's own room rates apply for this deal. Each bidding venue's
-                      per-room, per-night prices come from the Rooms step of their venue
-                      profile — you'll see the exact rates on their bid before you accept.
+                      {venueDealContext === "invited"
+                        ? "Since this is a new venue, their room rates are not yet in our system. You are proposing the 'Per Room' deal structure. The venue will input their specific room rates during their onboarding."
+                        : "The venue's own room rates apply for this deal. Each bidding venue's per-room, per-night prices come from the Rooms step of their venue profile — you'll see the exact rates on their bid before you accept."}
                     </div>
                   ) : selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
                     <div className="mt-3">

@@ -278,6 +278,50 @@ async function createVenueInviteForExperience(experience: any) {
   } as any);
 }
 
+/**
+ * Fills in a Per Room / Per Night deal from the venue's own profile.
+ *
+ * The creator agrees to the venue's published room rates rather than typing a
+ * number, so the Event Builder only *displays* them. Without this the contract
+ * reached the venue's dashboard reading "Per Room / Night: 0.00" and a payout
+ * estimate of zero — the venue could not see what the deal was worth.
+ *
+ * Rates are read at contract time so they always match what the venue
+ * published, and the full table is stored on the contract so both sides see
+ * the same numbers later even if the venue edits its profile.
+ */
+async function withVenueRoomRates<T extends { model?: string; terms?: any }>(
+  contract: T,
+  venueId: string | null | undefined,
+): Promise<T> {
+  if (normalizeVenueDealModel(contract.model) !== "per_room_night" || !venueId) return contract;
+
+  const venue = await storage.getVenue(venueId);
+  const rooms = ((venue as any)?.venueRoomTypes || []) as Array<{
+    name?: string; type?: string; quantity?: number; capacity?: number; pricePerNight?: number | string;
+  }>;
+
+  const roomRates = rooms
+    .map((room) => ({
+      name: room.name || room.type || "Room",
+      quantity: Number(room.quantity) > 0 ? Number(room.quantity) : 1,
+      capacity: Number(room.capacity) || null,
+      pricePerNight: numberOrZero(room.pricePerNight),
+    }))
+    .filter((room) => room.pricePerNight > 0);
+
+  if (roomRates.length === 0) return contract;
+
+  // The headline rate is the cheapest room — the entry price of the deal.
+  // The full table travels alongside it for the detailed view.
+  const perRoomPerNight = Math.min(...roomRates.map((room) => room.pricePerNight));
+
+  return {
+    ...contract,
+    terms: { ...(contract.terms || {}), perRoomPerNight, roomRates },
+  };
+}
+
 function buildRequestedVenueContractObject(input: any) {
   const model = normalizeVenueDealModel(input.venueTargetDeal) || "access_only";
   const targetValue = numberOrZero(input.venueTargetDealValue);
@@ -4199,22 +4243,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Failed to send event submitted email:", error);
       });
 
-      // Manual venues are external by definition. Send the proposal from the
-      // active draft-publish flow (the legacy publish endpoint already did
-      // this, but Event Builder uses this route).
+      // Manual venues are external by definition. This is the route the Event
+      // Builder publishes through, so the tokenised invite has to be created
+      // here too — without it the email falls back to the public event page and
+      // the venue has no way to claim their space or answer the deal.
       if (experience.venueType === "manual" && experience.manualVenueEmail) {
-        notificationService.sendExternalVenueInvitation(experience).catch((error) => {
+        (async () => {
+          const invite = await createVenueInviteForExperience({
+            ...experience,
+            creatorId: userId,
+          });
+          await notificationService.sendExternalVenueInvitation({
+            ...experience,
+            inviteToken: invite?.token,
+          });
+        })().catch((error) => {
           console.error("Failed to send external venue invitation:", error);
         });
       }
 
       if ((draft as any).selectedVenueId) {
-        await storage.upsertVenueContract(buildVenueContractObject(
+        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experienceData,
           experience.id,
           (draft as any).selectedVenueId,
           userId
-        ));
+        ), (draft as any).selectedVenueId));
       }
       
       // Delete the draft since it's now published
@@ -4270,12 +4324,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const selectedVenueId = req.body.selectedVenueId || req.body.linkedVenueId;
       if (status !== "draft" && selectedVenueId) {
-        await storage.upsertVenueContract(buildVenueContractObject(
+        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experienceData,
           experience.id,
           selectedVenueId,
           userId
-        ));
+        ), selectedVenueId));
       }
       res.json(experience);
     } catch (error) {
@@ -5773,12 +5827,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if ((existingDraft as any).selectedVenueId) {
-        await storage.upsertVenueContract(buildVenueContractObject(
+        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experienceData,
           experience.id,
           (existingDraft as any).selectedVenueId,
           userId
-        ));
+        ), (existingDraft as any).selectedVenueId));
       }
       
       // Delete the draft
@@ -12434,12 +12488,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       for (const experience of missingContractExperiences) {
         if (!experience.linkedVenueId) continue;
-        const contract = await storage.upsertVenueContract(buildVenueContractObject(
+        const contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experience,
           experience.id,
           experience.linkedVenueId,
           experience.creatorId
-        ));
+        ), experience.linkedVenueId));
         offers.push({ ...experience, venue: userVenues.find((v: any) => v.id === experience.linkedVenueId), contract });
       }
       res.json(offers);
@@ -12490,12 +12544,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
-        contract = await storage.upsertVenueContract(buildVenueContractObject(
+        contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experience,
           experienceId,
           experience.linkedVenueId,
           experience.creatorId
-        ));
+        ), experience.linkedVenueId));
       }
 
       // ── Venue-Sponsored deal: charge the venue before going live ─────────
@@ -12931,12 +12985,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
-        contract = await storage.upsertVenueContract(buildVenueContractObject(
+        contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
           experience,
           experienceId,
           experience.linkedVenueId,
           experience.creatorId
-        ));
+        ), experience.linkedVenueId));
       }
 
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
@@ -13375,12 +13429,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Upsert the venue contract in pending_payment state so the webhook can find it
         let contract = await storage.getVenueContractByExperience(offer.experienceId);
         if (!contract) {
-          contract = await storage.upsertVenueContract(buildVenueContractObject(
+          contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
             experience,
             offer.experienceId,
             offer.venueId,
             userId,
-          ));
+          ), offer.venueId));
         }
         await storage.updateVenueContractSponsorshipStatus(contract.id, 'unpaid');
 

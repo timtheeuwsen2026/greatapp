@@ -96,6 +96,15 @@ function formatEventDate(value: string | Date | null | undefined): string {
     : date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
+// Nights the space is held. Turns a per-night room rate into a real figure.
+function nightsBetween(start: string | Date | null | undefined, end: string | Date | null | undefined): number {
+  if (!start) return 0;
+  const startDate = new Date(start);
+  const endDate = end ? new Date(end) : startDate;
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 0;
+  return Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 86400000));
+}
+
 // How long the space is committed for — the thing a venue is really agreeing to.
 function describeEventDuration(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
   if (!start) return "—";
@@ -726,6 +735,7 @@ function VenueDashboardContent() {
                               maxParticipants={event.maxParticipants}
                               currency={event.currency}
                               platformPct={event.platformPct}
+                              nights={nightsBetween(event.startDate, event.endDate)}
                               eventUrl={`/experience/${event.slug || event.id}`}
                             />
 
@@ -837,6 +847,7 @@ function VenueDashboardContent() {
                             maxParticipants={offer.maxParticipants}
                             currency={offer.currency}
                             platformPct={offer.platformPct || offer.platformRevenuePercentage}
+                            nights={nightsBetween(offer.startDate, offer.endDate)}
                             eventUrl={`/experience/${offer.slug || offer.id}`}
                           />
                         </div>
@@ -924,6 +935,7 @@ function VenueDashboardContent() {
                           maxParticipants={experience.maxParticipants}
                           currency={experience.currency}
                           platformPct={experience.platformPct || experience.platformRevenuePercentage}
+                          nights={nightsBetween(experience.startDate, experience.endDate)}
                           eventUrl={`/experience/${experience.slug || experience.id}`}
                         />
                         {deal.acceptedAt && (
@@ -1322,6 +1334,7 @@ function VenueDashboardContent() {
                   maxParticipants={offerModal.event.maxParticipants}
                   currency={offerModal.event.currency}
                   platformPct={offerModal.event.platformPct}
+                  nights={nightsBetween(offerModal.event.startDate, offerModal.event.endDate)}
                 />
               </div>
             )}
@@ -1428,6 +1441,7 @@ function VenueDashboardContent() {
                   maxParticipants={counterModal.offer.maxParticipants}
                   currency={counterModal.offer.currency}
                   platformPct={counterModal.offer.platformPct || counterModal.offer.platformRevenuePercentage}
+                  nights={nightsBetween(counterModal.offer.startDate, counterModal.offer.endDate)}
                 />
               </div>
             )}

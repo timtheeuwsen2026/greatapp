@@ -210,6 +210,56 @@ function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
 }
 
 /**
+ * Venues publish no prices. The columns still hold values written before that
+ * changed, so strip them on the way out rather than leaving stale rates on the
+ * wire for anything that reads the API. Room types keep their capacity and
+ * lose their nightly rate the same way.
+ *
+ * Nothing is deleted from the database — this only controls what is served.
+ */
+const VENUE_PRICING_KEYS = [
+  "pricingModel", "currency", "basePrice", "minStay", "depositPercent",
+  "basePricePerDay", "basePricePerEvent", "cleaningFee", "useRoomPricesFromRoomsPage",
+  "defaultPricePerRoomPerNight", "minimumNights", "paymentTimingModel",
+  "softHoldDurationDays", "balanceDueDaysBeforeArrival", "pricingNotes",
+  "softHoldDays", "commissionPercent", "paymentModel",
+  "softHoldPolicyEnabled", "softHoldRefundableDeposit",
+] as const;
+
+function stripVenuePricing<T>(venue: T): T {
+  if (!venue || typeof venue !== "object") return venue;
+  const out: Record<string, any> = { ...(venue as any) };
+  for (const key of VENUE_PRICING_KEYS) delete out[key];
+
+  if (Array.isArray(out.venueRoomTypes)) {
+    out.venueRoomTypes = out.venueRoomTypes.map((room: any) => {
+      if (!room || typeof room !== "object") return room;
+      const { pricePerNight, ...rest } = room;
+      return rest;
+    });
+  }
+  if (Array.isArray(out.services)) {
+    out.services = out.services.map((service: any) => {
+      if (!service || typeof service !== "object") return service;
+      const { price, ...rest } = service;
+      return rest;
+    });
+  }
+  if (Array.isArray(out.venueRoles)) {
+    out.venueRoles = out.venueRoles.map((role: any) => {
+      if (!role || typeof role !== "object") return role;
+      const { rate, ...rest } = role;
+      return rest;
+    });
+  }
+  return out as T;
+}
+
+function stripVenuePricingAll<T>(venues: T[]): T[] {
+  return Array.isArray(venues) ? venues.map(stripVenuePricing) : venues;
+}
+
+/**
  * Rooms the creator is asking the venue to hold, summed from the Rooms step.
  * A Per Room / Per Night deal is billed against this, so it travels on the
  * contract rather than being re-derived by each side.
@@ -7733,7 +7783,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         approved: true,
         location: location as string,
       });
-      res.json(venues);
+      res.json(stripVenuePricingAll(venues));
     } catch (error) {
       console.error("Error fetching venues:", error);
       res.status(500).json({ message: "Failed to fetch venues" });
@@ -7750,7 +7800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const venues = await storage.getVenuesByCreator(userId);
-      res.json(venues);
+      res.json(stripVenuePricingAll(venues));
     } catch (error) {
       console.error("Error fetching user venues:", error);
       res.status(500).json({ message: "Failed to fetch venues" });
@@ -7783,7 +7833,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const venues = await storage.getVenuesByCreator(userId);
-      res.json(venues);
+      res.json(stripVenuePricingAll(venues));
     } catch (error) {
       console.error("Error fetching my venues:", error);
       res.status(500).json({ message: "Failed to fetch venues" });
@@ -7811,7 +7861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "You don't have permission to edit this venue" });
       }
 
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error fetching venue for editing:", error);
       res.status(500).json({ message: "Failed to fetch venue" });
@@ -7838,7 +7888,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Venue not found" });
       }
       
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error fetching venue:", error);
       res.status(500).json({ message: "Failed to fetch venue" });
@@ -7863,12 +7913,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // For approved venues, anyone can view
       if (venue.status === "approved" && venue.approved) {
-        return res.json(venue);
+        return res.json(stripVenuePricing(venue));
       }
       
       // For non-approved venues, only the owner can view
       if (userId && venue.createdBy === userId) {
-        return res.json(venue);
+        return res.json(stripVenuePricing(venue));
       }
       
       // Otherwise, venue is not accessible
@@ -8008,7 +8058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`Creating venue draft: ${venueData.name} (${venueData.venueType})`);
 
       const venue = await storage.createVenue(venueData);
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error creating venue:", error);
       res.status(500).json({ message: "Failed to create venue" });
@@ -8230,7 +8280,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { reviewNotes } = req.body;
       const venue = await storage.approveVenue(req.params.id, userId, reviewNotes);
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error approving venue:", error);
       res.status(500).json({ message: "Failed to approve venue" });
@@ -8253,7 +8303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { reviewNotes } = req.body;
       const venue = await storage.rejectVenue(req.params.id, userId, reviewNotes);
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error rejecting venue:", error);
       res.status(500).json({ message: "Failed to reject venue" });
@@ -10872,7 +10922,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
       const total = Number(totals[0]?.count || 0);
       const statusCounts = Object.fromEntries(statuses.map(row => [row.status || "unknown", Number(row.count)]));
-      res.json({ items: items.map(row => ({ ...row.venue, ownerName: [row.ownerFirstName, row.ownerLastName].filter(Boolean).join(" ") || null, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
+      res.json({ items: items.map(row => ({ ...stripVenuePricing(row.venue), ownerName: [row.ownerFirstName, row.ownerLastName].filter(Boolean).join(" ") || null, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
     } catch (error) {
       console.error("Error fetching admin venues:", error);
       res.status(500).json({ message: "Failed to fetch admin venues" });
@@ -10904,7 +10954,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get availability for all venues
       const availabilityPromises = venues.map(async (venue) => {
         const availability = await storage.getVenueAvailability(venue.id);
-        return availability.map(avail => ({ ...avail, venue }));
+        return availability.map(avail => ({ ...avail, venue: stripVenuePricing(venue) }));
       });
       
       const allAvailability = (await Promise.all(availabilityPromises)).flat();
@@ -11103,7 +11153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { status, reviewNotes } = req.body;
       if (status === 'approved') {
         const venue = await storage.approveVenue(req.params.id);
-        res.json(venue);
+        res.json(stripVenuePricing(venue));
       } else {
         await storage.rejectVenue(req.params.id);
         res.json({ message: "Venue rejected and removed" });
@@ -11123,7 +11173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const { displayPrefs } = req.body;
       const venue = await storage.updateVenueDisplayPrefs(req.params.id, displayPrefs);
-      res.json(venue);
+      res.json(stripVenuePricing(venue));
     } catch (error) {
       console.error("Error updating venue display preferences:", error);
       res.status(500).json({ message: "Failed to update display preferences" });
@@ -12421,7 +12471,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           experience.linkedVenueId,
           experience.creatorId
         ));
-        offers.push({ ...experience, venue: userVenues.find((v: any) => v.id === experience.linkedVenueId), contract });
+        offers.push({ ...experience, venue: stripVenuePricing(userVenues.find((v: any) => v.id === experience.linkedVenueId)), contract });
       }
       res.json(offers);
     } catch (err: any) {
@@ -13200,7 +13250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         db.select({ count: sql<number>`count(*)::int` }).from(venueOffers).where(where),
       ]);
       const total = Number(totals[0]?.count || 0);
-      res.json({ items, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } });
+      res.json({ items: items.map((row: any) => ({ ...row, venue: stripVenuePricing(row.venue) })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } });
     } catch (err: any) {
       console.error('Error fetching admin venue offers:', err);
       res.status(500).json({ message: 'Failed to fetch venue offers' });

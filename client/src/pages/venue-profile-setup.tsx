@@ -18,7 +18,6 @@ import { MapPin, Building, Users, ArrowLeft, ArrowRight, Save, DollarSign, Alert
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
-import { getVenueDealOptions, normalizeVenueDealModel } from '@shared/venueDealModels';
 import { Label } from '@/components/ui/label';
 import type { VenueService } from '@/components/VenueServicesEditor';
 import type { Role } from '@/components/RolesEditor';
@@ -59,16 +58,6 @@ const venueServiceSchema = z.object({
   description: z.string()
     .min(50, 'Service description must be at least 50 characters')
     .max(1000, 'Service description must not exceed 1000 characters'),
-  price: z.number()
-    .min(0, 'Price must be positive')
-    .max(999999.99, 'Price is too high')
-    .refine((val) => {
-      if (val === undefined) return true;
-      // Check for max 2 decimal places
-      const decimalPlaces = (val.toString().split('.')[1] || '').length;
-      return decimalPlaces <= 2;
-    }, 'Price can have at most 2 decimal places')
-    .optional(),
   frequency: z.enum(['one-time', 'per_day', 'per_person', 'per_hour']),
   quantity: z.number()
     .int('Quantity must be a whole number')
@@ -192,66 +181,7 @@ const venueProfileSchema = z.object({
   // Services
   services: z.array(venueServiceSchema).max(20, 'Maximum 20 services allowed').default([]),
   
-  // Step 5: Pricing & Commercial fields
-  pricingModel: z.string().optional().or(z.literal('')),
-  // DATA CONTRACT: Default to EUR for new venues
-  currency: z.string().default('eur'),
-  basePrice: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number()
-      .min(0, 'Base price must be positive')
-      .max(999999.99, 'Base price is too high')
-      .refine((val) => {
-        if (val === undefined) return true;
-        const decimalPlaces = (val.toString().split('.')[1] || '').length;
-        return decimalPlaces <= 2;
-      }, 'Base price can have at most 2 decimal places')
-      .optional()
-  ),
-  minStay: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number()
-      .int('Minimum stay must be a whole number')
-      .min(1, 'Minimum stay must be at least 1 day')
-      .max(365, 'Minimum stay must not exceed 365 days')
-      .optional()
-  ),
-  cancellationPolicy: z.string().optional().or(z.literal('')),
-  
-  softHoldDays: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number()
-      .int('Soft hold days must be a whole number')
-      .min(1, 'Soft hold days must be at least 1 day')
-      .max(365, 'Soft hold days must not exceed 365 days')
-      .optional()
-  ),
-  
-  depositPercent: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number()
-      .min(0, 'Deposit percentage must be at least 0%')
-      .max(100, 'Deposit percentage must not exceed 100%')
-      .refine((val) => {
-        if (val === undefined) return true;
-        const decimalPlaces = (val.toString().split('.')[1] || '').length;
-        return decimalPlaces <= 2;
-      }, 'Deposit percentage can have at most 2 decimal places')
-      .optional()
-  ),
-  
-  commissionPercent: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number()
-      .min(0, 'Commission percentage must be at least 0%')
-      .max(100, 'Commission percentage must not exceed 100%')
-      .refine((val) => {
-        if (val === undefined) return true;
-        const decimalPlaces = (val.toString().split('.')[1] || '').length;
-        return decimalPlaces <= 2;
-      }, 'Commission percentage can have at most 2 decimal places')
-      .optional()
-  ),
+  // Pricing removed — venue profiles are visual only (photos, capacity, amenities).
   
   paymentModel: z.preprocess(
     (val) => val === '' || val === null ? undefined : val,
@@ -260,8 +190,6 @@ const venueProfileSchema = z.object({
     }).optional()
   ),
   
-  approvalMode: z.string().optional().or(z.literal('')),
-  commercialModel: z.string().optional().or(z.literal('')),
   
   // Step 3: Calendar - Google Calendar sync
   googleCalendarConnected: z.boolean().default(false),
@@ -283,7 +211,6 @@ const venueProfileSchema = z.object({
     capacity: z.number().min(1, 'Capacity must be at least 1'),
     bedConfiguration: z.string().optional(),
     quantity: z.number().min(1, 'Quantity must be at least 1').default(1),
-    pricePerNight: z.number().min(0, 'Price per night cannot be negative'),
     description: z.string().optional(),
   })).default([]),
   
@@ -301,39 +228,12 @@ const venueProfileSchema = z.object({
     })).default([]),
   })).default([]),
   
-  // Step 9: Pricing Model Section
-  // Option A - Whole Venue Pricing (only basePricePerDay - basePricePerEvent and cleaningFee removed per Milestone 1)
-  basePricePerDay: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number().min(0, 'Price must be positive').optional()
-  ),
-  
-  // Option B - Per Room Pricing
-  useRoomPricesFromRoomsPage: z.boolean().default(true),
-  defaultPricePerRoomPerNight: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number().min(0, 'Price must be positive').optional()
-  ),
-  minimumNights: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number().int().min(1, 'Minimum 1 night').optional()
-  ),
-  
-  // Payment Timing Model
-  paymentTimingModel: z.enum(['soft_hold_deposit_balance', 'deposit_upfront_balance', 'deposit_balance_arrival']).optional(),
-  softHoldDurationDays: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number().int().min(1, 'Minimum 1 day').max(365, 'Maximum 365 days').optional()
-  ),
-  balanceDueDaysBeforeArrival: z.preprocess(
-    (val) => val === '' || val === null ? undefined : val,
-    z.coerce.number().int().min(1, 'Minimum 1 day').max(90, 'Maximum 90 days').optional()
-  ),
-  
-  // Pricing Notes
-  pricingNotes: z.string().optional().or(z.literal('')),
+  // Venues no longer publish prices. A creator proposes a Target Deal and the
+  // venue accepts or counters it, so nothing here collects rates.
   
   // Step 10: Terms & Conditions
+  // A booking policy, not a price — stays on Terms & Review.
+  cancellationPolicy: z.string().optional().or(z.literal('')),
   termsAndConditionsUrl: z.string().optional().or(z.literal('')),
   houseRules: z.string().optional().or(z.literal('')),
   damagePolicy: z.string().optional().or(z.literal('')),
@@ -414,22 +314,7 @@ const daytimeVenueVibes = [
   'Community Driven', 'Creative', 'High Energy', 'Quiet', 'Late Night', 'Pop-Up Ready'
 ];
 
-// Pricing models come from the shared vocabulary so a venue lists itself using
-// exactly the deals the Event Builder can propose to it. The old lists here
-// (minimum_spend/flat_rental, per_head_package/whole_venue/per_room) were a
-// separate vocabulary that never lined up with the creator side.
-const daytimePricingModels = getVenueDealOptions({ isDaytime: true, surface: 'venue' }).map((o) => o.value);
-const multiDayPricingModels = getVenueDealOptions({ isDaytime: false, surface: 'venue' }).map((o) => o.value);
 
-const PRICING_MODEL_ICONS: Record<string, typeof Building> = {
-  revenue_share: DollarSign,
-  fixed_fee: DollarSign,
-  per_head: Users,
-  per_room_night: Users,
-  upfront_rental: Building,
-  access_only: Clock,
-  minimum_spend: Building,
-};
 
 const viewsEnvironment = [
   'Ocean View', 'Lake View', 'Mountain View', 'Forest View',
@@ -440,17 +325,11 @@ const accommodationTypes = [
   'Private Rooms', 'Shared Rooms', 'Dormitory', 'Glamping', 'Camping'
 ];
 
-const currencies = ['USD', 'EUR', 'GBP', 'IDR', 'THB', 'MXN', 'AUD'];
 
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', IDR: 'Rp', THB: '฿', MXN: 'MX$', AUD: 'A$',
-};
 
 const cancellationPolicies = ['Flexible', 'Moderate', 'Strict'];
 
-const approvalModes = ['Direct', 'Approval', 'Fully Managed'];
 
-const commercialModels = ['Fixed Rental', 'Revenue Share', 'Flexible'];
 
 const regions = [
   'North America', 'South America', 'Europe', 'Africa', 'Asia',
@@ -510,33 +389,14 @@ export default function VenueProfileSetup() {
       whatsapp: '',
       skype: '',
       services: [],
-      pricingModel: '',
-      // DATA CONTRACT: Default to EUR for new venues
-      currency: 'eur',
-      basePrice: undefined,
-      minStay: undefined,
-      cancellationPolicy: '',
-      softHoldDays: undefined,
-      depositPercent: undefined,
-      commissionPercent: undefined,
       paymentModel: undefined,
-      approvalMode: '',
-      commercialModel: '',
       googleCalendarConnected: false,
       googleCalendarId: '',
       venueRoles: [],
       venueRoomTypes: [],
       defaultItinerary: [],
-      pricingNotes: '',
-      // New Page 9 fields (basePricePerEvent and cleaningFee removed per Milestone 1)
-      basePricePerDay: undefined,
-      useRoomPricesFromRoomsPage: true,
-      defaultPricePerRoomPerNight: undefined,
-      minimumNights: undefined,
-      paymentTimingModel: initialVenueType === 'daytime' ? 'deposit_balance_arrival' : undefined,
-      softHoldDurationDays: undefined,
-      balanceDueDaysBeforeArrival: undefined,
       // New Page 10 fields
+      cancellationPolicy: '',
       termsAndConditionsUrl: '',
       houseRules: '',
       damagePolicy: '',
@@ -548,27 +408,13 @@ export default function VenueProfileSetup() {
   const isDaytime = form.watch('venueType') === 'daytime';
   const DAYTIME_SKIP_STEPS = [6, 7, 8];
   const visibleStepIds = useMemo(
-    () => Array.from({ length: 10 }, (_, index) => index + 1).filter((id) => !isDaytime || !DAYTIME_SKIP_STEPS.includes(id)),
+    () => Array.from({ length: 9 }, (_, index) => index + 1).filter((id) => !isDaytime || !DAYTIME_SKIP_STEPS.includes(id)),
     [isDaytime]
   );
   const currentVisibleStep = Math.max(visibleStepIds.indexOf(step), 0) + 1;
   const totalVisibleSteps = visibleStepIds.length;
   const activeVenueCategories = isDaytime ? daytimeVenueCategories : multiDayVenueCategories;
   const activeVenueVibes = isDaytime ? daytimeVenueVibes : multiDayVenueVibes;
-
-  // The same deal list the Event Builder shows, so a venue prices itself in the
-  // vocabulary creators actually negotiate in.
-  const pricingModelValue = form.watch('pricingModel');
-  const pricingModelOptions = useMemo(
-    () => getVenueDealOptions({
-      isDaytime,
-      surface: 'venue',
-      currencySymbol: CURRENCY_SYMBOLS[(form.watch('currency') || 'eur').toUpperCase()] || '€',
-      currentValue: pricingModelValue,
-    }),
-    [isDaytime, pricingModelValue, form.watch('currency')],
-  );
-  const selectedPricingModel = pricingModelOptions.find((option) => option.value === pricingModelValue);
 
   useEffect(() => {
     const allowedCategories = new Set(activeVenueCategories);
@@ -583,26 +429,6 @@ export default function VenueProfileSetup() {
       form.setValue('venueRoles', []);
       form.setValue('venueRoomTypes', []);
       form.setValue('defaultItinerary', []);
-      form.setValue('useRoomPricesFromRoomsPage', false);
-      form.setValue('defaultPricePerRoomPerNight', undefined);
-      form.setValue('minimumNights', undefined);
-      form.setValue('minStay', undefined);
-      form.setValue('paymentTimingModel', 'deposit_balance_arrival');
-      // Legacy keys map onto the shared vocabulary before the list is checked,
-      // so an older listing keeps its pricing instead of being blanked.
-      const daytimeModel = normalizeVenueDealModel(form.getValues('pricingModel'));
-      if (!daytimeModel || !daytimePricingModels.includes(daytimeModel)) {
-        form.setValue('pricingModel', '');
-      } else if (daytimeModel !== form.getValues('pricingModel')) {
-        form.setValue('pricingModel', daytimeModel);
-      }
-    } else {
-      const multiDayModel = normalizeVenueDealModel(form.getValues('pricingModel'));
-      if (!multiDayModel || !multiDayPricingModels.includes(multiDayModel)) {
-        form.setValue('pricingModel', '');
-      } else if (multiDayModel !== form.getValues('pricingModel')) {
-        form.setValue('pricingModel', multiDayModel);
-      }
     }
   }, [activeVenueCategories, activeVenueVibes, form, isDaytime, step]);
 
@@ -659,33 +485,15 @@ export default function VenueProfileSetup() {
         whatsapp: existingVenue.whatsapp || '',
         skype: existingVenue.skype || '',
         services: existingVenue.services || [],
-        pricingModel: existingVenue.pricingModel || '',
         // DATA CONTRACT: Default to EUR for legacy venues
-        currency: existingVenue.currency || 'eur',
-        basePrice: existingVenue.basePrice ?? undefined,
-        minStay: existingVenue.minStay ?? undefined,
-        cancellationPolicy: existingVenue.cancellationPolicy || '',
-        softHoldDays: existingVenue.softHoldDays ?? undefined,
-        depositPercent: existingVenue.depositPercent ?? undefined,
-        commissionPercent: existingVenue.commissionPercent ?? undefined,
         paymentModel: existingVenue.paymentModel ?? undefined,
-        approvalMode: existingVenue.approvalMode || '',
-        commercialModel: existingVenue.commercialModel || '',
         googleCalendarConnected: existingVenue.googleCalendarConnected || false,
         googleCalendarId: existingVenue.googleCalendarId || '',
         venueRoles: existingVenue.venueRoles || [],
         venueRoomTypes: existingVenue.venueRoomTypes || [],
         defaultItinerary: existingVenue.defaultItinerary || [],
-        // New Page 9 fields (basePricePerEvent and cleaningFee removed per Milestone 1)
-        pricingNotes: existingVenue.pricingNotes || '',
-        basePricePerDay: existingVenue.basePricePerDay ?? undefined,
-        useRoomPricesFromRoomsPage: existingVenue.useRoomPricesFromRoomsPage ?? true,
-        defaultPricePerRoomPerNight: existingVenue.defaultPricePerRoomPerNight ?? undefined,
-        minimumNights: existingVenue.minimumNights ?? undefined,
-        paymentTimingModel: existingVenue.paymentTimingModel ?? undefined,
-        softHoldDurationDays: existingVenue.softHoldDurationDays ?? undefined,
-        balanceDueDaysBeforeArrival: existingVenue.balanceDueDaysBeforeArrival ?? undefined,
         // New Page 10 fields
+        cancellationPolicy: existingVenue.cancellationPolicy || '',
         termsAndConditionsUrl: existingVenue.termsAndConditionsUrl || '',
         houseRules: existingVenue.houseRules || '',
         damagePolicy: existingVenue.damagePolicy || '',
@@ -798,23 +606,10 @@ export default function VenueProfileSetup() {
     const cleanedData = {
       ...data,
       galleryImages: data.galleryImages?.filter((url: string) => url && url.trim()) || [],
-      // Decimal fields (prices, percentages) as strings - basePricePerEvent and cleaningFee removed per Milestone 1
-      basePrice: data.basePrice ? String(data.basePrice) : null,
-      basePricePerDay: data.basePricePerDay ? String(data.basePricePerDay) : null,
-      defaultPricePerRoomPerNight: isDaytimeVenue ? null : data.defaultPricePerRoomPerNight ? String(data.defaultPricePerRoomPerNight) : null,
-      depositPercent: data.depositPercent ? String(data.depositPercent) : null,
-      commissionPercent: data.commissionPercent ? String(data.commissionPercent) : null,
-      paymentTimingModel: isDaytimeVenue ? (data.paymentTimingModel || 'deposit_balance_arrival') : data.paymentTimingModel,
       // Integer fields as numbers (capacity is required so always a number)
       capacity: data.capacity ? Number(data.capacity) : data.capacity,
       standingCapacity: data.standingCapacity != null ? Number(data.standingCapacity) : null,
       seatedCapacity: data.seatedCapacity != null ? Number(data.seatedCapacity) : null,
-      minimumNights: isDaytimeVenue ? null : data.minimumNights ? Number(data.minimumNights) : null,
-      softHoldDurationDays: data.softHoldDurationDays ? Number(data.softHoldDurationDays) : null,
-      balanceDueDaysBeforeArrival: data.balanceDueDaysBeforeArrival ? Number(data.balanceDueDaysBeforeArrival) : null,
-      softHoldDays: data.softHoldDays ? Number(data.softHoldDays) : null,
-      minStay: isDaytimeVenue ? null : data.minStay ? Number(data.minStay) : null,
-      useRoomPricesFromRoomsPage: isDaytimeVenue ? false : data.useRoomPricesFromRoomsPage,
       venueRoles: isDaytimeVenue ? [] : data.venueRoles,
       venueRoomTypes: isDaytimeVenue ? [] : data.venueRoomTypes,
       defaultItinerary: isDaytimeVenue ? [] : data.defaultItinerary,
@@ -824,13 +619,13 @@ export default function VenueProfileSetup() {
   };
 
   const handleNext = async () => {
-    if (step < 10) {
+    if (step < 9) {
       // Skip Rooms & Itinerary steps for daytime spaces
       let nextStep = step + 1;
-      while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 10) {
+      while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 9) {
         nextStep++;
       }
-      setStep(nextStep <= 10 ? nextStep : 10);
+      setStep(nextStep <= 9 ? nextStep : 9);
     } else {
       form.handleSubmit(onSubmit)();
     }
@@ -854,7 +649,7 @@ export default function VenueProfileSetup() {
     const currentRooms = form.getValues("venueRoomTypes");
     form.setValue("venueRoomTypes", [
       ...currentRooms,
-      { name: "", type: "", capacity: 1, bedConfiguration: "", quantity: 1, pricePerNight: 0, description: "" }
+      { name: "", type: "", capacity: 1, bedConfiguration: "", quantity: 1, description: "" }
     ]);
   };
 
@@ -1031,8 +826,7 @@ export default function VenueProfileSetup() {
     6: 'Roles & Staffing',
     7: 'Rooms',
     8: 'Default Itinerary',
-    9: isDaytime ? 'Pricing & Booking' : 'Pricing',
-    10: 'Terms & Review'
+    9: 'Terms & Review'
   };
 
   const stepDescriptions: Record<number, string> = {
@@ -1046,12 +840,9 @@ export default function VenueProfileSetup() {
       ? 'Select the amenities and services your space can support for day events.'
       : 'Select amenities and services your venue offers to guests.',
     6: 'Define roles and staffing available at your venue.',
-    7: 'Configure room types and accommodation options.',
+    7: 'List your room types and how many spots each one sleeps.',
     8: 'Create a default itinerary template for events at your venue.',
-    9: isDaytime
-      ? 'Set event pricing, payment terms, and booking conditions.'
-      : 'Set up pricing, payment terms, and commercial details.',
-    10: 'Review and accept the terms before submitting your venue.'
+    9: 'Review and accept the terms before submitting your venue.'
   };
 
   return (
@@ -1666,7 +1457,7 @@ export default function VenueProfileSetup() {
                     <div className="space-y-6 pt-4 border-t">
                       <h3 className="text-lg font-semibold">Additional Paid Services (Optional)</h3>
                       <p className="text-gray-600 dark:text-gray-400">
-                        Add premium services with specific pricing (e.g., spa treatments, equipment rental, catering packages).
+                        List the services you can provide (e.g., spa treatments, equipment rental, catering packages). Describe what's on offer — the cost is agreed per event with the creator.
                       </p>
                       <FormField
                         control={form.control}
@@ -1695,15 +1486,16 @@ export default function VenueProfileSetup() {
                     <div className="space-y-2">
                       <h3 className="text-lg font-semibold">Venue Roles</h3>
                       <p className="text-gray-600 dark:text-gray-400">
-                        Define roles available at your venue. Select from standard roles or add custom ones. 
-                        Specify if each role is required, how many people are needed, and optional rates.
+                        Define roles available at your venue. Select from standard roles or add custom ones.
+                        Specify if each role is required and how many people are needed. Creators budget for staffing on their side.
                       </p>
                     </div>
-                    
+
                     <Suspense fallback={<StepLoading label="Loading roles..." />}>
                       <RolesEditor
                         roles={form.watch("venueRoles")}
                         onChange={(roles) => form.setValue("venueRoles", roles, { shouldDirty: true })}
+                        showRate={false}
                       />
                     </Suspense>
                   </div>
@@ -1714,7 +1506,7 @@ export default function VenueProfileSetup() {
                     <div className="space-y-2">
                       <h3 className="text-lg font-semibold">Room Types</h3>
                       <p className="text-gray-600 dark:text-gray-400">
-                        Define room types available at your venue with detailed configuration and pricing per night.
+                        Define the room types available at your venue — how many there are and how many people each one sleeps. No rates: creators bring their own budget and propose a deal.
                       </p>
                     </div>
                     
@@ -1824,23 +1616,9 @@ export default function VenueProfileSetup() {
                               </SelectContent>
                             </Select>
                           </div>
-                          <div className="space-y-2">
-                            <Label htmlFor={`room-price-${index}`}>Price Per Night *</Label>
-                            <Input
-                              id={`room-price-${index}`}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              placeholder="e.g., 150.00"
-                              value={room.pricePerNight}
-                              onChange={(e) => {
-                                const rooms = form.getValues("venueRoomTypes");
-                                rooms[index].pricePerNight = parseFloat(e.target.value) || 0;
-                                form.setValue("venueRoomTypes", rooms);
-                              }}
-                              data-testid={`input-room-price-${index}`}
-                            />
-                          </div>
+                          {/* No nightly rate here. Venues no longer publish
+                              prices — the creator proposes a Target Deal and the
+                              venue accepts or counters it. */}
                           <div className="md:col-span-2 space-y-2">
                             <Label htmlFor={`room-description-${index}`}>Description</Label>
                             <Textarea
@@ -1989,361 +1767,6 @@ export default function VenueProfileSetup() {
                 )}
 
                 {step === 9 && (
-                  <div className="space-y-8">
-                    {/* Section 1: Pricing Model */}
-                    <Card className="p-6">
-                      <h3 className="text-lg font-semibold mb-4">Pricing Model</h3>
-                      <p className="text-gray-600 dark:text-gray-400 mb-6">
-                        {isDaytime
-                          ? 'Choose how organizers can book your space for workshops, pop-ups, classes, and community events.'
-                          : 'Choose how you want to price your venue for event organizers.'}
-                      </p>
-                      
-                      <FormField
-                        control={form.control}
-                        name="pricingModel"
-                        render={({ field }) => (
-                          <FormItem className="space-y-4">
-                            <FormControl>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {pricingModelOptions.map((model) => {
-                                  const Icon = PRICING_MODEL_ICONS[model.value] || Building;
-                                  return (
-                                    <Card
-                                      key={model.value}
-                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === model.value ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'}`}
-                                      onClick={() => field.onChange(model.value)}
-                                      data-testid={`card-pricing-${model.value.replace(/_/g, '-')}`}
-                                    >
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <Icon className="h-5 w-5 text-primary" />
-                                        <span className="font-medium">{model.label}</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600">{model.description}</p>
-                                    </Card>
-                                  );
-                                })}
-                              </div>
-                            </FormControl>
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* One amount field, labelled by whichever model is selected.
-                          Access-Only still offers an optional space fee. */}
-                      {selectedPricingModel && (
-                        <div className="mt-6 space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                          <h4 className="font-medium text-blue-800 dark:text-blue-200">
-                            {selectedPricingModel.label}
-                          </h4>
-                          <FormField
-                            control={form.control}
-                            name="basePricePerDay"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>
-                                  {selectedPricingModel.valueKind === 'none'
-                                    ? `${selectedPricingModel.valueLabel} (optional)`
-                                    : selectedPricingModel.valueLabel}
-                                </FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    max={selectedPricingModel.valueKind === 'percent' ? '100' : undefined}
-                                    step={selectedPricingModel.valueKind === 'percent' ? '1' : '0.01'}
-                                    placeholder={selectedPricingModel.valueKind === 'percent' ? 'e.g., 20' : 'e.g., 350'}
-                                    {...field}
-                                    data-testid="input-pricing-model-value"
-                                  />
-                                </FormControl>
-                                <FormDescription>{selectedPricingModel.description}</FormDescription>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      )}
-
-                      {/* Per Room Pricing Fields */}
-                      {!isDaytime && form.watch('pricingModel') === 'per_room_night' && (
-                        <div className="mt-6 space-y-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                          <h4 className="font-medium text-green-800 dark:text-green-200">Per Room Pricing Options</h4>
-                          
-                          <FormField
-                            control={form.control}
-                            name="useRoomPricesFromRoomsPage"
-                            render={({ field }) => (
-                              <FormItem className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-md">
-                                <div>
-                                  <FormLabel>Use prices from Rooms page</FormLabel>
-                                  <FormDescription className="text-sm">
-                                    Enable to use individual room prices defined in the Rooms step
-                                  </FormDescription>
-                                </div>
-                                <FormControl>
-                                  <input
-                                    type="checkbox"
-                                    checked={field.value}
-                                    onChange={field.onChange}
-                                    className="h-5 w-5 rounded border-gray-300"
-                                    data-testid="checkbox-use-room-prices"
-                                  />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-
-                          {!form.watch('useRoomPricesFromRoomsPage') && (
-                            <FormField
-                              control={form.control}
-                              name="defaultPricePerRoomPerNight"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>Default Price Per Room Per Night</FormLabel>
-                                  <FormControl>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
-                                      placeholder="e.g., 150"
-                                      {...field}
-                                      data-testid="input-default-room-price"
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          )}
-
-                          <FormField
-                            control={form.control}
-                            name="minimumNights"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>Minimum Nights</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    min="1"
-                                    placeholder="e.g., 2"
-                                    {...field}
-                                    data-testid="input-minimum-nights"
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      )}
-                    </Card>
-
-                    {/* Section 2: Payment Timing Model (MVG) */}
-                    <Card className="p-6">
-                      <h3 className="text-lg font-semibold mb-4">
-                        {isDaytime ? 'Payment Timing' : 'Payment Timing Model (MVG)'}
-                      </h3>
-                      <p className="text-gray-600 dark:text-gray-400 mb-6">
-                        {isDaytime
-                          ? 'Choose when deposits and balances are collected for event bookings.'
-                          : 'Choose how payments should be collected in relation to the Minimum Viable Group threshold.'}
-                      </p>
-                      
-                      <FormField
-                        control={form.control}
-                        name="paymentTimingModel"
-                        render={({ field }) => (
-                          <FormItem className="space-y-4">
-                            <FormControl>
-                              <div className="space-y-3">
-                                {!isDaytime && (
-                                  <>
-                                    {/* Model 1 */}
-                                    <Card
-                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 hover:border-gray-300'}`}
-                                      onClick={() => field.onChange('soft_hold_deposit_balance')}
-                                      data-testid="card-payment-model-1"
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'soft_hold_deposit_balance' ? 'border-blue-500' : 'border-gray-400'}`}>
-                                          {field.value === 'soft_hold_deposit_balance' && <div className="w-2 h-2 rounded-full bg-blue-500" />}
-                                        </div>
-                                        <span className="font-medium">{'Soft Hold -> Deposit After MVG -> Balance Before Arrival'}</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600 ml-6 mt-1">
-                                        Dates are held without payment, deposit collected after MVG is met, balance due before arrival
-                                      </p>
-                                    </Card>
-
-                                    {/* Model 2 */}
-                                    <Card
-                                      className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'deposit_upfront_balance' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-gray-200 hover:border-gray-300'}`}
-                                      onClick={() => field.onChange('deposit_upfront_balance')}
-                                      data-testid="card-payment-model-2"
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_upfront_balance' ? 'border-green-500' : 'border-gray-400'}`}>
-                                          {field.value === 'deposit_upfront_balance' && <div className="w-2 h-2 rounded-full bg-green-500" />}
-                                        </div>
-                                        <span className="font-medium">{'Deposit Upfront (Refundable Until MVG) -> Balance Before Arrival'}</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600 ml-6 mt-1">
-                                        Deposit collected immediately but refundable if MVG not met, balance due before arrival
-                                      </p>
-                                    </Card>
-                                  </>
-                                )}
-
-                                {/* Model 3 */}
-                                <Card 
-                                  className={`p-4 cursor-pointer border-2 transition-colors ${field.value === 'deposit_balance_arrival' ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20' : 'border-gray-200 hover:border-gray-300'}`}
-                                  onClick={() => field.onChange('deposit_balance_arrival')}
-                                  data-testid="card-payment-model-3"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${field.value === 'deposit_balance_arrival' ? 'border-orange-500' : 'border-gray-400'}`}>
-                                      {field.value === 'deposit_balance_arrival' && <div className="w-2 h-2 rounded-full bg-orange-500" />}
-                                    </div>
-                                    <span className="font-medium">
-                                      {isDaytime ? 'Deposit After MVG -> Balance Before Arrival' : 'Deposit After MVG -> Balance on Arrival'}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-gray-600 ml-6 mt-1">
-                                    {isDaytime
-                                      ? 'Deposit collected only after MVG is met, remaining balance due before arrival/event start'
-                                      : 'Deposit collected only after MVG is met, remaining balance paid on arrival'}
-                                  </p>
-                                </Card>
-                              </div>
-                            </FormControl>
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Conditional fields based on payment timing model */}
-                      {form.watch('paymentTimingModel') && (
-                        <div className="mt-6 space-y-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                          {/* Soft Hold Duration - Only for Model 1 */}
-                          {form.watch('paymentTimingModel') === 'soft_hold_deposit_balance' && (
-                            <FormField
-                              control={form.control}
-                              name="softHoldDurationDays"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>Soft Hold Duration (Days)</FormLabel>
-                                  <FormDescription>
-                                    Number of days to hold dates without requiring payment
-                                  </FormDescription>
-                                  <FormControl>
-                                    <Input
-                                      type="number"
-                                      min="1"
-                                      max="30"
-                                      placeholder="e.g., 7"
-                                      {...field}
-                                      data-testid="input-soft-hold-duration"
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          )}
-
-                          {/* Deposit Percentage - For all models */}
-                          <FormField
-                            control={form.control}
-                            name="depositPercent"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>Deposit Percentage (%)</FormLabel>
-                                <FormDescription>
-                                  Percentage of total booking cost required as deposit
-                                </FormDescription>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    step="0.01"
-                                    placeholder="e.g., 25"
-                                    {...field}
-                                    data-testid="input-deposit-percent"
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-
-                          {/* Balance Due Days - For Model 1 and 2 */}
-                          {(form.watch('paymentTimingModel') === 'soft_hold_deposit_balance' || 
-                            form.watch('paymentTimingModel') === 'deposit_upfront_balance') && (
-                            <FormField
-                              control={form.control}
-                              name="balanceDueDaysBeforeArrival"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>{isDaytime ? 'Balance Due (Days Before Event)' : 'Balance Due (Days Before Arrival)'}</FormLabel>
-                                  <FormDescription>
-                                    {isDaytime
-                                      ? 'Number of days before the event when the remaining balance is due'
-                                      : 'Number of days before arrival when the remaining balance is due'}
-                                  </FormDescription>
-                                  <FormControl>
-                                    <Input
-                                      type="number"
-                                      min="1"
-                                      max="90"
-                                      placeholder="e.g., 14"
-                                      {...field}
-                                      data-testid="input-balance-due-days"
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </Card>
-
-                    {/* Section 3: Pricing Notes */}
-                    <Card className="p-6">
-                      <h3 className="text-lg font-semibold mb-4">Pricing Notes</h3>
-                      <FormField
-                        control={form.control}
-                        name="pricingNotes"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Additional Pricing Information (Optional)</FormLabel>
-                            <FormDescription>
-                              Any special rates, discounts, seasonal pricing, or booking conditions.
-                            </FormDescription>
-                            <FormControl>
-                              <Textarea
-                                placeholder={
-                                  isDaytime
-                                    ? 'e.g., weekend rates, minimum booking hours, add-on staffing fees, or discounts for recurring events...'
-                                    : 'e.g., 10% discount for bookings over 14 days, special rates available for retreats during low season...'
-                                }
-                                rows={4}
-                                {...field}
-                                data-testid="textarea-pricing-notes"
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </Card>
-                  </div>
-                )}
-
-                {step === 10 && (
                   <div className="space-y-6">
                     <div className="space-y-2">
                       <h3 className="text-lg font-semibold">Terms & Conditions</h3>
@@ -2655,18 +2078,6 @@ export default function VenueProfileSetup() {
                             const cleanedData = {
                               ...formData,
                               capacity: formData.capacity ? Number(formData.capacity) : null,
-                              basePrice: formData.basePrice ? String(formData.basePrice) : null,
-                              basePricePerDay: formData.basePricePerDay ? String(formData.basePricePerDay) : null,
-                              defaultPricePerRoomPerNight: isDaytimeVenue ? null : formData.defaultPricePerRoomPerNight ? String(formData.defaultPricePerRoomPerNight) : null,
-                              minimumNights: isDaytimeVenue ? null : formData.minimumNights ? Number(formData.minimumNights) : null,
-                              softHoldDurationDays: formData.softHoldDurationDays ? Number(formData.softHoldDurationDays) : null,
-                              softHoldDays: formData.softHoldDays ? Number(formData.softHoldDays) : null,
-                              depositPercent: formData.depositPercent ? String(formData.depositPercent) : null,
-                              commissionPercent: formData.commissionPercent ? String(formData.commissionPercent) : null,
-                              paymentTimingModel: isDaytimeVenue ? (formData.paymentTimingModel || 'deposit_balance_arrival') : formData.paymentTimingModel,
-                              balanceDueDaysBeforeArrival: formData.balanceDueDaysBeforeArrival ? Number(formData.balanceDueDaysBeforeArrival) : null,
-                              minStay: isDaytimeVenue ? null : formData.minStay ? Number(formData.minStay) : null,
-                              useRoomPricesFromRoomsPage: isDaytimeVenue ? false : formData.useRoomPricesFromRoomsPage,
                               venueRoles: isDaytimeVenue ? [] : formData.venueRoles,
                               venueRoomTypes: isDaytimeVenue ? [] : formData.venueRoomTypes,
                               defaultItinerary: isDaytimeVenue ? [] : formData.defaultItinerary,

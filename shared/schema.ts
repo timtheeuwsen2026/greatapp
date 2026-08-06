@@ -1313,7 +1313,8 @@ export const venues = pgTable("venues", {
     >()
     .default([]),
 
-  // Venue room types with pricing
+  // Venue room types. Capacity and layout only — venues publish no rates; the
+  // money is agreed per event through the creator's Target Deal.
   venueRoomTypes: jsonb("venue_room_types")
     .$type<
       Array<{
@@ -1322,7 +1323,6 @@ export const venues = pgTable("venues", {
         capacity: number;
         bedConfiguration?: string;
         quantity: number;
-        pricePerNight: number;
         description?: string;
       }>
     >()
@@ -2293,10 +2293,6 @@ export const venueRoomTypeSchema = z.object({
     .int("Quantity must be a whole number")
     .min(1, "Quantity must be at least 1")
     .max(1000, "Quantity must not exceed 1000"),
-  pricePerNight: z
-    .number()
-    .min(0, "Price per night must be positive")
-    .max(100000, "Price per night is too high"),
   description: z
     .string()
     .max(1000, "Description must not exceed 1000 characters")

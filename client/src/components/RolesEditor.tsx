@@ -37,9 +37,15 @@ interface RolesEditorProps {
   roles: Role[];
   onChange: (roles: Role[]) => void;
   className?: string;
+  /**
+   * Whether the rate column is shown. A creator budgets for the roles they
+   * hire, so the Event Builder wants it. A venue publishes no prices of any
+   * kind, so the Venue Builder does not.
+   */
+  showRate?: boolean;
 }
 
-export function RolesEditor({ roles, onChange, className }: RolesEditorProps) {
+export function RolesEditor({ roles, onChange, className, showRate = true }: RolesEditorProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [customRoleName, setCustomRoleName] = useState("");
 
@@ -147,7 +153,7 @@ export function RolesEditor({ roles, onChange, className }: RolesEditorProps) {
                 <TableHead className="w-[200px]">Role Name</TableHead>
                 <TableHead className="w-[100px] text-center">Required?</TableHead>
                 <TableHead className="w-[120px]">Headcount</TableHead>
-                <TableHead className="w-[140px]">Rate (Optional)</TableHead>
+                {showRate && <TableHead className="w-[140px]">Rate (Optional)</TableHead>}
                 <TableHead>Notes</TableHead>
                 <TableHead className="w-[80px]"></TableHead>
               </TableRow>
@@ -193,24 +199,26 @@ export function RolesEditor({ roles, onChange, className }: RolesEditorProps) {
                   </TableCell>
                   
                   {/* Rate */}
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={role.rate ?? ""}
-                      onChange={(e) =>
-                        updateRole(
-                          index,
-                          "rate",
-                          e.target.value ? parseFloat(e.target.value) : undefined
-                        )
-                      }
-                      placeholder="0.00"
-                      data-testid={`input-role-rate-${index}`}
-                    />
-                  </TableCell>
-                  
+                  {showRate && (
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={role.rate ?? ""}
+                        onChange={(e) =>
+                          updateRole(
+                            index,
+                            "rate",
+                            e.target.value ? parseFloat(e.target.value) : undefined
+                          )
+                        }
+                        placeholder="0.00"
+                        data-testid={`input-role-rate-${index}`}
+                      />
+                    </TableCell>
+                  )}
+
                   {/* Notes */}
                   <TableCell>
                     <Textarea

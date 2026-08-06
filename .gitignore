@@ -16,3 +16,5 @@ attached_assets/*.txt
 attached_assets/Screenshot*
 .agents
 .dockerignore
+# Local Claude Code dev-server config
+.claude/

@@ -1581,10 +1581,7 @@ export default function AdminDashboard() {
                         <TableHead>Owner</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Created</TableHead>
-                        <TableHead>Pricing</TableHead>
-                        <TableHead>Payment Timing</TableHead>
-                        <TableHead>Commission</TableHead>
-                        <TableHead>Deposit</TableHead>
+                        <TableHead>Capacity</TableHead>
                         <TableHead>Terms</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -1618,28 +1615,10 @@ export default function AdminDashboard() {
                           <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                             {venue.createdAt ? new Date(venue.createdAt).toLocaleDateString() : '-'}
                           </TableCell>
-                          <TableCell data-testid={`venue-pricing-${venue.id}`}>
-                            {(venue as any).pricingModel ? (
-                              <span className="text-xs">
-                                {getVenueDealLabel((venue as any).pricingModel)}
-                              </span>
-                            ) : '-'}
-                          </TableCell>
-                          <TableCell data-testid={`venue-payment-timing-${venue.id}`}>
-                            {(venue as any).paymentTimingModel ? (
-                              <span className="text-xs">
-                                {(venue as any).paymentTimingModel === 'soft_hold_deposit_balance' ? 'Soft Hold → Deposit' : 
-                                 (venue as any).paymentTimingModel === 'deposit_upfront_balance' ? 'Deposit Upfront' : 
-                                 (venue as any).paymentTimingModel === 'deposit_balance_arrival' ? 'Balance on Arrival' : 
-                                 (venue as any).paymentTimingModel}
-                              </span>
-                            ) : '-'}
-                          </TableCell>
-                          <TableCell data-testid={`venue-commission-${venue.id}`}>
-                            {venue.commissionPercent ? `${venue.commissionPercent}%` : '-'}
-                          </TableCell>
-                          <TableCell data-testid={`venue-deposit-${venue.id}`}>
-                            {venue.depositPercent ? `${venue.depositPercent}%` : '-'}
+                          {/* Venues carry no rates or payment terms of their own —
+                              capacity is what an admin is actually reviewing. */}
+                          <TableCell data-testid={`venue-capacity-${venue.id}`}>
+                            <span className="text-xs">{venue.capacity ? `${venue.capacity} people` : '-'}</span>
                           </TableCell>
                           <TableCell data-testid={`venue-terms-${venue.id}`}>
                             {(venue as any).termsConfirmed ? (

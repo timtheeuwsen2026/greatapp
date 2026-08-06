@@ -80,10 +80,9 @@ describe("DigitalHandshakeContract", () => {
     expect(content).toContain("Est. venue payout if full: EUR 500.00");
   });
 
-  it("shows the venue's room table and a real payout, not zero", () => {
-    // V14 QA: the creator agrees to the venue's published rates, so the contract
-    // carries them. Before this the venue's dashboard read
-    // "Per Room / Night: 0.00" and an estimate of zero.
+  it("prices Per Room / Per Night from the creator's rate, rooms and nights", () => {
+    // Venues publish no rates. The creator names the figure in the Event
+    // Builder and the contract carries it with the rooms being asked for.
     render(
       <DigitalHandshakeContract
         contract={{
@@ -91,7 +90,7 @@ describe("DigitalHandshakeContract", () => {
           status: "pending",
           terms: {
             perRoomPerNight: 200,
-            roomRates: [{ name: "Private Room", quantity: 4, capacity: 2, pricePerNight: 200 }],
+            roomCount: 4,
             currency: "EUR",
             platformPct: 15,
           },
@@ -104,11 +103,11 @@ describe("DigitalHandshakeContract", () => {
 
     const content = screen.getByTestId("digital-handshake-contract").textContent || "";
     expect(content).toContain("Per Room / Night: EUR 200.00");
-    expect(content).toContain("Private Room ×4");
-    expect(content).toContain("All rooms, one night");
-    expect(content).toContain("EUR 800.00");
+    expect(content).toContain("Rooms requested");
+    expect(content).toContain("Nights held");
     // 4 rooms x EUR 200 x 7 nights
     expect(content).toContain("Est. venue payout if full: EUR 5600.00");
+    expect(content).toContain("(4 rooms × 7 nights)");
     expect(content).not.toContain("EUR 0.00");
   });
 });

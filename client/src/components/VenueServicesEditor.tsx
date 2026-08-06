@@ -14,7 +14,6 @@ export interface VenueService {
   id: string;
   title: string;
   description: string;
-  price?: number;
   frequency: "one-time" | "per_day" | "per_person" | "per_hour";
   quantity?: number;
 }
@@ -39,9 +38,6 @@ export function VenueServicesEditor({
     );
     return incompleteService?.id ?? null;
   });
-  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(services.map((service) => [service.id, service.price?.toString() ?? ""])),
-  );
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   // Generate unique ID for new service
@@ -53,12 +49,10 @@ export function VenueServicesEditor({
       id: generateId(),
       title: "",
       description: "",
-      price: undefined,
       frequency: "one-time",
       quantity: undefined,
     };
     onChange([...services, newService]);
-    setPriceDrafts((current) => ({ ...current, [newService.id]: "" }));
     setEditingId(newService.id);
   };
 
@@ -108,9 +102,6 @@ export function VenueServicesEditor({
       errors.push("Description must be at least 50 characters");
     }
     
-    if (service.price !== undefined && service.price < 0) {
-      errors.push("Price must be positive");
-    }
     
     if (service.quantity !== undefined && service.quantity < 0) {
       errors.push("Quantity must be positive");
@@ -159,9 +150,9 @@ export function VenueServicesEditor({
                           <span>{service.title || "(Untitled Service)"}</span>
                         )}
                       </CardTitle>
-                      {!isEditing && service.price !== undefined && (
+                      {!isEditing && service.frequency && (
                         <Badge variant="secondary">
-                          ${service.price.toFixed(2)} / {service.frequency.replace("_", " ")}
+                          {service.frequency.replace("_", " ")}
                         </Badge>
                       )}
                     </div>
@@ -236,35 +227,8 @@ export function VenueServicesEditor({
                       </p>
                     </div>
 
-                    {/* Price & Frequency */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label htmlFor={`service-price-${service.id}`}>
-                          Price (USD)
-                        </Label>
-                        <Input
-                          id={`service-price-${service.id}`}
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={priceDrafts[service.id] ?? service.price?.toString() ?? ""}
-                          onChange={(e) => {
-                            const rawValue = e.target.value;
-                            setPriceDrafts((current) => ({ ...current, [service.id]: rawValue }));
-                            const val = e.target.valueAsNumber;
-                            if (rawValue === "" || isNaN(val)) {
-                              updateService(service.id, "price", undefined);
-                            } else {
-                              // Round to 2 decimal places to match validation
-                              const rounded = Math.round(val * 100) / 100;
-                              updateService(service.id, "price", rounded);
-                            }
-                          }}
-                          placeholder="0.00 (optional)"
-                          data-testid={`input-service-price-${index}`}
-                        />
-                      </div>
-
+                    {/* Frequency — venues no longer publish prices */}
+                    <div className="grid grid-cols-1 gap-4">
                       <div>
                         <Label htmlFor={`service-frequency-${service.id}`}>
                           Frequency *

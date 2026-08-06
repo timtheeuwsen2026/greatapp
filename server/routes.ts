@@ -209,6 +209,19 @@ function sanitizeDraftNumerics<T extends Record<string, any>>(data: T): T {
   return out as T;
 }
 
+/**
+ * Rooms the creator is asking the venue to hold, summed from the Rooms step.
+ * A Per Room / Per Night deal is billed against this, so it travels on the
+ * contract rather than being re-derived by each side.
+ */
+function countRequestedRooms(input: any): number {
+  const rooms = Array.isArray(input?.rooms) ? input.rooms : [];
+  return rooms.reduce(
+    (total: number, room: any) => total + (parseInt(room?.quantity, 10) || 0),
+    0,
+  );
+}
+
 function buildVenueContractObject(input: any, experienceId: string, venueId: string, creatorId: string) {
   const model = input.venueCompensationModel || "access_only";
   const singleDayEvent = isSingleDayExperience({
@@ -226,6 +239,7 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
       fixedFee: numberOrZero(input.venueFixedFee),
       perHeadAmount: numberOrZero(input.venuePerHeadAmount),
       perRoomPerNight: numberOrZero(input.venuePerRoomPerNight),
+      roomCount: countRequestedRooms(input),
       minimumSpend: numberOrZero(input.venueMinimumSpend),
       revenueSharePct: model === "revenue_share"
         ? numberOrZero(input.venueRevenueSharePct ?? input.venueRevenuePercentage)
@@ -278,56 +292,13 @@ async function createVenueInviteForExperience(experience: any) {
   } as any);
 }
 
-/**
- * Fills in a Per Room / Per Night deal from the venue's own profile.
- *
- * The creator agrees to the venue's published room rates rather than typing a
- * number, so the Event Builder only *displays* them. Without this the contract
- * reached the venue's dashboard reading "Per Room / Night: 0.00" and a payout
- * estimate of zero — the venue could not see what the deal was worth.
- *
- * Rates are read at contract time so they always match what the venue
- * published, and the full table is stored on the contract so both sides see
- * the same numbers later even if the venue edits its profile.
- */
-async function withVenueRoomRates<T extends { model?: string; terms?: any }>(
-  contract: T,
-  venueId: string | null | undefined,
-): Promise<T> {
-  if (normalizeVenueDealModel(contract.model) !== "per_room_night" || !venueId) return contract;
-
-  const venue = await storage.getVenue(venueId);
-  const rooms = ((venue as any)?.venueRoomTypes || []) as Array<{
-    name?: string; type?: string; quantity?: number; capacity?: number; pricePerNight?: number | string;
-  }>;
-
-  const roomRates = rooms
-    .map((room) => ({
-      name: room.name || room.type || "Room",
-      quantity: Number(room.quantity) > 0 ? Number(room.quantity) : 1,
-      capacity: Number(room.capacity) || null,
-      pricePerNight: numberOrZero(room.pricePerNight),
-    }))
-    .filter((room) => room.pricePerNight > 0);
-
-  if (roomRates.length === 0) return contract;
-
-  // The headline rate is the cheapest room — the entry price of the deal.
-  // The full table travels alongside it for the detailed view.
-  const perRoomPerNight = Math.min(...roomRates.map((room) => room.pricePerNight));
-
-  return {
-    ...contract,
-    terms: { ...(contract.terms || {}), perRoomPerNight, roomRates },
-  };
-}
-
 function buildRequestedVenueContractObject(input: any) {
   const model = normalizeVenueDealModel(input.venueTargetDeal) || "access_only";
   const targetValue = numberOrZero(input.venueTargetDealValue);
   const terms: Record<string, number | string> = {
     currency: input.currency || "eur",
     platformPct: FIXED_PLATFORM_FEE_PCT,
+    roomCount: countRequestedRooms(input),
   };
 
   // Each model stores its number under its own key — the vocabulary owns that
@@ -4263,12 +4234,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if ((draft as any).selectedVenueId) {
-        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        await storage.upsertVenueContract(buildVenueContractObject(
           experienceData,
           experience.id,
           (draft as any).selectedVenueId,
           userId
-        ), (draft as any).selectedVenueId));
+        ));
       }
       
       // Delete the draft since it's now published
@@ -4324,12 +4295,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const selectedVenueId = req.body.selectedVenueId || req.body.linkedVenueId;
       if (status !== "draft" && selectedVenueId) {
-        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        await storage.upsertVenueContract(buildVenueContractObject(
           experienceData,
           experience.id,
           selectedVenueId,
           userId
-        ), selectedVenueId));
+        ));
       }
       res.json(experience);
     } catch (error) {
@@ -5827,12 +5798,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if ((existingDraft as any).selectedVenueId) {
-        await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        await storage.upsertVenueContract(buildVenueContractObject(
           experienceData,
           experience.id,
           (existingDraft as any).selectedVenueId,
           userId
-        ), (existingDraft as any).selectedVenueId));
+        ));
       }
       
       // Delete the draft
@@ -7988,25 +7959,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Services JSONB
         services: Array.isArray(req.body.services) ? req.body.services : [],
         
-        // Pricing fields
-        pricingModel: req.body.pricingModel || null,
-        currency: req.body.currency || 'usd',
-        basePrice: req.body.basePrice ?? null,
-        minStay: req.body.minStay ?? null,
-        depositPercent: req.body.depositPercent ?? null,
         cancellationPolicy: req.body.cancellationPolicy || null,
         
-        // New Page 9 Pricing fields
-        basePricePerDay: req.body.basePricePerDay ?? null,
-        basePricePerEvent: req.body.basePricePerEvent ?? null,
-        cleaningFee: req.body.cleaningFee ?? null,
-        useRoomPricesFromRoomsPage: req.body.useRoomPricesFromRoomsPage ?? true,
-        defaultPricePerRoomPerNight: req.body.defaultPricePerRoomPerNight ?? null,
-        minimumNights: req.body.minimumNights ?? null,
-        paymentTimingModel: req.body.paymentTimingModel || null,
-        softHoldDurationDays: req.body.softHoldDurationDays ?? null,
-        balanceDueDaysBeforeArrival: req.body.balanceDueDaysBeforeArrival ?? null,
-        pricingNotes: req.body.pricingNotes || null,
         
         // New Page 10 Terms fields
         termsAndConditionsUrl: req.body.termsAndConditionsUrl || null,
@@ -8015,13 +7969,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         termsConfirmed: req.body.termsConfirmed ?? false,
         
         // Business fields
-        softHoldDays: req.body.softHoldDays ?? null,
-        commissionPercent: req.body.commissionPercent ?? null,
-        paymentModel: req.body.paymentModel || null,
         approvalMode: req.body.approvalMode || null,
         commercialModel: req.body.commercialModel || null,
-        softHoldPolicyEnabled: req.body.softHoldPolicyEnabled ?? false,
-        softHoldRefundableDeposit: req.body.softHoldRefundableDeposit ?? null,
         
         // Availability integration
         googleCalendarConnected: req.body.googleCalendarConnected ?? false,
@@ -8132,25 +8081,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Services JSONB
         services: req.body.services !== undefined ? (Array.isArray(req.body.services) ? req.body.services : []) : existingVenue.services,
         
-        // Pricing fields
-        pricingModel: req.body.pricingModel !== undefined ? (req.body.pricingModel || null) : existingVenue.pricingModel,
-        currency: req.body.currency !== undefined ? (req.body.currency || 'usd') : existingVenue.currency,
-        basePrice: req.body.basePrice !== undefined ? req.body.basePrice : existingVenue.basePrice,
-        minStay: req.body.minStay !== undefined ? req.body.minStay : existingVenue.minStay,
-        depositPercent: req.body.depositPercent !== undefined ? req.body.depositPercent : existingVenue.depositPercent,
         cancellationPolicy: req.body.cancellationPolicy !== undefined ? (req.body.cancellationPolicy || null) : existingVenue.cancellationPolicy,
         
-        // New Page 9 Pricing fields
-        basePricePerDay: req.body.basePricePerDay !== undefined ? req.body.basePricePerDay : existingVenue.basePricePerDay,
-        basePricePerEvent: req.body.basePricePerEvent !== undefined ? req.body.basePricePerEvent : existingVenue.basePricePerEvent,
-        cleaningFee: req.body.cleaningFee !== undefined ? req.body.cleaningFee : existingVenue.cleaningFee,
-        useRoomPricesFromRoomsPage: req.body.useRoomPricesFromRoomsPage !== undefined ? req.body.useRoomPricesFromRoomsPage : existingVenue.useRoomPricesFromRoomsPage,
-        defaultPricePerRoomPerNight: req.body.defaultPricePerRoomPerNight !== undefined ? req.body.defaultPricePerRoomPerNight : existingVenue.defaultPricePerRoomPerNight,
-        minimumNights: req.body.minimumNights !== undefined ? req.body.minimumNights : existingVenue.minimumNights,
-        paymentTimingModel: req.body.paymentTimingModel !== undefined ? (req.body.paymentTimingModel || null) : existingVenue.paymentTimingModel,
-        softHoldDurationDays: req.body.softHoldDurationDays !== undefined ? req.body.softHoldDurationDays : existingVenue.softHoldDurationDays,
-        balanceDueDaysBeforeArrival: req.body.balanceDueDaysBeforeArrival !== undefined ? req.body.balanceDueDaysBeforeArrival : existingVenue.balanceDueDaysBeforeArrival,
-        pricingNotes: req.body.pricingNotes !== undefined ? (req.body.pricingNotes || null) : existingVenue.pricingNotes,
         
         // New Page 10 Terms fields
         termsAndConditionsUrl: req.body.termsAndConditionsUrl !== undefined ? (req.body.termsAndConditionsUrl || null) : existingVenue.termsAndConditionsUrl,
@@ -8159,13 +8091,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         termsConfirmed: req.body.termsConfirmed !== undefined ? req.body.termsConfirmed : existingVenue.termsConfirmed,
         
         // Business fields
-        softHoldDays: req.body.softHoldDays !== undefined ? req.body.softHoldDays : existingVenue.softHoldDays,
-        commissionPercent: req.body.commissionPercent !== undefined ? req.body.commissionPercent : existingVenue.commissionPercent,
-        paymentModel: req.body.paymentModel !== undefined ? (req.body.paymentModel || null) : existingVenue.paymentModel,
         approvalMode: req.body.approvalMode !== undefined ? (req.body.approvalMode || null) : existingVenue.approvalMode,
         commercialModel: req.body.commercialModel !== undefined ? (req.body.commercialModel || null) : existingVenue.commercialModel,
-        softHoldPolicyEnabled: req.body.softHoldPolicyEnabled !== undefined ? req.body.softHoldPolicyEnabled : existingVenue.softHoldPolicyEnabled,
-        softHoldRefundableDeposit: req.body.softHoldRefundableDeposit !== undefined ? req.body.softHoldRefundableDeposit : existingVenue.softHoldRefundableDeposit,
         
         // Availability integration
         googleCalendarConnected: req.body.googleCalendarConnected !== undefined ? req.body.googleCalendarConnected : existingVenue.googleCalendarConnected,
@@ -12488,12 +12415,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       for (const experience of missingContractExperiences) {
         if (!experience.linkedVenueId) continue;
-        const contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        const contract = await storage.upsertVenueContract(buildVenueContractObject(
           experience,
           experience.id,
           experience.linkedVenueId,
           experience.creatorId
-        ), experience.linkedVenueId));
+        ));
         offers.push({ ...experience, venue: userVenues.find((v: any) => v.id === experience.linkedVenueId), contract });
       }
       res.json(offers);
@@ -12544,12 +12471,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
-        contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        contract = await storage.upsertVenueContract(buildVenueContractObject(
           experience,
           experienceId,
           experience.linkedVenueId,
           experience.creatorId
-        ), experience.linkedVenueId));
+        ));
       }
 
       // ── Venue-Sponsored deal: charge the venue before going live ─────────
@@ -12985,12 +12912,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
-        contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+        contract = await storage.upsertVenueContract(buildVenueContractObject(
           experience,
           experienceId,
           experience.linkedVenueId,
           experience.creatorId
-        ), experience.linkedVenueId));
+        ));
       }
 
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
@@ -13429,12 +13356,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Upsert the venue contract in pending_payment state so the webhook can find it
         let contract = await storage.getVenueContractByExperience(offer.experienceId);
         if (!contract) {
-          contract = await storage.upsertVenueContract(await withVenueRoomRates(buildVenueContractObject(
+          contract = await storage.upsertVenueContract(buildVenueContractObject(
             experience,
             offer.experienceId,
             offer.venueId,
             userId,
-          ), offer.venueId));
+          ));
         }
         await storage.updateVenueContractSponsorshipStatus(contract.id, 'unpaid');
 

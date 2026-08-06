@@ -213,11 +213,6 @@ export default function PublicVenuePage() {
                           <span className="text-xs text-muted-foreground">{svc.frequency.replace(/_/g, " ")}</span>
                         )}
                       </div>
-                      {svc.price != null && (
-                        <span className="text-sm font-semibold ml-3 shrink-0">
-                          {fmt(svc.price, currency)}
-                        </span>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -246,11 +241,8 @@ export default function PublicVenuePage() {
                         {room.description && (
                           <p className="text-xs text-muted-foreground line-clamp-2">{room.description}</p>
                         )}
-                        {room.pricePerNight > 0 && (
-                          <p className="text-sm font-medium">
-                            {fmt(room.pricePerNight, currency)} / night
-                          </p>
-                        )}
+                        {/* No nightly rate — venue profiles are visual only.
+                            Commercial terms come from the creator's Target Deal. */}
                       </CardContent>
                     </Card>
                   ))}
@@ -368,35 +360,9 @@ export default function PublicVenuePage() {
                   </div>
                 </div>
 
-                {/* Pricing */}
-                {(venue.basePrice || venue.basePricePerDay) && (
-                  <div className="flex items-start gap-3">
-                    <DollarSign className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
-                    <div>
-                      <p className="text-xs text-muted-foreground">Starting From</p>
-                      <p className="font-medium">
-                        {fmt(venue.basePricePerDay || venue.basePrice, currency)}
-                        <span className="text-xs text-muted-foreground ml-1">
-                          {venue.basePricePerDay ? "/ day" : "/ night"}
-                        </span>
-                      </p>
-                      {venue.minimumNights && !isDaytime && (
-                        <p className="text-xs text-muted-foreground">Min stay: {venue.minimumNights} nights</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Min Stay */}
-                {venue.minStay && !isDaytime && (
-                  <div className="flex items-center gap-3">
-                    <Clock className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div>
-                      <p className="text-xs text-muted-foreground">Minimum Stay</p>
-                      <p className="font-medium">{venue.minStay} days</p>
-                    </div>
-                  </div>
-                )}
+                {/* No pricing block. Venues publish photos, capacity and
+                    amenities; the commercial terms are negotiated per event
+                    through the creator's Target Deal. */}
 
                 {/* Cancellation */}
                 {venue.cancellationPolicy && (

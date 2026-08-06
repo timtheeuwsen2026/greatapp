@@ -1,6 +1,6 @@
 /**
  * Venue Services CRUD - Acceptance Tests
- * 
+ *
  * These tests verify the complete lifecycle of venue services:
  * - Adding services to a venue
  * - Editing existing services
@@ -8,6 +8,9 @@
  * - Reordering services (drag and drop)
  * - Services persistence in database
  * - Services display on public venue page
+ *
+ * Venue services carry no price. A venue describes what it can provide; the
+ * money is agreed per event through the creator's Target Deal.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -61,7 +64,7 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
 
     it('should fill in service details and save', async () => {
       const user = userEvent.setup();
-      
+
       const { rerender } = render(
         <VenueServicesEditor services={mockServices} onChange={mockOnChange} />
       );
@@ -80,10 +83,6 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
       const descInput = screen.getByTestId('input-service-description-0');
       await user.type(descInput, 'Organic farm-to-table meals prepared by our in-house chef. Includes breakfast, lunch, and dinner with vegetarian and vegan options.');
 
-      // Set price
-      const priceInput = screen.getByTestId('input-service-price-0');
-      await user.type(priceInput, '45.00');
-
       // Set frequency
       const frequencySelect = screen.getByTestId('select-service-frequency-0');
       fireEvent.click(frequencySelect);
@@ -98,28 +97,43 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
       expect(mockOnChange).toHaveBeenCalled();
     });
 
+    it('should not offer a price field — venues publish no rates', () => {
+      const service: VenueService = {
+        id: 'svc-1',
+        title: 'Catering',
+        description: 'A'.repeat(50),
+        frequency: 'per_day',
+      };
+
+      render(
+        <VenueServicesEditor services={[service]} onChange={mockOnChange} />
+      );
+
+      fireEvent.click(screen.getByTestId('button-edit-service-0'));
+
+      expect(screen.queryByTestId('input-service-price-0')).not.toBeInTheDocument();
+      expect(screen.queryByText(/price/i)).not.toBeInTheDocument();
+    });
+
     it('should validate service description (minimum 50 characters)', async () => {
-      const user = userEvent.setup();
-      
       const shortDescService: VenueService = {
         id: 'svc-1',
         title: 'Test Service',
         description: 'Too short', // Less than 50 characters
-        price: 25.00,
         frequency: 'one-time',
       };
 
-      const { container } = render(
+      render(
         <VenueServicesEditor services={[shortDescService]} onChange={mockOnChange} />
       );
 
       // Should show validation error
       const descriptionField = screen.getByTestId('input-service-description-0');
       expect(descriptionField).toHaveClass('border-destructive');
-      
+
       // Should show character count
       expect(screen.getByText(/9 \/ 50 minimum characters/)).toBeInTheDocument();
-      
+
       // Should show error in alert
       expect(screen.getByText('Description must be at least 50 characters')).toBeInTheDocument();
     });
@@ -129,7 +143,6 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
         id: `svc-${i}`,
         title: `Service ${i}`,
         description: 'A'.repeat(50), // Valid description
-        price: 10.00,
         frequency: 'one-time' as const,
       }));
 
@@ -139,7 +152,7 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
 
       // "Add Service" button should not be visible
       expect(screen.queryByTestId('button-add-service')).not.toBeInTheDocument();
-      
+
       // Should show max services warning
       expect(screen.getByText('Maximum 20 services reached')).toBeInTheDocument();
     });
@@ -151,7 +164,6 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
         id: 'svc-1',
         title: 'Catering',
         description: 'A'.repeat(50),
-        price: 45.00,
         frequency: 'per_day',
       };
 
@@ -174,12 +186,11 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
 
     it('should save edits when clicking save (checkmark) icon', async () => {
       const user = userEvent.setup();
-      
+
       const existingService: VenueService = {
         id: 'svc-1',
         title: 'Catering',
         description: 'A'.repeat(50),
-        price: 45.00,
         frequency: 'per_day',
       };
 
@@ -190,15 +201,16 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
       // Enter edit mode
       fireEvent.click(screen.getByTestId('button-edit-service-0'));
 
-      // Change price
-      const priceInput = screen.getByTestId('input-service-price-0');
-      await user.clear(priceInput);
-      await user.type(priceInput, '50.00');
+      // Change the quantity available. The editor is controlled by its parent,
+      // which does not re-render here, so type a single digit and assert on it.
+      const quantityInput = screen.getByTestId('input-service-quantity-0');
+      await user.clear(quantityInput);
+      await user.type(quantityInput, '8');
 
-      // Verify onChange called with updated price
+      // Verify onChange called with the updated quantity
       expect(mockOnChange).toHaveBeenCalled();
       const updatedServices = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1][0];
-      expect(updatedServices[0].price).toBe(50.00);
+      expect(updatedServices[0].quantity).toBe(8);
 
       // Click save (this just closes edit mode in the component)
       const saveButton = screen.getByTestId('button-save-service-0');
@@ -217,14 +229,12 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
           id: 'svc-1',
           title: 'Catering',
           description: 'A'.repeat(50),
-          price: 45.00,
           frequency: 'per_day',
         },
         {
           id: 'svc-2',
           title: 'Yoga Mats',
           description: 'B'.repeat(50),
-          price: 5.00,
           frequency: 'one-time',
         },
       ];
@@ -296,95 +306,11 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
       // Verify onChange called with reordered services
       expect(mockOnChange).toHaveBeenCalled();
       const reorderedServices = mockOnChange.mock.calls[0][0];
-      
+
       // Order should be: B, C, A
       expect(reorderedServices[0].title).toBe('Service B');
       expect(reorderedServices[1].title).toBe('Service C');
       expect(reorderedServices[2].title).toBe('Service A');
-    });
-  });
-
-  describe('Price Validation (2 Decimal Places)', () => {
-    it('should accept prices with 0, 1, or 2 decimal places', () => {
-      const validServices: VenueService[] = [
-        {
-          id: 'svc-1',
-          title: 'Whole Number',
-          description: 'A'.repeat(50),
-          price: 25, // 0 decimals
-          frequency: 'one-time',
-        },
-        {
-          id: 'svc-2',
-          title: 'One Decimal',
-          description: 'B'.repeat(50),
-          price: 25.5, // 1 decimal
-          frequency: 'one-time',
-        },
-        {
-          id: 'svc-3',
-          title: 'Two Decimals',
-          description: 'C'.repeat(50),
-          price: 25.99, // 2 decimals
-          frequency: 'one-time',
-        },
-      ];
-
-      const { container } = render(
-        <VenueServicesEditor services={validServices} onChange={mockOnChange} />
-      );
-
-      // All should render without errors
-      expect(screen.getByText('Whole Number')).toBeInTheDocument();
-      expect(screen.getByText('One Decimal')).toBeInTheDocument();
-      expect(screen.getByText('Two Decimals')).toBeInTheDocument();
-    });
-
-    it('should reject prices with more than 2 decimal places (client-side)', async () => {
-      // This tests that the Zod schema properly validates price precision
-      const user = userEvent.setup();
-      
-      const { rerender } = render(
-        <VenueServicesEditor services={mockServices} onChange={mockOnChange} />
-      );
-
-      // Add service
-      fireEvent.click(screen.getByTestId('button-add-first-service'));
-      const newServices = mockOnChange.mock.calls[0][0];
-      rerender(<VenueServicesEditor services={newServices} onChange={mockOnChange} />);
-
-      // Fill required fields
-      const titleInput = screen.getByTestId('input-service-title-0');
-      await user.type(titleInput, 'Test Service');
-
-      const descInput = screen.getByTestId('input-service-description-0');
-      await user.type(descInput, 'A'.repeat(50));
-
-      // Enter price with 3 decimal places
-      const priceInput = screen.getByTestId('input-service-price-0');
-      await user.type(priceInput, '12.345');
-
-      // When form is validated (e.g., on submit), it should fail
-      // The validation error would be "Price can have at most 2 decimal places"
-      // This ensures client and server validation match
-      
-      // Note: The actual form validation happens in venue-profile-setup.tsx
-      // when the form is submitted, which would trigger the Zod refine check
-    });
-
-    it('should match server validation (price with 3 decimals rejected)', () => {
-      // Simulates what the server validation does
-      const invalidPrice = 25.123;
-      const priceStr = invalidPrice.toString();
-      const decimals = priceStr.split('.')[1]?.length || 0;
-      
-      // Server check
-      expect(decimals).toBeGreaterThan(2);
-      
-      // This would result in 400 error from server with message:
-      // "Service has invalid price format (max 2 decimal places)"
-      
-      // With our updated Zod schema, client will catch this before submission
     });
   });
 
@@ -396,7 +322,6 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
           id: 'svc-1',
           title: 'Catering',
           description: 'Organic farm-to-table meals prepared by our in-house chef.',
-          price: 45.00,
           frequency: 'per_day',
           quantity: 50,
         },
@@ -411,20 +336,18 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
         id: expect.any(String),
         title: 'Catering',
         description: expect.stringContaining('Organic'),
-        price: 45.00,
         frequency: 'per_day',
         quantity: 50,
       });
     });
 
-    it('should handle services with optional price and quantity', () => {
+    it('should handle services with no quantity', () => {
       const services: VenueService[] = [
         {
           id: 'svc-1',
           title: 'Free Service',
           description: 'A'.repeat(50),
           frequency: 'one-time',
-          // No price
           // No quantity
         },
       ];
@@ -435,8 +358,8 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
 
       // Should render without errors
       expect(screen.getByText('Free Service')).toBeInTheDocument();
-      
-      // Price badge should not be visible
+
+      // No price badge exists anywhere in the editor
       expect(screen.queryByTestId('badge-service-price-0')).not.toBeInTheDocument();
     });
   });
@@ -448,20 +371,18 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
           id: 'svc-123',
           title: 'Gourmet Catering',
           description: 'Organic farm-to-table meals prepared by our in-house chef. Includes breakfast, lunch, and dinner with vegetarian and vegan options.',
-          price: 45.00,
           frequency: 'per_day',
           quantity: 50,
         },
       ];
 
-      // Expected JSON structure when sending to backend
+      // Expected JSON structure when sending to backend — no price key.
       const expectedPayload = {
         services: [
           {
             id: 'svc-123',
             title: 'Gourmet Catering',
             description: 'Organic farm-to-table meals prepared by our in-house chef. Includes breakfast, lunch, and dinner with vegetarian and vegan options.',
-            price: 45.00,
             frequency: 'per_day',
             quantity: 50,
           },
@@ -470,70 +391,69 @@ describe('Venue Services CRUD - Acceptance Tests', () => {
 
       // Verify structure matches
       expect(expectedPayload.services).toEqual(services);
-      
+
       // Verify all required fields are present
       expect(services[0].title).toBeDefined();
       expect(services[0].description).toBeDefined();
       expect(services[0].frequency).toBeDefined();
-      
+
       // Verify optional fields can be undefined
-      const minimalService = {
+      const minimalService: VenueService = {
         id: 'svc-456',
         title: 'Minimal',
         description: 'X'.repeat(50),
-        frequency: 'one-time' as const,
+        frequency: 'one-time',
       };
-      expect(minimalService.price).toBeUndefined();
       expect(minimalService.quantity).toBeUndefined();
+      expect('price' in minimalService).toBe(false);
     });
   });
 });
 
 /**
  * Manual Testing Checklist
- * 
+ *
  * Test these scenarios manually in the browser:
- * 
+ *
  * 1. Add Service Flow:
  *    - Navigate to venue creation/edit page
  *    - Click "Add Service"
  *    - Fill in title (min 3 chars)
  *    - Fill in description (min 50 chars)
- *    - Enter price (with 2 decimals)
  *    - Select frequency
  *    - Enter quantity
  *    - Click save (checkmark)
  *    - Verify service appears in collapsed view
- * 
+ *    - Verify no price field is offered anywhere
+ *
  * 2. Edit Service Flow:
  *    - Click edit icon on existing service
  *    - Modify any field
  *    - Click save
  *    - Verify changes persist
- * 
+ *
  * 3. Delete Service Flow:
  *    - Click delete icon (X)
  *    - Verify service removed from list
- * 
+ *
  * 4. Reorder Services:
  *    - Drag service card by grip handle
  *    - Drop in new position
  *    - Verify new order persists
- * 
+ *
  * 5. Validation Tests:
  *    - Try description < 50 chars → Should show error
- *    - Try price with 3 decimals → Should be validated server-side
  *    - Try adding 21st service → Should be blocked
- * 
+ *
  * 6. Persistence Test:
  *    - Add services
  *    - Save venue
  *    - Reload page
  *    - Verify services restored
- * 
+ *
  * 7. Public Display Test:
  *    - Navigate to public venue page
  *    - Verify services displayed in cards
- *    - Verify price shown correctly
  *    - Verify quantity shown if available
+ *    - Verify no rates or prices are shown
  */

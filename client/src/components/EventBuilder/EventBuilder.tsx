@@ -109,6 +109,16 @@ function normalizeGreatPillars(value: unknown): Array<typeof GREAT_PILLAR_VALUES
     );
 }
 
+// Nights the group actually sleeps at the venue — what a per-room, per-night
+// deal is billed against. A missing or same-day end date is zero nights.
+function countNightsBetween(start: unknown, end: unknown): number {
+  if (!start) return 0;
+  const startDate = new Date(start as string);
+  const endDate = end ? new Date(end as string) : startDate;
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 0;
+  return Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 86400000));
+}
+
 // 11-step Event Builder schema aligned with database fields
 const eventBuilderSchema = z.object({
   // Step 1: Basic Info
@@ -301,6 +311,7 @@ const eventBuilderSchema = z.object({
   venueCompensationModel: z.enum(VENUE_COMPENSATION_MODELS).default("access_only"),
   venueFixedFee: z.coerce.number().min(0).optional().nullable().default(0),
   venuePerHeadAmount: z.coerce.number().min(0).optional().nullable().default(0),
+  venuePerRoomPerNight: z.coerce.number().min(0).optional().nullable().default(0),
   venueMinimumSpend: z.coerce.number().min(0).optional().nullable().default(0),
   venueRevenueSharePct: z.coerce.number().min(0).max(100).optional().nullable().default(0),
   venueAccessFee: z.coerce.number().min(0).optional().nullable().default(0),
@@ -540,7 +551,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueCompensationModel: "access_only",
       venueFixedFee: 0,
       venuePerHeadAmount: 0,
-      venueMinimumSpend: 0,
+      venuePerRoomPerNight: 0,
       venueRevenueSharePct: 0,
       venueAccessFee: 0,
       
@@ -951,6 +962,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueCompensationModel: data.venueCompensationModel ?? "access_only",
       venueFixedFee: data.venueFixedFee != null ? parseFloat(data.venueFixedFee) : 0,
       venuePerHeadAmount: data.venuePerHeadAmount != null ? parseFloat(data.venuePerHeadAmount) : 0,
+      venuePerRoomPerNight: data.venuePerRoomPerNight != null ? parseFloat(data.venuePerRoomPerNight) : 0,
       venueMinimumSpend: data.venueMinimumSpend != null ? parseFloat(data.venueMinimumSpend) : 0,
       venueRevenueSharePct: data.venueRevenueSharePct != null
         ? parseFloat(data.venueRevenueSharePct)
@@ -1180,6 +1192,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         venueCompensationModel: formData.venueCompensationModel || "access_only",
         venueFixedFee: formData.venueFixedFee || 0,
         venuePerHeadAmount: formData.venuePerHeadAmount || 0,
+        venuePerRoomPerNight: formData.venuePerRoomPerNight || 0,
         venueMinimumSpend: formData.venueMinimumSpend || 0,
         venueRevenueSharePct: formData.venueRevenueSharePct || 0,
         venueAccessFee: formData.venueAccessFee || 0,
@@ -1699,6 +1712,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         venueCompensationModel: formData.venueCompensationModel || "access_only",
         venueFixedFee: formData.venueFixedFee || 0,
         venuePerHeadAmount: formData.venuePerHeadAmount || 0,
+        venuePerRoomPerNight: formData.venuePerRoomPerNight || 0,
         venueMinimumSpend: formData.venueMinimumSpend || 0,
         venueRevenueSharePct: formData.venueRevenueSharePct || 0,
         venueAccessFee: formData.venueAccessFee || 0,
@@ -3300,9 +3314,6 @@ function VenueStep({ form }: { form: any }) {
                       </p>
                       <div className="flex gap-4 text-sm">
                         <span>Capacity: {selectedVenue.capacity}</span>
-                        {selectedVenue.price && (
-                          <span>Price: ${selectedVenue.price}</span>
-                        )}
                       </div>
                       {selectedVenue.description && (
                         <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
@@ -3310,43 +3321,9 @@ function VenueStep({ form }: { form: any }) {
                         </p>
                       )}
 
-                      {/* Venue Pricing & Terms */}
-                      {(selectedVenue.commissionPercent || selectedVenue.depositPercent || selectedVenue.paymentModel || selectedVenue.softHoldDays) && (
-                        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                          <h5 className="text-sm font-semibold mb-2">Pricing & Booking Terms</h5>
-                          <div className="grid grid-cols-2 gap-3 text-sm">
-                            {selectedVenue.commissionPercent && (
-                              <div>
-                                <span className="text-gray-500">Commission: </span>
-                                <span className="font-medium">{parseFloat(selectedVenue.commissionPercent).toFixed(2)}%</span>
-                              </div>
-                            )}
-                            {selectedVenue.depositPercent && (
-                              <div>
-                                <span className="text-gray-500">Deposit: </span>
-                                <span className="font-medium">{parseFloat(selectedVenue.depositPercent).toFixed(2)}%</span>
-                              </div>
-                            )}
-                            {selectedVenue.paymentModel && (
-                              <div>
-                                <span className="text-gray-500">Payment: </span>
-                                <span className="font-medium capitalize">
-                                  {selectedVenue.paymentModel === 'full_upfront' ? 'Full Upfront' :
-                                   selectedVenue.paymentModel === 'balance_on_arrival' ? 'Balance on Arrival' :
-                                   selectedVenue.paymentModel === 'staggered' ? 'Staggered' :
-                                   selectedVenue.paymentModel}
-                                </span>
-                              </div>
-                            )}
-                            {selectedVenue.softHoldDays && (
-                              <div>
-                                <span className="text-gray-500">Soft Hold: </span>
-                                <span className="font-medium">{selectedVenue.softHoldDays} days</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      {/* No venue prices or terms here. A venue listing is
+                          space, capacity and photos; the commercial deal is the
+                          one you set on the Pricing step. */}
                     </div>
                   </div>
                 );
@@ -5146,6 +5123,7 @@ function PricingStep({ form }: { form: any }) {
   // Watch form values for reactivity
   const currency = form.watch('currency');
   const rooms = form.watch('rooms') || [];
+  const eventNightCount = countNightsBetween(form.watch('startDate'), form.watch('endDate'));
   const pricePerPerson = form.watch('pricePerPerson') || 0;
   const maxParticipants = form.watch('maxParticipants') || 0;
   const eventType = form.watch('type'); // Track event type for dynamic UI
@@ -5156,6 +5134,7 @@ function PricingStep({ form }: { form: any }) {
   const venueCompensationModel = form.watch('venueCompensationModel') || "access_only";
   const venueFixedFee = form.watch('venueFixedFee') || 0;
   const venuePerHeadAmount = form.watch('venuePerHeadAmount') || 0;
+  const venuePerRoomPerNight = form.watch('venuePerRoomPerNight') || 0;
   const venueMinimumSpend = form.watch('venueMinimumSpend') || 0;
   const venueRevenueSharePct = form.watch('venueRevenueSharePct') || 0;
   const venueAccessFee = form.watch('venueAccessFee') || 0;
@@ -5292,6 +5271,7 @@ function PricingStep({ form }: { form: any }) {
       form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
       form.setValue('venueFixedFee', 0, { shouldDirty: false });
       form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });
+      form.setValue('venuePerRoomPerNight', 0, { shouldDirty: false });
       form.setValue('venueMinimumSpend', 0, { shouldDirty: false });
       form.setValue('venueRevenueSharePct', 0, { shouldDirty: false });
       form.setValue('venueAccessFee', 0, { shouldDirty: false });
@@ -5532,6 +5512,20 @@ function PricingStep({ form }: { form: any }) {
   const activeFlatVenueAmount = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueFixedFee;
   const venueRevenueShareAmount = safeMultiply(totalRevenue, activeRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, effectiveCapacity);
+  // Per Room / Per Night is rate × rooms × nights. Rooms come from the Rooms
+  // step, nights from the event dates; a single-day event holds no nights, so
+  // it bills one.
+  const totalRoomCount = rooms.reduce(
+    (total: number, room: any) => total + (parseInt(room?.quantity, 10) || 0),
+    0,
+  );
+  const activePerRoomRate = (venueDealContext === "open" || venueDealContext === "invited")
+    ? venueTargetDealValue
+    : venuePerRoomPerNight;
+  const venuePerRoomNightEstimate = safeMultiply(
+    safeMultiply(activePerRoomRate, totalRoomCount),
+    Math.max(1, eventNightCount),
+  );
   const venueTicketDeductionEstimate = calculateTicketDeduction(
     activeFlatVenueAmount,
     effectiveCapacity,
@@ -5540,6 +5534,7 @@ function PricingStep({ form }: { form: any }) {
     switch (activeVenueDeal) {
       case "fixed_fee": return venueTicketDeductionEstimate;
       case "per_head": return venuePerHeadEstimate;
+      case "per_room_night": return venuePerRoomNightEstimate;
       case "minimum_spend": return venueMinimumSpend;
       case "revenue_share": return venueRevenueShareAmount;
       case "upfront_rental": return venueFixedFee; // cost to creator — show as deduction
@@ -6024,17 +6019,11 @@ function PricingStep({ form }: { form: any }) {
                       ? "Your invited venue will see this proposed deal when they review the invite."
                       : "Venues will see this preference when they bid to host your event."}
                   </p>
-                  {/* Per Room / Per Night carries no target number — the venue's
-                      own room rates apply. An invited external venue has no
-                      profile yet, so there is nothing to fetch: say so plainly
-                      instead of leaving the creator staring at a blank field. */}
-                  {selectedTargetDeal?.value === 'per_room_night' ? (
-                    <div className="mt-3 rounded-md border bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900 dark:text-gray-300" data-testid="target-deal-room-rates-note">
-                      {venueDealContext === "invited"
-                        ? "Since this is a new venue, their room rates are not yet in our system. You are proposing the 'Per Room' deal structure. The venue will input their specific room rates during their onboarding."
-                        : "The venue's own room rates apply for this deal. Each bidding venue's per-room, per-night prices come from the Rooms step of their venue profile — you'll see the exact rates on their bid before you accept."}
-                    </div>
-                  ) : selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
+                  {/* Every deal, Per Room / Per Night included, carries the
+                      creator's own target number. Venues publish no rates, so
+                      there is nothing to fetch — the creator names the figure
+                      and the venue accepts or counters it. */}
+                  {selectedTargetDeal && selectedTargetDeal.valueKind !== 'none' && (
                     <div className="mt-3">
                       <Label htmlFor="venue-target-deal-value">{selectedTargetDeal.valueLabel}</Label>
                       <Input
@@ -6115,35 +6104,21 @@ function PricingStep({ form }: { form: any }) {
               )}
               {venueCompensationModel === "per_room_night" && (
                 <div data-testid="venue-room-rates">
-                  <Label>Venue Room Rates (per night)</Label>
-                  {/* The venue's own room pricing applies — the creator agrees to
-                      those rates, not a number typed here. Surface them so the
-                      deal is never agreed blind. */}
-                  {(selectedMarketplaceVenue?.venueRoomTypes || []).length > 0 ? (
-                    <div className="mt-1 space-y-1 rounded-md border bg-gray-50 p-3 text-sm dark:bg-gray-900">
-                      {(selectedMarketplaceVenue.venueRoomTypes as any[]).map((room: any, index: number) => (
-                        <div key={index} className="flex items-center justify-between" data-testid={`venue-room-rate-${index}`}>
-                          <span className="text-gray-700 dark:text-gray-300">
-                            {room.name || room.type || `Room ${index + 1}`}
-                            {room.capacity ? ` · sleeps ${room.capacity}` : ''}
-                            {room.quantity > 1 ? ` · ×${room.quantity}` : ''}
-                          </span>
-                          <span className="font-semibold">
-                            {dealCurrencySymbol}{Number(room.pricePerNight || 0).toFixed(2)}/night
-                          </span>
-                        </div>
-                      ))}
-                      <p className="pt-1 text-xs text-gray-500">
-                        These rates come from the venue's profile and apply per room, per night.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                      {selectedMarketplaceVenue
-                        ? "This venue hasn't published room rates yet — ask them to complete the Rooms step of their venue profile before agreeing to this deal."
-                        : "Room rates come from the venue's profile once a venue is linked to this event."}
-                    </p>
-                  )}
+                  <Label htmlFor="venue-per-room-night">Rate per Room per Night ({dealCurrencySymbol})</Label>
+                  {/* The creator names the rate. Venue profiles carry no
+                      pricing, so this is the only figure in the deal. */}
+                  <Input
+                    id="venue-per-room-night"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={venuePerRoomPerNight || ''}
+                    onChange={(e) => form.setValue('venuePerRoomPerNight', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    data-testid="input-venue-per-room-night"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Multiplied by the number of rooms and the number of nights.
+                  </p>
                 </div>
               )}
               {venueCompensationModel === "per_head" && (

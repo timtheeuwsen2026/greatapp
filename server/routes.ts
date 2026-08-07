@@ -11,6 +11,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
+import { z } from "zod";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
@@ -8424,29 +8425,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only the venue owner or admin can manage availability" });
       }
 
-      // Validate request body with extended schema
-      const validationSchema = insertVenueAvailabilitySchema.extend({
-        startDate: insertVenueAvailabilitySchema.shape.startDate,
-        endDate: insertVenueAvailabilitySchema.shape.endDate,
-      }).refine((data) => {
-        const start = new Date(data.startDate);
-        const end = new Date(data.endDate);
+      // The generated schema wants real Date objects, which JSON cannot carry —
+      // every client necessarily sends ISO strings, so this rejected all of
+      // them with "Expected date, received string". Coerce instead.
+      const validationSchema = insertVenueAvailabilitySchema
+        // These identify a block as belonging to an imported feed. The sync
+        // owns them; a caller forging one could overwrite a real booking.
+        .omit({ externalFeedUrl: true, externalUid: true, source: true })
+        .extend({
+          startDate: z.coerce.date(),
+          endDate: z.coerce.date(),
+        })
         // Inclusive: a block from the 15th to the 15th is one day, which is a
         // perfectly ordinary thing for a venue to close off. Requiring a
         // strictly later end date made single-day blocks impossible, and it
         // disagreed with imported calendars, where a one-night booking lands
         // with the same start and end.
-        return start <= end;
-      }, {
-        message: "End date cannot be before start date",
-      });
+        .refine((data) => data.startDate <= data.endDate, {
+          message: "End date cannot be before start date",
+        });
 
+      // venueId comes from the path, never the body — spreading first would
+      // let a caller file a block against somebody else's venue.
       const validatedData = validationSchema.parse({
+        ...req.body,
         venueId: req.params.venueId,
-        ...req.body
       });
 
-      const availability = await storage.createVenueAvailability(validatedData);
+      // The route decides the source, not the caller. A block labelled
+      // ical_import would be deleted as an orphan by the next sync.
+      const availability = await storage.createVenueAvailability({
+        ...validatedData,
+        source: "manual",
+      });
       res.json(availability);
     } catch (error) {
       if (error instanceof Error && error.name === 'ZodError') {
@@ -8483,16 +8494,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only the venue owner or admin can update availability" });
       }
 
-      // Validate date range
-      if (req.body.startDate && req.body.endDate) {
-        const start = new Date(req.body.startDate);
-        const end = new Date(req.body.endDate);
-        if (start >= end) {
-          return res.status(400).json({ message: "End date must be after start date" });
-        }
+      // Only these are the owner's to change. The raw body used to go
+      // straight to the database, which let a caller rewrite venueId or forge
+      // the externalUid that identifies an imported booking — and handed
+      // Drizzle ISO strings where its timestamp columns want Dates.
+      const updateSchema = z
+        .object({
+          startDate: z.coerce.date().optional(),
+          endDate: z.coerce.date().optional(),
+          status: z.enum(["available", "blocked"]).optional(),
+          notes: z.string().max(2000).nullable().optional(),
+        })
+        .refine((data) => {
+          const start = data.startDate ?? availabilityBlock.startDate;
+          const end = data.endDate ?? availabilityBlock.endDate;
+          return new Date(start) <= new Date(end);
+        }, { message: "End date cannot be before start date" });
+
+      const parsed = updateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: parsed.error.issues[0]?.message || "Invalid data",
+        });
       }
 
-      const updatedAvailability = await storage.updateVenueAvailability(req.params.id, req.body);
+      const updatedAvailability = await storage.updateVenueAvailability(req.params.id, parsed.data);
       res.json(updatedAvailability);
     } catch (error) {
       console.error("Error updating availability:", error);

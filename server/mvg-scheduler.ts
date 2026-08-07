@@ -9,6 +9,7 @@ import { storage } from './storage';
 import { scheduleExperiencePayout } from './payout-scheduler';
 import { lockCommissionsForExperience, voidCommissionsForExperience } from './commissionService';
 import { sumBookingPayoutGrossCents } from './payoutRules';
+import { releaseVenueDatesForExperience } from './icalSync';
 import {
   calculateMvgDeadline,
   DEFAULT_MVG_DEADLINE_DAYS,
@@ -287,6 +288,8 @@ async function processMVGFailure(experienceId: string, failureReason: string) {
       currentParticipants: 0
     })
     .where(eq(experiences.id, experienceId));
+  // The event is off, so stop holding the venue's dates against it.
+  await releaseVenueDatesForExperience(experienceId);
   await voidCommissionsForExperience(experienceId);
   
   const experience = await storage.getExperience(experienceId);

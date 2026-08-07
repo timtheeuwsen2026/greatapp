@@ -57,6 +57,7 @@ import { getAccessToken } from "@/lib/authToken";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
+import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import Navigation from "@/components/navigation";
 import { 
@@ -370,10 +371,28 @@ const isEventType = (t: string | undefined) => t === 'one-day';
 // Legacy STEPS constant for backward compatibility (will be replaced by dynamic steps)
 const STEPS = ALL_STEPS;
 
+/** A YYYY-MM-DD from a Flash Deal link, as the form's Date. */
+function parsePrefillDate(value?: string): Date | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
 interface EventBuilderProps {
   draftId?: string;
   initialExperienceType?: "one-day" | "multi-day";
   onComplete?: (experienceId: string) => void;
+  /**
+   * Values a Flash Deal hands over when a creator claims it. They fill the
+   * dates and venue so the builder opens on the deal the creator clicked —
+   * nothing is reserved, and every field stays editable.
+   */
+  initialPrefill?: {
+    venueId?: string;
+    startDate?: string;
+    endDate?: string;
+    flashDealId?: string;
+  };
 }
 
 // Client-side normalization to prevent bad payloads
@@ -438,7 +457,7 @@ function normalizeEventTripFields(draft: any) {
   return copy;
 }
 
-export default function EventBuilder({ draftId, initialExperienceType, onComplete }: EventBuilderProps) {
+export default function EventBuilder({ draftId, initialExperienceType, onComplete, initialPrefill }: EventBuilderProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -470,8 +489,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       greatPillars: [],
       coverImageUrl: "",
       gallery: [],
-      startDate: undefined,
-      endDate: undefined,
+      startDate: parsePrefillDate(initialPrefill?.startDate),
+      endDate: parsePrefillDate(initialPrefill?.endDate),
       startTime: "",
       endTime: "",
       maxParticipants: undefined,
@@ -480,7 +499,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueOpenSpaceType: "",
       venueTargetDeal: "",
       venueTargetDealValue: undefined,
-      selectedVenueId: "",
+      selectedVenueId: initialPrefill?.venueId || "",
       venue: "",
       manualVenueName: "",
       manualVenueAddress: "",
@@ -2671,6 +2690,7 @@ function MediaStep({ form, isSaving, setIsSaving, autoSaveMutation }: { form: an
 function DatesStep({ form }: { form: any }) {
   const startDate = form.watch('startDate');
   const endDate = form.watch('endDate');
+  const selectedVenueId = form.watch('selectedVenueId');
   const startTime = form.watch('startTime');
   const endTime = form.watch('endTime');
   const maxParticipants = form.watch('maxParticipants');
@@ -2690,6 +2710,14 @@ function DatesStep({ form }: { form: any }) {
       {/* Single Date Range Section */}
       <div className="space-y-6">
         <h3 className="text-lg font-semibold">{isSingleDayEvent ? "Event Date" : "Trip Dates"}</h3>
+
+        {/* The venue's own calendars decide this, not us. A date sold on
+            Airbnb this morning is blocked here by the next sync. */}
+        <VenueDateConflictNotice
+          venueId={selectedVenueId}
+          startDate={startDate ? new Date(startDate).toISOString() : null}
+          endDate={endDate ? new Date(endDate).toISOString() : null}
+        />
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Start Date */}

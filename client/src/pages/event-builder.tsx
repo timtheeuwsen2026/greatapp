@@ -32,6 +32,20 @@ export default function EventBuilderPage() {
   const urlParams = new URLSearchParams(window.location.search);
   const editExperienceId = urlParams.get('edit');
   const selectedType = urlParams.get('type');
+  // A creator arriving from a Flash Deal card. These only seed the form —
+  // nothing is booked, and the creator can change any of it.
+  const prefillVenueId = urlParams.get('venueId');
+  const prefillStartDate = urlParams.get('startDate');
+  const prefillEndDate = urlParams.get('endDate');
+  const prefillFlashDealId = urlParams.get('flashDeal');
+  const initialPrefill = (prefillVenueId || prefillStartDate)
+    ? {
+        venueId: prefillVenueId || undefined,
+        startDate: prefillStartDate || undefined,
+        endDate: prefillEndDate || undefined,
+        flashDealId: prefillFlashDealId || undefined,
+      }
+    : undefined;
   const draftId = params?.draftId || editExperienceId || undefined;
   const initialExperienceType = selectedType === 'multi-day'
     ? 'multi-day'
@@ -197,6 +211,7 @@ export default function EventBuilderPage() {
           <EventBuilder
             draftId={draftId}
             initialExperienceType={initialExperienceType}
+            initialPrefill={initialPrefill}
             onComplete={(experienceId) => {
               // Submitted experiences wait for admin review before public listing.
               setLocation("/creator-dashboard?tab=pending");

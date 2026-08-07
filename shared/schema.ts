@@ -1253,6 +1253,15 @@ export const venues = pgTable("venues", {
   googleCalendarConnected: boolean("google_calendar_connected").default(false),
   googleCalendarId: varchar("google_calendar_id"), // Google Calendar ID for syncing
 
+  // Two-way iCal sync. Import feeds are the venue's existing calendars
+  // (Airbnb, Booking.com, Google); the export token addresses this venue's
+  // own outbound feed, so it must stay unguessable — the URL is the only
+  // credential on a published calendar link.
+  icalImportUrls: jsonb("ical_import_urls").$type<string[]>().default([]),
+  icalExportToken: varchar("ical_export_token", { length: 64 }),
+  icalLastSyncedAt: timestamp("ical_last_synced_at"),
+  icalLastSyncError: text("ical_last_sync_error"),
+
   // Contact & Social
   contactPerson: varchar("contact_person"),
   contactEmail: varchar("contact_email"),
@@ -1357,8 +1366,13 @@ export const venueAvailability = pgTable("venue_availability", {
   startDate: timestamp("start_date").notNull(),
   endDate: timestamp("end_date").notNull(),
   status: varchar("status").notNull().default("available"), // available, blocked
-  source: varchar("source").notNull().default("manual"), // manual, google_sync
+  source: varchar("source").notNull().default("manual"), // manual, google_sync, ical_import, handshake
   notes: text("notes"),
+  // Which import feed a synced block came from, and that feed's own id for the
+  // event. Together they let a re-sync update or withdraw a block instead of
+  // stacking a duplicate every time the scheduler runs.
+  externalFeedUrl: text("external_feed_url"),
+  externalUid: varchar("external_uid", { length: 512 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1732,6 +1746,40 @@ export const venueOffers = pgTable("venue_offers", {
     }>()
     .default({}),
   message: text("message"), // optional note from venue owner to creator
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/**
+ * A venue broadcasting dates it wants filled.
+ *
+ * Deliberately just words and a date range. There is no percentage, no
+ * discount and no "was/now" price, because a flash deal is a lead, not an
+ * offer: a venue writes "late cancellation for Aug 12-16, we'd take a flat
+ * €6,000 instead of our usual €10k" and a creator who likes the look of it
+ * opens a builder and proposes their own Target Deal. Claiming one reserves
+ * nothing — the real commitment is still the Digital Handshake.
+ */
+export const venueFlashDeals = pgTable("venue_flash_deals", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  venueId: varchar("venue_id")
+    .references(() => venues.id, { onDelete: "cascade" })
+    .notNull(),
+  createdBy: varchar("created_by")
+    .references(() => users.id)
+    .notNull(),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  headline: varchar("headline", { length: 160 }).notNull(),
+  description: text("description").notNull(),
+  // "active" until the venue withdraws it. Expiry is derived from endDate
+  // rather than stored, so a deal never needs a job to retire it.
+  status: varchar("status", { length: 20 }).notNull().default("active"),
+  // How many creators opened a builder from this card. Plain interest signal
+  // for the venue; it does not gate or reserve anything.
+  claimCount: integer("claim_count").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2656,6 +2704,33 @@ export const insertVenueAvailabilitySchema = createInsertSchema(
   updatedAt: true,
 });
 
+/**
+ * What a venue types into the Flash Deal form. Words and dates only — there is
+ * deliberately no amount, percentage or discount field to validate.
+ */
+export const venueFlashDealInputSchema = z
+  .object({
+    venueId: z.string().min(1, "Choose which venue this deal is for"),
+    startDate: z.coerce.date({ invalid_type_error: "Add a start date" }),
+    endDate: z.coerce.date({ invalid_type_error: "Add an end date" }),
+    headline: z
+      .string()
+      .trim()
+      .min(10, "Give the deal a headline of at least 10 characters")
+      .max(160, "Keep the headline under 160 characters"),
+    description: z
+      .string()
+      .trim()
+      .min(20, "Say a little more about what you're offering")
+      .max(2000, "Keep the description under 2000 characters"),
+  })
+  .refine((deal) => deal.endDate.getTime() >= deal.startDate.getTime(), {
+    message: "The end date cannot be before the start date",
+    path: ["endDate"],
+  });
+
+export type VenueFlashDealInput = z.infer<typeof venueFlashDealInputSchema>;
+
 export const insertServiceProviderSchema = createInsertSchema(
   serviceProviders,
 ).omit({
@@ -2988,6 +3063,8 @@ export type ExperienceVenue = typeof experienceVenues.$inferSelect;
 export type InsertExperienceVenue = z.infer<typeof insertExperienceVenueSchema>;
 export type VenueContract = typeof venueContracts.$inferSelect;
 export type InsertVenueContract = z.infer<typeof insertVenueContractSchema>;
+export type VenueFlashDeal = typeof venueFlashDeals.$inferSelect;
+export type InsertVenueFlashDeal = typeof venueFlashDeals.$inferInsert;
 export type VenueInvite = typeof venueInvites.$inferSelect;
 export type InsertVenueInvite = typeof venueInvites.$inferInsert;
 export type PromotionDeal = typeof promotionDeals.$inferSelect;

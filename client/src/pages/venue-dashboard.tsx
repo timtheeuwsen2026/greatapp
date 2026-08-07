@@ -42,6 +42,7 @@ import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import { VenueAvailabilityManager } from "@/components/VenueAvailabilityManager";
 import { VenueGoogleCalendarIntegration } from "@/components/VenueGoogleCalendarIntegration";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
+import { VenueFlashDeals } from "@/components/VenueFlashDeals";
 import {
   COUNTER_SENT_STATUS_LABEL,
   isCounterAwaitingCreator,
@@ -605,6 +606,7 @@ function VenueDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="flash-deals">Flash Deals</TabsTrigger>
             <TabsTrigger value="bookings">Bookings</TabsTrigger>
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -1111,6 +1113,16 @@ function VenueDashboardContent() {
                 ))}
               </div>
             )}
+          </TabsContent>
+
+          {/* ── Flash Deals Tab ── */}
+          {/* Dates the venue wants filled, broadcast to creators in their own words. */}
+          <TabsContent value="flash-deals" className="space-y-4">
+            <VenueFlashDeals
+              venues={(venues as any[])
+                .filter((venue) => venue.status === 'approved')
+                .map((venue) => ({ id: venue.id, name: venue.name }))}
+            />
           </TabsContent>
 
           <TabsContent value="bookings" className="space-y-6">

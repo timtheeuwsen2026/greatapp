@@ -9,8 +9,8 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers } from "@shared/schema";
-import { eq, and, or, desc, inArray, gt, sql, ilike, ne } from "drizzle-orm";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals } from "@shared/schema";
+import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
@@ -27,7 +27,8 @@ import {
   roomSchema,
   itinerarySchema,
   roleSchema,
-  extendedInsertVenueSchema
+  extendedInsertVenueSchema,
+  venueFlashDealInputSchema
 } from "@shared/schema";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
@@ -45,6 +46,15 @@ import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } 
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
+import { buildIcalFeed } from "./ical";
+import {
+  ensureIcalExportToken,
+  syncVenueIcalFeeds,
+  findVenueDateConflicts,
+  getConfirmedVenueEvents,
+  blockVenueDatesForExperience,
+  releaseVenueDatesForExperience,
+} from "./icalSync";
 import {
   calculateMvgDeadline,
   normalizeMvgDeadlineDays,
@@ -8519,6 +8529,351 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Two-way iCal sync ─────────────────────────────────────────────────────
+  //
+  // Import: the venue's existing calendars (Airbnb, Booking.com, Google) are
+  // read on a schedule and their busy dates written in as blocks, so a creator
+  // can never request a date the venue has already sold.
+  //
+  // Export: one feed per venue carrying the events confirmed here, so a deal
+  // agreed on the platform blocks the date in the venue's own calendars too.
+
+  /** Only the owner (or an admin) may see or change a venue's calendar links. */
+  async function requireVenueOwner(req: any, res: any, venueId: string) {
+    const userId = resolveCurrentUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return null;
+    }
+    const venue = await storage.getVenue(venueId);
+    if (!venue) {
+      res.status(404).json({ message: "Venue not found" });
+      return null;
+    }
+    if (venue.createdBy !== userId && !(await checkIsAdmin(req))) {
+      res.status(403).json({ message: "Only the venue owner can manage this calendar" });
+      return null;
+    }
+    return venue;
+  }
+
+  app.get("/api/venues/:venueId/ical", isAuthenticated, async (req: any, res) => {
+    try {
+      const venue = await requireVenueOwner(req, res, req.params.venueId);
+      if (!venue) return;
+
+      // Reading the settings is what mints the token, so the export link is
+      // ready the first time the venue opens the step.
+      const token = await ensureIcalExportToken(venue.id);
+
+      res.json({
+        importUrls: Array.isArray((venue as any).icalImportUrls) ? (venue as any).icalImportUrls : [],
+        exportUrl: `${getAppBaseUrl(req)}/api/venues/${venue.id}/ical/${token}.ics`,
+        lastSyncedAt: (venue as any).icalLastSyncedAt ?? null,
+        lastSyncError: (venue as any).icalLastSyncError ?? null,
+      });
+    } catch (error) {
+      console.error("Error reading venue iCal settings:", error);
+      res.status(500).json({ message: "Failed to load calendar settings" });
+    }
+  });
+
+  app.put("/api/venues/:venueId/ical", isAuthenticated, async (req: any, res) => {
+    try {
+      const venue = await requireVenueOwner(req, res, req.params.venueId);
+      if (!venue) return;
+
+      const submitted = Array.isArray(req.body?.importUrls) ? req.body.importUrls : [];
+      const urls: string[] = [];
+      for (const raw of submitted) {
+        const url = String(raw || "").trim();
+        if (!url) continue;
+        if (!/^(https?|webcal):\/\//i.test(url)) {
+          return res.status(400).json({ message: `"${url}" is not a calendar link. It should start with https:// or webcal://` });
+        }
+        if (url.length > 2000) {
+          return res.status(400).json({ message: "That calendar link is too long." });
+        }
+        if (!urls.includes(url)) urls.push(url);
+      }
+      if (urls.length > 10) {
+        return res.status(400).json({ message: "You can import up to 10 calendars." });
+      }
+
+      await storage.updateVenue(venue.id, { icalImportUrls: urls } as any);
+
+      // Sync straight away: a venue that has just pasted a link expects to see
+      // its dates, not to wait for the next scheduled run.
+      const result = await syncVenueIcalFeeds(venue.id);
+      res.json({ importUrls: urls, sync: result });
+    } catch (error) {
+      console.error("Error saving venue iCal links:", error);
+      res.status(500).json({ message: "Failed to save calendar links" });
+    }
+  });
+
+  app.post("/api/venues/:venueId/ical/sync", isAuthenticated, async (req: any, res) => {
+    try {
+      const venue = await requireVenueOwner(req, res, req.params.venueId);
+      if (!venue) return;
+      res.json(await syncVenueIcalFeeds(venue.id));
+    } catch (error) {
+      console.error("Error syncing venue calendars:", error);
+      res.status(500).json({ message: "Failed to sync calendars" });
+    }
+  });
+
+  /**
+   * The venue's outbound feed. Public by necessity — Airbnb and Google fetch
+   * it unauthenticated — so the unguessable token in the path is the only
+   * thing standing in for a login. A wrong token is a 404, never a hint.
+   */
+  app.get("/api/venues/:venueId/ical/:token.ics", async (req: any, res) => {
+    try {
+      const token = String(req.params.token || "");
+      const venue = await storage.getVenue(req.params.venueId);
+      if (!venue || !(venue as any).icalExportToken || (venue as any).icalExportToken !== token) {
+        return res.status(404).type("text/plain").send("Not found");
+      }
+
+      const events = await getConfirmedVenueEvents(venue.id);
+      const feed = buildIcalFeed(
+        `${venue.name} — booked on Great.`,
+        events.map((event) => {
+          const start = new Date(event.startDate as any);
+          const end = event.endDate ? new Date(event.endDate as any) : start;
+          return {
+            uid: `experience-${event.id}@great`,
+            start,
+            // DTEND is exclusive: a stay through the 16th ends on the 17th.
+            end: new Date(end.getTime() + 86400000),
+            summary: event.title || "Booked",
+            description: `Confirmed on Great.${event.maxParticipants ? ` Up to ${event.maxParticipants} guests.` : ""}`,
+            location: event.location || venue.location || null,
+          };
+        }),
+        new Date(),
+      );
+
+      res.type("text/calendar; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${venue.slug || venue.id}.ics"`);
+      res.setHeader("Cache-Control", "public, max-age=900");
+      res.send(feed);
+    } catch (error) {
+      console.error("Error building venue iCal feed:", error);
+      res.status(500).type("text/plain").send("Failed to build calendar");
+    }
+  });
+
+  /**
+   * Whether a venue is free between two dates. The Event Builder asks before
+   * letting a creator commit to dates; the handshake routes ask again before
+   * accepting one, because a feed can change between the two.
+   */
+  app.get("/api/venues/:venueId/date-conflicts", async (req: any, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate) {
+        return res.status(400).json({ message: "startDate is required" });
+      }
+      const conflicts = await findVenueDateConflicts(
+        req.params.venueId,
+        String(startDate),
+        endDate ? String(endDate) : null,
+      );
+      res.json({ available: conflicts.length === 0, conflicts });
+    } catch (error) {
+      console.error("Error checking venue date conflicts:", error);
+      res.status(500).json({ message: "Failed to check availability" });
+    }
+  });
+
+  // ── Venue Flash Deals ─────────────────────────────────────────────────────
+  //
+  // A venue broadcasting dates it wants filled, in its own words. There is no
+  // discount engine here on purpose: the card carries a headline, a
+  // description and a date range, and a creator who likes it opens a builder
+  // and proposes their own Target Deal. Claiming reserves nothing.
+
+  /** The venue's own deals, newest first. */
+  app.get("/api/venue-flash-deals/mine", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const owned = await storage.getVenuesByCreator(userId);
+      if (owned.length === 0) return res.json([]);
+
+      const deals = await db
+        .select()
+        .from(venueFlashDeals)
+        .where(inArray(venueFlashDeals.venueId, owned.map((venue: any) => venue.id)))
+        .orderBy(desc(venueFlashDeals.createdAt));
+
+      const venueById = new Map(owned.map((venue: any) => [venue.id, venue]));
+      res.json(deals.map((deal) => ({
+        ...deal,
+        venueName: venueById.get(deal.venueId)?.name || null,
+      })));
+    } catch (error) {
+      console.error("Error fetching venue flash deals:", error);
+      res.status(500).json({ message: "Failed to load flash deals" });
+    }
+  });
+
+  /**
+   * The creator-facing feed. Only live deals on dates that have not passed,
+   * and only from approved venues — an unapproved venue is not yet bookable,
+   * so advertising its dates would send creators nowhere.
+   */
+  app.get("/api/venue-flash-deals", async (req: any, res) => {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const rows = await db
+        .select({ deal: venueFlashDeals, venue: venues })
+        .from(venueFlashDeals)
+        .innerJoin(venues, eq(venueFlashDeals.venueId, venues.id))
+        .where(and(
+          eq(venueFlashDeals.status, "active"),
+          gte(venueFlashDeals.endDate, today),
+          eq(venues.approved, true),
+        ))
+        .orderBy(asc(venueFlashDeals.startDate));
+
+      res.json(rows.map(({ deal, venue }) => ({
+        ...deal,
+        venue: {
+          id: venue.id,
+          name: venue.name,
+          slug: venue.slug,
+          city: venue.city,
+          location: venue.location,
+          capacity: venue.capacity,
+          coverImageUrl: venue.coverImageUrl,
+        },
+      })));
+    } catch (error) {
+      console.error("Error fetching flash deal feed:", error);
+      res.status(500).json({ message: "Failed to load flash deals" });
+    }
+  });
+
+  app.post("/api/venue-flash-deals", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const parsed = venueFlashDealInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.issues[0]?.message || "Invalid flash deal" });
+      }
+      const input = parsed.data;
+
+      const venue = await storage.getVenue(input.venueId);
+      if (!venue) return res.status(404).json({ message: "Venue not found" });
+      if (venue.createdBy !== userId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Only the venue owner can post a deal for this venue" });
+      }
+
+      // A deal for dates the venue is already committed on would send creators
+      // straight into a conflict. Say so now rather than after they build.
+      const conflicts = await findVenueDateConflicts(venue.id, input.startDate, input.endDate);
+      if (conflicts.length > 0) {
+        return res.status(409).json({
+          message: "Those dates are blocked on your calendar. Free them up first, or pick dates you can actually host.",
+          conflicts,
+        });
+      }
+
+      const [deal] = await db
+        .insert(venueFlashDeals)
+        .values({
+          venueId: venue.id,
+          createdBy: userId,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          headline: input.headline,
+          description: input.description,
+        })
+        .returning();
+
+      res.status(201).json({ ...deal, venueName: venue.name });
+    } catch (error) {
+      console.error("Error creating flash deal:", error);
+      res.status(500).json({ message: "Failed to post flash deal" });
+    }
+  });
+
+  app.delete("/api/venue-flash-deals/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const [deal] = await db.select().from(venueFlashDeals).where(eq(venueFlashDeals.id, req.params.id));
+      if (!deal) return res.status(404).json({ message: "Flash deal not found" });
+
+      const venue = await storage.getVenue(deal.venueId);
+      if (venue?.createdBy !== userId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Only the venue owner can withdraw this deal" });
+      }
+
+      // Withdrawn rather than deleted: a creator may already have a builder
+      // open against it, and the card should read as pulled, not vanish.
+      const [updated] = await db
+        .update(venueFlashDeals)
+        .set({ status: "withdrawn", updatedAt: new Date() })
+        .where(eq(venueFlashDeals.id, deal.id))
+        .returning();
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error withdrawing flash deal:", error);
+      res.status(500).json({ message: "Failed to withdraw flash deal" });
+    }
+  });
+
+  /**
+   * A creator opening a builder from a deal card.
+   *
+   * This reserves nothing and blocks no dates — it records interest for the
+   * venue and hands back the values the builder should open with. The real
+   * commitment is still the Digital Handshake.
+   */
+  app.post("/api/venue-flash-deals/:id/claim", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const [deal] = await db.select().from(venueFlashDeals).where(eq(venueFlashDeals.id, req.params.id));
+      if (!deal || deal.status !== "active") {
+        return res.status(404).json({ message: "That deal is no longer available" });
+      }
+
+      const venue = await storage.getVenue(deal.venueId);
+      if (!venue || !venue.approved) {
+        return res.status(404).json({ message: "That deal is no longer available" });
+      }
+
+      await db
+        .update(venueFlashDeals)
+        .set({ claimCount: sql`${venueFlashDeals.claimCount} + 1`, updatedAt: new Date() })
+        .where(eq(venueFlashDeals.id, deal.id));
+
+      res.json({
+        flashDealId: deal.id,
+        venueId: venue.id,
+        venueName: venue.name,
+        startDate: new Date(deal.startDate).toISOString(),
+        endDate: new Date(deal.endDate).toISOString(),
+      });
+    } catch (error) {
+      console.error("Error claiming flash deal:", error);
+      res.status(500).json({ message: "Failed to open a builder for that deal" });
+    }
+  });
+
   app.patch("/api/venues/:venueId/google-calendar", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
@@ -12519,6 +12874,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // The venue's imported calendars are the authority on whether it is
+      // free. Checked again here because a feed can change between the
+      // creator picking dates and the venue accepting.
+      const dateConflicts = await findVenueDateConflicts(
+        linkedVenue.id,
+        experience.startDate as any,
+        (experience as any).endDate,
+      );
+      if (dateConflicts.length > 0) {
+        return res.status(409).json({
+          message: 'Those dates are no longer free on the venue calendar.',
+          conflicts: dateConflicts,
+        });
+      }
+
       let contract = await storage.getVenueContractByExperience(experienceId);
       if (!contract) {
         contract = await storage.upsertVenueContract(buildVenueContractObject(
@@ -12598,6 +12968,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // ── Standard deal: accept immediately ────────────────────────────────
       const acceptedContract = await storage.acceptVenueContract(experienceId, linkedVenue.id);
+      // Hold the dates. The venue's own calendar shows them taken, the export
+      // feed carries them out to Airbnb and Google, and the next creator who
+      // asks for the same week is turned away.
+      await blockVenueDatesForExperience(
+        linkedVenue.id,
+        experienceId,
+        experience.startDate as any,
+        (experience as any).endDate,
+        experience.title,
+      );
       await storage.updateExperience(experienceId, {
         ...getExperienceUpdatesFromAcceptedContract(acceptedContract),
         venueStatus: 'venue_confirmed',
@@ -12971,6 +13351,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
+      await releaseVenueDatesForExperience(experienceId);
       await storage.updateExperienceStatus(experienceId, 'draft');
       notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'rejected', reason);
       res.json({ success: true, contract: declinedContract, message: 'Offer rejected — experience returned to creator' });
@@ -13373,6 +13754,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+
+      // The venue's imported calendars are the authority on whether it is
+      // free. Checked again here because a feed can change between the
+      // creator picking dates and the creator accepting.
+      const dateConflicts = await findVenueDateConflicts(
+        offer.venueId,
+        experience.startDate as any,
+        (experience as any).endDate,
+      );
+      if (dateConflicts.length > 0) {
+        return res.status(409).json({
+          message: 'Those dates are no longer free on the venue calendar.',
+          conflicts: dateConflicts,
+        });
+      }
+
       const directContract = await storage.getVenueContractByExperience(offer.experienceId);
       const isDirectCounter = directContract?.venueId === offer.venueId && directContract.status === 'countered';
 
@@ -13497,6 +13894,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isDirectCounter) {
         await storage.acceptVenueContract(offer.experienceId, offer.venueId);
         await storage.updateExperienceStatus(offer.experienceId, 'approved');
+      }
+      await blockVenueDatesForExperience(
+        offer.venueId,
+        offer.experienceId,
+        experience.startDate as any,
+        (experience as any).endDate,
+        experience.title,
+      );
+      if (isDirectCounter) {
         const liveExperience = await storage.getExperience(offer.experienceId);
         notifyCreatorEventPublished(liveExperience).catch((error) => {
           console.error("Failed to send event published email:", error);
@@ -13543,6 +13949,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const directContract = await storage.getVenueContractByExperience(offer.experienceId);
       if (directContract?.venueId === offer.venueId && directContract.status === 'countered') {
         await storage.declineVenueContract(offer.experienceId, offer.venueId, 'Creator declined venue counter offer');
+        await releaseVenueDatesForExperience(offer.experienceId);
         await storage.updateExperienceStatus(offer.experienceId, 'draft');
       }
       notifyVenueOwnerOfBidResolution(offer, 'declined');

@@ -39,6 +39,11 @@ const GroupedMultiSelect = lazy(() =>
     default: module.GroupedMultiSelect,
   }))
 );
+const VenueIcalSync = lazy(() =>
+  import('@/components/VenueIcalSync').then((module) => ({
+    default: module.VenueIcalSync,
+  }))
+);
 
 function StepLoading({ label = 'Loading step...' }: { label?: string }) {
   return (
@@ -2175,14 +2180,26 @@ export default function VenueProfileSetup() {
                       )}
                     </div>
 
-                    <div className="space-y-6 pt-4 border-t">
-                      <h4 className="text-md font-medium">Google Calendar Sync</h4>
-                      <Alert>
-                        <AlertCircle className="h-4 w-4" />
-                        <AlertDescription>
-                          Google Calendar sync is coming soon. You'll be able to automatically sync your venue's availability with your Google Calendar.
-                        </AlertDescription>
-                      </Alert>
+                    <div className="space-y-4 pt-4 border-t">
+                      <div>
+                        <h4 className="text-md font-medium">Calendar Sync</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Keep this calendar and the ones you already use in step with each other, both ways.
+                        </p>
+                      </div>
+
+                      {editVenueId ? (
+                        <Suspense fallback={<StepLoading label="Loading calendar sync..." />}>
+                          <VenueIcalSync venueId={editVenueId} />
+                        </Suspense>
+                      ) : (
+                        <Alert>
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertDescription>
+                            Save your venue as a draft first to connect your calendars.
+                          </AlertDescription>
+                        </Alert>
+                      )}
                     </div>
 
                   </div>

@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
+import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -912,6 +913,7 @@ function CreatorDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="flash-deals">Venue Flash Deals</TabsTrigger>
             <TabsTrigger value="earnings">Earnings</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
@@ -2001,6 +2003,13 @@ function CreatorDashboardContent() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          {/* ── Venue Flash Deals ── */}
+          {/* Venues advertising dates they want filled. Claiming opens a
+              pre-filled builder; it reserves nothing. */}
+          <TabsContent value="flash-deals" className="space-y-4">
+            <CreatorFlashDealFeed />
           </TabsContent>
 
           <TabsContent value="earnings" className="space-y-6">

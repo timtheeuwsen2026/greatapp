@@ -6,6 +6,7 @@ import { startPayoutScheduler } from "./payout-scheduler";
 import { startPaymentReconciler } from "./payment-reconciler";
 import { startEventReminderScheduler } from "./event-reminder-scheduler";
 import { startEmailJobScheduler } from "./emailJobScheduler";
+import { startIcalSyncScheduler } from "./ical-scheduler";
 import { assertEmailConfiguration } from "./notifications";
 import { validateStripeConfig } from "./payments";
 
@@ -103,5 +104,7 @@ app.use((req, res, next) => {
     startEmailJobScheduler();
     // Rebuild bookings for payments Stripe captured but nothing recorded
     startPaymentReconciler();
+    // Pull venue calendars in so dates sold elsewhere are blocked here
+    startIcalSyncScheduler();
   });
 })();

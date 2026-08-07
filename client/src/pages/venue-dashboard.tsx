@@ -40,7 +40,6 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Breadcrumb from "@/components/Breadcrumb";
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import { VenueAvailabilityManager } from "@/components/VenueAvailabilityManager";
-import { VenueGoogleCalendarIntegration } from "@/components/VenueGoogleCalendarIntegration";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
 import { VenueFlashDeals } from "@/components/VenueFlashDeals";
 import {
@@ -1219,7 +1218,6 @@ function VenueDashboardContent() {
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-6">
-                        <VenueGoogleCalendarIntegration venue={venue} />
                         <VenueAvailabilityManager venueId={venue.id} />
                       </CardContent>
                     </Card>

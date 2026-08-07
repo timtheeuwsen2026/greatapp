@@ -44,7 +44,6 @@ interface VenueAvailabilityProps {
 export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [isGoogleDialogOpen, setIsGoogleDialogOpen] = useState(false);
   const [dateRange, setDateRange] = useState<{
     from: Date | undefined;
     to: Date | undefined;
@@ -132,15 +131,6 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
     });
   };
 
-  const handleGoogleConnect = () => {
-    // Stub: Show coming soon message
-    toast({
-      title: "Coming Soon",
-      description: "Google Calendar integration will be available in a future update. For now, please manage your availability manually.",
-    });
-    setIsGoogleDialogOpen(false);
-  };
-
   const groupedBlocks = blocks.reduce((acc, block) => {
     const status = block.status === "blocked" ? "Blocked Dates" : "Available Dates";
     if (!acc[status]) acc[status] = [];
@@ -157,56 +147,6 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
           unavailable or mark specific dates as featured.
         </p>
       </div>
-
-      {/* Google Calendar Connection */}
-      <Card data-testid="google-calendar-card">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Calendar className="h-4 w-4" />
-            Google Calendar Integration
-          </CardTitle>
-          <CardDescription>
-            Automatically sync your venue availability with Google Calendar
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Dialog open={isGoogleDialogOpen} onOpenChange={setIsGoogleDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" className="w-full" data-testid="button-google-calendar">
-                <Calendar className="h-4 w-4 mr-2" />
-                Connect Google Calendar
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Connect Google Calendar</DialogTitle>
-                <DialogDescription>
-                  Sync your venue availability with your Google Calendar to automatically block
-                  dates when you have events scheduled.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div className="bg-muted p-4 rounded-lg">
-                  <p className="text-sm text-muted-foreground">
-                    This feature is currently in development. Once available, you'll be able to:
-                  </p>
-                  <ul className="list-disc list-inside text-sm text-muted-foreground mt-2 space-y-1">
-                    <li>Connect your Google Calendar account</li>
-                    <li>Automatically sync blocked dates</li>
-                    <li>Two-way synchronization</li>
-                    <li>Manage multiple calendars</li>
-                  </ul>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button onClick={handleGoogleConnect} data-testid="button-connect-google">
-                  Get Notified When Available
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </CardContent>
-      </Card>
 
       {/* Manual Date Management */}
       <Card data-testid="manual-dates-card">

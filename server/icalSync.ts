@@ -93,16 +93,29 @@ async function syncOneFeed(venueId: string, url: string): Promise<FeedSyncResult
 
     const current = byUid.get(uid);
     if (!current) {
-      await db.insert(venueAvailability).values({
-        venueId,
-        startDate: start,
-        endDate: end,
-        status: "blocked",
-        source: "ical_import",
-        notes,
-        externalFeedUrl: url,
-        externalUid: uid,
-      });
+      // Upsert rather than insert. The hourly job and a venue pressing "Sync
+      // now" can land on the same feed at the same time; both would read no
+      // existing row and both would try to write one. The unique index would
+      // reject the loser and take the whole sync down with it.
+      await db
+        .insert(venueAvailability)
+        .values({
+          venueId,
+          startDate: start,
+          endDate: end,
+          status: "blocked",
+          source: "ical_import",
+          notes,
+          externalFeedUrl: url,
+          externalUid: uid,
+        })
+        .onConflictDoUpdate({
+          target: [venueAvailability.venueId, venueAvailability.externalFeedUrl, venueAvailability.externalUid],
+          // The unique index is partial, so the predicate has to be repeated
+          // here or Postgres cannot work out which index to arbitrate on.
+          targetWhere: isNotNull(venueAvailability.externalUid),
+          set: { startDate: start, endDate: end, notes, status: "blocked", updatedAt: new Date() },
+        });
       result.added += 1;
       continue;
     }
@@ -133,8 +146,27 @@ async function syncOneFeed(venueId: string, url: string): Promise<FeedSyncResult
   return result;
 }
 
+/**
+ * One sync per venue at a time.
+ *
+ * The hourly job and a venue pressing "Sync now" reach the same code. Running
+ * both at once still lands correct data — the writes are upserts — but they
+ * fetch the same feeds twice and report counts that describe each other's
+ * work. Joining the run in progress is both cheaper and more truthful.
+ */
+const inFlight = new Map<string, Promise<VenueSyncResult>>();
+
+export function syncVenueIcalFeeds(venueId: string): Promise<VenueSyncResult> {
+  const running = inFlight.get(venueId);
+  if (running) return running;
+
+  const run = syncVenueIcalFeedsUncoordinated(venueId).finally(() => inFlight.delete(venueId));
+  inFlight.set(venueId, run);
+  return run;
+}
+
 /** Syncs every feed configured on a venue and records the outcome on the venue. */
-export async function syncVenueIcalFeeds(venueId: string): Promise<VenueSyncResult> {
+async function syncVenueIcalFeedsUncoordinated(venueId: string): Promise<VenueSyncResult> {
   const [venue] = await db
     .select({ id: venues.id, urls: venues.icalImportUrls })
     .from(venues)

@@ -15,7 +15,10 @@
     "db:push": "drizzle-kit push",
     "push:db": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "verify:ical": "node --env-file=.env --import tsx scripts/verify-ical-sync.ts",
+    "verify:flash-deals": "node --env-file=.env --import tsx scripts/verify-flash-deals.ts",
+    "test:ical-feed": "node scripts/serve-test-ical.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.16.0",

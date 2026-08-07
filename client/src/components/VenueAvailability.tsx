@@ -65,7 +65,10 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
       source: string;
       notes?: string;
     }) => {
-      return apiRequest(`/api/venues/${venueId}/availability`, "POST", data);
+      // apiRequest takes (method, url, body). These were the other way round,
+      // so the URL was handed to fetch as the HTTP method and every save died
+      // with "is not a valid HTTP method".
+      return apiRequest("POST", `/api/venues/${venueId}/availability`, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/venues/${venueId}/availability`] });
@@ -88,7 +91,7 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
   // Delete availability block mutation
   const deleteBlockMutation = useMutation({
     mutationFn: async (blockId: string) => {
-      return apiRequest(`/api/venues/availability/${blockId}`, "DELETE");
+      return apiRequest("DELETE", `/api/venues/availability/${blockId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/venues/${venueId}/availability`] });
@@ -113,18 +116,20 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
   };
 
   const handleAddBlock = () => {
-    if (!dateRange.from || !dateRange.to) {
+    if (!dateRange.from) {
       toast({
         title: "Error",
-        description: "Please select both start and end dates",
+        description: "Please select at least one date",
         variant: "destructive",
       });
       return;
     }
 
+    // One click is one day. Closing off a single date is ordinary, and the
+    // picker leaves `to` empty until a second date is chosen.
     createBlockMutation.mutate({
       startDate: dateRange.from.toISOString(),
-      endDate: dateRange.to.toISOString(),
+      endDate: (dateRange.to ?? dateRange.from).toISOString(),
       status: blockStatus,
       source: "manual",
       notes: notes || undefined,
@@ -177,13 +182,19 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
                   <CalendarComponent
                     mode="range"
                     selected={dateRange}
-                    onSelect={setDateRange as any}
+                    // Clicking the selected start date again clears the range,
+                    // and the picker reports that as undefined. Passing it
+                    // straight to state made every later read of .from throw.
+                    onSelect={(range) =>
+                      setDateRange({ from: range?.from, to: range?.to })
+                    }
                     className="rounded-md border"
                     numberOfMonths={2}
                   />
-                  {dateRange.from && dateRange.to && (
+                  {dateRange.from && (
                     <p className="text-sm text-muted-foreground" data-testid="text-selected-dates">
-                      Selected: {format(dateRange.from, "PPP")} - {format(dateRange.to, "PPP")}
+                      Selected: {format(dateRange.from, "PPP")}
+                      {dateRange.to && ` - ${format(dateRange.to, "PPP")}`}
                     </p>
                   )}
                 </div>

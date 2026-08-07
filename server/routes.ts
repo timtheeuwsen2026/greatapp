@@ -8431,9 +8431,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }).refine((data) => {
         const start = new Date(data.startDate);
         const end = new Date(data.endDate);
-        return start < end;
+        // Inclusive: a block from the 15th to the 15th is one day, which is a
+        // perfectly ordinary thing for a venue to close off. Requiring a
+        // strictly later end date made single-day blocks impossible, and it
+        // disagreed with imported calendars, where a one-night booking lands
+        // with the same start and end.
+        return start <= end;
       }, {
-        message: "End date must be after start date",
+        message: "End date cannot be before start date",
       });
 
       const validatedData = validationSchema.parse({

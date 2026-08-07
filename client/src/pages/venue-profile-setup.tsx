@@ -345,11 +345,19 @@ export default function VenueProfileSetup() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [step, setStep] = useState(1);
-  const [servicesAndAmenitiesData, setServicesAndAmenitiesData] = useState<GroupedOptionsData | null>(null);
-
   // Get venue ID from URL for edit mode
   const urlParams = new URLSearchParams(window.location.search);
+
+  // Saving a new venue as a draft redirects so the wizard picks up the new id.
+  // Without carrying the step across, that redirect dumped the owner back on
+  // step 1 — which is how someone following "save a draft first to connect
+  // your calendars" ended up nowhere near the calendar step.
+  const requestedStep = Number(urlParams.get('step'));
+  const [step, setStep] = useState(
+    Number.isFinite(requestedStep) && requestedStep >= 1 && requestedStep <= 9 ? requestedStep : 1,
+  );
+  const [servicesAndAmenitiesData, setServicesAndAmenitiesData] = useState<GroupedOptionsData | null>(null);
+
   const editVenueId = urlParams.get('edit');
   const requestedVenueType = urlParams.get('venueType') || urlParams.get('type');
   const initialVenueType: VenueProfileForm['venueType'] =
@@ -564,8 +572,9 @@ export default function VenueProfileSetup() {
       if (editVenueId) {
         setLocation('/venue-dashboard');
       } else {
-        // Keep the user in the listing flow after the draft is created.
-        setLocation(`/venues/new?edit=${venue.id}`);
+        // Keep the user in the listing flow after the draft is created, on the
+        // step they were already working on.
+        setLocation(`/venues/new?edit=${venue.id}&step=${step}`);
       }
 
       refreshVenueCaches(venue);

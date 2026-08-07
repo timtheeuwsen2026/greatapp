@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CalendarCheck } from "lucide-react";
 
@@ -45,13 +46,11 @@ export function VenueDateConflictNotice({
   const { data } = useQuery<ConflictResponse>({
     queryKey: ["/api/venues", venueId, "date-conflicts", startDate, endDate],
     enabled,
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams({ startDate: String(startDate) });
       if (endDate) params.set("endDate", String(endDate));
-      return fetch(`/api/venues/${venueId}/date-conflicts?${params.toString()}`).then((res) => {
-        if (!res.ok) throw new Error("Could not check availability");
-        return res.json();
-      });
+      const res = await apiRequest("GET", `/api/venues/${venueId}/date-conflicts?${params.toString()}`);
+      return res.json();
     },
   });
 

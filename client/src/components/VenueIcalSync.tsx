@@ -58,13 +58,12 @@ export function VenueIcalSync({ venueId }: { venueId: string }) {
 
   const { data: settings, isLoading, isError } = useQuery<IcalSettings>({
     queryKey: ["/api/venues", venueId, "ical"],
-    queryFn: () => fetch(`/api/venues/${venueId}/ical`).then((res) => {
-      if (res.status === 401 || res.status === 403) {
-        throw new Error("Sign in as the venue owner to manage these calendars.");
-      }
-      if (!res.ok) throw new Error("Could not load your calendar settings.");
+    // apiRequest, not a bare fetch: this endpoint is owner-only, and a bare
+    // fetch sends no Authorization header, so it 401s even for the owner.
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/venues/${venueId}/ical`);
       return res.json();
-    }),
+    },
     retry: false,
   });
 

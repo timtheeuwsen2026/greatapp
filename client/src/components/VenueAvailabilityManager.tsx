@@ -23,10 +23,21 @@ export function VenueAvailabilityManager({ venueId }: VenueAvailabilityManagerPr
   const [status, setStatus] = useState<"available" | "blocked">("blocked");
   const [notes, setNotes] = useState("");
 
-  const { data: availability = [], isLoading } = useQuery<VenueAvailability[]>({
+  // apiRequest, not a bare fetch. This endpoint is owner-only; a bare fetch
+  // carries no Authorization header, so it came back 401 with a JSON error
+  // body, which `.json()` happily parsed into an object. The list below then
+  // called .map on it and took the whole dashboard down with it.
+  const { data, isLoading, isError } = useQuery<VenueAvailability[]>({
     queryKey: ['/api/venues', venueId, 'availability'],
-    queryFn: () => fetch(`/api/venues/${venueId}/availability`).then(res => res.json()),
+    queryFn: async () => {
+      const res = await apiRequest('GET', `/api/venues/${venueId}/availability`);
+      return res.json();
+    },
+    retry: false,
   });
+
+  // Belt and braces: whatever the server sends, this page renders a list.
+  const availability = Array.isArray(data) ? data : [];
 
   const createMutation = useMutation({
     mutationFn: async (data: { startDate: string; endDate: string; status: string; source: string; notes: string }) => {
@@ -188,6 +199,10 @@ export function VenueAvailabilityManager({ venueId }: VenueAvailabilityManagerPr
         <CardContent>
           {isLoading ? (
             <p className="text-muted-foreground">Loading availability...</p>
+          ) : isError ? (
+            <p className="text-destructive">
+              Could not load your availability. Sign in as the venue owner and reload.
+            </p>
           ) : availability.length === 0 ? (
             <p className="text-muted-foreground">No availability blocks set. Your venue is available by default.</p>
           ) : (

@@ -2205,7 +2205,9 @@ export default function VenueProfileSetup() {
                         <Alert>
                           <AlertCircle className="h-4 w-4" />
                           <AlertDescription>
-                            Save your venue as a draft first to connect your calendars.
+                            Click "Save as Draft" below and you'll come straight back here, with your Airbnb,
+                            Booking.com and Google Calendar links ready to paste in. We need the venue to exist
+                            before we can attach a calendar to it.
                           </AlertDescription>
                         </Alert>
                       )}

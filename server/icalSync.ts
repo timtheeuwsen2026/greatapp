@@ -23,6 +23,10 @@ export type FeedSyncResult = {
   added: number;
   updated: number;
   removed: number;
+  /** Events outside the import window — history, or too far ahead to matter. */
+  skippedOutsideWindow?: number;
+  /** Events dropped at the per-feed ceiling. Surfaced, never silent. */
+  truncated?: number;
   error?: string;
 };
 
@@ -57,8 +61,41 @@ function inclusiveEnd(start: Date, exclusiveEnd: Date): Date {
   return stepped.getTime() < start.getTime() ? start : stepped;
 }
 
+/**
+ * How far ahead a venue's availability is worth knowing about. Nobody holds a
+ * venue three years out, and importing that far turns a long-lived calendar
+ * into thousands of irrelevant rows.
+ */
+export const IMPORT_HORIZON_MONTHS = 24;
+
+/**
+ * A ceiling on what one feed may write. Reached only by a calendar that is
+ * not really a booking calendar; the venue is told rather than left to wonder
+ * why later dates are missing.
+ */
+export const MAX_BLOCKS_PER_FEED = 1000;
+
+/** Rows per INSERT. One statement per event turned a first sync into minutes. */
+const INSERT_CHUNK = 200;
+
+/**
+ * The window worth importing: from today to the horizon.
+ *
+ * Someone connecting a personal Google Calendar brings a decade of history
+ * with them — a 1999 dentist appointment says nothing about whether the venue
+ * is free next August, and importing it cost six minutes and thousands of
+ * rows. An event that is running right now still counts, so the test is on
+ * the end date, not the start.
+ */
+export function withinImportWindow(start: Date, end: Date, now: Date): boolean {
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const horizon = new Date(today);
+  horizon.setUTCMonth(horizon.getUTCMonth() + IMPORT_HORIZON_MONTHS);
+  return end.getTime() >= today.getTime() && start.getTime() <= horizon.getTime();
+}
+
 /** Pulls one feed into venue_availability. Never throws — the result carries the error. */
-async function syncOneFeed(venueId: string, url: string): Promise<FeedSyncResult> {
+async function syncOneFeed(venueId: string, url: string, now = new Date()): Promise<FeedSyncResult> {
   const result: FeedSyncResult = { url, ok: false, added: 0, updated: 0, removed: 0 };
 
   let periods;
@@ -81,42 +118,44 @@ async function syncOneFeed(venueId: string, url: string): Promise<FeedSyncResult
   const byUid = new Map(existing.map((row) => [row.externalUid as string, row]));
   const seen = new Set<string>();
 
-  for (const period of periods) {
+  // Decide everything in memory first, then write in batches. Deciding and
+  // writing in the same loop meant one database round trip per event.
+  const toInsert: Array<typeof venueAvailability.$inferInsert> = [];
+  const toUpdate: Array<{ id: string; startDate: Date; endDate: Date; notes: string }> = [];
+
+  const relevant = periods
+    .map((period) => ({ ...period, end: inclusiveEnd(period.start, period.end) }))
+    .filter((period) => withinImportWindow(period.start, period.end, now))
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  result.skippedOutsideWindow = periods.length - relevant.length;
+  if (relevant.length > MAX_BLOCKS_PER_FEED) {
+    result.truncated = relevant.length - MAX_BLOCKS_PER_FEED;
+    relevant.length = MAX_BLOCKS_PER_FEED;
+  }
+
+  for (const period of relevant) {
     const uid = period.uid.slice(0, 512);
     seen.add(uid);
 
     const start = period.start;
-    const end = inclusiveEnd(period.start, period.end);
+    const end = period.end;
     const notes = period.summary
       ? `Imported from your calendar — ${period.summary}`
       : "Imported from your calendar";
 
     const current = byUid.get(uid);
     if (!current) {
-      // Upsert rather than insert. The hourly job and a venue pressing "Sync
-      // now" can land on the same feed at the same time; both would read no
-      // existing row and both would try to write one. The unique index would
-      // reject the loser and take the whole sync down with it.
-      await db
-        .insert(venueAvailability)
-        .values({
-          venueId,
-          startDate: start,
-          endDate: end,
-          status: "blocked",
-          source: "ical_import",
-          notes,
-          externalFeedUrl: url,
-          externalUid: uid,
-        })
-        .onConflictDoUpdate({
-          target: [venueAvailability.venueId, venueAvailability.externalFeedUrl, venueAvailability.externalUid],
-          // The unique index is partial, so the predicate has to be repeated
-          // here or Postgres cannot work out which index to arbitrate on.
-          targetWhere: isNotNull(venueAvailability.externalUid),
-          set: { startDate: start, endDate: end, notes, status: "blocked", updatedAt: new Date() },
-        });
-      result.added += 1;
+      toInsert.push({
+        venueId,
+        startDate: start,
+        endDate: end,
+        status: "blocked",
+        source: "ical_import",
+        notes,
+        externalFeedUrl: url,
+        externalUid: uid,
+      });
       continue;
     }
 
@@ -125,13 +164,40 @@ async function syncOneFeed(venueId: string, url: string): Promise<FeedSyncResult
       new Date(current.endDate).getTime() === end.getTime() &&
       current.notes === notes;
 
-    if (!unchanged) {
-      await db
-        .update(venueAvailability)
-        .set({ startDate: start, endDate: end, notes, status: "blocked", updatedAt: new Date() })
-        .where(eq(venueAvailability.id, current.id));
-      result.updated += 1;
-    }
+    if (!unchanged) toUpdate.push({ id: current.id, startDate: start, endDate: end, notes });
+  }
+
+  for (let index = 0; index < toInsert.length; index += INSERT_CHUNK) {
+    const chunk = toInsert.slice(index, index + INSERT_CHUNK);
+    // Upsert rather than insert. The hourly job and a venue pressing "Sync
+    // now" can land on the same feed at the same time; both would read no
+    // existing row and both would try to write one. The unique index would
+    // reject the loser and take the whole sync down with it.
+    await db
+      .insert(venueAvailability)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: [venueAvailability.venueId, venueAvailability.externalFeedUrl, venueAvailability.externalUid],
+        // The unique index is partial, so the predicate has to be repeated
+        // here or Postgres cannot work out which index to arbitrate on.
+        targetWhere: isNotNull(venueAvailability.externalUid),
+        set: {
+          startDate: sql`excluded.start_date`,
+          endDate: sql`excluded.end_date`,
+          notes: sql`excluded.notes`,
+          status: sql`excluded.status`,
+          updatedAt: new Date(),
+        },
+      });
+    result.added += chunk.length;
+  }
+
+  for (const row of toUpdate) {
+    await db
+      .update(venueAvailability)
+      .set({ startDate: row.startDate, endDate: row.endDate, notes: row.notes, status: "blocked", updatedAt: new Date() })
+      .where(eq(venueAvailability.id, row.id));
+    result.updated += 1;
   }
 
   // Anything the feed no longer lists has been cancelled at the source. Drop
@@ -248,7 +314,6 @@ export type VenueDateConflict = {
   startDate: string;
   endDate: string;
   source: string;
-  notes: string | null;
 };
 
 /**
@@ -272,13 +337,16 @@ export async function findVenueDateConflicts(
       eq(venueAvailability.status, "blocked"),
     ));
 
+  // Dates and where the block came from, never the note. An imported block
+  // carries the event's own title — "Riga", "Marek Tim" — and this answer
+  // goes to any creator who asks whether a venue is free. That a venue is
+  // busy is the venue's business to share; what it is busy doing is not.
   return blocks
     .filter((block) => rangesOverlap(startDate, endDate, block.startDate, block.endDate))
     .map((block) => ({
       startDate: new Date(block.startDate).toISOString(),
       endDate: new Date(block.endDate).toISOString(),
       source: block.source,
-      notes: block.notes,
     }));
 }
 

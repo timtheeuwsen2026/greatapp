@@ -26,7 +26,16 @@ type IcalSettings = {
   lastSyncError: string | null;
 };
 
-type FeedResult = { url: string; ok: boolean; added: number; updated: number; removed: number; error?: string };
+type FeedResult = {
+  url: string;
+  ok: boolean;
+  added: number;
+  updated: number;
+  removed: number;
+  skippedOutsideWindow?: number;
+  truncated?: number;
+  error?: string;
+};
 type SyncResult = { feeds: FeedResult[]; blocked: number };
 
 function describeSync(result: SyncResult | null): string | null {
@@ -39,6 +48,17 @@ function describeSync(result: SyncResult | null): string | null {
   if (added) parts.push(`${added} new`);
   if (removed) parts.push(`${removed} freed up`);
   return parts.join(" · ");
+}
+
+/** What the sync deliberately left out, so nobody wonders where it went. */
+function describeSkipped(result: SyncResult | null): string | null {
+  if (!result) return null;
+  const skipped = result.feeds.reduce((total, feed) => total + (feed.skippedOutsideWindow || 0), 0);
+  const truncated = result.feeds.reduce((total, feed) => total + (feed.truncated || 0), 0);
+  const parts: string[] = [];
+  if (skipped) parts.push(`${skipped} past or far-future event${skipped === 1 ? "" : "s"} ignored`);
+  if (truncated) parts.push(`${truncated} beyond the per-calendar limit not imported`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 /**
@@ -226,6 +246,13 @@ export function VenueIcalSync({ venueId }: { venueId: string }) {
             <p className="text-xs text-muted-foreground" data-testid="ical-sync-status">
               {describeSync(lastResult) || "Synced"}
               {settings?.lastSyncedAt && ` · last checked ${new Date(settings.lastSyncedAt).toLocaleString()}`}
+            </p>
+          )}
+
+          {describeSkipped(lastResult) && (
+            <p className="text-xs text-muted-foreground" data-testid="ical-sync-skipped">
+              {describeSkipped(lastResult)}. We only import from today up to two years ahead — a personal
+              calendar's history says nothing about whether your venue is free.
             </p>
           )}
         </CardContent>

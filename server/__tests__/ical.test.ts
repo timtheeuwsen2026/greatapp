@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseIcalBusyPeriods, buildIcalFeed, rangesOverlap } from "../ical";
+import { withinImportWindow, IMPORT_HORIZON_MONTHS } from "../icalSync";
 
 /** Wraps VEVENT bodies in a minimal calendar so the parser sees real input. */
 function calendar(...events: string[]): string {
@@ -192,5 +193,50 @@ describe("rangesOverlap", () => {
 
   it("does not claim an overlap it cannot verify", () => {
     expect(rangesOverlap("not a date", null, "2026-08-12", "2026-08-16")).toBe(false);
+  });
+});
+
+// Reported from production: a venue connected a personal Google Calendar with
+// fourteen years of history. The sync imported every event — a 1999 dentist
+// appointment among them — writing thousands of rows one statement at a time,
+// and taking six minutes. Availability only means anything from today
+// forward, so the window is the fix and the batching is the speed.
+
+describe("import window", () => {
+  const inWindow = withinImportWindow;
+
+  const now = new Date("2026-08-08T10:00:00.000Z");
+  const at = (iso: string) => new Date(iso);
+
+  it("ignores events that finished before today", () => {
+    expect(inWindow(at("1999-12-14"), at("1999-12-14"), now)).toBe(false);
+    expect(inWindow(at("2012-01-05"), at("2012-01-08"), now)).toBe(false);
+  });
+
+  it("keeps an event that is running right now", () => {
+    // Started before today but has not finished — the venue is busy.
+    expect(inWindow(at("2026-08-01"), at("2026-08-20"), now)).toBe(true);
+  });
+
+  it("keeps today itself", () => {
+    expect(inWindow(at("2026-08-08"), at("2026-08-08"), now)).toBe(true);
+  });
+
+  it("keeps a booking inside the horizon", () => {
+    expect(inWindow(at("2027-06-01"), at("2027-06-08"), now)).toBe(true);
+  });
+
+  it("ignores an event beyond the horizon", () => {
+    expect(inWindow(at("2029-01-01"), at("2029-01-05"), now)).toBe(false);
+  });
+
+  it("keeps the whole of a real booking calendar", () => {
+    // The shape that matters: a venue's actual bookings all survive.
+    const bookings = [
+      [at("2026-08-12"), at("2026-08-16")],
+      [at("2026-10-01"), at("2026-10-07")],
+      [at("2027-03-20"), at("2027-03-27")],
+    ];
+    expect(bookings.every(([start, end]) => inWindow(start, end, now))).toBe(true);
   });
 });

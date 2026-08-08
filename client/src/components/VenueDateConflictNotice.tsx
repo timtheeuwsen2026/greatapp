@@ -1,10 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CalendarCheck } from "lucide-react";
-
-type Conflict = { startDate: string; endDate: string; source: string; notes: string | null };
-type ConflictResponse = { available: boolean; conflicts: Conflict[] };
+import { useVenueDateConflicts, type VenueDateConflict } from "@/hooks/useVenueDateConflicts";
 
 function formatRange(startDate: string, endDate: string): string {
   const start = new Date(startDate);
@@ -28,35 +24,29 @@ function describeSource(source: string): string {
 /**
  * Whether the chosen venue is actually free on the chosen dates.
  *
- * The venue's imported calendars are the authority here — a date sold on
- * Airbnb this morning is blocked here by the next sync. Telling the creator
- * now costs them a click; finding out at handshake time costs them the plan.
+ * Shown on both the Dates step and the Venue step, because either one can be
+ * the thing that just changed. A creator who picks dates first and a venue
+ * second must hear about the clash on the venue screen, not at submit.
  */
 export function VenueDateConflictNotice({
   venueId,
   startDate,
   endDate,
+  /** Where to send them to fix it. The screen they are not currently on. */
+  resolution = "dates",
 }: {
   venueId?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  resolution?: "dates" | "venue";
 }) {
-  const enabled = !!venueId && !!startDate;
+  const { hasConflict, conflicts, isIdle, isError } = useVenueDateConflicts(venueId, startDate, endDate);
 
-  const { data } = useQuery<ConflictResponse>({
-    queryKey: ["/api/venues", venueId, "date-conflicts", startDate, endDate],
-    enabled,
-    queryFn: async () => {
-      const params = new URLSearchParams({ startDate: String(startDate) });
-      if (endDate) params.set("endDate", String(endDate));
-      const res = await apiRequest("GET", `/api/venues/${venueId}/date-conflicts?${params.toString()}`);
-      return res.json();
-    },
-  });
+  if (isIdle || isError) return null;
 
-  if (!enabled || !data) return null;
-
-  if (data.available) {
+  if (!hasConflict) {
+    // Only reassure once the answer is actually "yes, free".
+    if (!conflicts) return null;
     return (
       <Alert className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30" data-testid="venue-dates-available">
         <CalendarCheck className="h-4 w-4 text-green-600" />
@@ -70,18 +60,21 @@ export function VenueDateConflictNotice({
   return (
     <Alert variant="destructive" data-testid="venue-dates-conflict">
       <AlertTriangle className="h-4 w-4" />
-      <AlertTitle>The venue is not free on these dates</AlertTitle>
+      <AlertTitle>This venue is booked on your selected dates</AlertTitle>
       <AlertDescription>
         <ul className="mt-1 space-y-1">
-          {data.conflicts.map((conflict, index) => (
+          {conflicts.map((conflict: VenueDateConflict, index: number) => (
             <li key={index} data-testid={`venue-date-conflict-${index}`}>
               {formatRange(conflict.startDate, conflict.endDate)} — {describeSource(conflict.source)}
             </li>
           ))}
         </ul>
-        <p className="mt-2">
-          Pick different dates, or a different venue. You won't be able to send a handshake for these.
+        <p className="mt-2 font-medium">
+          {resolution === "dates"
+            ? "Go back to the Dates step to change your dates, or choose a different venue."
+            : "Choose a different venue, or go back to the Dates step to change your dates."}
         </p>
+        <p className="mt-1">You won't be able to continue until this is resolved.</p>
       </AlertDescription>
     </Alert>
   );

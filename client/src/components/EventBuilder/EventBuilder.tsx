@@ -58,6 +58,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
 import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
+import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import Navigation from "@/components/navigation";
 import { 
@@ -341,6 +342,11 @@ const eventBuilderSchema = z.object({
 type EventBuilderData = z.infer<typeof eventBuilderSchema>;
 
 // All available steps with their absolute IDs
+// Named because the venue/date clash gate has to know which two screens can
+// create it, and a bare 3 or 4 in that check would be a puzzle later.
+const DATES_STEP_ID = 3;
+const VENUE_STEP_ID = 4;
+
 const ALL_STEPS = [
   { id: 1, title: "Basic Info", icon: Info, description: "Title, description, and category" },
   { id: 2, title: "Media", icon: Image, description: "Photos and visual content" },
@@ -1079,7 +1085,31 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     loadData();
   }, [user?.id, draftId, draftLoaded, toast]);
 
+  // Both steps that can create the clash read the same answer as the gate
+  // below, so what the creator is told and what they are allowed to do can
+  // never drift apart.
+  const watchedVenueId = form.watch('selectedVenueId');
+  const watchedStartDate = form.watch('startDate');
+  const watchedEndDate = form.watch('endDate');
+  const { hasConflict: venueDatesClash } = useVenueDateConflicts(
+    watchedVenueId,
+    watchedStartDate ? new Date(watchedStartDate).toISOString() : null,
+    watchedEndDate ? new Date(watchedEndDate).toISOString() : null,
+  );
+
   const nextStep = async () => {
+    // A venue that is already booked on these dates cannot host this event.
+    // Refuse to carry the creator deeper into a plan that cannot happen —
+    // the Dates and Venue steps both show why, and either can be changed.
+    if (venueDatesClash && (currentStep === DATES_STEP_ID || currentStep === VENUE_STEP_ID)) {
+      toast({
+        title: "This venue is booked on your selected dates",
+        description: "Change your dates on the Dates step, or pick a different venue.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     // Find current position in activeSteps and move to next
     const currentIdx = activeSteps.findIndex(s => s.id === currentStep);
     if (currentIdx < activeSteps.length - 1) {
@@ -1648,7 +1678,20 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const handleSubmit = async (data: EventBuilderData) => {
     // Prevent duplicate submissions
     if (isPublishing) return;
-    
+
+    // The step gate should have caught this, but a creator can reach Terms by
+    // clicking the step rail, and the venue's calendar can change underneath
+    // a draft that has been open for a while.
+    if (venueDatesClash) {
+      toast({
+        title: "This venue is booked on your selected dates",
+        description: "Change your dates on the Dates step, or pick a different venue, then submit again.",
+        variant: "destructive",
+      });
+      setCurrentStep(VENUE_STEP_ID);
+      return;
+    }
+
     // Prevent submission if already submitted
     if (draftStatus === 'pending' || draftStatus === 'pending_approval') {
       toast({
@@ -3008,6 +3051,10 @@ function VenueStep({ form }: { form: any }) {
   const selectedVenueId = form.watch('selectedVenueId') ?? '';
   const manualVenuePhotos = form.watch('manualVenuePhotos') ?? [];
   const eventType = form.watch('type');
+  // The dates were chosen a step earlier. Picking a venue here is the other
+  // half of the same decision, so the clash has to surface here too.
+  const chosenStartDate = form.watch('startDate');
+  const chosenEndDate = form.watch('endDate');
 
   // Fetch both approved catalog venues AND user's own venues (including drafts)
   useEffect(() => {
@@ -3067,6 +3114,15 @@ function VenueStep({ form }: { form: any }) {
 
   return (
     <div className="space-y-6">
+      {/* A venue that is already booked on these dates cannot host this event.
+          Said here rather than at submit, when it is far more expensive. */}
+      <VenueDateConflictNotice
+        venueId={selectedVenueId}
+        startDate={chosenStartDate ? new Date(chosenStartDate).toISOString() : null}
+        endDate={chosenEndDate ? new Date(chosenEndDate).toISOString() : null}
+        resolution="venue"
+      />
+
       {/* Location Input */}
       <FormField
         control={form.control}

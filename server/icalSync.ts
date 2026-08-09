@@ -15,7 +15,7 @@ import { randomBytes } from "crypto";
 import { and, eq, inArray, isNotNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { venueAvailability, venues, experiences, venueContracts } from "../shared/schema";
-import { fetchIcalFeed, parseIcalBusyPeriods, rangesOverlap } from "./ical";
+import { fetchIcalFeed, parseIcalBusyPeriods, rangesOverlap, startOfUtcDay, lastDayTouched } from "./ical";
 
 export type FeedSyncResult = {
   url: string;
@@ -52,13 +52,18 @@ export async function ensureIcalExportToken(venueId: string): Promise<string> {
 }
 
 /**
- * An imported event's end is exclusive (DTEND is the checkout morning), but a
- * venue_availability block reads inclusively — "blocked 12th to 16th". Step
- * back one day so an import does not block a day the feed left free.
+ * The whole days an imported event covers.
+ *
+ * Blocks are stored on day boundaries because that is what availability
+ * means. Keeping the event's clock times instead meant a Google entry from
+ * 6am to 3pm on the 3rd was stored at 06:00, and a creator asking about "the
+ * 3rd" — which arrives as midnight — did not overlap it.
+ *
+ * lastDayTouched covers both an all-day event, whose DTEND is exclusive, and
+ * a timed one, whose DTEND is the real finish.
  */
-function inclusiveEnd(start: Date, exclusiveEnd: Date): Date {
-  const stepped = new Date(exclusiveEnd.getTime() - 86400000);
-  return stepped.getTime() < start.getTime() ? start : stepped;
+function importedBlockDays(start: Date, end: Date): { startDate: Date; endDate: Date } {
+  return { startDate: startOfUtcDay(start), endDate: lastDayTouched(start, end) };
 }
 
 /**
@@ -124,9 +129,9 @@ async function syncOneFeed(venueId: string, url: string, now = new Date()): Prom
   const toUpdate: Array<{ id: string; startDate: Date; endDate: Date; notes: string }> = [];
 
   const relevant = periods
-    .map((period) => ({ ...period, end: inclusiveEnd(period.start, period.end) }))
-    .filter((period) => withinImportWindow(period.start, period.end, now))
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
+    .map((period) => ({ ...period, ...importedBlockDays(period.start, period.end) }))
+    .filter((period) => withinImportWindow(period.startDate, period.endDate, now))
+    .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 
   result.skippedOutsideWindow = periods.length - relevant.length;
   if (relevant.length > MAX_BLOCKS_PER_FEED) {
@@ -138,8 +143,8 @@ async function syncOneFeed(venueId: string, url: string, now = new Date()): Prom
     const uid = period.uid.slice(0, 512);
     seen.add(uid);
 
-    const start = period.start;
-    const end = period.end;
+    const start = period.startDate;
+    const end = period.endDate;
     const notes = period.summary
       ? `Imported from your calendar — ${period.summary}`
       : "Imported from your calendar";
@@ -369,9 +374,13 @@ export async function blockVenueDatesForExperience(
 ): Promise<void> {
   if (!venueId || !experienceId || !startDate) return;
 
-  const start = new Date(startDate);
-  const end = endDate ? new Date(endDate) : start;
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+  const rawStart = new Date(startDate);
+  const rawEnd = endDate ? new Date(endDate) : rawStart;
+  if (Number.isNaN(rawStart.getTime()) || Number.isNaN(rawEnd.getTime())) return;
+
+  // Whole days, matching imported blocks, so both answer a date query alike.
+  const start = startOfUtcDay(rawStart);
+  const end = startOfUtcDay(rawEnd);
 
   const uid = `experience-${experienceId}`;
   const notes = title ? `Booked on Great. — ${title}` : "Booked on Great.";

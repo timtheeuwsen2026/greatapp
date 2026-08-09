@@ -315,10 +315,46 @@ export function buildIcalFeed(calendarName: string, events: IcalExportEvent[], s
 
 // ─── Overlap ────────────────────────────────────────────────────────────────
 
+/** The UTC day a moment falls on, as a day number. */
+export function utcDayNumber(value: Date | string): number {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return NaN;
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86400000);
+}
+
+/** Midnight UTC on the day a moment falls on. */
+export function startOfUtcDay(value: Date | string): Date {
+  const date = new Date(value);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
 /**
- * Whether two date ranges collide, treating each as [start, end] inclusive of
- * the end date. A stay ending the morning someone else arrives is still a
- * clash for a whole-property booking, which is what venues here take.
+ * The last day an event touches.
+ *
+ * Handles both kinds of calendar entry with one rule. An all-day event's DTEND
+ * is exclusive — 3rd to 6th means the 3rd, 4th and 5th — while a timed event's
+ * DTEND is the real finishing moment. Stepping back a millisecond before
+ * taking the day gives the right answer for both, and for an event that ends
+ * exactly at midnight.
+ */
+export function lastDayTouched(start: Date, end: Date): Date {
+  if (!(end instanceof Date) || Number.isNaN(end.getTime()) || end.getTime() <= start.getTime()) {
+    return startOfUtcDay(start);
+  }
+  const lastMoment = new Date(end.getTime() - 1);
+  const last = startOfUtcDay(lastMoment);
+  const first = startOfUtcDay(start);
+  return last.getTime() < first.getTime() ? first : last;
+}
+
+/**
+ * Whether two date ranges collide, compared by whole days.
+ *
+ * Availability is a day-level idea. A venue blocked 6am to 3pm on the 3rd is
+ * unavailable on the 3rd — comparing the underlying instants said otherwise,
+ * because a creator picking "the 3rd" sends midnight and midnight is not
+ * inside 6am-to-3pm. Both ends are inclusive: one group leaving the morning
+ * another arrives is still a clash for a venue taken whole.
  */
 export function rangesOverlap(
   aStart: Date | string,
@@ -326,10 +362,10 @@ export function rangesOverlap(
   bStart: Date | string,
   bEnd: Date | string | null | undefined,
 ): boolean {
-  const a1 = new Date(aStart).getTime();
-  const a2 = new Date(aEnd || aStart).getTime();
-  const b1 = new Date(bStart).getTime();
-  const b2 = new Date(bEnd || bStart).getTime();
+  const a1 = utcDayNumber(aStart);
+  const a2 = utcDayNumber(aEnd || aStart);
+  const b1 = utcDayNumber(bStart);
+  const b2 = utcDayNumber(bEnd || bStart);
   if ([a1, a2, b1, b2].some(Number.isNaN)) return false;
-  return a1 <= b2 && b1 <= a2;
+  return a1 <= Math.max(b1, b2) && b1 <= Math.max(a1, a2);
 }

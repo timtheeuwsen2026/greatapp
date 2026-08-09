@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseIcalBusyPeriods, buildIcalFeed, rangesOverlap } from "../ical";
+import { parseIcalBusyPeriods, buildIcalFeed, rangesOverlap, startOfUtcDay, lastDayTouched } from "../ical";
 import { withinImportWindow, IMPORT_HORIZON_MONTHS } from "../icalSync";
 
 /** Wraps VEVENT bodies in a minimal calendar so the parser sees real input. */
@@ -238,5 +238,82 @@ describe("import window", () => {
       [at("2027-03-20"), at("2027-03-27")],
     ];
     expect(bookings.every(([start, end]) => inWindow(start, end, now))).toBe(true);
+  });
+});
+
+// UAT: a venue blocked 6am–3pm on 3 September in Google Calendar, and the
+// platform still called the 3rd free. Blocks were stored with the event's
+// clock times, and a creator picking "the 3rd" sends midnight — midnight is
+// not inside 6am-to-3pm, so nothing overlapped. Availability is a day-level
+// idea and has to be compared as one.
+
+describe("whole-day blocks", () => {
+  const dayOf = (start: Date, end: Date) => ({
+    startDate: startOfUtcDay(start),
+    endDate: lastDayTouched(start, end),
+  });
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const blocks = (start: Date, end: Date, day: string) => {
+    const b = dayOf(start, end);
+    return rangesOverlap(day, day, b.startDate, b.endDate);
+  };
+
+  it("blocks the day a timed Google event sits on", () => {
+    const start = new Date("2026-09-03T06:00:00.000Z");
+    const end = new Date("2026-09-03T15:00:00.000Z");
+    expect(blocks(start, end, "2026-09-03")).toBe(true);
+    expect(blocks(start, end, "2026-09-02")).toBe(false);
+    expect(blocks(start, end, "2026-09-04")).toBe(false);
+  });
+
+  it("stores a timed event on day boundaries, not clock times", () => {
+    const { startDate, endDate } = dayOf(
+      new Date("2026-09-03T06:00:00.000Z"),
+      new Date("2026-09-03T15:00:00.000Z"),
+    );
+    expect(startDate.toISOString()).toBe("2026-09-03T00:00:00.000Z");
+    expect(endDate.toISOString()).toBe("2026-09-03T00:00:00.000Z");
+  });
+
+  it("keeps an all-day event's exclusive DTEND off the free day", () => {
+    // 3rd to 6th means the 3rd, 4th and 5th. The 6th is still sellable.
+    const { startDate, endDate } = dayOf(
+      new Date("2026-09-03T00:00:00.000Z"),
+      new Date("2026-09-06T00:00:00.000Z"),
+    );
+    expect(iso(startDate)).toBe("2026-09-03");
+    expect(iso(endDate)).toBe("2026-09-05");
+  });
+
+  it("covers both days of an overnight timed event", () => {
+    const start = new Date("2026-09-03T20:00:00.000Z");
+    const end = new Date("2026-09-04T10:00:00.000Z");
+    expect(blocks(start, end, "2026-09-03")).toBe(true);
+    expect(blocks(start, end, "2026-09-04")).toBe(true);
+    expect(blocks(start, end, "2026-09-05")).toBe(false);
+  });
+
+  it("treats an event ending exactly at midnight as the day before", () => {
+    const start = new Date("2026-09-03T10:00:00.000Z");
+    const end = new Date("2026-09-04T00:00:00.000Z");
+    expect(blocks(start, end, "2026-09-03")).toBe(true);
+    expect(blocks(start, end, "2026-09-04")).toBe(false);
+  });
+
+  it("catches a range that merely ends on the blocked day", () => {
+    // The old comparison missed this: the query's end was midnight, the
+    // block's start was 6am, so nothing overlapped.
+    const b = dayOf(new Date("2026-09-03T06:00:00.000Z"), new Date("2026-09-03T15:00:00.000Z"));
+    expect(rangesOverlap("2026-09-01", "2026-09-03", b.startDate, b.endDate)).toBe(true);
+    expect(rangesOverlap("2026-09-03", "2026-09-06", b.startDate, b.endDate)).toBe(true);
+    expect(rangesOverlap("2026-09-04", "2026-09-08", b.startDate, b.endDate)).toBe(false);
+  });
+
+  it("ignores the time of day on either side of the comparison", () => {
+    // A creator's picker and a venue's calendar need not agree on hours.
+    expect(rangesOverlap(
+      "2026-09-03T23:30:00.000Z", "2026-09-03T23:30:00.000Z",
+      "2026-09-03T00:15:00.000Z", "2026-09-03T00:15:00.000Z",
+    )).toBe(true);
   });
 });

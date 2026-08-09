@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, readableError } from "@/lib/queryClient";
 import { useVenueAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -308,7 +308,7 @@ function VenueDashboardContent() {
       setOfferForm(emptyVenueOfferForm());
       toast({ title: "Offer Submitted", description: "Your offer is awaiting admin approval. Once approved, the creator will be able to see and respond to it." });
     },
-    onError: () => toast({ title: "Error", description: "Failed to submit offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to submit offer"), variant: "destructive" }),
   });
 
   const handleSubmitOffer = () => {
@@ -367,7 +367,7 @@ function VenueDashboardContent() {
       queryClient.invalidateQueries({ queryKey: ["/api/venue/active-deals"] });
       toast({ title: "Offer Accepted", description: "The experience is now Live!" });
     },
-    onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to accept offer"), variant: "destructive" }),
   });
 
   const rejectOffer = useMutation({
@@ -376,7 +376,7 @@ function VenueDashboardContent() {
       queryClient.invalidateQueries({ queryKey: ["/api/venue/pending-offers"] });
       toast({ title: "Offer Rejected", description: "The creator has been notified." });
     },
-    onError: () => toast({ title: "Error", description: "Failed to reject offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to reject offer"), variant: "destructive" }),
   });
 
   const submitForReview = useMutation({

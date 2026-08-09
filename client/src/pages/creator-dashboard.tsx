@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
@@ -536,7 +536,7 @@ function CreatorDashboardContent() {
           : "The venue has been confirmed for your event."),
       });
     },
-    onError: () => toast({ title: "Error", description: "Failed to accept offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to accept offer"), variant: "destructive" }),
   });
 
   const declineVenueOffer = useMutation({
@@ -545,7 +545,7 @@ function CreatorDashboardContent() {
       queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-offers"] });
       toast({ title: "Offer Declined", description: "The venue owner has been notified." });
     },
-    onError: () => toast({ title: "Error", description: "Failed to decline offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to decline offer"), variant: "destructive" }),
   });
 
   // Promotion Deals — Digital Handshake for promoters/brands (Part 3)
@@ -596,7 +596,7 @@ function CreatorDashboardContent() {
           : "The partner has been notified.",
       });
     },
-    onError: () => toast({ title: "Error", description: "Failed to respond to counter offer", variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to respond to counter offer"), variant: "destructive" }),
   });
 
   // Delete draft mutation

@@ -59,6 +59,7 @@ import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
 import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
+import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import Navigation from "@/components/navigation";
 import { 
@@ -377,23 +378,6 @@ const isEventType = (t: string | undefined) => t === 'one-day';
 // Legacy STEPS constant for backward compatibility (will be replaced by dynamic steps)
 const STEPS = ALL_STEPS;
 
-/**
- * A chosen day as YYYY-MM-DD in the creator's own timezone.
- *
- * Availability is asked and answered in whole days. Sending an instant
- * instead meant a creator in UTC+5 clicking "27 October" asked the server
- * about the 26th — so a venue that had closed the 27th still read as free.
- */
-function calendarDate(value: Date | string | null | undefined): string | null {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 /** A YYYY-MM-DD from a Flash Deal link, as the form's Date. */
 function parsePrefillDate(value?: string): Date | undefined {
   if (!value) return undefined;
@@ -421,8 +405,10 @@ interface EventBuilderProps {
 // Client-side normalization to prevent bad payloads
 function normalizeDraftForSave(draft: any) {
   const copy = normalizeEventTripFields(draft);
-  if (copy.startDate) copy.startDate = new Date(copy.startDate).toISOString();
-  if (copy.endDate) copy.endDate = new Date(copy.endDate).toISOString();
+  // A trip runs "12 to 16 August" wherever it is read from, so these are
+  // anchored to the day rather than to the creator's local midnight.
+  if (copy.startDate) copy.startDate = toCalendarDateISO(copy.startDate);
+  if (copy.endDate) copy.endDate = toCalendarDateISO(copy.endDate);
   if (copy.mvgDeadline) copy.mvgDeadline = new Date(copy.mvgDeadline).toISOString();
   return copy;
 }
@@ -629,10 +615,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       const mappedData = {
         ...normalizedData,
         // Handle date fields safely - ensure proper serialization for all date types
-        startDate: normalizedData.startDate ? (typeof normalizedData.startDate === 'string' ? normalizedData.startDate : 
-                   (normalizedData.startDate instanceof Date ? normalizedData.startDate.toISOString() : null)) : null,
-        endDate: normalizedData.endDate ? (typeof normalizedData.endDate === 'string' ? normalizedData.endDate : 
-                 (normalizedData.endDate instanceof Date ? normalizedData.endDate.toISOString() : null)) : null,
+        startDate: toCalendarDateISO(normalizedData.startDate),
+        endDate: toCalendarDateISO(normalizedData.endDate),
         mvgDeadline: normalizedData.mvgDeadline ? (typeof normalizedData.mvgDeadline === 'string' ? normalizedData.mvgDeadline : 
                      (normalizedData.mvgDeadline instanceof Date ? normalizedData.mvgDeadline.toISOString() : null)) : null,
         // Map MVG form fields to draft schema fields
@@ -731,10 +715,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       const mappedData = {
         ...data,
         // Handle date fields safely - ensure proper serialization for all date types
-        startDate: data.startDate ? (typeof data.startDate === 'string' ? data.startDate : 
-                   (data.startDate instanceof Date ? data.startDate.toISOString() : null)) : null,
-        endDate: data.endDate ? (typeof data.endDate === 'string' ? data.endDate : 
-                 (data.endDate instanceof Date ? data.endDate.toISOString() : null)) : null,
+        startDate: toCalendarDateISO(data.startDate),
+        endDate: toCalendarDateISO(data.endDate),
         mvgDeadline: data.mvgDeadline ? (typeof data.mvgDeadline === 'string' ? data.mvgDeadline : 
                      (data.mvgDeadline instanceof Date ? data.mvgDeadline.toISOString() : null)) : null,
         // Map MVG form fields to draft schema fields
@@ -1110,8 +1092,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const watchedEndDate = form.watch('endDate');
   const { hasConflict: venueDatesClash } = useVenueDateConflicts(
     watchedVenueId,
-    calendarDate(watchedStartDate),
-    calendarDate(watchedEndDate),
+    toDateOnly(watchedStartDate),
+    toDateOnly(watchedEndDate),
   );
 
   const nextStep = async () => {
@@ -2775,8 +2757,8 @@ function DatesStep({ form }: { form: any }) {
             Airbnb this morning is blocked here by the next sync. */}
         <VenueDateConflictNotice
           venueId={selectedVenueId}
-          startDate={calendarDate(startDate)}
-          endDate={calendarDate(endDate)}
+          startDate={toDateOnly(startDate)}
+          endDate={toDateOnly(endDate)}
         />
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3135,8 +3117,8 @@ function VenueStep({ form }: { form: any }) {
           Said here rather than at submit, when it is far more expensive. */}
       <VenueDateConflictNotice
         venueId={selectedVenueId}
-        startDate={calendarDate(chosenStartDate)}
-        endDate={calendarDate(chosenEndDate)}
+        startDate={toDateOnly(chosenStartDate)}
+        endDate={toDateOnly(chosenEndDate)}
         resolution="venue"
       />
 

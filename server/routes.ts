@@ -48,6 +48,7 @@ import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
+import { toCalendarDate } from "@shared/calendarDates";
 import {
   ensureIcalExportToken,
   syncVenueIcalFeeds,
@@ -2596,15 +2597,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       parsedBody.monetisationMode = "creator_led";
       parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
 
-      // Convert date strings to valid Date objects or null if invalid
-      if (parsedBody.startDate) {
-        const date = new Date(parsedBody.startDate);
-        parsedBody.startDate = !isNaN(date.getTime()) ? date : null;
-      }
-      if (parsedBody.endDate) {
-        const date = new Date(parsedBody.endDate);
-        parsedBody.endDate = !isNaN(date.getTime()) ? date : null;
-      }
+      // A trip's start and end are calendar days, not moments, so they are
+      // anchored to the day whatever timezone the browser sent them from.
+      // Without this a creator east of UTC stored the day before, and the
+      // venue's calendar held the wrong date.
+      if (parsedBody.startDate) parsedBody.startDate = toCalendarDate(parsedBody.startDate);
+      if (parsedBody.endDate) parsedBody.endDate = toCalendarDate(parsedBody.endDate);
       if (parsedBody.mvgDeadline) {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
@@ -2764,15 +2762,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Normalize date fields before validation
       const parsedBody = { ...req.body };
       
-      // Convert date strings to valid Date objects or null if invalid
-      if (parsedBody.startDate) {
-        const date = new Date(parsedBody.startDate);
-        parsedBody.startDate = !isNaN(date.getTime()) ? date : null;
-      }
-      if (parsedBody.endDate) {
-        const date = new Date(parsedBody.endDate);
-        parsedBody.endDate = !isNaN(date.getTime()) ? date : null;
-      }
+      // A trip's start and end are calendar days, not moments, so they are
+      // anchored to the day whatever timezone the browser sent them from.
+      // Without this a creator east of UTC stored the day before, and the
+      // venue's calendar held the wrong date.
+      if (parsedBody.startDate) parsedBody.startDate = toCalendarDate(parsedBody.startDate);
+      if (parsedBody.endDate) parsedBody.endDate = toCalendarDate(parsedBody.endDate);
       if (parsedBody.mvgDeadline) {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
@@ -2850,15 +2845,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Normalize date fields before validation
       const parsedBody = { ...req.body };
       
-      // Convert date strings to valid Date objects or null if invalid
-      if (parsedBody.startDate) {
-        const date = new Date(parsedBody.startDate);
-        parsedBody.startDate = !isNaN(date.getTime()) ? date : null;
-      }
-      if (parsedBody.endDate) {
-        const date = new Date(parsedBody.endDate);
-        parsedBody.endDate = !isNaN(date.getTime()) ? date : null;
-      }
+      // A trip's start and end are calendar days, not moments, so they are
+      // anchored to the day whatever timezone the browser sent them from.
+      // Without this a creator east of UTC stored the day before, and the
+      // venue's calendar held the wrong date.
+      if (parsedBody.startDate) parsedBody.startDate = toCalendarDate(parsedBody.startDate);
+      if (parsedBody.endDate) parsedBody.endDate = toCalendarDate(parsedBody.endDate);
       if (parsedBody.mvgDeadline) {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
@@ -3063,15 +3055,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const parsedBody = { ...req.body };
       parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
       
-      // Convert date strings to valid Date objects or null if invalid
-      if (parsedBody.startDate) {
-        const date = new Date(parsedBody.startDate);
-        parsedBody.startDate = !isNaN(date.getTime()) ? date : null;
-      }
-      if (parsedBody.endDate) {
-        const date = new Date(parsedBody.endDate);
-        parsedBody.endDate = !isNaN(date.getTime()) ? date : null;
-      }
+      // A trip's start and end are calendar days, not moments, so they are
+      // anchored to the day whatever timezone the browser sent them from.
+      // Without this a creator east of UTC stored the day before, and the
+      // venue's calendar held the wrong date.
+      if (parsedBody.startDate) parsedBody.startDate = toCalendarDate(parsedBody.startDate);
+      if (parsedBody.endDate) parsedBody.endDate = toCalendarDate(parsedBody.endDate);
       if (parsedBody.mvgDeadline) {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
@@ -5747,15 +5736,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Normalize date fields before saving
       const parsedBody = { ...req.body };
       
-      // Convert date strings to valid Date objects or null if invalid
-      if (parsedBody.startDate) {
-        const date = new Date(parsedBody.startDate);
-        parsedBody.startDate = !isNaN(date.getTime()) ? date : null;
-      }
-      if (parsedBody.endDate) {
-        const date = new Date(parsedBody.endDate);
-        parsedBody.endDate = !isNaN(date.getTime()) ? date : null;
-      }
+      // A trip's start and end are calendar days, not moments, so they are
+      // anchored to the day whatever timezone the browser sent them from.
+      // Without this a creator east of UTC stored the day before, and the
+      // venue's calendar held the wrong date.
+      if (parsedBody.startDate) parsedBody.startDate = toCalendarDate(parsedBody.startDate);
+      if (parsedBody.endDate) parsedBody.endDate = toCalendarDate(parsedBody.endDate);
       if (parsedBody.mvgDeadline) {
         const date = new Date(parsedBody.mvgDeadline);
         parsedBody.mvgDeadline = !isNaN(date.getTime()) ? date : null;
@@ -5780,10 +5766,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updateData = { ...req.body };
       
       // Convert date strings to valid Date objects or null if invalid
-      if (updateData.startDate) {
-        const date = new Date(updateData.startDate);
-        updateData.startDate = !isNaN(date.getTime()) ? date : null;
-      }
+        if (updateData.startDate) updateData.startDate = toCalendarDate(updateData.startDate);
       if (updateData.endDate) {
         const date = new Date(updateData.endDate);
         updateData.endDate = !isNaN(date.getTime()) ? date : null;

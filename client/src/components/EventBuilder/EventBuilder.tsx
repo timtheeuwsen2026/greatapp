@@ -377,6 +377,23 @@ const isEventType = (t: string | undefined) => t === 'one-day';
 // Legacy STEPS constant for backward compatibility (will be replaced by dynamic steps)
 const STEPS = ALL_STEPS;
 
+/**
+ * A chosen day as YYYY-MM-DD in the creator's own timezone.
+ *
+ * Availability is asked and answered in whole days. Sending an instant
+ * instead meant a creator in UTC+5 clicking "27 October" asked the server
+ * about the 26th — so a venue that had closed the 27th still read as free.
+ */
+function calendarDate(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 /** A YYYY-MM-DD from a Flash Deal link, as the form's Date. */
 function parsePrefillDate(value?: string): Date | undefined {
   if (!value) return undefined;
@@ -1093,8 +1110,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const watchedEndDate = form.watch('endDate');
   const { hasConflict: venueDatesClash } = useVenueDateConflicts(
     watchedVenueId,
-    watchedStartDate ? new Date(watchedStartDate).toISOString() : null,
-    watchedEndDate ? new Date(watchedEndDate).toISOString() : null,
+    calendarDate(watchedStartDate),
+    calendarDate(watchedEndDate),
   );
 
   const nextStep = async () => {
@@ -2758,8 +2775,8 @@ function DatesStep({ form }: { form: any }) {
             Airbnb this morning is blocked here by the next sync. */}
         <VenueDateConflictNotice
           venueId={selectedVenueId}
-          startDate={startDate ? new Date(startDate).toISOString() : null}
-          endDate={endDate ? new Date(endDate).toISOString() : null}
+          startDate={calendarDate(startDate)}
+          endDate={calendarDate(endDate)}
         />
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3118,8 +3135,8 @@ function VenueStep({ form }: { form: any }) {
           Said here rather than at submit, when it is far more expensive. */}
       <VenueDateConflictNotice
         venueId={selectedVenueId}
-        startDate={chosenStartDate ? new Date(chosenStartDate).toISOString() : null}
-        endDate={chosenEndDate ? new Date(chosenEndDate).toISOString() : null}
+        startDate={calendarDate(chosenStartDate)}
+        endDate={calendarDate(chosenEndDate)}
         resolution="venue"
       />
 

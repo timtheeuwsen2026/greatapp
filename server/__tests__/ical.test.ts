@@ -317,3 +317,55 @@ describe("whole-day blocks", () => {
     )).toBe(true);
   });
 });
+
+// A subscribed calendar polls the feed on its own schedule. Stamping "now"
+// on every response told it every booking had just been edited, every time.
+
+describe("a feed only changes when the booking does", () => {
+  it("uses the booking's own last-changed time", () => {
+    const changedAt = new Date("2026-08-01T09:30:00.000Z");
+    const feed = buildIcalFeed("Venue", [{
+      uid: "experience-1@greatexperiences.ai",
+      start: new Date("2026-08-10T00:00:00.000Z"),
+      end: new Date("2026-08-11T00:00:00.000Z"),
+      summary: "Yoga Training Soft",
+      stamp: changedAt,
+    }], new Date("2026-08-09T16:00:00.000Z"));
+
+    expect(feed).toContain("DTSTAMP:20260801T093000Z");
+    expect(feed).not.toContain("DTSTAMP:20260809T160000Z");
+  });
+
+  it("is byte-identical across two fetches when nothing changed", () => {
+    const event = {
+      uid: "experience-1@greatexperiences.ai",
+      start: new Date("2026-08-10T00:00:00.000Z"),
+      end: new Date("2026-08-11T00:00:00.000Z"),
+      summary: "Yoga Training Soft",
+      stamp: new Date("2026-08-01T09:30:00.000Z"),
+    };
+    const first = buildIcalFeed("Venue", [event], new Date("2026-08-09T16:00:00.000Z"));
+    const second = buildIcalFeed("Venue", [event], new Date("2026-08-09T18:45:00.000Z"));
+    expect(first).toBe(second);
+  });
+
+  it("still stamps something when the booking has no recorded change", () => {
+    const feed = buildIcalFeed("Venue", [{
+      uid: "u", start: new Date("2026-08-10T00:00:00.000Z"),
+      end: new Date("2026-08-11T00:00:00.000Z"), summary: "Booked", stamp: null,
+    }], new Date("2026-08-09T16:00:00.000Z"));
+    expect(feed).toContain("DTSTAMP:20260809T160000Z");
+  });
+
+  it("carries the title through to the subscriber", () => {
+    // The reported symptom was an untitled entry. SUMMARY has to survive
+    // whatever the trip is called.
+    for (const title of ["Yoga Training Soft", "Surf, yoga; and cold plunge", "Café Rëtreat 2026"]) {
+      const feed = buildIcalFeed("Venue", [{
+        uid: "u", start: new Date("2026-08-10T00:00:00.000Z"),
+        end: new Date("2026-08-11T00:00:00.000Z"), summary: title,
+      }], new Date("2026-08-09T16:00:00.000Z"));
+      expect(parseIcalBusyPeriods(feed)[0].summary).toBe(title);
+    }
+  });
+});

@@ -273,6 +273,11 @@ export type IcalExportEvent = {
   summary: string;
   description?: string | null;
   location?: string | null;
+  /**
+   * When this event last changed. Stamping "now" on every fetch told the
+   * subscriber every booking had just been edited, every time it polled.
+   */
+  stamp?: Date | null;
 };
 
 /**
@@ -297,7 +302,10 @@ export function buildIcalFeed(calendarName: string, events: IcalExportEvent[], s
 
     lines.push("BEGIN:VEVENT");
     lines.push(foldLine(`UID:${escapeText(event.uid)}`));
-    lines.push(`DTSTAMP:${formatIcalDateTime(stampedAt)}`);
+    const stamp = event.stamp instanceof Date && !Number.isNaN(event.stamp.getTime())
+      ? event.stamp
+      : stampedAt;
+    lines.push(`DTSTAMP:${formatIcalDateTime(stamp)}`);
     lines.push(`DTSTART;VALUE=DATE:${formatIcalDate(event.start)}`);
     lines.push(`DTEND;VALUE=DATE:${formatIcalDate(end)}`);
     lines.push(foldLine(`SUMMARY:${escapeText(event.summary)}`));

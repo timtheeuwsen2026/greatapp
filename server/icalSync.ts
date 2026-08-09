@@ -443,6 +443,7 @@ export async function getConfirmedVenueEvents(venueId: string) {
       status: experiences.status,
       location: experiences.location,
       maxParticipants: experiences.maxParticipants,
+      updatedAt: experiences.updatedAt,
     })
     .from(venueContracts)
     .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))

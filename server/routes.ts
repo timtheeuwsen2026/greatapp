@@ -8660,13 +8660,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const start = new Date(event.startDate as any);
           const end = event.endDate ? new Date(event.endDate as any) : start;
           return {
-            uid: `experience-${event.id}@great`,
+            uid: `experience-${event.id}@greatexperiences.ai`,
             start,
             // DTEND is exclusive: a stay through the 16th ends on the 17th.
             end: new Date(end.getTime() + 86400000),
             summary: event.title || "Booked",
             description: `Confirmed on Great.${event.maxParticipants ? ` Up to ${event.maxParticipants} guests.` : ""}`,
             location: event.location || venue.location || null,
+            // The booking's own last change, so a subscriber only sees a
+            // difference when something actually changed.
+            stamp: (event as any).updatedAt ? new Date((event as any).updatedAt) : null,
           };
         }),
         new Date(),

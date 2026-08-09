@@ -41,6 +41,14 @@ interface VenueAvailabilityProps {
   venueId: string;
 }
 
+/** A Date as the YYYY-MM-DD the person actually clicked, in their own timezone. */
+function calendarDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -128,8 +136,12 @@ export default function VenueAvailability({ venueId }: VenueAvailabilityProps) {
     // One click is one day. Closing off a single date is ordinary, and the
     // picker leaves `to` empty until a second date is chosen.
     createBlockMutation.mutate({
-      startDate: dateRange.from.toISOString(),
-      endDate: (dateRange.to ?? dateRange.from).toISOString(),
+      // The calendar date the venue picked, not the instant it maps to.
+      // toISOString() converts local midnight to UTC, so someone in UTC+5
+      // blocking the 13th stored "12th 19:00" — and the platform then read
+      // that as the 12th, leaving the 22nd bookable on a week they closed.
+      startDate: calendarDate(dateRange.from),
+      endDate: calendarDate(dateRange.to ?? dateRange.from),
       status: blockStatus,
       source: "manual",
       notes: notes || undefined,

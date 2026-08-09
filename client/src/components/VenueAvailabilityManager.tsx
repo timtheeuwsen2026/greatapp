@@ -103,8 +103,10 @@ export function VenueAvailabilityManager({ venueId }: VenueAvailabilityManagerPr
       return;
     }
     createMutation.mutate({
-      startDate: new Date(startDate).toISOString(),
-      endDate: new Date(endDate).toISOString(),
+      // These come from <input type="date"> as YYYY-MM-DD. Passing them
+      // through Date().toISOString() shifted them by the local offset.
+      startDate,
+      endDate,
       status,
       source: 'manual',
       notes,

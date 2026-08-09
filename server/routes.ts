@@ -47,7 +47,7 @@ import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } 
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
-import { buildIcalFeed } from "./ical";
+import { buildIcalFeed, startOfUtcDay } from "./ical";
 import {
   ensureIcalExportToken,
   syncVenueIcalFeeds,
@@ -8433,8 +8433,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // owns them; a caller forging one could overwrite a real booking.
         .omit({ externalFeedUrl: true, externalUid: true, source: true })
         .extend({
-          startDate: z.coerce.date(),
-          endDate: z.coerce.date(),
+          // A block covers whole days. Anchoring to UTC midnight keeps a
+          // hand-made block comparable with an imported one, whatever
+          // timezone the browser sent it from.
+          startDate: z.coerce.date().transform(startOfUtcDay),
+          endDate: z.coerce.date().transform(startOfUtcDay),
         })
         // Inclusive: a block from the 15th to the 15th is one day, which is a
         // perfectly ordinary thing for a venue to close off. Requiring a
@@ -8500,8 +8503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Drizzle ISO strings where its timestamp columns want Dates.
       const updateSchema = z
         .object({
-          startDate: z.coerce.date().optional(),
-          endDate: z.coerce.date().optional(),
+          startDate: z.coerce.date().transform(startOfUtcDay).optional(),
+          endDate: z.coerce.date().transform(startOfUtcDay).optional(),
           status: z.enum(["available", "blocked"]).optional(),
           notes: z.string().max(2000).nullable().optional(),
         })

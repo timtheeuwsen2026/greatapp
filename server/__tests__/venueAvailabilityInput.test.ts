@@ -96,3 +96,52 @@ describe("venue availability input", () => {
     }).success).toBe(false);
   });
 });
+
+// UAT: a venue in UTC+5 blocked 13-22 September. The dialog sent local
+// midnight as an instant, so it stored "12 Sept 19:00Z" and the platform
+// blocked 12-21 instead — leaving the 22nd bookable on a week the venue
+// had closed, and blocking the 12th which they never touched.
+
+import { startOfUtcDay } from "../ical";
+
+const dayAnchoredSchema = insertVenueAvailabilitySchema
+  .omit({ externalFeedUrl: true, externalUid: true, source: true })
+  .extend({
+    startDate: z.coerce.date().transform(startOfUtcDay),
+    endDate: z.coerce.date().transform(startOfUtcDay),
+  })
+  .refine((data) => data.startDate <= data.endDate, {
+    message: "End date cannot be before start date",
+  });
+
+describe("manual blocks cover whole days", () => {
+  const base = { venueId: "venue-1", status: "blocked", notes: null };
+
+  it("anchors a plain calendar date to UTC midnight", () => {
+    const parsed = dayAnchoredSchema.parse({ ...base, startDate: "2026-09-13", endDate: "2026-09-22" });
+    expect(parsed.startDate.toISOString()).toBe("2026-09-13T00:00:00.000Z");
+    expect(parsed.endDate.toISOString()).toBe("2026-09-22T00:00:00.000Z");
+  });
+
+  it("pulls a UTC+5 local-midnight instant back onto its own day", () => {
+    // What the old dialog sent for "13 September" from Asia/Karachi.
+    const parsed = dayAnchoredSchema.parse({
+      ...base, startDate: "2026-09-12T19:00:00.000Z", endDate: "2026-09-21T19:00:00.000Z",
+    });
+    expect(parsed.startDate.toISOString()).toBe("2026-09-12T00:00:00.000Z");
+    expect(parsed.endDate.toISOString()).toBe("2026-09-21T00:00:00.000Z");
+  });
+
+  it("keeps a date-only string on the day the venue clicked", () => {
+    // The fix: the client now sends the calendar date, so no shift happens.
+    for (const day of ["2026-09-13", "2026-01-01", "2026-12-31"]) {
+      expect(dayAnchoredSchema.parse({ ...base, startDate: day, endDate: day })
+        .startDate.toISOString().slice(0, 10)).toBe(day);
+    }
+  });
+
+  it("still allows a single-day block", () => {
+    const parsed = dayAnchoredSchema.parse({ ...base, startDate: "2026-09-13", endDate: "2026-09-13" });
+    expect(parsed.startDate.getTime()).toBe(parsed.endDate.getTime());
+  });
+});

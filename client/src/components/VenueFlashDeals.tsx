@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, readableError } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -81,7 +81,7 @@ export function VenueFlashDeals({ venues }: { venues: VenueOption[] }) {
       resetForm();
     },
     onError: (error: any) => {
-      const message = String(error?.message || "Could not post that deal");
+      const message = readableError(error, "Could not post that deal");
       // A date clash is the venue's to fix, so keep it in the form rather than
       // flashing it past in a toast.
       if (/blocked on your calendar/i.test(message)) setConflictMessage(message);

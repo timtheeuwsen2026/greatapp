@@ -17,6 +17,31 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+/**
+ * The sentence a person should read, pulled out of an apiRequest failure.
+ *
+ * Errors carry the whole response body so callers can inspect it, which meant
+ * a venue posting a flash deal on blocked dates was shown
+ * `409: {"message":"Those dates are blocked...","conflicts":[...]}` — the
+ * server's explanation was in there, wrapped in JSON nobody should have to
+ * read.
+ */
+export function readableError(error: unknown, fallback = "Something went wrong"): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  if (!raw) return fallback;
+
+  // apiRequest formats failures as "<status>: <body>".
+  const body = raw.replace(/^\d{3}:\s*/, "").trim();
+  try {
+    const parsed = JSON.parse(body);
+    const message = parsed?.message ?? parsed?.error;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  } catch {
+    // Not JSON — the body was already a sentence.
+  }
+  return body || fallback;
+}
+
 export async function apiRequest(
   method: string,
   url: string,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, readableError } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -111,7 +111,7 @@ export function VenueIcalSync({ venueId }: { venueId: string }) {
         : { title: "Calendars saved and synced" });
     },
     onError: (error: any) => {
-      toast({ title: "Could not save your calendars", description: error?.message, variant: "destructive" });
+      toast({ title: "Could not save your calendars", description: readableError(error), variant: "destructive" });
     },
   });
 

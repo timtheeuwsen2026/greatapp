@@ -902,6 +902,42 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  /**
+   * Invitations the creator has emailed to venues that are not on the platform
+   * yet, and which nobody has answered.
+   *
+   * These are not bids — there is no venue account behind them and nothing for
+   * the creator to accept. They exist so a creator can see that an invitation
+   * is out and waiting, rather than wondering whether it sent at all.
+   */
+  async getPendingVenueInvitesForCreator(creatorId: string): Promise<any[]> {
+    const rows = await db.select({ invite: venueInvites, experience: experiences })
+      .from(venueInvites)
+      .innerJoin(experiences, eq(venueInvites.experienceId, experiences.id))
+      .where(and(
+        eq(venueInvites.creatorId, creatorId),
+        eq(venueInvites.status, "pending"),
+      ))
+      .orderBy(desc(venueInvites.createdAt));
+
+    return rows.map(({ invite, experience }) => ({
+      id: invite.id,
+      experienceId: experience.id,
+      experienceTitle: experience.title,
+      startDate: experience.startDate,
+      endDate: experience.endDate,
+      venueName: invite.venueName || invite.contactName || invite.email,
+      contactName: invite.contactName,
+      email: invite.email,
+      proposedModel: invite.proposedModel,
+      proposedValue: invite.proposedValue != null ? Number(invite.proposedValue) : null,
+      currency: invite.currency || experience.currency || "eur",
+      status: invite.status,
+      sentAt: invite.createdAt,
+      expiresAt: invite.expiresAt,
+    }));
+  }
+
   async getAcceptedVenueOffersForCreator(creatorId: string): Promise<any[]> {
     // Returns all accepted offers for experiences the creator owns — used to show confirmed venue deals
     const creatorExperiences = await this.getExperiencesByCreator(creatorId);
@@ -4757,7 +4793,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAdminDealLedger(): Promise<any[]> {
-    const [venueRows, venueOfferRows, promotionRows, bookingRows, payoutRows] = await Promise.all([
+    const [venueRows, venueOfferRows, venueInviteRows, promotionRows, bookingRows, payoutRows] = await Promise.all([
       db.select({ contract: venueContracts, experience: experiences, venue: venues })
         .from(venueContracts)
         .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
@@ -4768,6 +4804,12 @@ export class DatabaseStorage implements IStorage {
         .from(venueOffers)
         .innerJoin(experiences, eq(venueOffers.experienceId, experiences.id))
         .innerJoin(venues, eq(venueOffers.venueId, venues.id)),
+      // An emailed invite to a venue that is not on the platform yet. It has
+      // no contract and no offer until the venue claims it, so without this
+      // the ledger showed nothing at all between sending and acceptance.
+      db.select({ invite: venueInvites, experience: experiences })
+        .from(venueInvites)
+        .innerJoin(experiences, eq(venueInvites.experienceId, experiences.id)),
       db.select({ deal: promotionDeals, experience: experiences, partner: users })
         .from(promotionDeals)
         .innerJoin(experiences, eq(promotionDeals.experienceId, experiences.id))
@@ -4784,6 +4826,7 @@ export class DatabaseStorage implements IStorage {
     const creatorIds = Array.from(new Set([
       ...venueRows.map((row) => row.contract.creatorId),
       ...venueOfferRows.map((row) => row.experience.creatorId),
+      ...venueInviteRows.map((row) => row.invite.creatorId),
       ...promotionRows.map((row) => row.deal.creatorId),
       ...bookingRows.map((row) => row.experience.creatorId),
       ...payoutRows.map((row) => row.experience.creatorId),
@@ -4897,6 +4940,50 @@ export class DatabaseStorage implements IStorage {
         },
       }));
 
+    // A claimed invite becomes a contract, and the contract row above says it
+    // better. Only show invites still waiting on the venue.
+    const claimedInviteIds = new Set(
+      venueInviteRows.filter(({ invite }) => invite.claimedVenueId).map(({ invite }) => invite.id),
+    );
+    const venueInviteLedger = venueInviteRows
+      .filter(({ invite }) => !claimedInviteIds.has(invite.id))
+      .map(({ invite, experience }) => ({
+        id: invite.id,
+        contractType: "venue",
+        dealType: invite.proposedModel || "access_only",
+        status: invite.status || "pending",
+        terms: invite.proposedValue != null
+          ? { proposedValue: Number(invite.proposedValue), currency: invite.currency || "eur" }
+          : {},
+        currency: normalizeCurrency(invite.currency || experience.currency),
+        acceptedAt: invite.respondedAt || invite.updatedAt || invite.createdAt,
+        updatedAt: invite.updatedAt,
+        experience: { id: experience.id, title: experience.title },
+        creator: creatorSummary(invite.creatorId),
+        counterparty: {
+          id: invite.claimedVenueId || null,
+          name: invite.venueName || invite.contactName || invite.email,
+          email: invite.email,
+          role: "venue",
+        },
+        negotiation: {
+          isCountered: false,
+          // Sent, delivered, and nobody on our side can move it forward.
+          pendingActionBy: invite.status === "pending" ? "venue" : null,
+          originalTerms: {},
+          currentTerms: {},
+          declineReason: invite.declineReason || null,
+          rounds: [{
+            from: "creator",
+            status: invite.status || "pending",
+            model: invite.proposedModel || null,
+            terms: invite.proposedValue != null ? { proposedValue: Number(invite.proposedValue) } : {},
+            note: "Invitation emailed to the venue",
+            at: invite.createdAt,
+          }],
+        },
+      }));
+
     const promotionLedger = promotionRows.map(({ deal, experience, partner }) => ({
       id: deal.id,
       contractType: "promotion",
@@ -4988,6 +5075,7 @@ export class DatabaseStorage implements IStorage {
     return [
       ...venueLedger,
       ...venueOfferLedger,
+      ...venueInviteLedger,
       ...promotionLedger,
       ...bookingLedger,
       ...payoutLedger,

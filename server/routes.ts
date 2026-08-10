@@ -13730,6 +13730,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Invitations the creator emailed to off-platform venues and is still
+  // waiting on. They carry no accept button — only the venue can move them.
+  app.get('/api/creator/venue-invites', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+      res.json(await storage.getPendingVenueInvitesForCreator(userId));
+    } catch (err: any) {
+      console.error('Error fetching creator venue invites:', err);
+      res.status(500).json({ message: 'Failed to fetch venue invites' });
+    }
+  });
+
   // GET /api/creator/venue-offers/accepted
   // Creator retrieves all accepted (confirmed) venue deals — shows deal terms after acceptance.
   app.get('/api/creator/venue-offers/accepted', isAuthenticated, async (req: any, res) => {

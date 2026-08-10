@@ -3,6 +3,7 @@ import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
+import { getVenueDealLabel } from "@shared/venueDealModels";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -464,6 +465,13 @@ function CreatorDashboardContent() {
   });
 
   // Incoming venue bids for open events (Reverse Handshake)
+  // Invitations this creator has emailed out and is still waiting on. They
+  // are not offers — nobody has replied yet — so they are listed apart from
+  // the bids, without accept buttons that would do nothing.
+  const { data: sentVenueInvites = [] } = useQuery<any[]>({
+    queryKey: ["/api/creator/venue-invites"],
+  });
+
   const { data: venueOffers = [], isLoading: venueOffersLoading } = useQuery({
     queryKey: ["/api/creator/venue-offers"],
     enabled: isAuthenticated && !!creatorProfile,
@@ -1535,6 +1543,44 @@ function CreatorDashboardContent() {
           </TabsContent>
 
           <TabsContent value="venue-offers" className="space-y-4">
+            {sentVenueInvites.length > 0 && (
+              <div className="space-y-3" data-testid="sent-venue-invites">
+                <div>
+                  <h2 className="text-xl font-semibold">Invitations you've sent</h2>
+                  <p className="text-sm text-gray-500">
+                    Emailed and waiting on the venue. There is nothing to accept here — the venue replies first.
+                  </p>
+                </div>
+                {sentVenueInvites.map((invite: any) => (
+                  <Card key={invite.id} data-testid={`sent-venue-invite-${invite.id}`}>
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <CardTitle className="text-base">{invite.venueName}</CardTitle>
+                          <CardDescription className="mt-1">
+                            {invite.experienceTitle}
+                            {invite.email ? ` · ${invite.email}` : ""}
+                          </CardDescription>
+                        </div>
+                        <Badge variant="secondary">Awaiting venue</Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="text-sm text-gray-600 dark:text-gray-400">
+                      {invite.proposedModel && (
+                        <p>
+                          Proposed: {getVenueDealLabel(invite.proposedModel)}
+                          {invite.proposedValue != null && ` · ${invite.proposedValue}${invite.proposedModel === "revenue_share" ? "%" : ""}`}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs">
+                        Sent {invite.sentAt ? new Date(invite.sentAt).toLocaleDateString() : "recently"}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+
             <h2 className="text-xl font-semibold">Incoming Venue Offers</h2>
             <p className="text-sm text-gray-500">
               Venue owners have submitted proposals for your open events or countered a direct invitation. Review their Commercial Model and accept the one that works for you.

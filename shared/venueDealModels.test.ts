@@ -48,12 +48,15 @@ describe("venue deal vocabulary", () => {
     expect(values).not.toContain("venue_sponsored");
   });
 
-  it("gives the Event Builder and Venue Builder the same vocabulary bar sponsorship", () => {
+  it("gives the Event Builder and Venue Builder the identical vocabulary", () => {
+    // The venue's Offer to Host and Counter Offer dropdowns showed four deals
+    // where the creator's builder showed five, so a venue could never answer a
+    // day event with the sponsorship it was willing to pay.
     const forEvent = getVenueDealOptions({ isDaytime: true, surface: "event" }).map((o) => o.value);
     const forVenue = getVenueDealOptions({ isDaytime: true, surface: "venue" }).map((o) => o.value);
 
-    // A venue never lists itself as a sponsor; everything else matches exactly.
-    expect(forVenue).toEqual(forEvent.filter((value) => value !== "venue_sponsored"));
+    expect(forVenue).toEqual(forEvent);
+    expect(forVenue).toContain("venue_sponsored");
 
     const tripEvent = getVenueDealOptions({ isDaytime: false, surface: "event" }).map((o) => o.value);
     const tripVenue = getVenueDealOptions({ isDaytime: false, surface: "venue" }).map((o) => o.value);

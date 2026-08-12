@@ -11,7 +11,13 @@ import { isEmailCategoryEnabled, type EmailCategory } from './emailPreferences';
 import { claimImmediateEmailEvent, completeEmailEvent, retryOrFailEmailJob } from './emailDeliveryLedger';
 import { resolveBookingEmailDecision } from './emailRules';
 import { getConfiguredPublicAppBaseUrl } from './publicUrl';
-import { formatVenueDealSummary } from '@shared/venueDealModels';
+import { formatVenueDealSummary, getVenueDealTermsKey, normalizeVenueDealModel } from '@shared/venueDealModels';
+import {
+  describeEventCapacity,
+  resolveEventCapacity,
+  summariseTicketTypes,
+  type InviteTicketLine,
+} from '@shared/inviteContext';
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -1244,29 +1250,35 @@ The Great. Team
     venueTargetDeal?: string | null;
     venueTargetDealValue?: string | number | null;
     currency?: string | null;
+    maxParticipants?: number | string | null;
+    ticketSkus?: any[] | null;
     /** Token for the private claim link. Without it there is nowhere to send them. */
     inviteToken?: string | null;
+    /**
+     * Set when a creator asks for the invitation to go out again. Delivery is
+     * keyed on the event, so a resend that reused the original key would be
+     * filed as a duplicate and silently dropped — which is exactly the failure
+     * a venue reporting "I never got it" is asking us to fix.
+     */
+    resendKey?: string | null;
   }): Promise<void> {
     if (!event.manualVenueEmail) return;
 
     const creator = event.creatorId ? await storage.getUser(event.creatorId) : undefined;
     const partnerName = event.manualVenueContactName?.trim() || event.manualVenueName?.trim() || 'there';
     const creatorName = [creator?.firstName, creator?.lastName].filter(Boolean).join(' ') || 'the creator';
-    const dealLabels: Record<string, string> = {
-      revenue_share: 'Revenue Split',
-      fixed_fee: 'Ticket Deduction',
-      access_only: 'Access-Only',
-      venue_sponsored: 'Venue Sponsorship',
-      upfront_rental: 'Upfront Rental',
-    };
-    const deal = event.venueTargetDeal
-      ? dealLabels[event.venueTargetDeal] || event.venueTargetDeal
+
+    // The shared vocabulary spells the deal out — the local label map this
+    // replaced knew nothing about per-head or per-room-per-night deals and
+    // printed their raw keys at the venue.
+    const proposedModel = normalizeVenueDealModel(event.venueTargetDeal);
+    const proposedTermsKey = getVenueDealTermsKey(proposedModel);
+    const proposedTerms = proposedTermsKey && event.venueTargetDealValue != null
+      ? { [proposedTermsKey]: Number(event.venueTargetDealValue) }
+      : {};
+    const dealSummary = proposedModel
+      ? formatVenueDealSummary(proposedModel, proposedTerms, event.currency)
       : 'To be agreed';
-    const value = event.venueTargetDealValue
-      ? event.venueTargetDeal === 'revenue_share'
-        ? `${event.venueTargetDealValue}%`
-        : `${String(event.currency || 'eur').toUpperCase()} ${event.venueTargetDealValue}`
-      : '';
 
     // The claim screen is the point of the email — it is where the venue signs
     // up, claims their space and answers the deal. Only fall back to the public
@@ -1281,10 +1293,14 @@ The Great. Team
       creatorName,
       eventName: event.title || 'A Great. experience',
       eventSlugOrId: (event as any).slug || (event as any).id || '',
-      proposedTerms: `${deal}${value ? ` (${value})` : ''}`,
+      proposedTerms: dealSummary,
+      capacity: describeEventCapacity(resolveEventCapacity(event)),
+      ticketLines: summariseTicketTypes(event.ticketSkus, event.currency),
       reviewUrl,
       ctaLabel: event.inviteToken ? 'Review & Claim Your Venue' : 'Review the Offer',
-      eventKey: notificationEventKey('external_venue_invite', (event as any).id, event.manualVenueEmail),
+      eventKey: event.resendKey
+        ? notificationEventKey('external_venue_invite_resend', (event as any).id, event.manualVenueEmail, event.resendKey)
+        : notificationEventKey('external_venue_invite', (event as any).id, event.manualVenueEmail),
     });
   }
 
@@ -1295,16 +1311,32 @@ The Great. Team
     eventName: string;
     eventSlugOrId?: string | null;
     proposedTerms?: string | null;
+    /** e.g. "60 spots" — what the deal's percentage is a percentage of. */
+    capacity?: string | null;
+    /** The ticket types on sale, so the partner can do their own arithmetic. */
+    ticketLines?: InviteTicketLine[];
     reviewUrl?: string | null;
     ctaLabel?: string;
     eventKey?: string;
   }): Promise<void> {
     const subject = `Private Invite: Partner with us on ${opts.eventName}`;
+    const ticketLines = opts.ticketLines || [];
     const bodyText = `Hello ${opts.partnerName?.trim() || 'there'}, you've been invited by ${opts.creatorName?.trim() || 'the creator'} to partner on an upcoming experience: ${opts.eventName}. They have proposed a specific collaboration deal and would love to work with you. Click below to view the event details and review the offer!`;
+
+    // Capacity and ticket prices sit beside the deal because a share of ticket
+    // sales means nothing without them. No projection is offered — the partner
+    // has the two numbers and can work out the value themselves.
+    const receiptRows: EmailReceiptRow[] = [];
+    if (opts.capacity) receiptRows.push({ label: 'Event Capacity', value: opts.capacity });
+    if (opts.proposedTerms) receiptRows.push({ label: 'Proposed Deal', value: opts.proposedTerms });
+    for (const line of ticketLines) {
+      receiptRows.push({ label: `Ticket · ${line.name}`, value: line.price });
+    }
+
     const email = renderBaseEmail({
       to: opts.to,
       bodyText,
-      receiptRows: opts.proposedTerms ? [{ label: 'Deal Summary', value: opts.proposedTerms }] : undefined,
+      receiptRows: receiptRows.length ? receiptRows : undefined,
       cta: {
         label: opts.ctaLabel || 'Review the Offer',
         href: opts.reviewUrl || (opts.eventSlugOrId ? experienceDetailsUrl(String(opts.eventSlugOrId)) : partnerDashboardUrl()),
@@ -1339,6 +1371,8 @@ The Great. Team
     promotionMilestoneRewardTickets?: string | number | null;
     promotionBrandPitch?: string | null;
     promotionSponsorshipAmount?: string | number | null;
+    maxParticipants?: number | string | null;
+    ticketSkus?: any[] | null;
     promotionExternalInvites?: Array<{
       email?: string | null;
       name?: string | null;
@@ -1367,6 +1401,10 @@ The Great. Team
 
     const creator = event.creatorId ? await storage.getUser(event.creatorId) : undefined;
     const creatorName = [creator?.firstName, creator?.lastName].filter(Boolean).join(' ') || 'the creator';
+    // A promoter on commission is being asked to sell these tickets, so the
+    // prices and the size of the room are the deal's real terms.
+    const capacity = describeEventCapacity(resolveEventCapacity(event));
+    const ticketLines = summariseTicketTypes(event.ticketSkus, event.currency);
     let sentCount = 0;
     for (const invite of invites) {
       // The deal row (and its claim token) is created by syncDirectPromotionDeals
@@ -1384,6 +1422,8 @@ The Great. Team
         eventName: event.title || 'A Great. experience',
         eventSlugOrId: (event as any).slug || (event as any).id || '',
         proposedTerms: dealSummary,
+        capacity,
+        ticketLines,
         reviewUrl: deal?.inviteToken ? partnerInviteUrl(deal.inviteToken) : undefined,
         ctaLabel: deal?.inviteToken ? 'Review & Accept the Deal' : undefined,
         eventKey: notificationEventKey('external_promotion_invite', (event as any).id, invite.email),

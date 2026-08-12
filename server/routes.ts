@@ -16,6 +16,7 @@ import { paymentService } from "./payments";
 import { initializeWebSocket, broadcastMVGUpdate, broadcastChatMessage } from "./websocket";
 import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabaseAuth";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
+import { getLastEmailAttemptAt } from "./emailDeliveryLedger";
 import { registerOGRoutes } from "./og";
 import { 
   insertCommunityApplicationSchema, 
@@ -46,6 +47,7 @@ import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
 import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
+import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
@@ -325,6 +327,12 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
   };
 }
 
+/** How long a venue has to answer before the claim link stops working. */
+const VENUE_INVITE_TTL_DAYS = 60;
+
+/** Minimum gap between two invitation emails to the same venue. */
+const VENUE_INVITE_RESEND_COOLDOWN_MS = 5 * 60 * 1000;
+
 /**
  * Creates (or refreshes) the tokenised invite behind an "Invite External Venue"
  * email. Returns undefined when the creator left the venue email blank.
@@ -333,7 +341,6 @@ async function createVenueInviteForExperience(experience: any) {
   const email = String(experience?.manualVenueEmail || '').trim();
   if (!email) return undefined;
 
-  const INVITE_TTL_DAYS = 60;
   return storage.upsertVenueInvite({
     token: randomBytes(24).toString('base64url'),
     experienceId: experience.id,
@@ -350,7 +357,7 @@ async function createVenueInviteForExperience(experience: any) {
     proposedValue: experience.venueTargetDealValue ?? null,
     currency: (experience.currency || 'eur').toLowerCase(),
     status: 'pending',
-    expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
+    expiresAt: new Date(Date.now() + VENUE_INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
   } as any);
 }
 
@@ -13059,6 +13066,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         currency: experience.currency,
         requireMinimumParticipants: experience.requireMinimumParticipants,
         minimumParticipants: experience.mvgMin || experience.minimumParticipants,
+        // A share of ticket sales is unreadable without the size of the room
+        // and what a ticket costs, so the invite carries both.
+        capacity: resolveEventCapacity(experience),
+        ticketTypes: summariseTicketTypes((experience as any).ticketSkus, experience.currency),
       } : null,
       creator: creator ? {
         firstName: creator.firstName,
@@ -13272,6 +13283,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           endDate: experience.endDate,
           location: experience.location,
           currency: experience.currency,
+          // A promoter on commission is being asked to sell these tickets —
+          // the prices and the room size are what make the offer judgeable.
+          capacity: resolveEventCapacity(experience),
+          ticketTypes: summariseTicketTypes((experience as any).ticketSkus, experience.currency),
         } : null,
         creator: creator ? { firstName: creator.firstName, lastName: creator.lastName } : null,
       });
@@ -13743,6 +13758,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * Send an outstanding venue invitation again.
+   *
+   * Invitations get lost — filtered, mistyped, buried. Before this the only
+   * remedy was to rebuild and republish the whole event, so the creator's
+   * choice was between a broken deal and redoing an hour of work.
+   *
+   * The invite keeps its token, so a link the venue may still have in an older
+   * mail stays valid; only the expiry is pushed out.
+   */
+  app.post('/api/creator/venue-invites/:inviteId/resend', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+      const invite = await storage.getVenueInviteById(String(req.params.inviteId));
+      if (!invite) return res.status(404).json({ message: 'That invitation no longer exists' });
+      if (invite.creatorId !== userId) {
+        return res.status(403).json({ message: 'That invitation belongs to another creator' });
+      }
+      // Claimed, accepted or declined means the venue did receive it and
+      // answered. Sending it again would only muddy a settled deal.
+      if (invite.status !== 'pending' && invite.status !== 'expired') {
+        return res.status(409).json({
+          message: `This venue has already responded to the invitation (${invite.status}).`,
+        });
+      }
+
+      // The button fires at somebody else's inbox, so a repeated click must not
+      // become a repeated email.
+      const lastAttemptAt = await getLastEmailAttemptAt('external_partner_invite', invite.email);
+      const msSinceLastSend = lastAttemptAt ? Date.now() - new Date(lastAttemptAt).getTime() : Infinity;
+      if (msSinceLastSend < VENUE_INVITE_RESEND_COOLDOWN_MS) {
+        const minutes = Math.max(1, Math.ceil((VENUE_INVITE_RESEND_COOLDOWN_MS - msSinceLastSend) / 60000));
+        return res.status(429).json({
+          message: `An invitation already went to ${invite.email} moments ago. You can send it again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        });
+      }
+
+      const experience = await storage.getExperience(invite.experienceId);
+      if (!experience) return res.status(404).json({ message: 'That event no longer exists' });
+
+      const expiresAt = new Date(Date.now() + VENUE_INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
+      await notificationService.sendExternalVenueInvitation({
+        ...(experience as any),
+        id: experience.id,
+        slug: (experience as any).slug,
+        creatorId: invite.creatorId,
+        // The invite row, not the event, is the record of who was asked and on
+        // what terms — the event may have moved on since.
+        manualVenueEmail: invite.email,
+        manualVenueContactName: invite.contactName,
+        manualVenueName: invite.venueName,
+        venueTargetDeal: invite.proposedModel,
+        venueTargetDealValue: invite.proposedValue,
+        currency: invite.currency || (experience as any).currency,
+        inviteToken: invite.token,
+        resendKey: String(Date.now()),
+      });
+
+      // Only once the email is away, so a failed send leaves the invite as it was.
+      const refreshed = await storage.updateVenueInvite(invite.id, {
+        status: 'pending',
+        expiresAt,
+      } as any);
+
+      res.json({
+        success: true,
+        email: invite.email,
+        lastSentAt: refreshed?.updatedAt ?? new Date(),
+        expiresAt,
+      });
+    } catch (err: any) {
+      console.error('Error resending venue invite:', err);
+      res.status(500).json({ message: err?.message || 'Failed to resend this invitation' });
+    }
+  });
+
   // GET /api/creator/venue-offers/accepted
   // Creator retrieves all accepted (confirmed) venue deals — shows deal terms after acceptance.
   app.get('/api/creator/venue-offers/accepted', isAuthenticated, async (req: any, res) => {
@@ -13813,7 +13906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the webhook can read them when it completes the deal)
       await storage.updateExperience(offer.experienceId, {
         linkedVenueId: offer.venueId,
-        venueStatus: isDirectCounter && offer.model === 'venue_sponsored' ? 'venue_pending' : 'venue_confirmed',
+        venueStatus: offer.model === 'venue_sponsored' ? 'venue_pending' : 'venue_confirmed',
         venueType: 'catalog',
         location: venue?.location ?? (experience as any).location,
         venueCompensationModel: offer.model,
@@ -13895,17 +13988,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // ── Standard deals: accept immediately → event goes Live ─────────────
-      // The creator accepts the counter first; the venue then sees the agreed
-      // sponsorship in Pending Offers and pays it through the existing Stripe flow.
-      if (isDirectCounter && offer.model === 'venue_sponsored') {
+      // Sponsorship money runs venue → creator, so accepting is not the end of
+      // it. The creator agrees first; the venue then sees the agreed sponsorship
+      // in Pending Offers and pays it through the existing Stripe flow. This
+      // holds for a bid offered out of the blue as much as for a counter —
+      // without it a venue could sponsor an event and never be charged.
+      if (offer.model === 'venue_sponsored') {
         const accepted = await storage.updateVenueOfferStatus(offerId, 'accepted');
-        await storage.updateVenueContractProposal(
-          offer.experienceId,
-          offer.venueId,
-          offer.model,
-          offer.terms,
-          'pending',
-        );
+        // A countered proposal already has a contract row to update. A
+        // reverse-marketplace bid has none, so write one in the same pending
+        // state the sponsorship checkout expects to find.
+        const existingContract = await storage.getVenueContractByExperience(offer.experienceId);
+        if (existingContract && existingContract.venueId === offer.venueId) {
+          await storage.updateVenueContractProposal(
+            offer.experienceId,
+            offer.venueId,
+            offer.model,
+            offer.terms,
+            'pending',
+          );
+        } else {
+          const proposed = buildVenueContractObject(experience, offer.experienceId, offer.venueId, userId);
+          await storage.upsertVenueContract({
+            ...proposed,
+            model: offer.model,
+            terms: { ...proposed.terms, ...(offer.terms || {}) },
+            status: 'pending',
+          } as any);
+        }
         const otherOffers = await storage.getVenueOffersForExperience(offer.experienceId);
         for (const row of otherOffers) {
           const competingOffer = row.offer ?? row;
@@ -13918,7 +14028,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({
           accepted,
           awaitingVenuePayment: true,
-          message: 'Counter accepted. The venue must complete the sponsorship payment.',
+          message: 'Sponsorship agreed. The venue must complete the payment before the event goes live.',
         });
       }
 

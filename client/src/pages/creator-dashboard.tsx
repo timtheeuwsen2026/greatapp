@@ -3,7 +3,7 @@ import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
-import { getVenueDealLabel } from "@shared/venueDealModels";
+import { getVenueDealLabel, formatVenueDealSummary } from "@shared/venueDealModels";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -545,6 +545,29 @@ function CreatorDashboardContent() {
       });
     },
     onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to accept offer"), variant: "destructive" }),
+  });
+
+  // Invitations get lost in spam folders. Before this the only way to reach the
+  // venue again was to rebuild and republish the whole event.
+  const resendVenueInvite = useMutation({
+    mutationFn: async (inviteId: string) => {
+      const res = await apiRequest("POST", `/api/creator/venue-invites/${inviteId}/resend`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/venue-invites"] });
+      toast({
+        title: "Invitation resent",
+        description: data?.email
+          ? `A fresh copy is on its way to ${data.email}.`
+          : "A fresh copy is on its way to the venue.",
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Could not resend",
+      description: readableError(error, "Please try again in a moment."),
+      variant: "destructive",
+    }),
   });
 
   const declineVenueOffer = useMutation({
@@ -1572,8 +1595,28 @@ function CreatorDashboardContent() {
                           {invite.proposedValue != null && ` · ${invite.proposedValue}${invite.proposedModel === "revenue_share" ? "%" : ""}`}
                         </p>
                       )}
-                      <p className="mt-1 text-xs">
-                        Sent {invite.sentAt ? new Date(invite.sentAt).toLocaleDateString() : "recently"}
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs">
+                          Sent {invite.sentAt ? new Date(invite.sentAt).toLocaleDateString() : "recently"}
+                          {invite.lastSentAt && invite.sentAt
+                            && new Date(invite.lastSentAt).getTime() - new Date(invite.sentAt).getTime() > 60000
+                            && ` · last sent ${new Date(invite.lastSentAt).toLocaleDateString()}`}
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => resendVenueInvite.mutate(invite.id)}
+                          disabled={resendVenueInvite.isPending}
+                          data-testid={`button-resend-venue-invite-${invite.id}`}
+                        >
+                          <Send className="mr-1.5 h-3.5 w-3.5" />
+                          {resendVenueInvite.isPending && resendVenueInvite.variables === invite.id
+                            ? "Sending…"
+                            : "Resend invite"}
+                        </Button>
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Didn't arrive? Resending emails the same link again — the venue's original link keeps working.
                       </p>
                     </CardContent>
                   </Card>
@@ -1732,16 +1775,15 @@ function CreatorDashboardContent() {
                   const offer = row.offer ?? row;
                   const venue = row.venue ?? {};
                   const exp = row.experience ?? {};
-                  const modelLabels: Record<string, string> = {
-                    access_only: "Access Only",
-                    fixed_fee: "Flat Fee",
-                    per_head: "Per Head",
-                    minimum_spend: "Minimum Spend",
-                    revenue_share: "Revenue Share (%)",
-                    venue_sponsored: "Venue-Sponsored",
-                    upfront_rental: "Upfront Rental",
-                  };
                   const terms = offer.terms ?? {};
+                  // "Confirmed" on its own left the creator with no record of
+                  // what they had confirmed. The shared summary spells out the
+                  // agreed number for every model, in the event's own currency.
+                  const agreedTerms = formatVenueDealSummary(
+                    offer.model,
+                    terms,
+                    terms.currency || exp.currency,
+                  );
                   return (
                     <Card key={offer.id} className="border-green-200 dark:border-green-800 bg-green-50/30 dark:bg-green-900/10">
                       <CardContent className="p-4">
@@ -1769,13 +1811,14 @@ function CreatorDashboardContent() {
                               </Badge>
                             </div>
                           </div>
-                          <div className="text-sm text-right shrink-0">
-                            <span className="text-gray-500">Deal: </span>
-                            <strong>{modelLabels[offer.model] ?? offer.model}</strong>
-                            {offer.model === "fixed_fee" && <span className="ml-1 text-gray-600">— €{terms.fixedFee ?? 0}</span>}
-                            {offer.model === "per_head" && <span className="ml-1 text-gray-600">— €{terms.perHeadAmount ?? 0}/head</span>}
-                            {offer.model === "minimum_spend" && <span className="ml-1 text-gray-600">— €{terms.minimumSpend ?? 0} min</span>}
-                            {offer.model === "revenue_share" && <span className="ml-1 text-gray-600">— {terms.revenueSharePct ?? 0}%</span>}
+                          <div className="text-sm sm:text-right shrink-0">
+                            <p className="text-xs text-gray-500">Agreed terms</p>
+                            <strong data-testid="text-active-deal-terms">{agreedTerms}</strong>
+                            {offer.risk?.requireMinimumParticipants && offer.risk?.minimumParticipants ? (
+                              <p className="text-xs text-gray-500">
+                                Confirms at {offer.risk.minimumParticipants} participants
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       </CardContent>

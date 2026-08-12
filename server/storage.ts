@@ -111,6 +111,7 @@ import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillmentRules";
 import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
+import { getVenueDealTermsKey, normalizeVenueDealModel } from "@shared/venueDealModels";
 
 function withoutSingleDayDeposits(experience: Record<string, any>): any {
   if (!isSingleDayExperience(experience)) return experience;
@@ -934,6 +935,10 @@ export class DatabaseStorage implements IStorage {
       currency: invite.currency || experience.currency || "eur",
       status: invite.status,
       sentAt: invite.createdAt,
+      // Every write to a still-pending invite is a send — the original, a
+      // republish, or a creator asking for it again — so this is when the
+      // venue was last emailed.
+      lastSentAt: invite.updatedAt || invite.createdAt,
       expiresAt: invite.expiresAt,
     }));
   }
@@ -2974,6 +2979,14 @@ export class DatabaseStorage implements IStorage {
     return invite;
   }
 
+  async getVenueInviteById(inviteId: string): Promise<VenueInvite | undefined> {
+    const [invite] = await db
+      .select()
+      .from(venueInvites)
+      .where(eq(venueInvites.id, inviteId));
+    return invite;
+  }
+
   async getVenueInvitesByExperience(experienceId: string): Promise<VenueInvite[]> {
     return db
       .select()
@@ -4947,42 +4960,52 @@ export class DatabaseStorage implements IStorage {
     );
     const venueInviteLedger = venueInviteRows
       .filter(({ invite }) => !claimedInviteIds.has(invite.id))
-      .map(({ invite, experience }) => ({
-        id: invite.id,
-        contractType: "venue",
-        dealType: invite.proposedModel || "access_only",
-        status: invite.status || "pending",
-        terms: invite.proposedValue != null
-          ? { proposedValue: Number(invite.proposedValue), currency: invite.currency || "eur" }
-          : {},
-        currency: normalizeCurrency(invite.currency || experience.currency),
-        acceptedAt: invite.respondedAt || invite.updatedAt || invite.createdAt,
-        updatedAt: invite.updatedAt,
-        experience: { id: experience.id, title: experience.title },
-        creator: creatorSummary(invite.creatorId),
-        counterparty: {
-          id: invite.claimedVenueId || null,
-          name: invite.venueName || invite.contactName || invite.email,
-          email: invite.email,
-          role: "venue",
-        },
-        negotiation: {
-          isCountered: false,
-          // Sent, delivered, and nobody on our side can move it forward.
-          pendingActionBy: invite.status === "pending" ? "venue" : null,
-          originalTerms: {},
-          currentTerms: {},
-          declineReason: invite.declineReason || null,
-          rounds: [{
-            from: "creator",
-            status: invite.status || "pending",
-            model: invite.proposedModel || null,
-            terms: invite.proposedValue != null ? { proposedValue: Number(invite.proposedValue) } : {},
-            note: "Invitation emailed to the venue",
-            at: invite.createdAt,
-          }],
-        },
-      }));
+      .map(({ invite, experience }) => {
+        const model = normalizeVenueDealModel(invite.proposedModel) || "access_only";
+        // An invite carries one loose number. Filing it under the key its model
+        // owns is what lets the ledger read it — parked under a generic
+        // "proposedValue" a 40% revenue split rendered as 0%.
+        const termsKey = getVenueDealTermsKey(model);
+        const terms: Record<string, any> = { currency: invite.currency || experience.currency || "eur" };
+        if (termsKey && invite.proposedValue != null) {
+          terms[termsKey] = Number(invite.proposedValue);
+        }
+
+        return {
+          id: invite.id,
+          contractType: "venue",
+          dealType: model,
+          status: invite.status || "pending",
+          terms,
+          currency: normalizeCurrency(invite.currency || experience.currency),
+          acceptedAt: invite.respondedAt || invite.updatedAt || invite.createdAt,
+          updatedAt: invite.updatedAt,
+          experience: { id: experience.id, title: experience.title },
+          creator: creatorSummary(invite.creatorId),
+          counterparty: {
+            id: invite.claimedVenueId || null,
+            name: invite.venueName || invite.contactName || invite.email,
+            email: invite.email,
+            role: "venue",
+          },
+          negotiation: {
+            isCountered: false,
+            // Sent, delivered, and nobody on our side can move it forward.
+            pendingActionBy: invite.status === "pending" ? "venue" : null,
+            originalTerms: terms,
+            currentTerms: terms,
+            declineReason: invite.declineReason || null,
+            rounds: [{
+              from: "creator",
+              status: invite.status || "pending",
+              model,
+              terms,
+              note: "Invitation emailed to the venue",
+              at: invite.createdAt,
+            }],
+          },
+        };
+      });
 
     const promotionLedger = promotionRows.map(({ deal, experience, partner }) => ({
       id: deal.id,

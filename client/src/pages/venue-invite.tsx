@@ -15,6 +15,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
+import { type InviteTicketLine } from "@shared/inviteContext";
+import {
+  formatVenueDealSummary,
+  getVenueDealTermsKey,
+  normalizeVenueDealModel,
+} from "@shared/venueDealModels";
+import { InviteValueContext } from "@/components/InviteValueContext";
 
 type VenueInvite = {
   token: string;
@@ -48,33 +55,22 @@ type VenueInvite = {
     currency: string | null;
     requireMinimumParticipants: boolean | null;
     minimumParticipants: number | null;
+    capacity: number | null;
+    ticketTypes: InviteTicketLine[];
   } | null;
   creator: { firstName: string | null; lastName: string | null } | null;
   claimedVenueId: string | null;
 };
 
-const DEAL_LABELS: Record<string, string> = {
-  revenue_share: 'Revenue Split',
-  fixed_fee: 'Ticket Deduction',
-  per_head: 'Per Head',
-  minimum_spend: 'Minimum Spend',
-  access_only: 'Access Only',
-  venue_sponsored: 'Venue Sponsorship',
-  upfront_rental: 'Upfront Rental',
-};
-
-const formatMoney = (amount: number | null | undefined, currency?: string | null) => {
-  const symbols: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' };
-  const code = (currency || 'EUR').toUpperCase();
-  return `${symbols[code] || code + ' '}${(amount || 0).toFixed(2)}`;
-};
-
+// The deal reads through the same vocabulary the creator proposed it in, so a
+// per-head or per-room-per-night offer is named rather than shown as a raw key.
 function describeDeal(deal: VenueInvite['deal']): string {
-  const label = deal.model ? DEAL_LABELS[deal.model] || deal.model : 'To be agreed';
-  if (deal.value === null || deal.value === undefined) return label;
-  if (deal.model === 'revenue_share') return `${label} — ${deal.value}% of ticket revenue`;
-  if (deal.model === 'fixed_fee') return `${label} — ${formatMoney(deal.value, deal.currency)} per ticket`;
-  return `${label} — ${formatMoney(deal.value, deal.currency)}`;
+  const model = normalizeVenueDealModel(deal.model);
+  if (!model) return 'To be agreed';
+
+  const termsKey = getVenueDealTermsKey(model);
+  const terms = termsKey && deal.value != null ? { [termsKey]: deal.value } : {};
+  return formatVenueDealSummary(model, terms, deal.currency);
 }
 
 const formatDate = (value: string) =>
@@ -282,10 +278,19 @@ export default function VenueInvitePage() {
             <CardHeader>
               <CardTitle className="text-lg">The proposed deal</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <p className="text-2xl font-bold text-gray-950" data-testid="invite-deal-summary">
                 {describeDeal(invite.deal)}
               </p>
+
+              {/* A percentage says nothing on its own. The capacity and the
+                  ticket prices are what let a venue work out the value of the
+                  deal for itself — no projection is put in their mouth. */}
+              <InviteValueContext
+                capacity={experience?.capacity ?? experience?.maxParticipants ?? null}
+                ticketTypes={experience?.ticketTypes}
+              />
+
               <p className="text-sm text-gray-600">
                 Nothing is agreed until you accept. You can decline and the organiser will be told.
               </p>

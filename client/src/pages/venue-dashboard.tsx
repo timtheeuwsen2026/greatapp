@@ -62,9 +62,12 @@ type VenueOfferForm = {
   message: string;
 };
 
+// The model is left blank on purpose. Defaulting it to access_only pinned a
+// deal that a multi-day event never offers, which pushed a fifth, invalid
+// option into the dropdown; VenueDealFields picks the first valid one instead.
 const emptyVenueOfferForm = (): VenueOfferForm => ({
   venueId: "",
-  model: "access_only",
+  model: "",
   fixedFee: "",
   perHeadAmount: "",
   perRoomPerNight: "",
@@ -79,7 +82,7 @@ function venueOfferFormFromContract(contract: any, venueId: string): VenueOfferF
   return {
     ...emptyVenueOfferForm(),
     venueId,
-    model: contract?.model || "access_only",
+    model: contract?.model || "",
     fixedFee: terms.fixedFee != null ? String(terms.fixedFee) : "",
     perHeadAmount: terms.perHeadAmount != null ? String(terms.perHeadAmount) : "",
     perRoomPerNight: terms.perRoomPerNight != null ? String(terms.perRoomPerNight) : "",
@@ -167,6 +170,16 @@ function VenueDealFields({ form, setForm, currency, isDaytime }: {
   });
   const selected = options.find((option) => option.value === form.model);
   const field = selected?.termsKey ? OFFER_FIELD_BY_TERMS_KEY[selected.termsKey] : null;
+
+  // Opening the modal with nothing chosen — or with a deal that does not apply
+  // to this event's length — lands on the first deal the creator could have
+  // proposed, rather than showing an empty trigger.
+  const firstOption = options[0]?.value;
+  useEffect(() => {
+    if (!selected && firstOption) {
+      setForm((current: VenueOfferForm) => ({ ...current, model: firstOption }));
+    }
+  }, [selected, firstOption, setForm]);
 
   return (
     <>
@@ -313,17 +326,16 @@ function VenueDashboardContent() {
 
   const handleSubmitOffer = () => {
     if (!offerModal.event || !offerForm.venueId || !offerForm.model) return;
-    const terms: Record<string, number> = {};
-    if (offerForm.model === "fixed_fee" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
-    if (offerForm.model === "revenue_share" && offerForm.revenueSharePct) terms.revenueSharePct = parseFloat(offerForm.revenueSharePct);
-    if (offerForm.model === "per_head" && offerForm.perHeadAmount) terms.perHeadAmount = parseFloat(offerForm.perHeadAmount);
-    if (offerForm.model === "minimum_spend" && offerForm.minimumSpend) terms.minimumSpend = parseFloat(offerForm.minimumSpend);
-    if (offerForm.model === "access_only") terms.accessFee = parseFloat(offerForm.accessFee || "0");
-    // venue_sponsored: venue pays creator flat fee — stored as fixedFee
-    if (offerForm.model === "venue_sponsored" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
-    // upfront_rental: creator pays venue flat fee — also stored as fixedFee
-    if (offerForm.model === "upfront_rental" && offerForm.fixedFee) terms.fixedFee = parseFloat(offerForm.fixedFee);
-    submitOffer.mutate({ experienceId: offerModal.event.id, venueId: offerForm.venueId, model: offerForm.model, terms, message: offerForm.message });
+    // The vocabulary owns which key each model's number lives under, so a bid
+    // cannot be sent with its amount dropped — the hand-written list here used
+    // to leave Per Room / Per Night with no terms at all.
+    submitOffer.mutate({
+      experienceId: offerModal.event.id,
+      venueId: offerForm.venueId,
+      model: offerForm.model,
+      terms: venueOfferTerms(offerForm),
+      message: offerForm.message,
+    });
   };
 
   const counterOffer = useMutation({
@@ -1287,7 +1299,10 @@ function VenueDashboardContent() {
 
       {/* ── Offer to Host Modal ── */}
       <Dialog open={offerModal.open} onOpenChange={(open) => setOfferModal(m => ({ ...m, open }))}>
-        <DialogContent className="sm:max-w-lg">
+        {/* The event summary, the creator's terms and the deal fields make this
+            taller than a laptop screen. Without a scroll the Submit button sits
+            off-screen and the venue cannot answer at all. */}
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Offer to Host: {offerModal.event?.title}</DialogTitle>
             <DialogDescription>
@@ -1413,7 +1428,7 @@ function VenueDashboardContent() {
       </Dialog>
 
       <Dialog open={counterModal.open} onOpenChange={(open) => setCounterModal((current) => ({ ...current, open }))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Counter Offer: {counterModal.offer?.title}</DialogTitle>
             <DialogDescription>

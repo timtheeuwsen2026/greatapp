@@ -47,6 +47,11 @@ const invite = {
     currency: 'eur',
     requireMinimumParticipants: true,
     minimumParticipants: 2,
+    capacity: 16,
+    ticketTypes: [
+      { name: 'The Run & Coffee Pass', price: '€10.00' },
+      { name: 'The Run & Smoothie Pass', price: '€12.50' },
+    ],
   },
   creator: { firstName: 'Great App', lastName: null },
   claimedVenueId: null,
@@ -110,9 +115,31 @@ describe('Venue invite claim page', () => {
     expect(await screen.findByTestId('invite-heading')).toHaveTextContent(
       'Great App wants to host at Casa Verde Rooftop',
     );
-    expect(screen.getByTestId('invite-deal-summary')).toHaveTextContent('Revenue Split — 50% of ticket revenue');
+    expect(screen.getByTestId('invite-deal-summary')).toHaveTextContent('Revenue Split — 50% of ticket sales');
     expect(screen.getByTestId('invite-event-card')).toHaveTextContent('3-Day Coastal Wellness Retreat');
     expect(screen.getByTestId('invite-venue-card')).toHaveTextContent('Casa Verde Rooftop');
+  });
+
+  // A venue offered "50%" could not tell what it was 50% of.
+  it('shows the capacity and ticket prices the deal is a share of', async () => {
+    renderInvite();
+
+    expect(await screen.findByTestId('invite-capacity')).toHaveTextContent('16 spots');
+
+    const tickets = screen.getByTestId('invite-ticket-types');
+    expect(tickets).toHaveTextContent('The Run & Coffee Pass');
+    expect(tickets).toHaveTextContent('€10.00');
+    expect(tickets).toHaveTextContent('The Run & Smoothie Pass');
+    expect(tickets).toHaveTextContent('€12.50');
+  });
+
+  it('leaves the context out rather than showing an empty block', async () => {
+    renderInvite({
+      experience: { ...invite.experience, maxParticipants: null, capacity: null, ticketTypes: [] },
+    });
+
+    expect(await screen.findByTestId('invite-deal-summary')).toBeInTheDocument();
+    expect(screen.queryByTestId('invite-value-context')).not.toBeInTheDocument();
   });
 
   it('offers account creation to a venue that is not signed in', async () => {

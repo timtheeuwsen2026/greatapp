@@ -42,8 +42,6 @@ type VenueDealDefinition = {
   valueLabel: string;
   /** Who pays whom. Drives which side gets charged. */
   direction: "attendee_funded" | "creator_pays_venue" | "venue_pays_creator";
-  /** Deals only a creator can propose — a venue never lists itself as a sponsor. */
-  eventBuilderOnly?: boolean;
   /** Kept for existing records but no longer offered in any dropdown. */
   legacy?: boolean;
 };
@@ -111,7 +109,6 @@ const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
     termsKey: "fixedFee",
     valueLabel: "Sponsorship the venue pays you ({cur})",
     direction: "venue_pays_creator",
-    eventBuilderOnly: true,
   },
   minimum_spend: {
     model: "minimum_spend",
@@ -192,7 +189,11 @@ function render(definition: VenueDealDefinition, currencySymbol: string): VenueD
 export type VenueDealOptionsInput = {
   /** A one-day event or a daytime space gets the day list. */
   isDaytime: boolean;
-  /** "event" includes venue sponsorship; "venue" does not. */
+  /**
+   * Which dashboard is asking. Both get the same list — a venue answering an
+   * offer can only speak in the vocabulary the creator proposed it in, and a
+   * venue offering to sponsor an event is a deal it makes about itself.
+   */
   surface: "event" | "venue";
   currencySymbol?: string;
   /** A value already saved, so a legacy deal stays selectable while editing. */
@@ -207,9 +208,7 @@ export function getVenueDealOptions(input: VenueDealOptionsInput): VenueDealOpti
   const currencySymbol = input.currencySymbol || "€";
   const models = input.isDaytime ? DAY_EVENT_MODELS : MULTI_DAY_MODELS;
 
-  const options = models
-    .filter((model) => input.surface === "event" || !DEFINITIONS[model].eventBuilderOnly)
-    .map((model) => render(DEFINITIONS[model], currencySymbol));
+  const options = models.map((model) => render(DEFINITIONS[model], currencySymbol));
 
   // Keep an already-saved deal visible even if it is no longer offered,
   // otherwise editing an older event silently clears its terms.

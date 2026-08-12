@@ -45,7 +45,7 @@ import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
-import { getVenueDealLabel } from "@shared/venueDealModels";
+import { getVenueDealLabel, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
 interface VenueWithOwner extends Venue {
   ownerName: string | null;
@@ -108,6 +108,7 @@ function summariseTerms(terms: Record<string, any> | undefined, currency: string
   if (t.commissionPct !== undefined && t.commissionPct !== null) parts.push(`${Number(t.commissionPct)}% commission`);
   if (Number(t.fixedFee || 0) > 0) parts.push(`${formatCurrency(t.fixedFee, currency)} fee`);
   if (Number(t.perHeadAmount || 0) > 0) parts.push(`${formatCurrency(t.perHeadAmount, currency)}/head`);
+  if (Number(t.perRoomPerNight || 0) > 0) parts.push(`${formatCurrency(t.perRoomPerNight, currency)}/room/night`);
   if (Number(t.minimumSpend || 0) > 0) parts.push(`${formatCurrency(t.minimumSpend, currency)} min spend`);
   if (Number(t.accessFee || 0) > 0) parts.push(`${formatCurrency(t.accessFee, currency)} access`);
   if (Number(t.sponsorshipAmount || 0) > 0) parts.push(`${formatCurrency(t.sponsorshipAmount, currency)} sponsorship`);
@@ -139,6 +140,14 @@ function formatDealType(value: unknown): string {
 
 function formatDealTerms(deal: AdminDealLedgerItem): string {
   const terms = deal.terms || {};
+
+  // Every venue agreement — contract, bid or emailed invite — is described by
+  // the shared vocabulary, so a deal saved under an older key still reads
+  // correctly and no model is left to fall through to "Terms recorded".
+  if (deal.contractType === "venue" && normalizeVenueDealModel(deal.dealType)) {
+    return formatVenueDealSummary(deal.dealType, terms, deal.currency);
+  }
+
   switch (deal.dealType) {
     case "commission_per_ticket":
       return `${Number(terms.commissionPct || 0)}% commission per ticket`;

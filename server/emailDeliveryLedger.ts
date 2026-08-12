@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import { emailNotificationEvents } from "@shared/schema";
 import { db } from "./db";
 import type { EmailCategory } from "./emailPreferences";
@@ -127,6 +127,29 @@ export async function retryOrFailEmailJob(eventKey: string, attempts: number, er
       updatedAt: now,
     })
     .where(eq(emailNotificationEvents.eventKey, eventKey));
+}
+
+/**
+ * When this address last had an email of this type attempted.
+ *
+ * A resend button hands the creator a trigger that fires at somebody else's
+ * inbox, so the ledger — which already records every attempt — is what stops a
+ * repeated click from becoming a repeated email.
+ */
+export async function getLastEmailAttemptAt(
+  emailType: string,
+  recipientEmail: string,
+): Promise<Date | null> {
+  const [row] = await db
+    .select({ lastAttemptAt: emailNotificationEvents.lastAttemptAt })
+    .from(emailNotificationEvents)
+    .where(and(
+      eq(emailNotificationEvents.emailType, emailType),
+      sql`lower(${emailNotificationEvents.recipientEmail}) = lower(${recipientEmail})`,
+    ))
+    .orderBy(desc(emailNotificationEvents.lastAttemptAt))
+    .limit(1);
+  return row?.lastAttemptAt ?? null;
 }
 
 export async function recoverStaleEmailJobs(now = new Date()): Promise<number> {

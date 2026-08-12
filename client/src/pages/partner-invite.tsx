@@ -12,6 +12,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
+import { type InviteTicketLine } from "@shared/inviteContext";
+import { InviteValueContext } from "@/components/InviteValueContext";
 
 type PartnerInvite = {
   status: string;
@@ -32,6 +34,8 @@ type PartnerInvite = {
     endDate: string;
     location: string;
     currency: string | null;
+    capacity: number | null;
+    ticketTypes: InviteTicketLine[];
   } | null;
   creator: { firstName: string | null; lastName: string | null } | null;
 };
@@ -212,10 +216,18 @@ export default function PartnerInvitePage() {
             <CardHeader>
               <CardTitle className="text-lg">The proposed deal</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <p className="text-xl font-bold text-gray-950" data-testid="partner-invite-deal-summary">
                 {invite.dealSummary}
               </p>
+
+              {/* A commission per ticket is only worth what the tickets cost
+                  and how many of them there are, so both go on the page. */}
+              <InviteValueContext
+                capacity={experience?.capacity}
+                ticketTypes={experience?.ticketTypes}
+              />
+
               <p className="text-sm text-gray-600">
                 Nothing is agreed until you accept. Declining tells the organiser.
               </p>

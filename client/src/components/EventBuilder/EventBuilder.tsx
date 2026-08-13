@@ -61,6 +61,7 @@ import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
+import LegalConsentLabel from "@/components/LegalConsentLabel";
 import Navigation from "@/components/navigation";
 import { 
   applyDiscounts, 
@@ -6863,28 +6864,38 @@ function TermsStep({ form }: { form: any }) {
         
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
           <h5 className="font-medium text-gray-900 dark:text-white mb-4">
-            Great. Experience Platform - Terms of Service
+            Great App - Terms and Conditions
           </h5>
-          
+
           <div className="text-sm text-gray-600 dark:text-gray-300 space-y-4 max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-800 p-4 rounded border">
             <p><strong>1. Experience Creation & Publishing</strong></p>
-            <p>By creating and publishing an experience, you confirm that you have the right to offer this experience and all information provided is accurate.</p>
-            
+            <p>Great App is an intermediary and technology provider — we do not organise, host, or execute your experience. By publishing, you confirm that you have the right to offer this experience, that all information provided is accurate, and that the safety, quality, marketing, and fulfilment of the experience are your sole responsibility.</p>
+
             <p><strong>2. Payment Processing</strong></p>
-            <p>Payments are processed securely through Stripe. Platform fees and processing charges apply as outlined in your creator dashboard.</p>
-            
-            <p><strong>3. Cancellations & Refunds</strong></p>
-            <p>You must honor your stated cancellation and refund policies. Participants may be entitled to refunds based on your experience terms.</p>
-            
+            <p>Payments are processed securely through Stripe in Euros. You authorise us to collect ticket revenue on your behalf and to deduct platform fees and processing charges before payout.</p>
+
+            <p><strong>3. Refunds</strong></p>
+            <p>Platform ticket sales are final. If you offer a custom cancellation/refund policy in your Custom Terms, you are solely responsible for managing and issuing those refunds directly.</p>
+
             <p><strong>4. Content Guidelines</strong></p>
-            <p>All experience content must be appropriate, legal, and comply with our community guidelines. We reserve the right to remove inappropriate content.</p>
-            
+            <p>All experience content must be accurate, lawful, and free of misleading claims. We may edit, remove, or unpublish content that breaches these terms, and may suspend accounts that do.</p>
+
             <p><strong>5. Liability & Insurance</strong></p>
-            <p>You are responsible for appropriate insurance coverage and safety measures for your experiences.</p>
-            
-            <p><strong>6. Revenue & Payments</strong></p>
-            <p>Platform fees will be deducted from gross revenue before payouts. Payouts are processed according to your selected schedule.</p>
+            <p>You are responsible for appropriate insurance coverage, permits, and safety measures for your experiences, and you indemnify Great App against claims arising from them.</p>
+
+            <p><strong>6. Revenue & Payouts</strong></p>
+            <p>Platform fees are deducted from gross revenue before payouts, and revenue splits agreed with venues, promoters, and service providers are settled automatically. Processing transactions or revenue splits outside the platform to avoid fees is prohibited.</p>
           </div>
+
+          <a
+            href="/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-block text-sm font-medium text-primary underline underline-offset-4"
+            data-testid="link-full-platform-terms"
+          >
+            Read the full Great App Terms and Conditions
+          </a>
         </div>
       </div>
 
@@ -7110,7 +7121,8 @@ Example sections:
                   </FormControl>
                   <div className="space-y-1 leading-none">
                     <FormLabel className="text-sm font-normal">
-                      I agree to the Terms of Service and Privacy Policy *
+                      <LegalConsentLabel />
+                      <span className="text-destructive"> *</span>
                     </FormLabel>
                     <FormDescription>
                       You must accept our terms to submit your experience for review.

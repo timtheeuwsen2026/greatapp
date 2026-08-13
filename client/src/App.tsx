@@ -68,6 +68,8 @@ import UnsubscribePage from "@/pages/unsubscribe";
 import VenueListingTypeGate, { VenueProfileSetupRoute } from "@/components/VenueListingTypeGate";
 import VenueInvitePage from "@/pages/venue-invite";
 import PartnerInvitePage from "@/pages/partner-invite";
+import Terms from "@/pages/terms";
+import Privacy from "@/pages/privacy";
 
 // Keep routed component types at module scope. Defining them inside Router makes
 // React remount the active page whenever Router rerenders (for example, when the
@@ -210,6 +212,12 @@ function Router() {
       <Route path="/event-builder" component={EventBuilderPage} />
       <Route path="/event-builder/:draftId" component={EventBuilderPage} />
       <Route path="/about" component={About} />
+
+      {/* Legal — linked from the mandatory consent checkboxes across the signup,
+          Event Builder, and Venue Builder flows, so these must stay public. */}
+      <Route path="/terms" component={Terms} />
+      <Route path="/privacy" component={Privacy} />
+
       <Route path="/admin/api-console" component={AdminAPIConsole} />
       <Route path="/admin/promoters" component={AdminPromotersPage} />
       <Route path="/admin/promoters/:promoterId" component={AdminPromoterDetailPage} />

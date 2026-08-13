@@ -22,6 +22,7 @@ import { Label } from '@/components/ui/label';
 import type { VenueService } from '@/components/VenueServicesEditor';
 import type { Role } from '@/components/RolesEditor';
 import Navigation from '@/components/navigation';
+import LegalConsentLabel from '@/components/LegalConsentLabel';
 
 const VenueAvailability = lazy(() => import('@/components/VenueAvailability'));
 const VenueServicesEditor = lazy(() =>
@@ -243,6 +244,9 @@ const venueProfileSchema = z.object({
   houseRules: z.string().optional().or(z.literal('')),
   damagePolicy: z.string().optional().or(z.literal('')),
   termsConfirmed: z.boolean().default(false),
+  // Mandatory consent to the platform's own legal terms, given afresh on every
+  // submission — deliberately never rehydrated from a saved venue.
+  platformTermsAccepted: z.boolean().default(false),
 });
 
 type VenueProfileForm = z.infer<typeof venueProfileSchema>;
@@ -414,6 +418,7 @@ export default function VenueProfileSetup() {
       houseRules: '',
       damagePolicy: '',
       termsConfirmed: false,
+      platformTermsAccepted: false,
     },
   });
 
@@ -511,6 +516,9 @@ export default function VenueProfileSetup() {
         houseRules: existingVenue.houseRules || '',
         damagePolicy: existingVenue.damagePolicy || '',
         termsConfirmed: existingVenue.termsConfirmed ?? false,
+        // Consent to the platform terms is re-given on every submission, so it
+        // stays false when an existing listing is loaded for editing.
+        platformTermsAccepted: false,
       });
     }
   }, [existingVenue, form]);
@@ -2030,7 +2038,7 @@ export default function VenueProfileSetup() {
                       <p className="text-sm text-blue-800 dark:text-blue-200">
                         By listing your venue on this platform you also agree to the{' '}
                         <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline font-medium">
-                          Great Platform Terms of Service
+                          Great App Terms and Conditions
                         </a>{' '}
                         and{' '}
                         <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline font-medium">
@@ -2067,6 +2075,33 @@ export default function VenueProfileSetup() {
                           </FormItem>
                         )}
                       />
+
+                      <FormField
+                        control={form.control}
+                        name="platformTermsAccepted"
+                        render={({ field }) => (
+                          <FormItem className="mt-4 flex items-start gap-3 rounded-lg bg-gray-50 p-4 dark:bg-gray-800">
+                            <FormControl>
+                              <input
+                                type="checkbox"
+                                checked={field.value}
+                                onChange={field.onChange}
+                                className="h-5 w-5 mt-0.5 rounded border-gray-300"
+                                data-testid="checkbox-platform-terms-accepted"
+                              />
+                            </FormControl>
+                            <div>
+                              <FormLabel className="text-base font-medium">
+                                <LegalConsentLabel />
+                                <span className="text-destructive"> *</span>
+                              </FormLabel>
+                              <FormDescription>
+                                You must accept these to submit your venue listing.
+                              </FormDescription>
+                            </div>
+                          </FormItem>
+                        )}
+                      />
                     </Card>
 
                     {/* Submit for Review Button */}
@@ -2080,7 +2115,7 @@ export default function VenueProfileSetup() {
                     <Button
                       type="button"
                       className="w-full btn-gradient py-6 text-lg"
-                      disabled={!form.watch('termsConfirmed') || submitForReviewMutation.isPending || profileMutation.isPending}
+                      disabled={!form.watch('termsConfirmed') || !form.watch('platformTermsAccepted') || submitForReviewMutation.isPending || profileMutation.isPending}
                       onClick={async () => {
                         if (editVenueId) {
                           submitForReviewMutation.mutate(editVenueId);

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Compass } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
+import LegalConsentLabel from "@/components/LegalConsentLabel";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 
@@ -45,6 +46,7 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("participant");
+  const [acceptedLegalTerms, setAcceptedLegalTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -130,6 +132,16 @@ export default function AuthPage() {
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
+    // Belt and braces: the checkbox is `required` and also gates the submit
+    // button, but never fire the signup request without it ticked.
+    if (!acceptedLegalTerms) {
+      toast({
+        title: "Please accept the terms",
+        description: "You must agree to the Terms and Conditions and Privacy Policy to create an account.",
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch("/api/auth/signup", {
@@ -157,6 +169,7 @@ export default function AuthPage() {
         title: "Check your inbox",
         description: "We sent a verification link to " + email + ". Click it to activate your account.",
       });
+      setAcceptedLegalTerms(false);
       setMode("login");
     } finally {
       setLoading(false);
@@ -246,7 +259,12 @@ export default function AuthPage() {
                   <button
                     key={m}
                     type="button"
-                    onClick={() => setMode(m)}
+                    onClick={() => {
+                      // Consent has to be given deliberately on the signup form
+                      // itself, so never carry a stale tick across a mode switch.
+                      setAcceptedLegalTerms(false);
+                      setMode(m);
+                    }}
                     className={`rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
                       mode === m
                         ? "bg-white text-primary shadow-sm ring-1 ring-primary/10"
@@ -331,9 +349,26 @@ export default function AuthPage() {
                   </div>
                 )}
 
+                {mode === "signup" && (
+                  <label className="flex items-start gap-3 rounded-lg border border-primary/15 bg-primary/5 p-3.5 text-sm leading-6 text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      required
+                      checked={acceptedLegalTerms}
+                      onChange={(e) => setAcceptedLegalTerms(e.target.checked)}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-primary"
+                      data-testid="checkbox-accept-legal-terms"
+                    />
+                    <span>
+                      <LegalConsentLabel />
+                      <span className="text-destructive"> *</span>
+                    </span>
+                  </label>
+                )}
+
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || (mode === "signup" && !acceptedLegalTerms)}
                   className="flex w-full items-center justify-center rounded-lg bg-gradient-to-r from-primary to-secondary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-secondary/25 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {loading

@@ -43,7 +43,7 @@ export function EventSocialProofToast({ experienceId }: { experienceId:string })
     if (viewers >= 2) items.push({ kind: "viewers", text: `${viewers} people are looking at this experience right now` });
     if (!items.length && (proof?.totalCount || 0) > 0) {
       const count = proof!.totalCount;
-      items.push({ kind: "viewers", text: count === 1 ? "1 traveler has already joined this experience" : `${count} people have already joined this experience` });
+      items.push({ kind: "viewers", text: count === 1 ? "1 person has already joined this experience" : `${count} people have already joined this experience` });
     }
     if (!items.length) items.push({ kind: "viewers", text: "Be among the first to reserve a spot for this experience" });
     return items;

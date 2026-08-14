@@ -51,6 +51,7 @@ import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContex
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
+import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
   syncVenueIcalFeeds,
@@ -3391,12 +3392,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           limit: limit ? parseInt(limit as string) : undefined,
         });
         
-        // If no status filter, combine approved and published; enforce strict data hygiene
+        // With no explicit status filter, expose every public experience.
+        // Price 0 is intentional for Free RSVP events and must remain discoverable.
         if (!statusFilter) {
-          experiences = experiences.filter(exp => 
-            (exp.status === "approved" || exp.status === "published") &&
-            parseFloat(exp.price as string || '0') > 0
-          );
+          experiences = experiences.filter(isPublicExperienceListable);
         }
         
         res.json(await enrichWithLiveLifecycle(experiences));
@@ -3407,12 +3406,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           limit: limit ? parseInt(limit as string) : undefined,
         });
         
-        // If no status filter, combine approved and published; enforce strict data hygiene
+        // With no explicit status filter, expose every public experience.
+        // Price 0 is intentional for Free RSVP events and must remain discoverable.
         if (!statusFilter) {
-          experiences = experiences.filter(exp => 
-            (exp.status === "approved" || exp.status === "published") &&
-            parseFloat(exp.price as string || '0') > 0
-          );
+          experiences = experiences.filter(isPublicExperienceListable);
         }
         
         res.json(await enrichWithLiveLifecycle(experiences));

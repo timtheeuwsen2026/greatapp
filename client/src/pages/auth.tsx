@@ -32,7 +32,7 @@ const ROLE_OPTIONS = [
   {
     value: "promoter",
     label: "Promoter",
-    description: "I want to promote trips and earn commission",
+    description: "I want to promote experiences and earn commission",
   },
 ] as const;
 
@@ -217,19 +217,19 @@ export default function AuthPage() {
               <div className="mt-16 max-w-md">
                 <p className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-sm font-medium backdrop-blur">
                   <Compass className="h-4 w-4" />
-                  Community-powered travel
+                  Community-powered experiences
                 </p>
                 <h1 className="text-5xl font-bold leading-tight tracking-tight">
-                  Find the people, places, and trips worth showing up for.
+                  Find the people, places, and experiences worth showing up for.
                 </h1>
                 <p className="mt-5 text-base leading-7 text-white/85">
-                  Join curated experiences, create trips, promote adventures, or welcome groups into your venue.
+                  Join curated experiences, create events, promote moments, or welcome groups into your space.
                 </p>
               </div>
             </div>
 
             <div className="relative grid grid-cols-3 gap-3">
-              {["Curated trips", "Real groups", "Local venues"].map((item) => (
+              {["Curated experiences", "Real communities", "Local spaces"].map((item) => (
                 <div key={item} className="rounded-xl border border-white/15 bg-white/12 p-4 text-sm font-semibold backdrop-blur">
                   {item}
                 </div>
@@ -244,7 +244,7 @@ export default function AuthPage() {
                   <BrandLogo className="h-16 w-auto" />
                 </a>
                 <p className="mb-2 text-sm font-semibold uppercase text-primary">
-                  {mode === "login" ? "Welcome back" : mode === "reset" ? "Account recovery" : "Start your journey"}
+                  {mode === "login" ? "Welcome back" : mode === "reset" ? "Account recovery" : "Join the community"}
                 </p>
                 <h2 className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-3xl font-bold tracking-tight text-transparent">
                   {mode === "login" ? "Log in to Great." : mode === "reset" ? "Reset your password" : "Create your Great. account"}

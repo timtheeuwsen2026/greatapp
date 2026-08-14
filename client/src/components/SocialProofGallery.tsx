@@ -119,7 +119,7 @@ export function SocialProofGallery({ experienceId, compact = false, className = 
         </div>
       );
     }
-    if (p.avatarUrl) return <img src={p.avatarUrl} alt={name || "Traveler"} className="w-full h-full object-cover" />;
+    if (p.avatarUrl) return <img src={p.avatarUrl} alt={name || "Participant"} className="w-full h-full object-cover" />;
     if (initials) return <div className="w-full h-full bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white font-semibold">{initials}</div>;
     return (
       <div className="w-full h-full bg-gradient-to-br from-violet-500 to-purple-700 flex items-center justify-center">
@@ -139,7 +139,7 @@ export function SocialProofGallery({ experienceId, compact = false, className = 
             const isPlaceholder = p.isPlaceholder || (!p.firstName && !p.displayName);
             const isClickable = !!p.userId && !isPlaceholder;
             const sharedClass = `${avatarSize} rounded-full border-2 border-white dark:border-gray-800 shadow-sm overflow-hidden flex-shrink-0 transition-transform hover:scale-110 hover:z-10`;
-            const tooltipText = `${name || "Traveler"}${isClickable ? " · View profile" : ""}`;
+            const tooltipText = `${name || "Participant"}${isClickable ? " · View profile" : ""}`;
 
             if (isClickable) {
               return (
@@ -164,7 +164,7 @@ export function SocialProofGallery({ experienceId, compact = false, className = 
 
           {remaining > 0 && (
             <div
-              title={`${remaining} more ${remaining === 1 ? "traveler" : "travelers"}`}
+              title={`${remaining} more ${remaining === 1 ? "person" : "people"}`}
               className={`${avatarSize} rounded-full border-2 border-white dark:border-gray-800 shadow-sm bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-300 font-semibold flex-shrink-0 cursor-default`}
             >
               +{remaining}

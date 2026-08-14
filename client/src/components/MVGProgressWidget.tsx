@@ -11,6 +11,7 @@ interface MVGProgressWidgetProps {
   experienceId: string;
   className?: string;
   showTitle?: boolean;
+  isFreeExperience?: boolean;
   refreshInterval?: number; // in milliseconds, default 30 seconds
 }
 
@@ -19,6 +20,7 @@ export default function MVGProgressWidget({
   experienceId, 
   className = "",
   showTitle = true,
+  isFreeExperience = false,
   refreshInterval = 30000 
 }: MVGProgressWidgetProps) {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -131,12 +133,12 @@ export default function MVGProgressWidget({
         {!isComplete && mvgStatus !== "failed" && remaining > 0 && (
           <p className="text-lg font-black text-primary leading-tight" data-testid="mvg-human-gap-text">
             {remaining === 1
-              ? "🔥 Just 1 more traveler to make this real!"
+              ? "🔥 Just 1 more person to make this real!"
               : remaining <= 3
-              ? `🔥 Just ${remaining} more travelers to make this real!`
+              ? `🔥 Just ${remaining} more people to make this real!`
               : remaining <= 6
-              ? `⚡ ${remaining} more travelers needed to confirm this trip!`
-              : `👥 ${remaining} more travelers needed to make this happen!`}
+              ? `⚡ ${remaining} more people needed to confirm this experience!`
+              : `👥 ${remaining} more people needed to make this happen!`}
           </p>
         )}
 
@@ -165,7 +167,7 @@ export default function MVGProgressWidget({
         </div>
 
         {/* Time remaining and status information */}
-        {mvgDeadline && !isComplete && mvgStatus !== "failed" && (
+        {mvgDeadline && !isFreeExperience && !isComplete && mvgStatus !== "failed" && (
           <Alert className="mt-3">
             <Shield className="h-4 w-4" />
             <AlertDescription className="text-sm">
@@ -184,7 +186,9 @@ export default function MVGProgressWidget({
           <Alert className="mt-3">
             <Zap className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              <strong>Booking Confirmed!</strong> The minimum group size has been reached. Your payment has been processed and your spot is secured.
+              <strong>Booking Confirmed!</strong> The minimum group size has been reached. {isFreeExperience
+                ? "Your spot is secured."
+                : "Your payment has been processed and your spot is secured."}
             </AlertDescription>
           </Alert>
         )}
@@ -193,7 +197,7 @@ export default function MVGProgressWidget({
           <Alert variant="destructive" className="mt-3">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              <strong>Booking Cancelled:</strong> The minimum group size was not reached by the deadline. Your payment has been refunded automatically.
+              <strong>Booking Cancelled:</strong> The minimum group size was not reached by the deadline. {!isFreeExperience && "Your payment has been refunded automatically."}
             </AlertDescription>
           </Alert>
         )}

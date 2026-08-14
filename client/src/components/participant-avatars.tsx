@@ -1,6 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Link } from "wouter";
-import { Plane } from "lucide-react";
+import { UserRound } from "lucide-react";
 
 interface ParticipantAvatarsProps {
   participants: Array<{
@@ -67,7 +67,7 @@ export default function ParticipantAvatars({
     if (remainingCount > 0) {
       return names.length > 0 
         ? `${names.join(", ")} & ${remainingCount} others`
-        : `${remainingCount} travelers joined`;
+        : `${remainingCount} participants joined`;
     }
     
     return names.join(", ");
@@ -88,11 +88,11 @@ export default function ParticipantAvatars({
           const avatarEl = (
             <Avatar
               className={`w-8 h-8 border-2 border-white avatar ${userId ? 'hover:opacity-90 hover:scale-110 transition-transform' : ''}`}
-              title={userId ? (fn || dn || 'Traveler') : undefined}
+              title={userId ? (fn || dn || 'Participant') : undefined}
             >
               <AvatarImage src={imgUrl} />
               <AvatarFallback className={`text-xs ${isPlaceholder ? 'bg-gradient-to-br from-violet-500 to-purple-700' : 'bg-gradient-to-br from-primary to-secondary'} text-white`}>
-                {isPlaceholder ? <Plane className="h-3 w-3" /> : initials}
+                {isPlaceholder ? <UserRound className="h-3 w-3" /> : initials}
               </AvatarFallback>
             </Avatar>
           );

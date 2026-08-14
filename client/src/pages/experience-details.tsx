@@ -480,6 +480,10 @@ export default function ExperienceDetails() {
   
   const { minPrice: effectivePrice, hasRange: hasPriceRange } = getEffectivePrice();
   const formattedPrice = effectivePrice > 0 ? effectivePrice.toFixed(2) : '0.00';
+  const isFreeExperience = effectivePrice === 0 && !ticketSkus.some((ticket: any) => (
+    ticket.pricingMode === 'pwyw'
+    || (ticket.pricingMode === 'combi' && Number(ticket.addonPrice || 0) > 0)
+  ));
 
   // DATA CONTRACT: Get fixed deposit from ticketSkus.depositPerPerson or experience.depositAmount
   const depositAmount = (() => {
@@ -537,12 +541,12 @@ export default function ExperienceDetails() {
               </div>
               <p className="text-xl sm:text-2xl font-black text-white leading-tight drop-shadow-lg">
                 {needed === 1
-                  ? '🔥 Just 1 more traveler to make this real!'
+                  ? '🔥 Just 1 more person to make this real!'
                   : needed <= 3
-                  ? `🔥 Just ${needed} more travelers to make this real!`
+                  ? `🔥 Just ${needed} more people to make this real!`
                   : needed <= 6
-                  ? `⚡ ${needed} more travelers needed to confirm this trip!`
-                  : `👥 ${needed} more travelers needed to make this happen!`}
+                  ? `⚡ ${needed} more people needed to confirm this experience!`
+                  : `👥 ${needed} more people needed to make this happen!`}
               </p>
             </div>
           );
@@ -557,8 +561,10 @@ export default function ExperienceDetails() {
           >
             <CheckCircle className="h-5 w-5 text-emerald-300 shrink-0" />
             <div>
-              <p className="text-sm font-bold text-white">Group confirmed — this trip is happening!</p>
-              <p className="text-xs text-emerald-200">Your deposit is secured</p>
+              <p className="text-sm font-bold text-white">Group confirmed — this experience is happening!</p>
+              <p className="text-xs text-emerald-200">
+                {isFreeExperience ? "Your spot is secured" : "Your deposit is secured"}
+              </p>
             </div>
           </div>
         )}
@@ -569,7 +575,7 @@ export default function ExperienceDetails() {
             <div className="bg-gray-900/75 backdrop-blur-sm text-white rounded-xl px-6 py-3 flex items-center gap-3">
               <AlertCircle className="h-6 w-6 text-gray-300" />
               <div>
-                <p className="font-bold text-gray-100">Trip Cancelled</p>
+                <p className="font-bold text-gray-100">Experience Cancelled</p>
                 <p className="text-xs text-gray-300">
                   {experience.cancellationReason || 'Minimum group size was not reached by the deadline'}
                 </p>
@@ -705,10 +711,10 @@ export default function ExperienceDetails() {
                   <span className="flex items-center">
                     <Users className="h-5 w-5 mr-2 text-primary" />
                     {experience.requireMinimumParticipants
-                      ? `Meet Your Fellow Travelers (${isMvgForming
+                      ? `Meet Other Participants (${isMvgForming
                           ? formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)
                           : formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)})`
-                      : `Meet Your Fellow Travelers (${liveParticipantCount} joined)`}
+                      : `Meet Other Participants (${liveParticipantCount} joined)`}
                   </span>
                   <div className="flex items-center space-x-2">
                     <Badge variant="secondary" className="text-primary border-primary/20">
@@ -725,8 +731,8 @@ export default function ExperienceDetails() {
                       <div className="flex-1">
                         <h3 className="font-semibold text-gray-900 mb-2">Connect Before You Book</h3>
                         <p className="text-sm text-gray-600 mb-3">
-                          Join our pre-experience community to meet fellow travelers, share intentions, 
-                          and start building connections before your journey begins.
+                          Join our pre-experience community to meet other participants, share intentions,
+                          and start building connections before the experience begins.
                         </p>
                         <div className="flex flex-wrap gap-2 text-xs text-gray-500 mb-3">
                           <span className="flex items-center">
@@ -1581,6 +1587,7 @@ export default function ExperienceDetails() {
                     <MVGProgressWidget 
                       experienceId={experience.id}
                       showTitle={true}
+                      isFreeExperience={isFreeExperience}
                       refreshInterval={30000}
                       className="mb-4"
                     />
@@ -1702,10 +1709,12 @@ export default function ExperienceDetails() {
                 </div>
 
                 <div className="mt-6 pt-6 border-t">
-                  <div className="flex items-center text-sm text-gray-600">
-                    <i className="fas fa-shield-alt mr-2"></i>
-                    <span>Secure payment with Stripe</span>
-                  </div>
+                  {!isFreeExperience && (
+                    <div className="flex items-center text-sm text-gray-600">
+                      <i className="fas fa-shield-alt mr-2"></i>
+                      <span>Secure payment with Stripe</span>
+                    </div>
+                  )}
                   <div className="flex items-center text-sm text-gray-600 mt-2">
                     <i className="fas fa-undo mr-2"></i>
                     <span>Free cancellation up to 24h before</span>

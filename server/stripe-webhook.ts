@@ -26,6 +26,7 @@ import {
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
+import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
@@ -196,6 +197,39 @@ async function rebuildMissingBooking(pi: Stripe.PaymentIntent, source: string): 
  * Mode A / D: PaymentIntent captured immediately (capture_method=automatic).
  * Mark booking as fully_paid. If it was a balance payment, mark balance paid.
  */
+/**
+ * Register (or refresh) the 7-day post-event payout job for a ticketed event.
+ *
+ * Scheduling only ever happened on three paths — MVG success, venue sponsorship
+ * and upfront rental — so a plain creator event selling plain tickets produced no
+ * scheduled_payouts row at all. With nothing for getExperiencesReadyForPayout()
+ * to find, the hourly scheduler skipped the event forever and the creator was
+ * never paid, with no error raised anywhere.
+ *
+ * MVG events keep going through completeMVGSuccess; isExperiencePayoutEligible
+ * keeps this out of their way until the minimum is met. upsertScheduledPayout is
+ * idempotent, so both paths touching the same experience is harmless.
+ */
+async function ensurePayoutScheduled(experienceId: string | null | undefined): Promise<void> {
+  if (!experienceId) return;
+
+  try {
+    const experience = await storage.getExperience(experienceId);
+    if (!experience?.endDate) return;
+    if (!isExperiencePayoutEligible(experience)) return;
+
+    const confirmedBookings = await storage.getConfirmedBookings(experienceId);
+    const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
+
+    await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
+  } catch (err: any) {
+    console.error(
+      `[Webhook] Failed to schedule payout for experience ${experienceId}:`,
+      err?.message || err
+    );
+  }
+}
+
 async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<void> {
   const booking = await storage.getBookingByPaymentIntent(pi.id);
 
@@ -227,6 +261,10 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     console.log(`[Webhook] Full payment confirmed for booking ${booking.id}`);
     await sendBookingNotificationsAfterPayment(booking.id);
   }
+
+  // Money for this event has landed, so the payout job has to exist. Re-running
+  // it on every payment keeps the recorded gross in step with later sales.
+  await ensurePayoutScheduled(booking.experienceId);
 }
 
 /**

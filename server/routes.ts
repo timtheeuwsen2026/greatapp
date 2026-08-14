@@ -1164,13 +1164,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).send('Webhook secret not configured');
     }
 
-    let event: Stripe.Event;
+    // A Connect platform normally ends up with more than one endpoint on this URL
+    // — one for events on the platform account, one for events on connected
+    // accounts — and Stripe issues a separate signing secret per endpoint. With a
+    // single secret every delivery from the other endpoint failed verification and
+    // was dropped with a 400, which is how account.updated never arrived and left
+    // creator verification status permanently stale. Accept a comma-separated list
+    // and try each; one secret keeps working exactly as before.
+    const webhookSecrets = webhookSecret
+      .split(',')
+      .map((secret) => secret.trim())
+      .filter(Boolean);
 
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err: any) {
-      console.error('Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+    let event: Stripe.Event | undefined;
+    let lastError: any;
+
+    for (const secret of webhookSecrets) {
+      try {
+        event = stripe.webhooks.constructEvent(req.body, sig, secret);
+        break;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    if (!event) {
+      console.error('Webhook signature verification failed:', lastError?.message);
+      return res.status(400).send(`Webhook Error: ${lastError?.message}`);
     }
 
     // Dispatch to the comprehensive webhook handler
@@ -7637,6 +7657,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (chargesEnabled && payoutsEnabled) status = 'verified';
       else if (detailsSubmitted) status = 'pending';
       else status = 'incomplete';
+
+      // Write the live answer back to the cached column. Until now it only ever
+      // moved when the account.updated Connect webhook arrived, so a webhook that
+      // was never configured (or simply missed) left a fully verified creator
+      // showing "Connect Payments" forever in the onboarding checklist, and left
+      // them permanently undeliverable as a promoter — the payout scheduler defers
+      // anyone whose cached status isn't 'verified'. Refreshing here means any
+      // dashboard visit repairs the cache, webhook or no webhook.
+      const cachedStatus = status === 'incomplete' ? 'unverified' : status;
+      if (profile.stripeVerificationStatus !== cachedStatus) {
+        await storage.setCreatorStripeVerificationStatus(userId, cachedStatus)
+          .catch((err: any) => console.error('Failed to persist Stripe verification status:', err?.message || err));
+      }
 
       res.json({
         connected: true,

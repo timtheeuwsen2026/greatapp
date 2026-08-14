@@ -278,11 +278,18 @@ async function executeExperiencePayout(
       continue;
     }
 
+    // Skipping used to be a console.warn and a `continue`, which meant the
+    // recipient's share silently stayed in the platform balance while the payout
+    // still reported "completed". Money going missing has to be loud: fail the
+    // payout so it shows up as failed and an admin can retry it once the account
+    // is connected. Transfers already sent this run are protected by the
+    // idempotency keys below, so a retry never double-pays.
     if (!recipient.stripeAccountId) {
-      console.warn(
-        `[Payout Scheduler] Recipient ${recipient.recipientType} has no Stripe account — skipping`
+      throw new Error(
+        `Recipient ${recipient.recipientType}`
+        + `${recipient.userId ? ` (${recipient.userId})` : ''}`
+        + ` has no connected Stripe account — payout halted so their share is not silently retained`
       );
-      continue;
     }
 
     const isReservedFlatFee = flatFeeAmounts.has(recipient);
@@ -485,16 +492,25 @@ async function buildDefaultRecipients(
     });
   }
 
-  if (experience.stripeConnectAccountId) {
-    recipients.push({
-      recipientType: "creator",
-      stripeAccountId: experience.stripeConnectAccountId,
-      userId: experience.creatorId,
-      splitMode: "percentage",
-      splitValue: String(adjustedCreatorPct),
-      isActive: true,
-    });
-  }
+  // experiences.stripe_connect_account_id is read here but no write path in the
+  // app has ever populated it, so relying on it alone dropped the creator out of
+  // every default split — the payout ran, retained the platform fee and paid the
+  // creator nothing. Their account actually lives on the creator profile, which
+  // is what Stripe Connect onboarding writes.
+  const creatorProfile = experience.creatorId
+    ? await storage.getCreatorProfile(experience.creatorId)
+    : undefined;
+  const creatorStripeAccountId =
+    experience.stripeConnectAccountId || creatorProfile?.stripeAccountId || null;
+
+  recipients.push({
+    recipientType: "creator",
+    stripeAccountId: creatorStripeAccountId,
+    userId: experience.creatorId,
+    splitMode: "percentage",
+    splitValue: String(adjustedCreatorPct),
+    isActive: true,
+  });
 
   return recipients;
 }

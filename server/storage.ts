@@ -390,6 +390,7 @@ export interface IStorage {
   getCreatorProfileByUserId(userId: string): Promise<CreatorProfile | undefined>;
   createOrUpdateCreatorProfile(userId: string, profileData: Omit<InsertCreatorProfile, 'userId'>): Promise<CreatorProfile>;
   updateCreatorProfileStripe(userId: string, stripeAccountId: string): Promise<void>;
+  setCreatorStripeVerificationStatus(userId: string, verificationStatus: string): Promise<void>;
   getPromoterProfile(userId: string): Promise<PromoterProfile | undefined>;
   getPromoterProfileByUserId(userId: string): Promise<PromoterProfile | undefined>;
   createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile>;
@@ -2621,6 +2622,16 @@ export class DatabaseStorage implements IStorage {
       .update(creatorProfiles)
       .set({
         stripeAccountId,
+        updatedAt: new Date(),
+      })
+      .where(eq(creatorProfiles.userId, userId));
+  }
+
+  async setCreatorStripeVerificationStatus(userId: string, verificationStatus: string): Promise<void> {
+    await db
+      .update(creatorProfiles)
+      .set({
+        stripeVerificationStatus: verificationStatus,
         updatedAt: new Date(),
       })
       .where(eq(creatorProfiles.userId, userId));

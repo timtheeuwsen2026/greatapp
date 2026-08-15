@@ -1347,6 +1347,13 @@ export const venues = pgTable("venues", {
   stripeCustomerId: varchar("stripe_customer_id"), // Stripe Customer ID for the venue owner
   stripePaymentMethodId: varchar("stripe_payment_method_id"), // Default saved card
 
+  // Stripe Connect — the paying-OUT side. Distinct from the two fields above,
+  // which charge the venue on sponsorship deals. A venue's revenue share, fixed
+  // fee or rental income transfers here, so it lives on the venue rather than on
+  // the owner: one account can run several spaces, each billed as its own business.
+  stripeAccountId: varchar("stripe_account_id"),
+  stripeVerificationStatus: varchar("stripe_verification_status").default("unverified"),
+
   // Meta fields
   createdBy: varchar("created_by")
     .notNull()

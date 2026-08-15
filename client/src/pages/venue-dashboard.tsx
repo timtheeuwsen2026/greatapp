@@ -214,12 +214,229 @@ function VenueDealFields({ form, setForm, currency, isDaytime }: {
   );
 }
 
+// ── Venue payouts: Stripe Connect ───────────────────────────────────────────
+// A venue is paid into its own connected account, so each space gets its own
+// card. Status is read live from Stripe rather than from a cached flag, which is
+// what kept the creator dashboard showing "not connected" after a missed webhook.
+type VenueConnectStatus = {
+  venueId: string;
+  venueName: string;
+  connected: boolean;
+  status: "not_connected" | "incomplete" | "pending" | "verified";
+  accountId?: string;
+  requirementsDue?: string[];
+};
+
+const VENUE_PAYOUT_VIEW: Record<VenueConnectStatus["status"], {
+  badgeClass: string;
+  badgeLabel: string;
+  title: string;
+  body: string;
+  cta: string;
+}> = {
+  not_connected: {
+    badgeClass: "bg-gray-200 text-gray-800",
+    badgeLabel: "Not connected",
+    title: "Connect this space to get paid",
+    body: "Your share of ticket sales, fixed fees and rental income is sent straight to your own Stripe account. Connecting takes about 2 minutes.",
+    cta: "Connect Stripe account",
+  },
+  incomplete: {
+    badgeClass: "bg-amber-100 text-amber-800",
+    badgeLabel: "Setup unfinished",
+    title: "Finish setting up your payouts",
+    body: "Stripe onboarding was started but never completed, so we cannot send this venue's earnings yet.",
+    cta: "Finish Stripe setup",
+  },
+  pending: {
+    badgeClass: "bg-blue-100 text-blue-800",
+    badgeLabel: "Verifying",
+    title: "Stripe is verifying your details",
+    body: "Your information is submitted and under review by Stripe. This usually clears quickly — add any missing details if prompted.",
+    cta: "Update details",
+  },
+  verified: {
+    badgeClass: "bg-green-100 text-green-800",
+    badgeLabel: "Connected & ready",
+    title: "This space is ready to receive payouts",
+    body: "Stripe is verified and payouts are enabled. Earnings are released 7 days after each event ends.",
+    cta: "Open Stripe dashboard",
+  },
+};
+
+function VenuePayoutCard({ venue }: { venue: VenueConnectStatus }) {
+  const { toast } = useToast();
+
+  const connect = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/venue/stripe/connect-url", {
+        venueId: venue.venueId,
+        returnPath: "/venue-dashboard?tab=payouts",
+      });
+      return res.json();
+    },
+    onSuccess: (data: { url?: string }) => {
+      if (data?.url) window.location.href = data.url;
+    },
+    onError: (error: any) =>
+      toast({ title: "Couldn't open Stripe", description: readableError(error), variant: "destructive" }),
+  });
+
+  const openDashboard = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/venue/stripe/dashboard-link", { venueId: venue.venueId });
+      return res.json();
+    },
+    onSuccess: (data: { url?: string }) => {
+      if (data?.url) window.open(data.url, "_blank", "noopener");
+    },
+    onError: (error: any) =>
+      toast({ title: "Couldn't open Stripe dashboard", description: readableError(error), variant: "destructive" }),
+  });
+
+  const view = VENUE_PAYOUT_VIEW[venue.status];
+  const isVerified = venue.status === "verified";
+  const busy = connect.isPending || openDashboard.isPending;
+
+  const icon = isVerified
+    ? <CheckCircle className="w-6 h-6 text-green-600" />
+    : venue.status === "pending"
+      ? <Clock className="w-6 h-6 text-blue-600" />
+      : venue.status === "incomplete"
+        ? <AlertCircle className="w-6 h-6 text-amber-600" />
+        : <DollarSign className="w-6 h-6 text-purple-600" />;
+
+  return (
+    <Card
+      className="border-purple-200 bg-purple-50/60 dark:bg-purple-950/30 dark:border-purple-800"
+      data-testid={`card-venue-stripe-connect-${venue.venueId}`}
+    >
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            {icon}
+            {venue.venueName}
+          </CardTitle>
+          <Badge className={view.badgeClass} data-testid={`badge-venue-stripe-${venue.venueId}`}>
+            {view.badgeLabel}
+          </Badge>
+        </div>
+        <CardDescription>{view.title}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-300">{view.body}</p>
+
+        {!isVerified && (venue.requirementsDue?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/40 p-3 text-xs text-amber-800 dark:text-amber-200">
+            Stripe still needs: {venue.requirementsDue!.map((r) => r.replace(/[._]/g, " ")).join(", ")}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => (isVerified ? openDashboard.mutate() : connect.mutate())}
+            disabled={busy}
+            data-testid={`button-venue-stripe-connect-${venue.venueId}`}
+          >
+            {busy ? "Opening…" : view.cta}
+          </Button>
+          {isVerified && (
+            <Button variant="outline" onClick={() => connect.mutate()} disabled={busy}>
+              Update bank details
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function VenuePayoutsTab() {
+  const { data: statuses = [], isLoading } = useQuery<VenueConnectStatus[]>({
+    queryKey: ["/api/venue/stripe/connect-status"],
+  });
+
+  if (isLoading) {
+    return <p className="text-sm text-gray-500">Checking your payout accounts…</p>;
+  }
+
+  if (statuses.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center">
+          <Building className="mx-auto mb-4 h-12 w-12 text-gray-400" />
+          <h3 className="text-lg font-semibold">No spaces yet</h3>
+          <p className="mt-2 text-sm text-gray-600">
+            Add a venue first — payouts are connected per space.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const unconnected = statuses.filter((venue) => venue.status !== "verified");
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold">Payouts — Stripe Connect</h2>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Each space is paid into its own Stripe account. A space that is not connected
+          cannot be paid, and its events will not release funds.
+        </p>
+      </div>
+
+      {unconnected.length > 0 && (
+        <div
+          className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/40 p-3 text-sm text-amber-800 dark:text-amber-200"
+          data-testid="alert-venue-payouts-incomplete"
+        >
+          {unconnected.length} of your {statuses.length} space{statuses.length === 1 ? "" : "s"} cannot
+          receive money yet. Connect {unconnected.length === 1 ? "it" : "them"} before hosting a paid event.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {statuses.map((venue) => (
+          <VenuePayoutCard key={venue.venueId} venue={venue} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VenueDashboardContent() {
   const [, setLocation] = useLocation();
   const { user, isAuthenticated, hasRequiredRole, isLoading: authLoading } = useVenueAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const breadcrumbs = useBreadcrumbs();
+
+  // Stripe sends the venue back to ?tab=payouts, so the tab has to be driven by
+  // the URL rather than left uncontrolled — otherwise onboarding finishes and
+  // drops them on "My Venues" with no sign anything happened.
+  const [activeTab, setActiveTab] = useState(
+    () => new URLSearchParams(window.location.search).get("tab") || "venues",
+  );
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("stripe_success") === "true";
+    const refresh = params.get("stripe_refresh") === "true";
+    if (!success && !refresh) return;
+
+    queryClient.invalidateQueries({ queryKey: ["/api/venue/stripe/connect-status"] });
+    setActiveTab("payouts");
+    if (success) {
+      toast({ title: "Stripe updated", description: "We've refreshed this venue's payout status." });
+    }
+
+    params.delete("stripe_success");
+    params.delete("stripe_refresh");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -591,9 +808,10 @@ function VenueDashboardContent() {
           </Card>
         </div>
 
-        <Tabs defaultValue="venues" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="venues">My Venues</TabsTrigger>
+            <TabsTrigger value="payouts">Payouts</TabsTrigger>
             <TabsTrigger value="offers" className="relative">
               Offers
               {pendingOffers.length > 0 && (
@@ -623,6 +841,11 @@ function VenueDashboardContent() {
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
+
+          {/* ── Payouts Tab ── */}
+          <TabsContent value="payouts" className="space-y-4">
+            <VenuePayoutsTab />
+          </TabsContent>
 
           {/* ── Open Events Feed Tab ── */}
           {/* Creators who published with venueType="open" appear here so venue owners can reach out */}

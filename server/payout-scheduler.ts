@@ -32,6 +32,7 @@ import {
   calculateTicketDeductionCents,
   sumBookingTicketQuantity,
 } from "@shared/ticketDeduction";
+import { resolveVenuePayoutAccount } from "./venuePayouts";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
@@ -278,20 +279,6 @@ async function executeExperiencePayout(
       continue;
     }
 
-    // Skipping used to be a console.warn and a `continue`, which meant the
-    // recipient's share silently stayed in the platform balance while the payout
-    // still reported "completed". Money going missing has to be loud: fail the
-    // payout so it shows up as failed and an admin can retry it once the account
-    // is connected. Transfers already sent this run are protected by the
-    // idempotency keys below, so a retry never double-pays.
-    if (!recipient.stripeAccountId) {
-      throw new Error(
-        `Recipient ${recipient.recipientType}`
-        + `${recipient.userId ? ` (${recipient.userId})` : ''}`
-        + ` has no connected Stripe account — payout halted so their share is not silently retained`
-      );
-    }
-
     const isReservedFlatFee = flatFeeAmounts.has(recipient);
     let transferAmountCents = isReservedFlatFee
       ? flatFeeAmounts.get(recipient) ?? 0
@@ -309,7 +296,24 @@ async function executeExperiencePayout(
       ),
     );
 
+    // Owed nothing — a listed recipient on a 0% share needs no account and must
+    // not block the run, so this is checked before the account requirement below.
     if (transferAmountCents <= 0) continue;
+
+    // Missing account used to be a console.warn and a `continue`, which meant the
+    // recipient's share silently stayed in the platform balance while the payout
+    // still reported "completed". Money going missing has to be loud: fail the
+    // payout so it surfaces as failed and an admin can retry once the account is
+    // connected. Transfers already sent this run are protected by the idempotency
+    // keys below, so a retry never double-pays.
+    if (!recipient.stripeAccountId) {
+      throw new Error(
+        `Recipient ${recipient.recipientType}`
+        + `${recipient.userId ? ` (${recipient.userId})` : ''}`
+        + ` is owed ${(transferAmountCents / 100).toFixed(2)} ${currency.toUpperCase()}`
+        + ` but has no connected Stripe account — payout halted so their share is not silently retained`
+      );
+    }
 
     try {
       const transfer = await stripe.transfers.create({
@@ -477,15 +481,12 @@ async function buildDefaultRecipients(
     && venueFixedFee > 0
     && experience.linkedVenueId
   ) {
-    const venue = await storage.getVenue(experience.linkedVenueId);
-    const venueOwnerProfile = venue?.createdBy
-      ? await storage.getCreatorProfile(venue.createdBy)
-      : undefined;
+    const venueAccount = await resolveVenuePayoutAccount(experience.linkedVenueId);
 
     recipients.push({
       recipientType: "venue",
-      stripeAccountId: venueOwnerProfile?.stripeAccountId ?? null,
-      userId: venue?.createdBy ?? null,
+      stripeAccountId: venueAccount.stripeAccountId,
+      userId: venueAccount.userId,
       splitMode: "flat_fee",
       splitValue: String(venueFixedFee),
       isActive: true,

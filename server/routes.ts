@@ -7702,6 +7702,167 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── Venue payouts: Stripe Connect ────────────────────────────────────────
+  // Mirrors the creator routes above, but the account belongs to the venue rather
+  // than the account holder — one owner can run several spaces, and each is paid
+  // as its own business. Ownership is re-checked on every call: the venue id
+  // arrives from the client and must never be trusted on its own.
+
+  /** Loads a venue the caller is allowed to manage, or null. */
+  async function getOwnedVenue(req: any, venueId: unknown) {
+    if (typeof venueId !== "string" || !venueId) return null;
+    const userId = req.user.claims.sub;
+    const venue = await storage.getVenue(venueId);
+    if (!venue) return null;
+    if (venue.createdBy === userId) return venue;
+    return (await checkIsAdmin(req)) ? venue : null;
+  }
+
+  app.post("/api/venue/stripe/connect-url", isAuthenticated, async (req: any, res) => {
+    try {
+      const venue = await getOwnedVenue(req, req.body?.venueId);
+      if (!venue) {
+        return res.status(404).json({ message: "That venue is not available on your account" });
+      }
+
+      const userEmail = req.user.claims.email;
+
+      // Only allow internal same-origin paths to avoid open-redirects.
+      const rawReturn = typeof req.body?.returnPath === "string" ? req.body.returnPath : "";
+      const returnPath = rawReturn.startsWith("/") && !rawReturn.startsWith("//")
+        ? rawReturn
+        : "/venue-dashboard?tab=payouts";
+
+      let account: Stripe.Account | null = null;
+
+      if (venue.stripeAccountId) {
+        try {
+          account = await stripe.accounts.retrieve(venue.stripeAccountId);
+        } catch (err: any) {
+          // A stored id from the other Stripe mode (test vs live) stops resolving
+          // after a key switch; create a fresh account instead of failing.
+          if (err?.code === "resource_missing" || err?.code === "account_invalid") {
+            console.warn(`Stripe account ${venue.stripeAccountId} for venue ${venue.id} not found in current mode; creating a new one.`);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      if (!account) {
+        account = await stripe.accounts.create({
+          type: "express",
+          email: venue.contactEmail || userEmail,
+          metadata: { venueId: venue.id, userId: req.user.claims.sub, accountPurpose: "venue_payouts" },
+        });
+        await storage.updateVenueStripeAccount(venue.id, account.id);
+      }
+
+      const base = getAppBaseUrl(req);
+      const sep = returnPath.includes("?") ? "&" : "?";
+      const accountLink = await stripe.accountLinks.create({
+        account: account.id,
+        refresh_url: `${base}${returnPath}${sep}stripe_refresh=true`,
+        return_url: `${base}${returnPath}${sep}stripe_success=true`,
+        type: "account_onboarding",
+      });
+
+      res.json({ url: accountLink.url });
+    } catch (error: any) {
+      console.error("Error creating venue Stripe Connect URL:", error);
+      const msg: string = error?.message || "Unknown error";
+      if (msg.includes("signed up for Connect") || msg.includes("platform-profile") || msg.includes("responsibilities of managing losses")) {
+        return res.status(500).json({
+          message: "Stripe Connect isn't fully activated on the platform's account yet. An admin needs to finish Connect setup at dashboard.stripe.com (Connect → Get started / Platform profile).",
+        });
+      }
+      res.status(500).json({ message: "Error creating Stripe Connect URL: " + msg });
+    }
+  });
+
+  /**
+   * Live payout status for every venue the caller runs. One call rather than one
+   * per venue, because the dashboard renders a card for each. Stripe is only asked
+   * about venues that actually have an account, and the freshly read status is
+   * written back so the cached column cannot drift when a Connect webhook is
+   * missed — the same self-healing the creator route does.
+   */
+  app.get("/api/venue/stripe/connect-status", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const venues = await storage.getVenuesByCreator(userId);
+
+      const statuses = await Promise.all(venues.map(async (venue) => {
+        const base = { venueId: venue.id, venueName: venue.name };
+
+        if (!venue.stripeAccountId) {
+          return { ...base, connected: false, status: "not_connected" as const };
+        }
+
+        try {
+          const account = await stripe.accounts.retrieve(venue.stripeAccountId);
+          const chargesEnabled = !!account.charges_enabled;
+          const payoutsEnabled = !!account.payouts_enabled;
+          const detailsSubmitted = !!account.details_submitted;
+          const requirementsDue = Array.from(new Set([
+            ...(account.requirements?.currently_due || []),
+            ...(account.requirements?.past_due || []),
+          ]));
+
+          let status: "verified" | "pending" | "incomplete";
+          if (chargesEnabled && payoutsEnabled) status = "verified";
+          else if (detailsSubmitted) status = "pending";
+          else status = "incomplete";
+
+          const cachedStatus = status === "incomplete" ? "unverified" : status;
+          if (venue.stripeVerificationStatus !== cachedStatus) {
+            await storage.setVenueStripeVerificationStatus(venue.id, cachedStatus)
+              .catch((err: any) => console.error("Failed to persist venue Stripe status:", err?.message || err));
+          }
+
+          return {
+            ...base,
+            connected: true,
+            accountId: account.id,
+            status,
+            chargesEnabled,
+            payoutsEnabled,
+            detailsSubmitted,
+            requirementsDue,
+          };
+        } catch (err: any) {
+          // A dead id (mode switch, deleted account) must not blank the whole
+          // dashboard — report this one venue as unconnected and keep going.
+          console.error(`Failed to read Stripe account for venue ${venue.id}:`, err?.message || err);
+          return { ...base, connected: false, status: "not_connected" as const };
+        }
+      }));
+
+      res.json(statuses);
+    } catch (error: any) {
+      console.error("Error fetching venue Stripe status:", error);
+      res.status(500).json({ message: "Failed to fetch Stripe status: " + error.message });
+    }
+  });
+
+  app.post("/api/venue/stripe/dashboard-link", isAuthenticated, async (req: any, res) => {
+    try {
+      const venue = await getOwnedVenue(req, req.body?.venueId);
+      if (!venue) {
+        return res.status(404).json({ message: "That venue is not available on your account" });
+      }
+      if (!venue.stripeAccountId) {
+        return res.status(400).json({ message: "No Stripe account connected yet. Connect this venue first." });
+      }
+
+      const loginLink = await stripe.accounts.createLoginLink(venue.stripeAccountId);
+      res.json({ url: loginLink.url });
+    } catch (error: any) {
+      console.error("Error creating venue Stripe dashboard link:", error);
+      res.status(500).json({ message: "Couldn't open the Stripe dashboard. Finish onboarding first, then try again." });
+    }
+  });
+
   // Review routes
   app.post("/api/reviews", isAuthenticated, async (req: any, res) => {
     try {

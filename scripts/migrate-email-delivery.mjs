@@ -7,6 +7,7 @@ const migrationUrls = [
   new URL("../migrations/20260717_fulfillment_archive_deal_ledger.sql", import.meta.url),
   new URL("../migrations/20260718_production_email_delivery.sql", import.meta.url),
   new URL("../migrations/20260726_booking_ticket_quantity.sql", import.meta.url),
+  new URL("../migrations/20260815_venue_stripe_connect_payouts.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {
@@ -32,7 +33,7 @@ try {
   await client.query("COMMIT");
   transactionStarted = false;
 
-  console.log("[Database Migration] Fulfillment and email delivery schemas are ready");
+  console.log(`[Database Migration] ${migrationUrls.length} production support migration(s) applied — schemas are ready`);
 } catch (error) {
   if (transactionStarted) {
     await client.query("ROLLBACK").catch(() => undefined);

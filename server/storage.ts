@@ -298,6 +298,9 @@ export interface IStorage {
   getVenueBySlug(slug: string): Promise<Venue | undefined>;
   getVenues(options?: { location?: string; type?: string; approved?: boolean }): Promise<Venue[]>;
   getVenuesByCreator(userId: string): Promise<Venue[]>;
+  getVenueByStripeAccountId(stripeAccountId: string): Promise<Venue | undefined>;
+  updateVenueStripeAccount(id: string, stripeAccountId: string): Promise<void>;
+  setVenueStripeVerificationStatus(id: string, verificationStatus: string): Promise<void>;
   updateVenue(id: string, updates: Partial<InsertVenue>): Promise<Venue>;
   deleteVenue(id: string): Promise<void>;
   updateVenueDisplayPrefs(id: string, displayPrefs: { servicesPlacement?: "sidebar" | "inline" }): Promise<Venue>;
@@ -2168,6 +2171,30 @@ export class DatabaseStorage implements IStorage {
 
   async getVenuesByCreator(userId: string): Promise<Venue[]> {
     return await db.select().from(venues).where(eq(venues.createdBy, userId)).orderBy(desc(venues.createdAt));
+  }
+
+  // account.updated only carries the Stripe account id, so the webhook needs to
+  // reach the venue from that alone.
+  async getVenueByStripeAccountId(stripeAccountId: string): Promise<Venue | undefined> {
+    const [venue] = await db
+      .select()
+      .from(venues)
+      .where(eq(venues.stripeAccountId, stripeAccountId));
+    return venue;
+  }
+
+  async updateVenueStripeAccount(id: string, stripeAccountId: string): Promise<void> {
+    await db
+      .update(venues)
+      .set({ stripeAccountId, updatedAt: new Date() })
+      .where(eq(venues.id, id));
+  }
+
+  async setVenueStripeVerificationStatus(id: string, verificationStatus: string): Promise<void> {
+    await db
+      .update(venues)
+      .set({ stripeVerificationStatus: verificationStatus, updatedAt: new Date() })
+      .where(eq(venues.id, id));
   }
 
   async updateVenue(id: string, updates: Partial<InsertVenue>): Promise<Venue> {

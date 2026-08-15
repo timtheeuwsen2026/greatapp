@@ -27,6 +27,7 @@ import {
 import { eq } from "drizzle-orm";
 import { scheduleExperiencePayout } from "./payout-scheduler";
 import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
+import { resolveVenuePayoutAccount } from "./venuePayouts";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
@@ -407,7 +408,18 @@ async function handleAccountUpdated(account: Stripe.Account): Promise<void> {
       .set({ stripeVerificationStatus: verificationStatus, updatedAt: new Date() })
       .where(eq(promoterProfiles.id, promoterProfile.id));
     console.log(`[Webhook] Promoter profile ${promoterProfile.id} Stripe status -> ${verificationStatus}`);
-  } else if (!profile) {
+  }
+
+  // Venues onboard their own Connect account now, so the same event has to keep
+  // the venue row in step — otherwise a fully verified venue stays "unverified"
+  // in the dashboard and its payouts look blocked.
+  const venue = await storage.getVenueByStripeAccountId(account.id);
+  if (venue) {
+    await storage.setVenueStripeVerificationStatus(venue.id, verificationStatus);
+    console.log(`[Webhook] Venue ${venue.id} Stripe status -> ${verificationStatus}`);
+  }
+
+  if (!profile && !promoterProfile && !venue) {
     console.warn(`[Webhook] account.updated: no payout profile for Stripe account ${account.id}`);
   }
 }
@@ -490,14 +502,11 @@ async function handleUpfrontRental(session: Stripe.Checkout.Session): Promise<vo
     const platformFeePct = parseFloat(settings?.platformFeePercentage?.toString() ?? '15');
     const venuePct = Math.max(0, 100 - platformFeePct);
 
-    // Look up venue owner's Stripe Connect account for the payout transfer
-    const venue = await storage.getVenue(venueId);
-    const venueOwnerProfile = venue?.createdBy
-      ? await storage.getCreatorProfile(venue.createdBy)
-      : undefined;
+    // Look up the venue's Stripe Connect account for the payout transfer
+    const venueAccount = await resolveVenuePayoutAccount(venueId);
 
-    if (!venueOwnerProfile?.stripeAccountId) {
-      console.warn(`[Webhook] upfront_rental: venue owner (${venue?.createdBy}) has no Stripe Connect account — payout will fail at execution`);
+    if (!venueAccount.stripeAccountId) {
+      console.warn(`[Webhook] upfront_rental: venue ${venueId} has no Stripe Connect account — payout will fail at execution`);
     }
 
     // Replace any previous split recipients for this experience
@@ -514,8 +523,8 @@ async function handleUpfrontRental(session: Stripe.Checkout.Session): Promise<vo
       {
         experienceId,
         recipientType: 'venue' as const,
-        userId: venue?.createdBy ?? null,
-        stripeAccountId: venueOwnerProfile?.stripeAccountId ?? null,
+        userId: venueAccount.userId,
+        stripeAccountId: venueAccount.stripeAccountId,
         splitMode: 'percentage' as const,
         splitValue: String(venuePct),
         priority: 1,

@@ -26,6 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import BrandLogo from "@/components/BrandLogo";
+import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -108,41 +109,6 @@ export default function Home() {
     refetchInterval: 30000 // Refresh every 30s for live updates
   });
 
-  // Helper to get pricing from ticket SKUs or legacy fields
-  // Returns the lowest price/deposit from ticketSkus, falling back to legacy fields
-  const getPricingFromTicketSkus = (ticketSkus: any[] | undefined, legacyPrice: any, legacyDeposit: any) => {
-    // Safe parseFloat that returns null for invalid values
-    const safeParse = (val: any): number | null => {
-      if (val === null || val === undefined || val === '') return null;
-      const num = typeof val === 'number' ? val : parseFloat(val);
-      return isNaN(num) || num <= 0 ? null : num;
-    };
-
-    // Get legacy values first for fallback
-    const parsedLegacyPrice = safeParse(legacyPrice);
-    const parsedLegacyDeposit = safeParse(legacyDeposit);
-
-    // Check ticketSkus for valid pricing
-    if (ticketSkus && ticketSkus.length > 0) {
-      const validPrices = ticketSkus
-        .map((s: any) => safeParse(s.pricePerPerson))
-        .filter((p): p is number => p !== null);
-      const validDeposits = ticketSkus
-        .map((s: any) => safeParse(s.depositPerPerson))
-        .filter((d): d is number => d !== null);
-
-      // Use lowest valid SKU price, otherwise legacy price
-      const lowestPrice = validPrices.length > 0 ? Math.min(...validPrices) : parsedLegacyPrice;
-      // Use lowest valid SKU deposit, otherwise legacy deposit
-      const lowestDeposit = validDeposits.length > 0 ? Math.min(...validDeposits) : parsedLegacyDeposit;
-
-      return { price: lowestPrice, depositAmount: lowestDeposit };
-    }
-
-    // No ticketSkus - use legacy fields
-    return { price: parsedLegacyPrice, depositAmount: parsedLegacyDeposit };
-  };
-
   // Helper to format currency with proper symbol
   // DATA CONTRACT: Currency must come from experience.currency - never default to USD
   const formatCurrency = (amount: number | string | null | undefined, currency?: string): string => {
@@ -168,7 +134,7 @@ export default function Home() {
         // Use ticketSkus for pricing - PERSON = SELLABLE UNIT
         const currentParticipants = trip.currentParticipants;
         const minimumParticipants = trip.minimumParticipants;
-        const { price, depositAmount } = getPricingFromTicketSkus(
+        const { price, depositAmount } = resolveDiscoveryPricing(
           trip.ticketSkus,
           trip.price,
           trip.depositAmount
@@ -253,11 +219,11 @@ export default function Home() {
 
   const filteredExperiences = filterExperiences(activeFunding);
 
-  // Grid groups — CANCELLED trips never show; price-less trips never show
+  // Grid groups — cancelled and genuinely price-less experiences never show.
+  // Zero is a valid display price for Free RSVP experiences.
   const visibleExperiences = filteredExperiences.filter((e: any) => {
     if (e.lifecycleStatus === 'cancelled') return false;
-    // Only hide experiences with no full price at all — deposit is optional
-    if (!e.price || e.price <= 0) return false;
+    if (!hasDisplayableDiscoveryPrice(e.price)) return false;
     return true;
   });
 

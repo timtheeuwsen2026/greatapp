@@ -9,9 +9,8 @@ import VenueDashboard from '../pages/venue-dashboard';
 //  1. "Offer to Host" and "Counter Offer" were taller than the screen with no
 //     way to scroll, so the Submit button sat off-screen and the venue could
 //     not answer at all.
-//  2. The Commercial Model dropdown offered four deals where the creator's
-//     builder offered five — a venue could never answer a day event with the
-//     sponsorship it was willing to pay.
+//  2. The Commercial Model dropdown must match the creator's allowed list,
+//     including sponsorship while excluding the disabled Pay-at-Counter deal.
 
 vi.mock('wouter', () => ({
   useLocation: () => ['/venue-dashboard', vi.fn()],
@@ -140,16 +139,16 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /venue sponsorship/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByRole('option')).toHaveLength(5);
+    expect(screen.getAllByRole('option')).toHaveLength(4);
     for (const label of [
       /revenue split/i,
       /ticket deduction/i,
       /upfront rental/i,
-      /access-only/i,
       /venue sponsorship/i,
     ]) {
       expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
     }
+    expect(screen.queryByRole('option', { name: /access-only|pay-at-counter/i })).not.toBeInTheDocument();
   });
 
   it('never lands a multi-day event on a deal it cannot be offered', async () => {

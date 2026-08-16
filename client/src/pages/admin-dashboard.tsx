@@ -69,6 +69,11 @@ interface AdminUserInventory {
   activeBookingCount: number;
   lastBookingAt: string | null;
   hasParticipantProfile: boolean;
+  venueListingCount: number;
+  venueDraftCount: number;
+  venuePendingCount: number;
+  venueApprovedCount: number;
+  venueRejectedCount: number;
 }
 
 interface AdminDealLedgerItem {
@@ -205,6 +210,7 @@ export default function AdminDashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeTab, setActiveTab] = useState("experiences");
   const [reviewNotes, setReviewNotes] = useState("");
   const [, setLocation] = useLocation();
   const [expandedExperiences, setExpandedExperiences] = useState<Set<string>>(new Set());
@@ -217,6 +223,16 @@ export default function AdminDashboard() {
   const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [venueStatusFilter, setVenueStatusFilter] = useState<string>("all");
   const experiencePageSize = 10;
+
+  const openVenueOverview = (ownerSearch = "") => {
+    setSearchTerm(ownerSearch);
+    setVenueStatusFilter("all");
+    setVenuePage(1);
+    setActiveTab("venues");
+    window.requestAnimationFrame(() => {
+      document.getElementById("admin-dashboard-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
 
   const toggleExperienceDetails = (id: string) => {
     setExpandedExperiences(prev => {
@@ -295,6 +311,8 @@ export default function AdminDashboard() {
         total: venueResponse.length,
         approved: venueResponse.filter((venue) => venue.status === "approved").length,
         pending: venueResponse.filter((venue) => venue.status === "pending").length,
+        draft: venueResponse.filter((venue) => venue.status === "draft").length,
+        rejected: venueResponse.filter((venue) => venue.status === "rejected").length,
       }
     : venueResponse?.stats;
   const venuePagination = Array.isArray(venueResponse) ? undefined : venueResponse?.pagination;
@@ -653,7 +671,7 @@ export default function AdminDashboard() {
                 <div>
                   <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Venue profiles</p>
                   <p className="text-2xl font-bold" data-testid="text-venue-total">{venueStats?.total ?? 0}</p>
-                  <div className="mt-2 text-xs text-muted-foreground">
+                   <div className="mt-2 text-xs text-muted-foreground">
                     <span className="text-green-600 dark:text-green-400" data-testid="text-venue-approved">
                       {venueStats?.approved ?? 0} approved
                     </span>
@@ -661,7 +679,20 @@ export default function AdminDashboard() {
                     <span className="text-yellow-600 dark:text-yellow-400" data-testid="text-venue-pending">
                       {venueStats?.pending ?? 0} pending
                     </span>
+                    {" • "}
+                    <span className="text-slate-600 dark:text-slate-300" data-testid="text-venue-draft">
+                      {venueStats?.draft ?? 0} draft
+                    </span>
                   </div>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="mt-2 h-auto p-0 text-xs"
+                    onClick={() => openVenueOverview()}
+                    data-testid="button-open-venue-overview"
+                  >
+                    Open venue overview
+                  </Button>
                 </div>
                 <Building className="w-8 h-8 text-purple-500" />
               </div>
@@ -691,7 +722,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <Tabs defaultValue="experiences" className="space-y-6">
+        <Tabs id="admin-dashboard-tabs" value={activeTab} onValueChange={setActiveTab} className="scroll-mt-4 space-y-6">
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
             <TabsTrigger value="deal-ledger">Deal Ledger</TabsTrigger>
@@ -1375,6 +1406,7 @@ export default function AdminDashboard() {
                         <TableHead>User</TableHead>
                         <TableHead>Role</TableHead>
                         <TableHead>Participant Profile</TableHead>
+                        <TableHead>Venue Listings</TableHead>
                         <TableHead>Tickets</TableHead>
                         <TableHead>Last Booking</TableHead>
                         <TableHead>Joined</TableHead>
@@ -1384,6 +1416,8 @@ export default function AdminDashboard() {
                     <TableBody>
                       {registeredUsers.map((account) => {
                         const fullName = [account.firstName, account.lastName].filter(Boolean).join(" ");
+                        const accountRole = account.role || "participant";
+                        const venueListingCount = Number(account.venueListingCount || 0);
                         return (
                           <TableRow key={account.id} data-testid={`user-row-${account.id}`}>
                             <TableCell>
@@ -1393,13 +1427,41 @@ export default function AdminDashboard() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <Badge variant="secondary">{(account.role || "participant").replaceAll("_", " ")}</Badge>
+                              <Badge variant="secondary">{accountRole.replaceAll("_", " ")}</Badge>
                             </TableCell>
                             <TableCell>
                               {account.hasParticipantProfile ? (
                                 <span className="inline-flex items-center text-sm text-green-700"><CheckCircle className="mr-1 h-4 w-4" />Complete</span>
-                              ) : (
+                              ) : accountRole === "participant" ? (
                                 <span className="text-sm text-muted-foreground">Not completed</span>
+                              ) : (
+                                <span className="text-sm text-muted-foreground">Not required for this role</span>
+                              )}
+                            </TableCell>
+                            <TableCell data-testid={`user-venue-listings-${account.id}`}>
+                              {accountRole !== "venue_provider" ? (
+                                <span className="text-sm text-muted-foreground">Not applicable</span>
+                              ) : venueListingCount === 0 ? (
+                                <div>
+                                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">No venue listing created</p>
+                                  <p className="text-xs text-muted-foreground">Account registered only</p>
+                                </div>
+                              ) : (
+                                <div className="min-w-44 space-y-1.5">
+                                  <button
+                                    type="button"
+                                    className="text-left text-sm font-semibold text-primary hover:underline"
+                                    onClick={() => openVenueOverview(account.email || fullName)}
+                                  >
+                                    {venueListingCount} venue {venueListingCount === 1 ? "listing" : "listings"}
+                                  </button>
+                                  <div className="flex flex-wrap gap-1 text-xs">
+                                    {Number(account.venueDraftCount || 0) > 0 && <Badge variant="outline">{account.venueDraftCount} draft</Badge>}
+                                    {Number(account.venuePendingCount || 0) > 0 && <Badge className="bg-yellow-100 text-yellow-800">{account.venuePendingCount} pending</Badge>}
+                                    {Number(account.venueApprovedCount || 0) > 0 && <Badge className="bg-green-100 text-green-800">{account.venueApprovedCount} approved</Badge>}
+                                    {Number(account.venueRejectedCount || 0) > 0 && <Badge variant="destructive">{account.venueRejectedCount} rejected</Badge>}
+                                  </div>
+                                </div>
                               )}
                             </TableCell>
                             <TableCell>
@@ -1559,8 +1621,29 @@ export default function AdminDashboard() {
           </TabsContent>
 
           <TabsContent value="venues" className="space-y-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Venue Management</h2>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Venue Management</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Every saved venue profile appears here, including unfinished drafts, pending reviews, approved listings, and rejected submissions.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="venue-status-filter" className="whitespace-nowrap text-sm">Status:</Label>
+                <select
+                  id="venue-status-filter"
+                  value={venueStatusFilter}
+                  onChange={(event) => setVenueStatusFilter(event.target.value)}
+                  className="rounded-md border bg-white px-3 py-2 text-sm dark:bg-gray-800"
+                  data-testid="select-venue-status-filter"
+                >
+                  <option value="all">All venues</option>
+                  <option value="draft">Draft / incomplete</option>
+                  <option value="pending">Pending review</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
             </div>
 
             {venuesLoading ? (
@@ -1581,12 +1664,13 @@ export default function AdminDashboard() {
               </Card>
             ) : (
               <Card>
-                <CardContent className="p-0">
+                <CardContent className="overflow-x-auto p-0">
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-16">Photo</TableHead>
                         <TableHead>Name</TableHead>
+                        <TableHead>Location</TableHead>
                         <TableHead>Owner</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Created</TableHead>
@@ -1615,8 +1699,16 @@ export default function AdminDashboard() {
                           <TableCell className="font-medium" data-testid={`venue-name-${venue.id}`}>
                             {venue.name}
                           </TableCell>
+                          <TableCell className="min-w-40 text-sm" data-testid={`venue-location-${venue.id}`}>
+                            {(venue as any).city || venue.location || "—"}
+                          </TableCell>
                           <TableCell data-testid={`venue-owner-${venue.id}`}>
-                            {venue.ownerName || venue.ownerEmail || 'Unknown'}
+                            <div className="min-w-44">
+                              <p className="font-medium">{venue.ownerName || venue.ownerEmail || "Unknown"}</p>
+                              {venue.ownerName && venue.ownerEmail && (
+                                <p className="text-xs text-muted-foreground">{venue.ownerEmail}</p>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             {getStatusBadge(venue.status || 'draft')}

@@ -379,10 +379,10 @@ export default function EmbeddedPricingCalculator() {
                     Day Venue Models
                   </h4>
                   <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-                    <li>• <strong>Flat Fee</strong> — fixed amount to the venue</li>
-                    <li>• <strong>Per Head</strong> — amount × number of attendees</li>
-                    <li>• <strong>Minimum Spend</strong> — guaranteed floor spend</li>
-                    <li>• <strong>Access-Only / Pay-at-Counter</strong> — venue keeps all on-site sales, Great takes 0%</li>
+                    <li>• <strong>Revenue Split</strong> — percentage of digital ticket revenue</li>
+                    <li>• <strong>Ticket Deduction / Per-Head Fee</strong> — fixed amount from each digital ticket</li>
+                    <li>• <strong>Upfront Rental</strong> — creator pays the venue through the platform</li>
+                    <li>• <strong>Venue Sponsorship</strong> — venue pays the creator through the platform</li>
                   </ul>
                 </div>
                 <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border border-purple-200 dark:border-purple-800">

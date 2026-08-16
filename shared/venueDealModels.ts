@@ -134,9 +134,12 @@ const DAY_EVENT_MODELS: VenueDealModel[] = [
   "revenue_share",
   "fixed_fee",
   "upfront_rental",
-  "access_only",
   "venue_sponsored",
 ];
+
+// Temporarily disabled for every creator/venue dropdown. Keep the definition
+// and normalizer so historical contracts still render without data loss.
+const HIDDEN_FROM_DEAL_DROPDOWNS = new Set<VenueDealModel>(["access_only"]);
 
 /**
  * Older records used a different key for the same idea. Reading them through
@@ -154,6 +157,11 @@ const LEGACY_ALIASES: Record<string, VenueDealModel> = {
 
 export function isVenueDealModel(value: unknown): value is VenueDealModel {
   return typeof value === "string" && (VENUE_DEAL_MODELS as readonly string[]).includes(value);
+}
+
+/** True only for canonical models that users may select in a new deal. */
+export function isVenueDealSelectable(value: unknown): value is VenueDealModel {
+  return isVenueDealModel(value) && !HIDDEN_FROM_DEAL_DROPDOWNS.has(value);
 }
 
 /** Maps a stored value — current or legacy — onto a canonical model. */
@@ -208,16 +216,101 @@ export function getVenueDealOptions(input: VenueDealOptionsInput): VenueDealOpti
   const currencySymbol = input.currencySymbol || "€";
   const models = input.isDaytime ? DAY_EVENT_MODELS : MULTI_DAY_MODELS;
 
-  const options = models.map((model) => render(DEFINITIONS[model], currencySymbol));
+  const options = models
+    .filter((model) => !HIDDEN_FROM_DEAL_DROPDOWNS.has(model))
+    .map((model) => render(DEFINITIONS[model], currencySymbol));
 
-  // Keep an already-saved deal visible even if it is no longer offered,
-  // otherwise editing an older event silently clears its terms.
+  // Keep an already-saved legacy deal visible while editing, unless the model
+  // has been explicitly disabled platform-wide. Pay-at-Counter must not be
+  // reintroduced merely because an older draft already selected it.
   const current = normalizeVenueDealModel(input.currentValue);
-  if (current && !options.some((option) => option.value === current)) {
+  if (
+    current
+    && !HIDDEN_FROM_DEAL_DROPDOWNS.has(current)
+    && !options.some((option) => option.value === current)
+  ) {
     options.push(render(DEFINITIONS[current], currencySymbol));
   }
 
   return options;
+}
+
+/**
+ * Validates one newly selected deal. Historical disabled models can still be
+ * rendered, but they cannot be used to create a new proposal or counteroffer.
+ */
+export function getVenueDealSelectionError(model: unknown, value: unknown): string | null {
+  if (!isVenueDealSelectable(model)) {
+    return "Select an available on-platform venue deal";
+  }
+
+  const definition = DEFINITIONS[model];
+  if (definition.valueKind === "none") return null;
+
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return definition.valueKind === "percent"
+      ? "Enter a percentage greater than zero"
+      : "Enter an amount greater than zero";
+  }
+  if (definition.valueKind === "percent" && amount > 100) {
+    return "Revenue share percentage cannot exceed 100";
+  }
+
+  return null;
+}
+
+type ExperienceVenueDealInput = {
+  venueType?: unknown;
+  selectedVenueId?: unknown;
+  venueTargetDeal?: unknown;
+  venueTargetDealValue?: unknown;
+  venueCompensationModel?: unknown;
+  venueFixedFee?: unknown;
+  venuePerHeadAmount?: unknown;
+  venuePerRoomPerNight?: unknown;
+  venueMinimumSpend?: unknown;
+  venueRevenueSharePct?: unknown;
+};
+
+function readExperienceVenueDealValue(input: ExperienceVenueDealInput, model: unknown): unknown {
+  switch (model) {
+    case "revenue_share": return input.venueRevenueSharePct;
+    case "fixed_fee":
+    case "upfront_rental":
+    case "venue_sponsored": return input.venueFixedFee;
+    case "per_head": return input.venuePerHeadAmount;
+    case "per_room_night": return input.venuePerRoomPerNight;
+    case "minimum_spend": return input.venueMinimumSpend;
+    default: return undefined;
+  }
+}
+
+/**
+ * Publication-time guard for the existing venue contexts. This deliberately
+ * does not implement the paused Ticket Type matrix; it only guarantees that a
+ * venue deal is on-platform, selected, and numerically usable.
+ */
+export function validateExperienceVenueDeal(input: ExperienceVenueDealInput): string[] {
+  const venueType = String(input.venueType || "catalog");
+
+  if (venueType === "open" || venueType === "manual") {
+    const error = getVenueDealSelectionError(input.venueTargetDeal, input.venueTargetDealValue);
+    return error ? [`Target deal: ${error}`] : [];
+  }
+
+  const hasCatalogVenue = venueType === "catalog"
+    && typeof input.selectedVenueId === "string"
+    && input.selectedVenueId.trim() !== "";
+  if (hasCatalogVenue) {
+    const error = getVenueDealSelectionError(
+      input.venueCompensationModel,
+      readExperienceVenueDealValue(input, input.venueCompensationModel),
+    );
+    return error ? [`Venue commercial deal: ${error}`] : [];
+  }
+
+  return [];
 }
 
 export function getVenueDealDefinition(model: unknown): VenueDealOption | null {

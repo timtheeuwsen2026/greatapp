@@ -282,9 +282,9 @@ export default function RevenueCalculatorDemo() {
                       Venue Commercial Deal (Digital Handshake)
                     </h4>
                     <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-                      <li>• Day venues: Flat Fee, Per Head, Minimum Spend, or Access-Only</li>
+                      <li>• Day venues: Revenue Split, Ticket Deduction / Per-Head Fee, Upfront Rental, or Venue Sponsorship</li>
                       <li>• Retreat venues: Revenue Share, Per-Head Package, or Flat Rental</li>
-                      <li>• External venues: you manage payment independently</li>
+                      <li>• Outdoor or virtual events: no venue commercial deal is required</li>
                       <li>• Terms locked after venue accepts your offer</li>
                     </ul>
                   </div>

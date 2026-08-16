@@ -1,35 +1,15 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MapPin, Users, Building, ChevronLeft, ChevronRight } from "lucide-react";
+import { Building, ChevronLeft, ChevronRight } from "lucide-react";
 import Navigation from "@/components/navigation";
 import { Link } from "wouter";
-import { normalizeImageUrl } from "@/lib/utils";
+import { PublicVenueCard, type PublicVenueSummary } from "@/components/PublicVenueCard";
 
 const VENUES_PER_PAGE = 9;
 
-type Venue = {
-  id: string;
-  name: string;
-  tagline?: string;
-  description: string;
-  city: string;
-  location: string;
-  capacity: number;
-  coverImageUrl?: string;
-  categories?: string[];
-  vibes?: string[];
-  amenities?: string[];
-  status?: string;
-  approved: boolean;
-  createdAt: string;
-  slug: string;
-};
-
 export default function Venues() {
-  const { data: venues, isLoading } = useQuery<Venue[]>({
+  const { data: venues, isLoading } = useQuery<PublicVenueSummary[]>({
     queryKey: ['/api/venues'],
   });
   const [currentPage, setCurrentPage] = useState(1);
@@ -100,7 +80,7 @@ export default function Venues() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {paginatedVenues.map((venue) => (
-                <VenueCard key={venue.id} venue={venue} />
+                <PublicVenueCard key={venue.id} venue={venue} />
               ))}
             </div>
 
@@ -158,77 +138,5 @@ export default function Venues() {
         )}
       </div>
     </div>
-  );
-}
-
-function VenueCard({ venue }: { venue: Venue }) {
-  const categories = venue.categories || [];
-  const vibes = venue.vibes || [];
-
-  return (
-    <Link href={`/v/${venue.slug}`}>
-      <Card className="hover:shadow-lg transition-shadow cursor-pointer">
-        {venue.coverImageUrl && (
-          <div className="aspect-video w-full overflow-hidden rounded-t-lg">
-            <img
-              src={normalizeImageUrl(venue.coverImageUrl) || ''}
-              alt={venue.name}
-              className="w-full h-full object-cover"
-            />
-          </div>
-        )}
-        <CardHeader>
-          <div className="flex justify-between items-start">
-            <CardTitle className="text-lg">{venue.name}</CardTitle>
-          </div>
-          <CardDescription className="flex items-center text-sm text-gray-600">
-            <MapPin className="w-4 h-4 mr-1" />
-            {venue.city || venue.location}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {venue.tagline && (
-            <p className="text-gray-600 italic mb-2 text-sm">{venue.tagline}</p>
-          )}
-          <p className="text-gray-700 mb-4 line-clamp-2">{venue.description}</p>
-          
-          <div className="space-y-3">
-            {categories.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {categories.slice(0, 3).map((cat) => (
-                  <Badge key={cat} variant="secondary" className="text-xs">
-                    {cat.replace(/_/g, ' ')}
-                  </Badge>
-                ))}
-              </div>
-            )}
-            
-            {vibes.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {vibes.slice(0, 3).map((vibe) => (
-                  <Badge key={vibe} variant="outline" className="text-xs">
-                    {vibe}
-                  </Badge>
-                ))}
-                {vibes.length > 3 && (
-                  <Badge variant="outline" className="text-xs">
-                    +{vibes.length - 3} more
-                  </Badge>
-                )}
-              </div>
-            )}
-
-            <div className="flex justify-between items-center text-sm text-gray-600">
-              <div className="flex items-center">
-                <Users className="w-4 h-4 mr-1" />
-                Up to {venue.capacity} people
-              </div>
-              {/* No price. Venues are discovered on space and fit; the
-                  commercial deal is negotiated per event with the creator. */}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
   );
 }

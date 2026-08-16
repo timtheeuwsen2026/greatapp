@@ -47,7 +47,13 @@ import {
   COUNTER_SENT_STATUS_LABEL,
   isCounterAwaitingCreator,
 } from "@/lib/venueOfferStatus";
-import { getVenueDealOptions, getVenueDealTermsKey, getVenueDealLabel, venueDealNeedsValue } from "@shared/venueDealModels";
+import {
+  getVenueDealOptions,
+  getVenueDealSelectionError,
+  getVenueDealTermsKey,
+  getVenueDealLabel,
+  isVenueDealSelectable,
+} from "@shared/venueDealModels";
 import { isSingleDayExperience } from "@shared/depositRules";
 
 type VenueOfferForm = {
@@ -141,15 +147,10 @@ function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
 }
 
 function isVenueOfferFormValid(form: VenueOfferForm): boolean {
-  if (!form.model) return false;
   const termsKey = getVenueDealTermsKey(form.model);
   if (!termsKey) return false;
   const value = Number(form[OFFER_FIELD_BY_TERMS_KEY[termsKey]] || 0);
-
-  // Access-Only may legitimately be free; every other model needs a real number.
-  if (!venueDealNeedsValue(form.model)) return value >= 0;
-  if (form.model === "revenue_share") return value > 0 && value <= 100;
-  return value > 0;
+  return getVenueDealSelectionError(form.model, value) === null;
 }
 
 function VenueDealFields({ form, setForm, currency, isDaytime }: {
@@ -976,7 +977,7 @@ function VenueDashboardContent() {
                               eventUrl={`/experience/${event.slug || event.id}`}
                             />
 
-                            {event.venueTargetDeal && (
+                            {isVenueDealSelectable(event.venueTargetDeal) && (
                               <div className="flex items-center gap-2 text-sm">
                                 <span className="text-gray-500">Preferred deal:</span>
                                 <Badge className="bg-green-100 text-green-800 border-green-300">

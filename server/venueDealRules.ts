@@ -10,10 +10,11 @@ import {
   VENUE_DEAL_MODELS,
   type VenueDealModel,
   isVenueDealModel,
+  isVenueDealSelectable,
   normalizeVenueDealModel,
 } from "@shared/venueDealModels";
 
-export { VENUE_DEAL_MODELS, isVenueDealModel, normalizeVenueDealModel };
+export { VENUE_DEAL_MODELS, isVenueDealModel, isVenueDealSelectable, normalizeVenueDealModel };
 export type { VenueDealModel };
 
 export type VenueDealTerms = {

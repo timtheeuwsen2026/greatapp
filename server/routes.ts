@@ -45,8 +45,12 @@ import {
 } from "@shared/ticketDeduction";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
-import { isVenueDealModel, normalizeVenueDealTerms } from "./venueDealRules";
-import { normalizeVenueDealModel, getVenueDealTermsKey } from "@shared/venueDealModels";
+import { isVenueDealModel, isVenueDealSelectable, normalizeVenueDealTerms } from "./venueDealRules";
+import {
+  normalizeVenueDealModel,
+  getVenueDealTermsKey,
+  validateExperienceVenueDeal,
+} from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
@@ -3033,6 +3037,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      errors.push(...validateExperienceVenueDeal(req.body));
+
       // Pricing validation - conditional logic based on rooms
       const rooms = req.body.rooms || [];
       const hasRooms = rooms.length > 0;
@@ -3952,6 +3958,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         errors.push("Experience price seems unusually high. Please contact support if this is intentional");
       }
     }
+
+    errors.push(...validateExperienceVenueDeal(data));
     
     return {
       isValid: errors.length === 0,
@@ -11454,6 +11462,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
             select 1 from ${participantProfiles}
             where ${participantProfiles.userId} = ${users.id}
           )`,
+          venueListingCount: sql<number>`(
+            select count(*)::int from ${venues}
+            where ${venues.createdBy} = ${users.id}
+          )`,
+          venueDraftCount: sql<number>`(
+            select count(*)::int from ${venues}
+            where ${venues.createdBy} = ${users.id} and ${venues.status} = 'draft'
+          )`,
+          venuePendingCount: sql<number>`(
+            select count(*)::int from ${venues}
+            where ${venues.createdBy} = ${users.id} and ${venues.status} = 'pending'
+          )`,
+          venueApprovedCount: sql<number>`(
+            select count(*)::int from ${venues}
+            where ${venues.createdBy} = ${users.id} and ${venues.status} = 'approved'
+          )`,
+          venueRejectedCount: sql<number>`(
+            select count(*)::int from ${venues}
+            where ${venues.createdBy} = ${users.id} and ${venues.status} = 'rejected'
+          )`,
         }).from(users).where(userWhere).orderBy(desc(users.createdAt)).limit(pageSize).offset(offset),
         db.select({ count: sql<number>`count(*)::int` }).from(users).where(userWhere),
         db.select({ role: users.role, count: sql<number>`count(*)::int` }).from(users).groupBy(users.role),
@@ -11486,16 +11514,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const venueSearch = String(req.query.search || "").trim();
       const venueFilters: any[] = [];
       if (venueStatus !== "all") venueFilters.push(eq(venues.status, venueStatus as any));
-      if (venueSearch) venueFilters.push(or(ilike(venues.name, `%${venueSearch}%`), ilike(venues.location, `%${venueSearch}%`), ilike(venues.city, `%${venueSearch}%`)));
+      if (venueSearch) venueFilters.push(or(
+        ilike(venues.name, `%${venueSearch}%`),
+        ilike(venues.location, `%${venueSearch}%`),
+        ilike(venues.city, `%${venueSearch}%`),
+        ilike(users.firstName, `%${venueSearch}%`),
+        ilike(users.lastName, `%${venueSearch}%`),
+        ilike(users.email, `%${venueSearch}%`),
+      ));
       const venueWhere = venueFilters.length ? and(...venueFilters) : undefined;
       const [items, totals, statuses] = await Promise.all([
         db.select({ venue: venues, ownerFirstName: users.firstName, ownerLastName: users.lastName, ownerEmail: users.email }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere).orderBy(desc(venues.createdAt)).limit(pageSize).offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(venues).where(venueWhere),
+        db.select({ count: sql<number>`count(*)::int` }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere),
         db.select({ status: venues.status, count: sql<number>`count(*)::int` }).from(venues).groupBy(venues.status),
       ]);
       const total = Number(totals[0]?.count || 0);
       const statusCounts = Object.fromEntries(statuses.map(row => [row.status || "unknown", Number(row.count)]));
-      res.json({ items: items.map(row => ({ ...stripVenuePricing(row.venue), ownerName: [row.ownerFirstName, row.ownerLastName].filter(Boolean).join(" ") || null, ownerEmail: row.ownerEmail })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, stats: { total, approved: statusCounts.approved || 0, pending: statusCounts.pending || 0 } });
+      res.json({
+        items: items.map(row => ({
+          ...stripVenuePricing(row.venue),
+          ownerName: [row.ownerFirstName, row.ownerLastName].filter(Boolean).join(" ") || null,
+          ownerEmail: row.ownerEmail,
+        })),
+        pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+        stats: {
+          total,
+          draft: statusCounts.draft || 0,
+          approved: statusCounts.approved || 0,
+          pending: statusCounts.pending || 0,
+          rejected: statusCounts.rejected || 0,
+        },
+      });
     } catch (error) {
       console.error("Error fetching admin venues:", error);
       res.status(500).json({ message: "Failed to fetch admin venues" });
@@ -13599,6 +13648,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isVenueDealModel(model)) {
         return res.status(400).json({ message: 'Unsupported venue deal model' });
       }
+      if (!isVenueDealSelectable(model)) {
+        return res.status(400).json({ message: 'This venue deal model is currently unavailable' });
+      }
 
       const experience = await storage.getExperience(experienceId);
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
@@ -13784,6 +13836,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (!isVenueDealModel(model)) {
         return res.status(400).json({ message: 'Unsupported venue deal model' });
+      }
+      if (!isVenueDealSelectable(model)) {
+        return res.status(400).json({ message: 'This venue deal model is currently unavailable' });
       }
 
       // Verify the experience is actually open for bids

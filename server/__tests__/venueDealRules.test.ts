@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isVenueDealModel, normalizeVenueDealTerms } from "../venueDealRules";
+import { isVenueDealModel, isVenueDealSelectable, normalizeVenueDealTerms } from "../venueDealRules";
 
 describe("venue deal rules", () => {
   it("normalizes a revenue-share counter in the event currency", () => {
@@ -16,5 +16,10 @@ describe("venue deal rules", () => {
   it("rejects invalid percentages and unsupported models", () => {
     expect(() => normalizeVenueDealTerms("revenue_share", { revenueSharePct: 101 }, "EUR")).toThrow("cannot exceed 100");
     expect(isVenueDealModel("something_else")).toBe(false);
+  });
+
+  it("keeps pay-at-counter readable for history but unavailable to new offers", () => {
+    expect(isVenueDealModel("access_only")).toBe(true);
+    expect(isVenueDealSelectable("access_only")).toBe(false);
   });
 });

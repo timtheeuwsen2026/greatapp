@@ -27,6 +27,7 @@ import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import BrandLogo from "@/components/BrandLogo";
 import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
+import { FeaturedVenues } from "@/components/FeaturedVenues";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -650,6 +651,9 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Public venue inventory — visible in the page flow without adding a top-nav item. */}
+      <FeaturedVenues />
 
       {/* 4. How It Works - 3-Step Social Contract (the MVG model) */}
       <section id="how-it-works" className="py-16 lg:py-24 bg-gray-50 dark:bg-gray-900" data-testid="how-it-works-section">

@@ -107,13 +107,13 @@ export function FundingProgressBar({
           ) : (
             <span className="font-semibold text-primary transition-all duration-300" role="status" aria-live="polite">
               {participantsNeeded === 1
-                ? '🔥 Just 1 more traveler to make this real!'
+                ? '🔥 Just 1 more person to make this real!'
                 : participantsNeeded !== undefined && participantsNeeded > 0 && participantsNeeded <= 3
-                ? `🔥 Just ${participantsNeeded} more travelers to make this real!`
+                ? `🔥 Just ${participantsNeeded} more people to make this real!`
                 : participantsNeeded !== undefined && participantsNeeded > 0 && participantsNeeded <= 6
-                ? `⚡ ${participantsNeeded} more travelers needed to confirm this trip!`
+                ? `⚡ ${participantsNeeded} more people needed to confirm this experience!`
                 : participantsNeeded !== undefined && participantsNeeded > 0
-                ? `👥 ${participantsNeeded} more travelers needed to make this happen!`
+                ? `👥 ${participantsNeeded} more people needed to make this happen!`
                 : 'Forming now'}
             </span>
           )}

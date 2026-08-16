@@ -75,7 +75,11 @@ import {
   safeAdd
 } from '@shared/pricingService';
 import { calculateTicketDeduction } from "@shared/ticketDeduction";
-import { getVenueDealOptions } from "@shared/venueDealModels";
+import {
+  getVenueDealLabel,
+  getVenueDealOptions,
+  validateExperienceVenueDeal,
+} from "@shared/venueDealModels";
 
 const GREAT_PILLAR_VALUES = ["health", "sports", "wellness", "food"] as const;
 const FIXED_PLATFORM_FEE_PCT = 15;
@@ -155,7 +159,7 @@ const eventBuilderSchema = z.object({
   venueOpenSpaceType: z.string().optional(),
   venueTargetDeal: z.string().optional(),
   // Numeric target for the chosen deal type: a % for revenue_share, a € amount for everything else.
-  // Only shown/required when venueTargetDeal is one of the value-bearing types (not access_only).
+  // Only shown/required when the selected target deal carries a percentage or amount.
   venueTargetDealValue: z.number().optional(),
 
   // Catalog venue fields
@@ -312,7 +316,7 @@ const eventBuilderSchema = z.object({
   platformPct: z.coerce.number().min(0).max(100).optional().nullable().default(FIXED_PLATFORM_FEE_PCT),
 
   // Pillar B: Commercial venue terms
-  venueCompensationModel: z.enum(VENUE_COMPENSATION_MODELS).default("access_only"),
+  venueCompensationModel: z.enum(VENUE_COMPENSATION_MODELS).default("revenue_share"),
   venueFixedFee: z.coerce.number().min(0).optional().nullable().default(0),
   venuePerHeadAmount: z.coerce.number().min(0).optional().nullable().default(0),
   venuePerRoomPerNight: z.coerce.number().min(0).optional().nullable().default(0),
@@ -507,7 +511,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       location: "",
       venueType: "catalog",
       venueOpenSpaceType: "",
-      venueTargetDeal: "",
+      venueTargetDeal: "revenue_share",
       venueTargetDealValue: undefined,
       selectedVenueId: initialPrefill?.venueId || "",
       venue: "",
@@ -577,7 +581,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       platformPct: FIXED_PLATFORM_FEE_PCT,
 
       // Pillar B: Commercial venue terms
-      venueCompensationModel: "access_only",
+      venueCompensationModel: "revenue_share",
       venueFixedFee: 0,
       venuePerHeadAmount: 0,
       venuePerRoomPerNight: 0,
@@ -984,7 +988,14 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       price: data.price || data.basePrice,
       // Ensure marketplace economics defaults are preserved when loading drafts.
       monetisationMode: 'creator_led',
-      venueCompensationModel: data.venueCompensationModel ?? "access_only",
+      // Blank or disabled historical targets must not fall through to the
+      // server's legacy access-only representation when republished.
+      venueTargetDeal: data.venueTargetDeal && data.venueTargetDeal !== "access_only"
+        ? data.venueTargetDeal
+        : "revenue_share",
+      venueCompensationModel: data.venueCompensationModel && data.venueCompensationModel !== "access_only"
+        ? data.venueCompensationModel
+        : "revenue_share",
       venueFixedFee: data.venueFixedFee != null ? parseFloat(data.venueFixedFee) : 0,
       venuePerHeadAmount: data.venuePerHeadAmount != null ? parseFloat(data.venuePerHeadAmount) : 0,
       venuePerRoomPerNight: data.venuePerRoomPerNight != null ? parseFloat(data.venuePerRoomPerNight) : 0,
@@ -1238,7 +1249,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
-        venueCompensationModel: formData.venueCompensationModel || "access_only",
+        venueCompensationModel: formData.venueCompensationModel || "revenue_share",
         venueFixedFee: formData.venueFixedFee || 0,
         venuePerHeadAmount: formData.venuePerHeadAmount || 0,
         venuePerRoomPerNight: formData.venuePerRoomPerNight || 0,
@@ -1494,6 +1505,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         errors.push("Please select the type of space you are looking for");
       }
     }
+
+    errors.push(...validateExperienceVenueDeal(data));
 
     // Required: pricing - zero is valid for free RSVP events.
     const ticketSkus = Array.isArray(data.ticketSkus) ? data.ticketSkus : [];
@@ -1771,7 +1784,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         depositPercentage: formData.depositPercentage || 20,
         
         // Marketplace economics
-        venueCompensationModel: formData.venueCompensationModel || "access_only",
+        venueCompensationModel: formData.venueCompensationModel || "revenue_share",
         venueFixedFee: formData.venueFixedFee || 0,
         venuePerHeadAmount: formData.venuePerHeadAmount || 0,
         venuePerRoomPerNight: formData.venuePerRoomPerNight || 0,
@@ -5215,14 +5228,13 @@ function PricingStep({ form }: { form: any }) {
   const selectedVenueId = form.watch('selectedVenueId') || "";
   const creatorPct = form.watch('creatorPct') || 85;
   const platformPct = FIXED_PLATFORM_FEE_PCT;
-  const venueCompensationModel = form.watch('venueCompensationModel') || "access_only";
+  const venueCompensationModel = form.watch('venueCompensationModel') || "revenue_share";
   const venueFixedFee = form.watch('venueFixedFee') || 0;
   const venuePerHeadAmount = form.watch('venuePerHeadAmount') || 0;
   const venuePerRoomPerNight = form.watch('venuePerRoomPerNight') || 0;
   const venueMinimumSpend = form.watch('venueMinimumSpend') || 0;
   const venueRevenueSharePct = form.watch('venueRevenueSharePct') || 0;
-  const venueAccessFee = form.watch('venueAccessFee') || 0;
-  const venueTargetDeal = form.watch('venueTargetDeal') || "access_only";
+  const venueTargetDeal = form.watch('venueTargetDeal') || "";
   const venueTargetDealValue = Number(form.watch('venueTargetDealValue') || 0);
   const requireMinimumParticipants = form.watch('requireMinimumParticipants');
   const minimumParticipants = form.watch('minimumParticipants') || 6;
@@ -5291,7 +5303,7 @@ function PricingStep({ form }: { form: any }) {
   // venueDealContext drives which UI branch the Pricing step renders:
   //   "open"              — creator is seeking venue bids; sets a target deal preference only
   //   "invited"           — creator invited a specific external venue (manual); proposes a deal to that venue
-  //   "external"          — outdoor/virtual, no venue to negotiate a deal with; creator manages venue payment themselves
+  //   "external"          — outdoor/virtual, so there is no venue commercial deal to negotiate
   //   "marketplace_day"   — catalog daytime space or one-day event; limited short-stay deal models
   //   "marketplace_retreat" — catalog multi-day retreat; full revenue-share models
   const venueDealContext =
@@ -5306,8 +5318,7 @@ function PricingStep({ form }: { form: any }) {
             : "marketplace_retreat";
 
   // Deal options come from the shared vocabulary so the Venue Builder offers the
-  // same list, and so a multi-day retreat is never asked to run Access-Only /
-  // Pay-at-Counter while a one-day pop-up is never offered Per Room / Per Night.
+  // same list and each event length receives only compatible on-platform deals.
   const dealCurrencySymbol =
     CURRENCY_CONFIG[(form.watch('currency') || 'EUR').toUpperCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€';
   const isDaytimeDeal = !isMultiDayEvent;
@@ -5349,10 +5360,12 @@ function PricingStep({ form }: { form: any }) {
   useEffect(() => {
     if (venueDealContext === "external" || venueDealContext === "open" || venueDealContext === "invited") {
       // Zero out venue deal amounts for external, open, and invited modes.
-      // External: creator handles venue payment independently, no platform split needed.
+      // External: outdoor/virtual events have no venue commercial terms.
       // Open: no specific venue is chosen yet — amounts are determined when a venue accepts the bid.
       // Invited: amount lives in venueTargetDealValue, determined when the invited venue accepts.
-      form.setValue('venueCompensationModel', 'access_only', { shouldDirty: false });
+      // This value is ignored in these contexts, but keeping an on-platform
+      // model prevents legacy drafts from resurfacing the disabled option.
+      form.setValue('venueCompensationModel', 'revenue_share', { shouldDirty: false });
       form.setValue('venueFixedFee', 0, { shouldDirty: false });
       form.setValue('venuePerHeadAmount', 0, { shouldDirty: false });
       form.setValue('venuePerRoomPerNight', 0, { shouldDirty: false });
@@ -5363,7 +5376,7 @@ function PricingStep({ form }: { form: any }) {
     }
 
     // A model that isn't valid for this event length falls back to the first
-    // one that is — a retreat has no Access-Only option to fall back to.
+    // compatible on-platform option.
     if (!venueDealOptions.some((option) => option.value === venueCompensationModel)) {
       form.setValue('venueCompensationModel', venueDealOptions[0]?.value || 'revenue_share', { shouldDirty: true });
     }
@@ -5590,7 +5603,7 @@ function PricingStep({ form }: { form: any }) {
   const activeVenueDeal = venueDealContext === "open" || venueDealContext === "invited"
     ? venueTargetDeal
     : venueDealContext === "external"
-      ? "access_only"
+      ? null
       : venueCompensationModel;
   const activeRevenueSharePct = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueRevenueSharePct;
   const activeFlatVenueAmount = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueFixedFee;
@@ -5623,7 +5636,6 @@ function PricingStep({ form }: { form: any }) {
       case "revenue_share": return venueRevenueShareAmount;
       case "upfront_rental": return venueFixedFee; // cost to creator — show as deduction
       case "venue_sponsored": return 0; // income for creator — handled separately
-      case "access_only":
       default: return 0;
     }
   })();
@@ -5635,6 +5647,11 @@ function PricingStep({ form }: { form: any }) {
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
   const promoterBounty = isCommissionPromotion ? totalRevenue * influencerCommissionPct / 100 : 0;
   const estimatedCreatorNet = revenueSplit.creatorAmount + venuePayout - promoterBounty;
+  const venueDealSummaryLabel = venueDealContext === "external"
+    ? "No venue commercial deal"
+    : activeVenueDeal
+      ? getVenueDealLabel(activeVenueDeal, dealCurrencySymbol)
+      : "Not selected";
 
   // **4. MVG PROGRESS** - Using pricing service computation
   const mvgProgress = computeMVGProgress(0, minimumParticipants); // 0 current bookings in draft mode
@@ -6075,7 +6092,7 @@ function PricingStep({ form }: { form: any }) {
               </div>
               {venueDealContext === "external" ? (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
-                  External Venue Selected. You manage venue payments independently.
+                  No venue commercial deal is required for this outdoor or virtual event.
                 </div>
               ) : (venueDealContext === "open" || venueDealContext === "invited") ? (
                 <div>
@@ -6084,7 +6101,12 @@ function PricingStep({ form }: { form: any }) {
                   </Label>
                   <Select
                     value={form.watch('venueTargetDeal') || ""}
-                    onValueChange={(value) => form.setValue('venueTargetDeal', value, { shouldDirty: true })}
+                    onValueChange={(value) => {
+                      form.setValue('venueTargetDeal', value, { shouldDirty: true });
+                      // A percentage from Revenue Split must never silently
+                      // become a euro amount when the creator changes models.
+                      form.setValue('venueTargetDealValue', undefined, { shouldDirty: true });
+                    }}
                   >
                     <SelectTrigger id="venue-target-deal" data-testid="select-venue-target-deal">
                       <SelectValue placeholder="Select preferred deal type" />
@@ -6246,21 +6268,6 @@ function PricingStep({ form }: { form: any }) {
                     onChange={(e) => form.setValue('venueRevenueSharePct', parseFloat(e.target.value) || 0, { shouldDirty: true })}
                     data-testid="input-venue-revenue-share-pct"
                   />
-                </div>
-              )}
-              {venueCompensationModel === "access_only" && (
-                <div>
-                  <Label htmlFor="venue-access-fee">Optional Access Fee</Label>
-                  <Input
-                    id="venue-access-fee"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={venueAccessFee || ''}
-                    onChange={(e) => form.setValue('venueAccessFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
-                    data-testid="input-venue-access-fee"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Venue keeps its own food and beverage sales.</p>
                 </div>
               )}
               {venueCompensationModel === "venue_sponsored" && (
@@ -6780,18 +6787,9 @@ function PricingStep({ form }: { form: any }) {
             <div>
               <span className="font-medium text-blue-900 dark:text-blue-100">Venue deal:</span>{" "}
               <span className="text-blue-800 dark:text-blue-200">
-                {({
-                  access_only: "Access only / pay-at-counter",
-                  fixed_fee: "Flat fee",
-                  per_head: "Per head",
-                  minimum_spend: "Minimum spend",
-                  revenue_share: "Revenue share",
-                  venue_sponsored: "Venue-sponsored",
-                  upfront_rental: "Upfront rental",
-                } as Record<string, string>)[venueCompensationModel]
-                  || String(venueCompensationModel).replace(/_/g, " ")}
-                {venueCompensationModel === "revenue_share" && venueRevenueSharePct
-                  ? ` — ${venueRevenueSharePct}% to venue`
+                {venueDealSummaryLabel}
+                {activeVenueDeal === "revenue_share" && activeRevenueSharePct
+                  ? ` — ${activeRevenueSharePct}% to venue`
                   : ""}
               </span>
             </div>

@@ -169,7 +169,7 @@ export default function ParticipantList({
                   className="w-10 h-10 flex-shrink-0" 
                   data-testid={`participant-avatar-${participantId}`}
                 >
-                  <AvatarImage src={profileImageUrl || ""} alt={primaryName || "Traveler"} />
+                  <AvatarImage src={profileImageUrl || ""} alt={primaryName || "Participant"} />
                   <AvatarFallback className="text-xs bg-gradient-to-br from-primary to-secondary text-white">
                     {initials || <Plane className="h-4 w-4" />}
                   </AvatarFallback>
@@ -181,7 +181,7 @@ export default function ParticipantList({
                   data-testid={`participant-name-${participantId}`}
                 >
                   {isPlaceholder ? (
-                    <span className="text-gray-400 italic">Traveler</span>
+                    <span className="text-gray-400 italic">Participant</span>
                   ) : (
                     primaryName
                   )}

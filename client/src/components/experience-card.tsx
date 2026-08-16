@@ -176,12 +176,12 @@ export default function ExperienceCard({ experience }: ExperienceCardProps) {
               </p>
               <p className="text-sm font-bold text-white leading-tight">
                 {spotsNeeded === 1
-                  ? '🔥 Just 1 more traveler to make this real!'
+                  ? '🔥 Just 1 more person to make this real!'
                   : spotsNeeded <= 3
-                  ? `🔥 Just ${spotsNeeded} more travelers to make this real!`
+                  ? `🔥 Just ${spotsNeeded} more people to make this real!`
                   : spotsNeeded <= 6
-                  ? `⚡ ${spotsNeeded} more travelers needed to confirm this trip!`
-                  : `👥 ${spotsNeeded} more travelers needed to make this happen!`}
+                  ? `⚡ ${spotsNeeded} more people needed to confirm this experience!`
+                  : `👥 ${spotsNeeded} more people needed to make this happen!`}
               </p>
               <div className="h-1.5 rounded-full bg-white/30 overflow-hidden">
                 <div

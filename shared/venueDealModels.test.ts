@@ -2,9 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   getVenueDealOptions,
   getVenueDealLabel,
+  getVenueDealSelectionError,
+  isVenueDealSelectable,
   normalizeVenueDealModel,
   formatVenueDealSummary,
   readVenueDealValue,
+  validateExperienceVenueDeal,
   venueDealNeedsValue,
 } from "./venueDealModels";
 
@@ -36,9 +39,56 @@ describe("venue deal vocabulary", () => {
       "Revenue Split (%)",
       "Ticket Deduction / Per-Head Fee (€)",
       "Upfront Rental / Flat Fee (€)",
-      "Access-Only / Pay-at-Counter",
       "Venue Sponsorship (€)",
     ]);
+  });
+
+  it("never offers pay-at-counter in creator or venue dropdowns", () => {
+    const surfaces = ["event", "venue"] as const;
+
+    for (const surface of surfaces) {
+      expect(getVenueDealOptions({ isDaytime: true, surface }).map((o) => o.value))
+        .not.toContain("access_only");
+      expect(getVenueDealOptions({
+        isDaytime: true,
+        surface,
+        currentValue: "access_only",
+      }).map((o) => o.value)).not.toContain("access_only");
+    }
+
+    expect(isVenueDealSelectable("access_only")).toBe(false);
+    expect(isVenueDealSelectable("revenue_share")).toBe(true);
+  });
+
+  it("requires a usable value for every new on-platform deal", () => {
+    expect(getVenueDealSelectionError("access_only", 0)).toMatch(/on-platform/i);
+    expect(getVenueDealSelectionError("revenue_share", 0)).toMatch(/greater than zero/i);
+    expect(getVenueDealSelectionError("revenue_share", 101)).toMatch(/cannot exceed 100/i);
+    expect(getVenueDealSelectionError("revenue_share", 20)).toBeNull();
+    expect(getVenueDealSelectionError("upfront_rental", 500)).toBeNull();
+  });
+
+  it("blocks blank or disabled publication deals without applying the paused ticket matrix", () => {
+    expect(validateExperienceVenueDeal({ venueType: "open" })).toEqual([
+      "Target deal: Select an available on-platform venue deal",
+    ]);
+    expect(validateExperienceVenueDeal({
+      venueType: "manual",
+      venueTargetDeal: "access_only",
+      venueTargetDealValue: 0,
+    })[0]).toMatch(/on-platform/i);
+    expect(validateExperienceVenueDeal({
+      venueType: "open",
+      venueTargetDeal: "revenue_share",
+      venueTargetDealValue: 25,
+    })).toEqual([]);
+    expect(validateExperienceVenueDeal({
+      venueType: "catalog",
+      selectedVenueId: "venue-1",
+      venueCompensationModel: "upfront_rental",
+      venueFixedFee: 300,
+    })).toEqual([]);
+    expect(validateExperienceVenueDeal({ venueType: "virtual" })).toEqual([]);
   });
 
   it("never offers a retreat the pay-at-counter or sponsorship deals", () => {

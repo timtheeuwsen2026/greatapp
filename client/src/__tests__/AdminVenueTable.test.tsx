@@ -340,4 +340,62 @@ describe('Admin Venue Table', () => {
       expect(screen.getByText(/No venues found/i)).toBeInTheDocument();
     });
   });
+
+  it('does not mark a venue provider as having an incomplete participant profile', async () => {
+    (global.fetch as any).mockImplementation((url: string) => {
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'noor-user',
+              firstName: 'Noor',
+              lastName: 'Caffee',
+              email: 'carla.moreno@noorcoffee.co',
+              role: 'venue_provider',
+              createdAt: '2026-08-16T10:00:00Z',
+              bookingCount: 0,
+              activeBookingCount: 0,
+              lastBookingAt: null,
+              hasParticipantProfile: false,
+              venueListingCount: 0,
+              venueDraftCount: 0,
+              venuePendingCount: 0,
+              venueApprovedCount: 0,
+              venueRejectedCount: 0,
+            }],
+            pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
+            stats: { total: 1, venue_provider: 1 },
+          }),
+        });
+      }
+      if (url.includes('/api/admin/venues')) {
+        return Promise.resolve({ ok: true, json: async () => [] });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    renderComponent();
+    fireEvent.mouseDown(await screen.findByText('Users / Participants'), { button: 0, ctrlKey: false });
+
+    await waitFor(() => {
+      expect(screen.getByText('Noor Caffee')).toBeTruthy();
+      expect(screen.getByText('Not required for this role')).toBeTruthy();
+      expect(screen.getByText('No venue listing created')).toBeTruthy();
+      expect(screen.getByText('Account registered only')).toBeTruthy();
+    });
+    expect(screen.queryByText('Not completed')).toBeNull();
+  });
+
+  it('opens the complete venue inventory from the venue summary card', async () => {
+    renderComponent();
+
+    fireEvent.click(await screen.findByTestId('button-open-venue-overview'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Venue Management')).toBeTruthy();
+      expect(screen.getByText(/Every saved venue profile appears here/i)).toBeTruthy();
+      expect(screen.getByTestId('select-venue-status-filter')).toBeTruthy();
+    });
+  });
 });

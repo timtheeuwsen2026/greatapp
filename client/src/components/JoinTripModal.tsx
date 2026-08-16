@@ -96,13 +96,13 @@ export function JoinTripModal({ open, onClose, trip, onConfirm }: JoinTripModalP
             </div>
             <div className="text-2xl font-bold text-primary mb-2">
               {(trip.minimumParticipants - trip.currentParticipants) === 1
-                ? '🔥 Just 1 more traveler to make this real!'
+                ? '🔥 Just 1 more person to make this real!'
                 : (trip.minimumParticipants - trip.currentParticipants) <= 3 && (trip.minimumParticipants - trip.currentParticipants) > 0
-                ? `🔥 Just ${trip.minimumParticipants - trip.currentParticipants} more travelers to make this real!`
+                ? `🔥 Just ${trip.minimumParticipants - trip.currentParticipants} more people to make this real!`
                 : (trip.minimumParticipants - trip.currentParticipants) <= 6 && (trip.minimumParticipants - trip.currentParticipants) > 0
-                ? `⚡ ${trip.minimumParticipants - trip.currentParticipants} more travelers needed to confirm this trip!`
+                ? `⚡ ${trip.minimumParticipants - trip.currentParticipants} more people needed to confirm this experience!`
                 : (trip.minimumParticipants - trip.currentParticipants) > 0
-                ? `👥 ${trip.minimumParticipants - trip.currentParticipants} more travelers needed to make this happen!`
+                ? `👥 ${trip.minimumParticipants - trip.currentParticipants} more people needed to make this happen!`
                 : '✅ Group confirmed!'}
             </div>
             <div className="text-sm text-gray-600 dark:text-gray-400">

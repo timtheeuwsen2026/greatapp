@@ -622,6 +622,18 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2025-07-30.basil",
 });
 
+// Stripe refuses any charge below a per-currency floor (€0.50, £0.30, …).
+// Pay-what-you-want tickets let a buyer land between zero and that floor, which
+// otherwise surfaces as an opaque 500 from paymentIntents.create.
+const STRIPE_MINIMUM_CHARGE_MINOR_UNITS: Record<string, number> = {
+  eur: 50, usd: 50, gbp: 30, chf: 50, cad: 50, aud: 50, nzd: 50,
+  dkk: 250, nok: 300, sek: 300, pln: 200, ron: 200, czk: 1500, huf: 17500,
+};
+
+function getStripeMinimumChargeMinorUnits(currency: string): number {
+  return STRIPE_MINIMUM_CHARGE_MINOR_UNITS[currency.toLowerCase()] ?? 50;
+}
+
 // Safe helper function to convert values to ISO strings
 function safeToISOString(value: any): string | null {
   if (!value && value !== 0) return null;
@@ -6685,9 +6697,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // Between zero and Stripe's floor there is no chargeable amount: €0 is
+      // already handled above as a free RSVP, so anything short of the minimum
+      // has to be raised. Caught here so it reads as guidance to the buyer
+      // instead of a 500 carrying a raw Stripe message.
+      const currencyCode = (experience.currency || "eur").toLowerCase();
+      const chargeMinorUnits = Math.round(chargeAmount * 100);
+      const minimumMinorUnits = getStripeMinimumChargeMinorUnits(currencyCode);
+      if (chargeMinorUnits > 0 && chargeMinorUnits < minimumMinorUnits) {
+        return res.status(400).json({
+          message: `The smallest payment we can take is ${(minimumMinorUnits / 100).toFixed(2)} ${currencyCode.toUpperCase()}. Enter 0 to RSVP for free, or raise your amount.`,
+          minimumChargeAmount: minimumMinorUnits / 100,
+          currency: currencyCode,
+        });
+      }
+
       const paymentIntentData: any = {
-        amount: Math.round(chargeAmount * 100),
-        currency: (experience.currency || "eur").toLowerCase(),
+        amount: chargeMinorUnits,
+        currency: currencyCode,
         automatic_payment_methods: {
           enabled: true,
         },

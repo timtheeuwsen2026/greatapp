@@ -56,6 +56,16 @@ const formatCurrency = (amount: number | string | undefined | null, currency?: s
   return `${symbol}${numAmount.toFixed(2)}`;
 };
 
+// Mirrors getStripeMinimumChargeMinorUnits in server/routes.ts. €0 is free-RSVP
+// and always allowed; anything above it still has to clear Stripe's floor.
+const STRIPE_MINIMUM_CHARGE: Record<string, number> = {
+  eur: 0.5, usd: 0.5, gbp: 0.3, chf: 0.5, cad: 0.5, aud: 0.5, nzd: 0.5,
+  dkk: 2.5, nok: 3, sek: 3, pln: 2, ron: 2, czk: 15, huf: 175,
+};
+
+const getMinimumChargeAmount = (currency: string): number =>
+  STRIPE_MINIMUM_CHARGE[(currency || 'eur').toLowerCase()] ?? 0.5;
+
 const stripePromise = import.meta.env.VITE_STRIPE_PUBLIC_KEY
   ? loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY)
   : Promise.resolve(null);
@@ -567,8 +577,10 @@ export default function Checkout() {
     window.history.replaceState({}, '', url.toString());
     
     setClientSecret("");
-    await createPaymentIntent(newMode);
-  }, [paymentMode, createPaymentIntent]);
+    // A PWYW buyer already chose their amount — re-send it, otherwise the server
+    // falls back to the ticket's suggested price and silently rewrites the donation.
+    await createPaymentIntent(newMode, pwywSubmitted ? pwywPrice : undefined);
+  }, [paymentMode, createPaymentIntent, pwywSubmitted, pwywPrice]);
 
   const completeFreeRsvp = useCallback(async () => {
     if (!experience || !experienceId || freeRsvpSubmitting || freeRsvpStartedRef.current) return;
@@ -688,7 +700,7 @@ export default function Checkout() {
               <h2 className="mb-2 text-xl font-semibold text-gray-900">Payment setup failed</h2>
               <p className="mb-6 text-sm text-gray-600">{paymentInitError}</p>
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
-                <Button onClick={() => createPaymentIntent(paymentMode)}>
+                <Button onClick={() => createPaymentIntent(paymentMode, pwywSubmitted ? pwywPrice : undefined)}>
                   Try Again
                 </Button>
                 <Button variant="outline" onClick={() => window.history.back()}>
@@ -831,11 +843,23 @@ export default function Checkout() {
   // ── PWYW price input screen ───────────────────────────────────────────
   if (pwywReady && !pwywSubmitted) {
     const currency = (experience as any).currency || 'EUR';
+    const minimumCharge = getMinimumChargeAmount(currency);
+    // A price of exactly 0 skips Stripe entirely, so only amounts that will
+    // actually be charged have to clear the floor.
+    const isUnchargeable = pwywPrice > 0 && pwywPrice < minimumCharge;
     const handlePwywSubmit = () => {
       if (pwywPrice < pwywMin) {
         toast({
           title: "Price too low",
           description: `Minimum contribution is ${formatCurrency(pwywMin, currency)}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (isUnchargeable) {
+        toast({
+          title: "Amount too small to charge",
+          description: `The smallest payment we can take is ${formatCurrency(minimumCharge, currency)}. Enter 0 to RSVP for free, or raise your amount.`,
           variant: "destructive",
         });
         return;
@@ -879,9 +903,15 @@ export default function Checkout() {
                     Minimum contribution: {formatCurrency(pwywMin, currency)}
                   </p>
                 )}
-                {pwywMin === 0 && (
+                {pwywMin === 0 && !isUnchargeable && (
                   <p className="text-xs text-gray-500">
                     You can enter €0 for free — any contribution helps the creator!
+                  </p>
+                )}
+                {isUnchargeable && (
+                  <p className="text-xs text-red-600">
+                    Enter 0 to RSVP for free, or {formatCurrency(minimumCharge, currency)} or more —
+                    amounts in between are too small for card payments.
                   </p>
                 )}
               </div>
@@ -902,7 +932,7 @@ export default function Checkout() {
               <Button
                 className="w-full"
                 onClick={handlePwywSubmit}
-                disabled={pwywPrice < pwywMin}
+                disabled={pwywPrice < pwywMin || isUnchargeable}
               >
                 {pwywPrice === 0 && pwywMin === 0
                   ? 'Confirm Free RSVP'

@@ -1,5 +1,6 @@
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
+import { getStripePublishableKey } from '@/lib/stripeKey';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -66,8 +67,10 @@ const STRIPE_MINIMUM_CHARGE: Record<string, number> = {
 const getMinimumChargeAmount = (currency: string): number =>
   STRIPE_MINIMUM_CHARGE[(currency || 'eur').toLowerCase()] ?? 0.5;
 
-const stripePromise = import.meta.env.VITE_STRIPE_PUBLIC_KEY
-  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY)
+const stripePublishableKey = getStripePublishableKey();
+
+const stripePromise = stripePublishableKey
+  ? loadStripe(stripePublishableKey)
   : Promise.resolve(null);
 
 const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
@@ -472,7 +475,7 @@ export default function Checkout() {
         setClientSecret("");
         return;
       }
-      if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
+      if (!stripePublishableKey) {
         throw new Error("Stripe checkout is not configured. Add VITE_STRIPE_PUBLIC_KEY and restart the app.");
       }
       if (!data.clientSecret) {

@@ -1,3 +1,10 @@
+// FIRST import, deliberately. ES modules are evaluated in source order, so this
+// strips stray newlines/quotes from every secret before any module below reads
+// one. A key pasted into the hosting dashboard with a trailing line break is
+// otherwise rejected by Node as an invalid header character, and every Stripe
+// call in the process fails as a misleading "connection error".
+import "./env";
+
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";

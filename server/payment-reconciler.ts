@@ -15,17 +15,9 @@
  */
 
 import cron from "node-cron";
-import Stripe from "stripe";
 import { storage } from "./storage";
+import { stripe } from "./stripeClient";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
-
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
-}
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2025-07-30.basil",
-});
 
 // How far back to look. Long enough to cover a weekend of nobody restarting
 // anything; short enough that the sweep stays a handful of list pages.

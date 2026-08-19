@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { db } from './db';
 import { experiences, bookings } from '../shared/schema';
 import { eq, and, lte, isNull, ne, or, inArray } from 'drizzle-orm';
-import Stripe from 'stripe';
+import { stripe } from './stripeClient';
 import { notificationService } from './notifications';
 import { broadcastMVGUpdate } from './websocket';
 import { storage } from './storage';
@@ -17,10 +17,6 @@ import {
   MVG_DEADLINE_FAILURE_REASON,
   MVG_PREPUBLICATION_FAILURE_REASON,
 } from './mvgDeadlineRules';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-07-30.basil',
-});
 
 export function startMVGDeadlineScheduler() {
   cron.schedule('*/15 * * * *', async () => {

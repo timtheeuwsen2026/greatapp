@@ -17,7 +17,7 @@
  */
 
 import cron from "node-cron";
-import Stripe from "stripe";
+import { stripe } from "./stripeClient";
 import { db } from "./db";
 import { experiences, bookings, platformSettings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
@@ -33,14 +33,6 @@ import {
   sumBookingTicketQuantity,
 } from "@shared/ticketDeduction";
 import { resolveVenuePayoutAccount } from "./venuePayouts";
-
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
-}
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2025-07-30.basil",
-});
 
 function formatPayoutAmount(cents: number, currency: string): string {
   return `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;

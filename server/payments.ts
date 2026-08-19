@@ -1,21 +1,7 @@
 import Stripe from 'stripe';
 import { storage } from './storage';
-
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
-}
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-07-30.basil',
-});
-
-/** 'test' | 'live' | 'unknown' — derived from a Stripe key prefix. */
-function stripeKeyMode(key: string | undefined): 'test' | 'live' | 'unknown' {
-  if (!key) return 'unknown';
-  if (key.startsWith('sk_test') || key.startsWith('pk_test')) return 'test';
-  if (key.startsWith('sk_live') || key.startsWith('pk_live')) return 'live';
-  return 'unknown';
-}
+import { stripe, stripeKeyMode } from './stripeClient';
+import { isHeaderSafe, describeUnsafeChars } from './env';
 
 /**
  * Validate the Stripe environment at boot and log a clear report. This turns the
@@ -40,6 +26,24 @@ export async function validateStripeConfig(): Promise<void> {
   console.log(`[Stripe] secret key      : ${secretKey ? secretMode.toUpperCase() : 'MISSING'}`);
   console.log(`[Stripe] publishable key : ${publishableKey ? publishableMode.toUpperCase() : 'MISSING (VITE_STRIPE_PUBLIC_KEY)'}`);
   console.log(`[Stripe] webhook secret  : ${webhookSecret ? 'set' : 'MISSING (STRIPE_WEBHOOK_SECRET)'}`);
+
+  // A credential carrying a line break cannot go into an Authorization header:
+  // Node throws ERR_INVALID_CHAR, the SDK retries twice, and the failure is
+  // reported as "An error occurred with our connection to Stripe" — which sends
+  // you looking for a network fault that isn't there. Name it precisely instead.
+  for (const [label, value] of [
+    ['STRIPE_SECRET_KEY', secretKey],
+    ['VITE_STRIPE_PUBLIC_KEY', publishableKey],
+    ['STRIPE_WEBHOOK_SECRET', webhookSecret],
+  ] as const) {
+    if (value && !isHeaderSafe(value)) {
+      console.error(
+        `[Stripe] ❌ ${label} contains ${describeUnsafeChars(value)}. ` +
+        `Every Stripe request will fail with ERR_INVALID_CHAR / StripeConnectionError. ` +
+        `Re-paste the value in the hosting dashboard as a single line with no trailing newline.`,
+      );
+    }
+  }
 
   if (publishableKey && secretMode !== 'unknown' && publishableMode !== 'unknown' && secretMode !== publishableMode) {
     console.error(

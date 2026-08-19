@@ -5,6 +5,10 @@ import fs from "fs";
 import path from "path";
 import { randomBytes } from "crypto";
 import Stripe from "stripe";
+// Shared, pre-validated client. Importing it also runs the secret-key check,
+// so a key pasted with a trailing newline fails at boot with a message naming
+// the problem, rather than as an opaque StripeConnectionError at checkout.
+import { stripe } from "./stripeClient";
 import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
@@ -87,10 +91,6 @@ import {
   getConfiguredPublicAppBaseUrl,
   getPublicAppBaseUrl,
 } from "./publicUrl";
-
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error('Missing required Stripe secret: STRIPE_SECRET_KEY');
-}
 
 // ─── Base URL Helper ─────────────────────────────────────────────────────────
 // Returns the canonical public URL for the app.
@@ -616,10 +616,6 @@ const upload = multer({
       cb(new Error('Invalid file type. Only JPEG, PNG, and WebP images are allowed.'));
     }
   }
-});
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2025-07-30.basil",
 });
 
 // Stripe refuses any charge below a per-currency floor (€0.50, £0.30, …).

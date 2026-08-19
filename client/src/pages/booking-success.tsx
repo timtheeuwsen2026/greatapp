@@ -19,8 +19,13 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 import ProfileCompletionPrompt from "@/components/ProfileCompletionPrompt";
 import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
+import { getStripePublishableKey } from "@/lib/stripeKey";
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+const stripePublishableKey = getStripePublishableKey();
+
+const stripePromise = stripePublishableKey
+  ? loadStripe(stripePublishableKey)
+  : Promise.resolve(null);
 
 type Experience = {
   id: string;

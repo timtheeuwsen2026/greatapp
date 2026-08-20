@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
@@ -38,6 +39,8 @@ import {
   ListOrdered,
   Archive,
   Handshake,
+  Edit,
+  FileText,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -215,6 +218,7 @@ export default function AdminDashboard() {
   const [, setLocation] = useLocation();
   const [expandedExperiences, setExpandedExperiences] = useState<Set<string>>(new Set());
   const [experienceStatusFilter, setExperienceStatusFilter] = useState<string>("all");
+  const [selectedDeal, setSelectedDeal] = useState<AdminDealLedgerItem | null>(null);
   const [experiencePage, setExperiencePage] = useState(1);
   const [applicationPage, setApplicationPage] = useState(1);
   const [venuePage, setVenuePage] = useState(1);
@@ -866,6 +870,17 @@ export default function AdminDashboard() {
                             <Eye className="w-4 h-4 mr-1" />
                             View
                           </Button>
+                          {/* Moderation is not read-only: an admin who can see a
+                              live listing has to be able to correct it. */}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setLocation(`/event-builder?edit=${experience.id}`)}
+                            data-testid={`button-edit-experience-${experience.id}`}
+                          >
+                            <Edit className="w-4 h-4 mr-1" />
+                            Edit
+                          </Button>
                           {experience.status !== "cancelled" && (
                             <Button
                               size="sm"
@@ -1278,6 +1293,7 @@ export default function AdminDashboard() {
                           <TableHead>Negotiation</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Occurred / Updated</TableHead>
+                          <TableHead className="text-right">Proposal</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1347,6 +1363,17 @@ export default function AdminDashboard() {
                             </TableCell>
                             <TableCell className="whitespace-nowrap text-muted-foreground">
                               {deal.acceptedAt ? new Date(deal.acceptedAt).toLocaleDateString() : "-"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setSelectedDeal(deal)}
+                                data-testid={`button-deal-details-${deal.id}`}
+                              >
+                                <FileText className="mr-1 h-3 w-3" />
+                                Details
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1910,7 +1937,153 @@ export default function AdminDashboard() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <DealProposalDialog deal={selectedDeal} onClose={() => setSelectedDeal(null)} />
     </div>
+  );
+}
+
+/**
+ * One agreement, in full.
+ *
+ * The ledger row is a summary — it has to fit a table. This is the proposal
+ * itself: every term either side put on the table, in the order they put it
+ * there, so an admin arbitrating a dispute is reading the same numbers the two
+ * parties are.
+ */
+function DealProposalDialog({
+  deal,
+  onClose,
+}: {
+  deal: AdminDealLedgerItem | null;
+  onClose: () => void;
+}) {
+  if (!deal) return null;
+
+  const rounds = deal.negotiation?.rounds ?? [];
+  const openedWith = deal.negotiation?.originalTerms;
+  const standsAt = deal.negotiation?.currentTerms ?? deal.terms;
+  const termEntries = Object.entries(standsAt || {});
+
+  return (
+    <Dialog open={!!deal} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="dialog-deal-proposal">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {ledgerTypeLabel(deal.contractType)}
+            <Badge variant="outline">{formatDealType(deal.dealType)}</Badge>
+            <LedgerStatusBadge status={deal.status} />
+          </DialogTitle>
+          <DialogDescription>{deal.experience.title}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 text-sm">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Creator</p>
+              <p className="font-medium">{deal.creator.name}</p>
+              {deal.creator.email && <p className="text-muted-foreground">{deal.creator.email}</p>}
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Counterparty ({formatDealType(deal.counterparty.role)})
+              </p>
+              <p className="font-medium">{deal.counterparty.name}</p>
+              {deal.counterparty.email && <p className="text-muted-foreground">{deal.counterparty.email}</p>}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Agreed terms</p>
+            <p className="font-medium">{formatDealTerms(deal)}</p>
+            {openedWith && summariseTerms(openedWith, deal.currency) !== summariseTerms(standsAt, deal.currency) && (
+              <p className="mt-1 text-muted-foreground">
+                Opened at <span className="font-medium">{summariseTerms(openedWith, deal.currency)}</span>
+                {" → now "}
+                <span className="font-medium text-foreground">{summariseTerms(standsAt, deal.currency)}</span>
+              </p>
+            )}
+          </div>
+
+          {/* Every field the two sides actually agreed on, not just the headline
+              number the table has room for. */}
+          <div>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Terms recorded</p>
+            <div className="rounded-lg border">
+              <Table>
+                <TableBody>
+                  {termEntries.length === 0 ? (
+                    <TableRow>
+                      <TableCell className="text-muted-foreground">No terms recorded on this agreement.</TableCell>
+                    </TableRow>
+                  ) : (
+                    termEntries.map(([key, value]) => (
+                      <TableRow key={key}>
+                        <TableCell className="w-1/2 align-top text-muted-foreground">{formatDealType(key)}</TableCell>
+                        <TableCell className="align-top font-medium break-words">
+                          {value === null || value === undefined || value === ""
+                            ? "—"
+                            : typeof value === "object"
+                              ? JSON.stringify(value)
+                              : String(value)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          {rounds.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Negotiation history</p>
+              <ol className="space-y-2">
+                {rounds.map((round, index) => (
+                  <li key={index} className="rounded-lg border p-3" data-testid={`deal-round-${index}`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium capitalize">{round.from}</span>
+                      <span className="text-muted-foreground">proposed</span>
+                      <span className="font-medium">{summariseTerms(round.terms, deal.currency)}</span>
+                      <Badge variant="outline">{formatDealType(round.status)}</Badge>
+                      {round.at && (
+                        <span className="text-xs text-muted-foreground">{new Date(round.at).toLocaleString()}</span>
+                      )}
+                    </div>
+                    {round.note && <p className="mt-1 italic text-muted-foreground">{round.note}</p>}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {deal.negotiation?.pendingActionBy && (
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Awaiting</p>
+                <p className="font-medium capitalize">{deal.negotiation.pendingActionBy}</p>
+              </div>
+            )}
+            {deal.negotiation?.declineReason && (
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Decline reason</p>
+                <p className="font-medium">{deal.negotiation.declineReason}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Accepted / updated</p>
+              <p className="font-medium">
+                {deal.acceptedAt ? new Date(deal.acceptedAt).toLocaleString() : "Not yet accepted"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Currency</p>
+              <p className="font-medium uppercase">{deal.currency}</p>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

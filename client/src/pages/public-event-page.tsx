@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { VenueInfoCard } from "@/components/VenueInfoCard";
+import { LocationMap } from "@/components/LocationMap";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
@@ -46,6 +47,8 @@ interface PublicEventData {
   start_date: string;
   end_date: string;
   duration: number;
+  /** The address the creator typed, present whether or not a venue is linked. */
+  location?: string | null;
   cover_image: string;
   gallery: Array<{ id: string; imageUrl: string; caption?: string; order: number }>;
   itinerary: any[];
@@ -450,73 +453,87 @@ export default function PublicEventPage() {
         </div>
       )}
 
-      {/* Hero Section - Full-width cover image with title, dates, and location overlay */}
-      <div className="relative w-full h-[500px] bg-gray-900">
-        {/* Cover Image */}
-        {event.cover_image && (
-          <img
-            src={event.cover_image}
-            alt={event.title}
-            className="absolute inset-0 w-full h-full object-cover"
-            data-testid="img-cover"
-          />
-        )}
-        
-        {/* Dark overlay for better text readability */}
-        <div className="absolute inset-0 bg-black/40" />
-        
-        {/* Content Overlay */}
-        <div className="absolute inset-0 flex items-end">
-          <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
-            <div className="text-white">
-              {/* Title */}
-              <h1 
-                className="text-4xl md:text-5xl lg:text-6xl font-bold mb-4"
+      {/* Hero — a square cover beside the details, rather than a wide banner.
+          A 500px-tall crop of a portrait photo threw away most of the image and
+          then printed the title on top of what was left. */}
+      <div className="border-b bg-white">
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
+          <div className="grid gap-8 md:grid-cols-[minmax(0,360px)_1fr] lg:gap-12">
+            {/* Cover */}
+            <div className="aspect-square w-full overflow-hidden rounded-2xl bg-gray-100 shadow-sm">
+              {event.cover_image ? (
+                <img
+                  src={event.cover_image}
+                  alt={event.title}
+                  className="h-full w-full object-cover"
+                  data-testid="img-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-gray-300">
+                  <Calendar className="h-16 w-16" />
+                </div>
+              )}
+            </div>
+
+            {/* Details */}
+            <div className="flex flex-col justify-center">
+              <h1
+                className="text-3xl font-bold text-gray-900 md:text-4xl lg:text-5xl"
                 data-testid="text-title"
               >
                 {event.title}
               </h1>
-              
-              {/* MVG Badge */}
+
               {event.mvg.enabled && (
-                <div className="mb-4">
-                  <Badge 
-                    variant="secondary" 
-                    className="bg-white/20 text-white border-white/40 backdrop-blur-sm hover:bg-white/30 text-sm font-medium px-3 py-1.5"
+                <div className="mt-4">
+                  <Badge
+                    variant="secondary"
+                    className="px-3 py-1.5 text-sm font-medium"
                     data-testid="badge-mvg"
                   >
-                    <Users className="w-4 h-4 mr-1.5" />
+                    <Users className="mr-1.5 h-4 w-4" />
                     Minimum {event.mvg.minimum_required} participant{event.mvg.minimum_required > 1 ? 's' : ''} to confirm
                   </Badge>
                 </div>
               )}
-              
-              {/* Dates and Location */}
-              <div className="flex flex-wrap gap-6 text-lg mb-6">
+
+              <div className="mt-6 space-y-4">
                 {/* Dates */}
-                <div className="flex items-center gap-2" data-testid="text-dates">
-                  <Calendar className="w-5 h-5" />
-                  <span>
-                    {formatDate(event.start_date)}
-                    {event.end_date && ` - ${formatDate(event.end_date)}`}
-                    {event.duration && ` (${event.duration} day${event.duration > 1 ? 's' : ''})`}
-                  </span>
+                <div className="flex items-start gap-3" data-testid="text-dates">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
+                    <Calendar className="h-5 w-5 text-gray-700" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {formatDate(event.start_date)}
+                      {event.end_date && event.end_date !== event.start_date && ` – ${formatDate(event.end_date)}`}
+                    </p>
+                    {event.duration > 1 && (
+                      <p className="text-sm text-gray-600">{event.duration} days</p>
+                    )}
+                  </div>
                 </div>
-                
+
                 {/* Location */}
-                {event.venue?.location && (
-                  <div className="flex items-center gap-2" data-testid="text-location">
-                    <MapPin className="w-5 h-5" />
-                    <span>{event.venue.location}</span>
+                {(event.venue?.name || event.venue?.location) && (
+                  <div className="flex items-start gap-3" data-testid="text-location">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
+                      <MapPin className="h-5 w-5 text-gray-700" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{event.venue.name || event.venue.location}</p>
+                      {event.venue.name && event.venue.location && (
+                        <p className="text-sm text-gray-600">{event.venue.location}</p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-              
-              {/* CTA Button */}
-              <div>
-                <Button 
-                  size="lg" 
-                  className="bg-white text-gray-900 hover:bg-gray-100 font-semibold px-8 py-6 text-lg"
+
+              <div className="mt-8">
+                <Button
+                  size="lg"
+                  className="px-8 py-6 text-lg font-semibold"
                   data-testid="button-book-now"
                 >
                   Book Now
@@ -530,7 +547,7 @@ export default function PublicEventPage() {
       {/* Quick Facts Section */}
       <ChatTeaser experienceId={event.id} />
       <EventSocialProofToast experienceId={event.id} />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-8 relative z-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 relative z-10">
         <Card className="shadow-lg">
           <CardContent className="p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Facts</h2>
@@ -630,7 +647,7 @@ export default function PublicEventPage() {
             
             {/* Short Description */}
             {event.short_description && (
-              <p className="text-lg text-gray-700 mb-6 leading-relaxed" data-testid="text-short-description">
+              <p className="whitespace-pre-wrap text-lg text-gray-700 mb-6 leading-relaxed" data-testid="text-short-description">
                 {event.short_description}
               </p>
             )}
@@ -795,7 +812,7 @@ export default function PublicEventPage() {
                     <AccordionContent>
                       <div className="pl-13 pt-2 space-y-4">
                         {day.description && (
-                          <p className="text-gray-600 leading-relaxed">{day.description}</p>
+                          <p className="whitespace-pre-wrap text-gray-600 leading-relaxed">{day.description}</p>
                         )}
                         
                         {day.activities && day.activities.length > 0 && (
@@ -967,11 +984,28 @@ export default function PublicEventPage() {
       )}
 
       {/* Venue Section */}
-      {event.venue && (
+      {event.venue ? (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
           <VenueInfoCard venue={event.venue} />
         </div>
-      )}
+      ) : event.location ? (
+        // Self-hosted and manual-address events have no venue record, but a
+        // participant still has to be able to find the place.
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+          <Card>
+            <CardContent className="p-8">
+              <h2 className="mb-4 text-2xl font-bold text-gray-900" data-testid="heading-location">
+                Where
+              </h2>
+              <div className="mb-4 flex items-center gap-2 text-gray-600">
+                <MapPin className="h-5 w-5" />
+                <span className="text-base" data-testid="text-location-address">{event.location}</span>
+              </div>
+              <LocationMap address={event.location} />
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
 
       {/* Creator Section */}
       {event.creator && (

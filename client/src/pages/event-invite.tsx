@@ -184,7 +184,7 @@ export default function EventInvite() {
             {/* Description */}
             <div className="mb-8">
               <h2 className="text-2xl font-semibold mb-4">About this Experience</h2>
-              <p className="text-gray-700 leading-relaxed">
+              <p className="whitespace-pre-wrap text-gray-700 leading-relaxed">
                 {experience.description || experience.shortDescription}
               </p>
             </div>

@@ -1,6 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Users } from "lucide-react";
+import { LocationMap } from "@/components/LocationMap";
 
 interface VenueInfo {
   id: string;
@@ -72,10 +73,13 @@ export function VenueInfoCard({
             {venue.name}
           </h3>
           {venue.location && (
-            <div className="flex items-center gap-2 text-gray-600 mb-4">
-              <MapPin className="w-5 h-5" />
-              <span className="text-base" data-testid="venue-location">{venue.location}</span>
-            </div>
+            <>
+              <div className="flex items-center gap-2 text-gray-600 mb-4">
+                <MapPin className="w-5 h-5" />
+                <span className="text-base" data-testid="venue-location">{venue.location}</span>
+              </div>
+              <LocationMap name={venue.name} address={venue.location} className="mb-6" />
+            </>
           )}
           
           {/* Venue Description */}

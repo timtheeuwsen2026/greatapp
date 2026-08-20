@@ -27,7 +27,7 @@ import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import BrandLogo from "@/components/BrandLogo";
 import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
-import { FeaturedVenues } from "@/components/FeaturedVenues";
+import { FeaturedCommunities } from "@/components/FeaturedCommunities";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -652,8 +652,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Public venue inventory — visible in the page flow without adding a top-nav item. */}
-      <FeaturedVenues />
+      {/* Communities, not the venue directory. Venue inventory is supply the
+          platform manages, so it belongs in the admin dashboard; what a first
+          visitor should see is the groups they could join. */}
+      <FeaturedCommunities />
 
       {/* 4. How It Works - 3-Step Social Contract (the MVG model) */}
       <section id="how-it-works" className="py-16 lg:py-24 bg-gray-50 dark:bg-gray-900" data-testid="how-it-works-section">
@@ -1095,15 +1097,6 @@ export default function Home() {
                       aria-label="Offer your services to creators"
                     >
                       Offer Services
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      onClick={() => setLocation('/venues')}
-                      className="text-gray-400 hover:text-white transition-colors"
-                      aria-label="Browse all available venues"
-                    >
-                      Browse Venues
                     </button>
                   </li>
                 </ul>

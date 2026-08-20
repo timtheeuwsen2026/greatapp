@@ -12,6 +12,7 @@ import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
+import { LocationMap } from "@/components/LocationMap";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
@@ -673,10 +674,25 @@ export default function ExperienceDetails() {
             {/* Description */}
             <div className="mb-8">
               <h2 className="text-2xl font-semibold mb-4">About this Experience</h2>
-              <p className="text-gray-700 leading-relaxed">
+              <p className="whitespace-pre-wrap text-gray-700 leading-relaxed">
                 {experience.description || experience.shortDescription}
               </p>
             </div>
+
+            {/* Where — an address is only useful if you can find it. */}
+            {experience.location && (
+              <div className="mb-8">
+                <h2 className="text-2xl font-semibold mb-4">Where</h2>
+                <div className="mb-3 flex items-center gap-2 text-gray-600">
+                  <MapPin className="h-5 w-5" />
+                  <span>{experience.location}</span>
+                </div>
+                <LocationMap
+                  name={(experience as any).venue || undefined}
+                  address={experience.location}
+                />
+              </div>
+            )}
 
             {/* Creator Profile Section - Always show when we have a creatorId */}
             {experience.creatorId && (
@@ -896,7 +912,7 @@ export default function ExperienceDetails() {
                               ))}
                             </div>
                           ) : day.description ? (
-                            <p className="text-gray-600">{day.description}</p>
+                            <p className="whitespace-pre-wrap text-gray-600">{day.description}</p>
                           ) : (
                             <p className="text-gray-500 italic">Activities to be announced</p>
                           )}
@@ -1229,7 +1245,7 @@ export default function ExperienceDetails() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {experience.termsAndConditions && (
-                    <p className="whitespace-pre-line text-sm text-gray-700">
+                    <p className="whitespace-pre-wrap text-sm text-gray-700">
                       {experience.termsAndConditions}
                     </p>
                   )}

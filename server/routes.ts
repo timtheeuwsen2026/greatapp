@@ -818,6 +818,319 @@ async function checkIsAdmin(req: any): Promise<boolean> {
   return false;
 }
 
+function normalizeGreatPillarsPayload(value: unknown): string[] {
+  const allowed = new Set(["health", "sports", "wellness", "food"]);
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+
+  return rawValues
+    .map((item) => String(item).trim().toLowerCase())
+    .filter((item) => allowed.has(item));
+}
+
+/**
+ * An Event Builder payload → an `experiences` row.
+ *
+ * Publishing a draft and editing an event that is already live both translate
+ * the same builder payload, so they share this one mapping. Splitting them
+ * would let an edit quietly write a field differently from the way publishing
+ * wrote it.
+ */
+function buildExperienceFromBuilderPayload(draft: any, userId: string) {
+    // Convert date strings to Date objects
+    const experienceType = (draft.type as "one-day" | "multi-day" | "virtual") || "one-day";
+    const isSingleDayEvent = experienceType === "one-day";
+    const isMultiDayTrip = experienceType === "multi-day";
+    const startDate = draft.startDate ? new Date(draft.startDate) : new Date();
+    const endDate = isSingleDayEvent
+      ? startDate
+      : (draft.endDate ? new Date(draft.endDate) : startDate);
+    const normalizedRooms = isMultiDayTrip ? (draft.rooms || []) : [];
+    const sleepingCapacity = normalizedRooms.reduce((total: number, room: any) => {
+      const capacity = Number(room?.capacity || 0);
+      const quantity = Number(room?.quantity || 0);
+      return total + capacity * quantity;
+    }, 0);
+    const normalizedMaxParticipants = isSingleDayEvent
+      ? Number((draft as any).standingCapacity || (draft as any).seatedCapacity || draft.maxParticipants || 1)
+      : (sleepingCapacity || draft.maxParticipants || 10);
+    const resolvedMvgEnabled = draft.mvgEnabled !== undefined
+      ? draft.mvgEnabled
+      : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true);
+      
+    // A zero-day setting stays open through the end of the event's start date.
+    const mvgDeadlineDays = normalizeMvgDeadlineDays(draft.mvgDeadlineDays);
+    const mvgDeadline = resolvedMvgEnabled
+      ? calculateMvgDeadline(startDate, mvgDeadlineDays)
+      : null;
+    
+    // Check if this is a demo event for placeholder image fallback
+    const isDemoEvent = draft.title?.toLowerCase().includes('mystic') && 
+                       draft.title?.toLowerCase().includes('marrakesh');
+    
+    // Default placeholder cover image for Marrakesh demo
+    const defaultMarrakeshImage = "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400";
+    
+    // Use placeholder image for demo if cover image is missing/empty
+    const coverImageUrl = (isDemoEvent && (!draft.coverImageUrl || draft.coverImageUrl.trim() === '')) 
+      ? defaultMarrakeshImage 
+      : draft.coverImageUrl;
+    
+    // Service and Amenity mappings for converting IDs to structured objects
+    const serviceMap: Record<string, { name: string; description: string }> = {
+      yoga_instructor: { name: 'Yoga Instructor', description: 'Certified yoga instructor for sessions' },
+      meditation_guide: { name: 'Meditation Guide', description: 'Guided meditation and mindfulness' },
+      personal_trainer: { name: 'Personal Trainer', description: 'One-on-one fitness coaching' },
+      massage_therapist: { name: 'Massage Therapist', description: 'Professional massage services' },
+      nutrition_coach: { name: 'Nutrition Coach', description: 'Dietary guidance and meal planning' },
+      hiking_guide: { name: 'Hiking Guide', description: 'Experienced trail guide and safety' },
+      climbing_instructor: { name: 'Climbing Instructor', description: 'Rock climbing and safety instruction' },
+      surf_instructor: { name: 'Surf Instructor', description: 'Surfing lessons and water safety' },
+      dive_instructor: { name: 'Dive Instructor', description: 'Scuba diving instruction and certification' },
+      kayak_guide: { name: 'Kayak Guide', description: 'Kayaking instruction and tours' },
+      language_tutor: { name: 'Language Tutor', description: 'Local language instruction' },
+      cultural_guide: { name: 'Cultural Guide', description: 'Local culture and history expert' },
+      cooking_instructor: { name: 'Cooking Instructor', description: 'Local cuisine cooking classes' },
+      art_instructor: { name: 'Art Instructor', description: 'Creative arts and crafts guidance' },
+      music_instructor: { name: 'Music Instructor', description: 'Musical instrument or vocal instruction' },
+      photographer: { name: 'Photographer', description: 'Professional photography services' },
+      videographer: { name: 'Videographer', description: 'Video production and editing' },
+      chef: { name: 'Chef/Cook', description: 'Professional culinary services' },
+      driver: { name: 'Driver/Guide', description: 'Transportation and local guiding' },
+      childcare_provider: { name: 'Childcare Provider', description: 'Professional childcare services' },
+    };
+
+    const amenityMap: Record<string, { name: string; description: string }> = {
+      wifi: { name: 'Wi-Fi', description: 'High-speed internet access' },
+      projector: { name: 'Projector/Screen', description: 'Presentation equipment' },
+      sound_system: { name: 'Sound System', description: 'Audio equipment and speakers' },
+      charging_stations: { name: 'Charging Stations', description: 'Device charging areas' },
+      pool: { name: 'Swimming Pool', description: 'Swimming and water activities' },
+      spa: { name: 'Spa/Hot Tub', description: 'Relaxation and wellness facilities' },
+      sauna: { name: 'Sauna', description: 'Steam and heat therapy' },
+      gym: { name: 'Gym/Fitness Center', description: 'Exercise equipment and facilities' },
+      yoga_studio: { name: 'Yoga/Movement Studio', description: 'Dedicated space for movement practices' },
+      fire_pit: { name: 'Fire Pit/Bonfire Area', description: 'Outdoor gathering and warmth' },
+      bbq_grill: { name: 'BBQ/Grill', description: 'Outdoor cooking facilities' },
+      garden: { name: 'Garden/Terrace', description: 'Outdoor space and nature' },
+      sports_court: { name: 'Sports Court', description: 'Basketball, tennis, or multi-sport' },
+      hiking_trails: { name: 'Hiking Trails', description: 'Walking and nature paths' },
+      full_kitchen: { name: 'Full Kitchen', description: 'Complete cooking facilities' },
+      dining_area: { name: 'Dining Area', description: 'Shared meal space' },
+      coffee_station: { name: 'Coffee Station', description: 'Coffee and tea facilities' },
+      outdoor_dining: { name: 'Outdoor Dining', description: 'Al fresco eating area' },
+      air_conditioning: { name: 'Air Conditioning', description: 'Climate control' },
+      heating: { name: 'Heating', description: 'Warmth and comfort' },
+      parking: { name: 'Parking', description: 'Vehicle parking space' },
+      laundry: { name: 'Laundry Facilities', description: 'Washing and drying' },
+      library: { name: 'Library/Reading Area', description: 'Quiet space with books' },
+    };
+
+    // Convert selectedServiceIds to structured service objects
+    const services = isMultiDayTrip && Array.isArray((draft as any).selectedServiceIds)
+      ? (draft as any).selectedServiceIds.map((id: string) => ({
+          id,
+          name: serviceMap[id]?.name || id,
+          description: serviceMap[id]?.description,
+          custom: !serviceMap[id], // Mark as custom if not in standard list
+          approvedByAdmin: false
+        }))
+      : [];
+
+    // Convert selectedAmenityIds to structured amenity objects
+    const amenities = isMultiDayTrip && Array.isArray((draft as any).selectedAmenityIds)
+      ? (draft as any).selectedAmenityIds.map((id: string) => ({
+          id,
+          name: amenityMap[id]?.name || id,
+          description: amenityMap[id]?.description,
+          custom: !amenityMap[id], // Mark as custom if not in standard list
+          approvedByAdmin: false
+        }))
+      : [];
+
+    // Get roles from draft
+    const roles = Array.isArray((draft as any).roles) ? (draft as any).roles : [];
+    const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
+    const resolvedParticipantReferralDealType = (draft as any).participantReferralDealType ?? null;
+    const resolvedParticipantReferralCommissionPct =
+      (draft as any).participantReferralCommissionPct ?? "0.00";
+    
+    // Prepare experience data from draft with explicit type mapping
+    const experienceData = applyMarketplaceEconomics({
+      title: draft.title || '',
+      description: draft.description || '',
+      shortDescription: draft.shortDescription,
+      category: (draft.category as "sports_wellness" | "retreats" | "community_social" | "adventure_trips" | "workations" | "festivals_events") || "community_social" as const,
+      experienceType,
+      greatPillars: normalizeGreatPillarsPayload((draft as any).greatPillars),
+      coverImageUrl,
+      gallery: draft.gallery || [],
+      location: draft.location || '',
+      venue: draft.venue,
+      startDate,
+      endDate,
+      startTime: isSingleDayEvent ? (draft as any).startTime || null : null,
+      endTime: isSingleDayEvent ? (draft as any).endTime || null : null,
+      maxParticipants: normalizedMaxParticipants,
+      currentParticipants: 0,
+      price: resolvedPrice.toString(),
+      pricePerPerson: resolvedPrice.toString(),
+      currency: draft.currency || 'usd',
+      depositEnabled: !!draft.depositEnabled || (Array.isArray((draft as any).ticketSkus)
+        && (draft as any).ticketSkus.some((sku: any) => numberOrZero(sku?.depositPerPerson) > 0)),
+      depositPercentage: draft.depositPercentage,
+      depositAmount: (draft as any).depositAmount || null,
+      balanceDueDays: draft.balanceDueDays || 14,
+      creatorId: userId,
+      status: "pending_approval" as const,
+      submittedAt: new Date(),
+
+      // ── Open-to-Venue-Offers fields ──────────────────────────────────────
+      // Stored so the venue discovery feed can match venues by city + space type.
+      venueType: (draft as any).venueType || null,
+      manualVenueName: (draft as any).manualVenueName || null,
+      manualVenueAddress: (draft as any).manualVenueAddress || null,
+      manualVenueContactName: (draft as any).manualVenueContactName || null,
+      manualVenueEmail: (draft as any).manualVenueEmail || null,
+      manualVenuePropertyUrl: (draft as any).manualVenuePropertyUrl || null,
+      manualVenueDescription: (draft as any).manualVenueDescription || null,
+      venueOpenSpaceType: (draft as any).venueOpenSpaceType || null,
+      // venueTargetDeal is a preference, not a binding contract — it tells bidding venues
+      // what commercial model the creator is hoping for.
+      venueTargetDeal: (draft as any).venueTargetDeal || null,
+      venueTargetDealValue: (draft as any).venueTargetDealValue || null,
+      // venue_pending means no venue is confirmed yet; venue_confirmed for all other modes.
+      venueStatus: (draft as any).venueType === "open" ? "venue_pending" : "venue_confirmed",
+
+      // Venue mapping: map selectedVenueId to linkedVenueId.
+      // For open bids, linkedVenueId stays null until a venue accepts —
+      // it gets populated when the Digital Handshake is completed.
+      linkedVenueId: (draft as any).venueType === "open" ? null : ((draft as any).selectedVenueId || null),
+      venueCompensationModel: ((draft as any).selectedVenueId && (draft as any).venueType !== "open")
+        ? ((draft as any).venueCompensationModel || "access_only")
+        : "access_only",
+      venueFixedFee: (draft as any).venueFixedFee || "0.00",
+      venuePerHeadAmount: (draft as any).venuePerHeadAmount || "0.00",
+      venueMinimumSpend: (draft as any).venueMinimumSpend || "0.00",
+      venueRevenueSharePct: (draft as any).venueRevenueSharePct || (draft as any).venueRevenuePercentage || "0.00",
+      venueAccessFee: (draft as any).venueAccessFee || "0.00",
+
+      // ── Self-Hosted / Manual Address logic ──────────────────────────────
+      // If no platform Space is linked the creator is bringing their own venue.
+      // Rules:
+      //   1. Space revenue share is forced to 0% — no external venue gets a cut.
+      //   2. The creator absorbs that % (their share = 100% - platform fee).
+      //   3. No Space Handshake needed — experience publishes immediately.
+      venueRevenuePercentage: ((draft as any).selectedVenueId)
+        ? String(draft.venueRevenuePercentage ?? '0.00')   // platform Space: keep draft value
+        : '0.00',                                           // self-hosted: always 0%
+
+      // MVG field mapping: Map frontend MVG fields to backend schema fields
+      // Use type assertion for fields that may exist from frontend but not in strict type
+      requireMinimumParticipants: resolvedMvgEnabled,
+      mvgEnabled: resolvedMvgEnabled,
+      // mvgMinimumSize (draft) → minimumParticipants, mvgMinimumSize, mvgMin (experience)
+      // Note: Frontend sends as minimumParticipants but draft schema stores as mvgMinimumSize
+      minimumParticipants: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
+      mvgMinimumSize: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
+      mvgMin: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
+      // Persist the absolute deadline used by the scheduler and public countdowns.
+      mvgDeadline,
+      mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
+      escrowEnabled: resolvedMvgEnabled || false,
+      monetisationMode: "creator_led" as const,
+      participantReferralDealType: resolvedParticipantReferralDealType,
+      participantReferralCommissionPct: resolvedParticipantReferralCommissionPct,
+      participantReferralMilestoneAttendeeTarget:
+        (draft as any).participantReferralMilestoneAttendeeTarget ?? null,
+      participantReferralMilestoneRewardDescription: (draft as any).participantReferralMilestoneRewardDescription || null,
+      promotionDealType: (draft as any).promotionDealType
+        ?? null,
+      promotionMilestoneAttendeeTarget: (draft as any).promotionMilestoneAttendeeTarget || null,
+      promotionMilestoneRewardTickets: (draft as any).promotionMilestoneRewardTickets || null,
+      promotionBrandPitch: (draft as any).promotionBrandPitch || null,
+      promotionSponsorshipAmount: (draft as any).promotionSponsorshipAmount || null,
+      promotionSelectedPartnerIds: Array.isArray((draft as any).promotionSelectedPartnerIds)
+        ? (draft as any).promotionSelectedPartnerIds
+        : [],
+      promotionExternalInvites: Array.isArray((draft as any).promotionExternalInvites)
+        ? (draft as any).promotionExternalInvites
+        : [],
+      promoterEnabled: (draft as any).promoterEnabled ?? true,
+      influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
+      promoterCommission: resolvedParticipantReferralCommissionPct,
+      commissionMode: resolvedParticipantReferralDealType === "commission_per_ticket" ? "percent" : null,
+      commissionValue: resolvedParticipantReferralDealType === "commission_per_ticket"
+        ? resolvedParticipantReferralCommissionPct
+        : null,
+      commissionBasis: resolvedParticipantReferralDealType === "commission_per_ticket" ? "per_spot" : null,
+      
+      // Revenue split fields
+      // Self-hosted: creator gets back whatever % was earmarked for the Space.
+      // Platform Space: use the split exactly as the creator configured it.
+      ...((() => {
+        const isLinked = !!((draft as any).selectedVenueId);
+        const platformPct = parseFloat(String(draft.platformPct ?? draft.platformRevenuePercentage ?? 15));
+        const venuePct    = isLinked ? parseFloat(String((draft as any).venueRevenuePercentage ?? 0)) : 0;
+        const creatorPct  = Math.max(0, 100 - platformPct - venuePct);
+        return {
+          creatorPct,
+          platformPct,
+          creatorRevenuePercentage: creatorPct,
+          platformRevenuePercentage: platformPct,
+        };
+      })()),
+      
+      // Soft-hold fields
+      softHoldEnabled: draft.softHoldEnabled || false,
+      softHoldDurationHours: draft.softHoldDurationHours || 48,
+      
+      // Services, Amenities, and Roles
+      services,
+      amenities,
+      roles,
+      
+      // Itinerary/Plan
+      itinerary: (draft as any).itinerary || [],
+      
+      // Rooms and accommodation
+      rooms: normalizedRooms,
+      ticketSkus: (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0)
+        ? normalizeTicketSkus((draft as any).ticketSkus)
+        : normalizedRooms.map((room: any, index: number) => ({
+            id: `sku-${Date.now()}-${index}`,
+            sourceRoomId: room.id || `room-${index}`,
+            ticketName: room.name || `Ticket ${index + 1}`,
+            pricePerPerson: room.pricePerPerson || 0,
+            ticketCapacity: room.quantity || 0,
+            soldCount: 0,
+            depositEnabled: room.depositEnabled || false,
+            depositType: room.depositType || 'fixed',
+            depositPerPerson: room.depositAmount || 0,
+            notes: room.notes || '',
+            gallery: room.gallery || [],
+          }))),
+      accommodationType: isMultiDayTrip ? draft.accommodationType : null,
+      
+      // Virtual meeting fields
+      virtualMeetingUrl: draft.virtualMeetingUrl,
+      virtualPlatform: draft.virtualPlatform,
+      virtualInstructions: draft.virtualInstructions,
+      
+      // Terms and conditions mapping
+      termsAndConditions: (draft as any).customTerms || null,
+      termsDocumentUrl: draft.termsDocumentUrl || null,
+      
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+  return experienceData;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   const emailFromPreferenceToken = (req: any): string => {
     const token = String(req.query?.token || req.body?.token || "");
@@ -2614,19 +2927,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const normalizeGreatPillarsPayload = (value: unknown): string[] => {
-    const allowed = new Set(["health", "sports", "wellness", "food"]);
-    const rawValues = Array.isArray(value)
-      ? value
-      : typeof value === "string"
-        ? value.split(",")
-        : [];
-
-    return rawValues
-      .map((item) => String(item).trim().toLowerCase())
-      .filter((item) => allowed.has(item));
-  };
-
   app.post('/api/experience-drafts', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -3863,7 +4163,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Validation function for required fields - strict HTTPS validation
-  const validateDraftForPublication = (data: any) => {
+  const validateDraftForPublication = (
+    data: any,
+    options: { allowPastStart?: boolean } = {},
+  ) => {
     const errors: string[] = [];
     
     // Check if this is a demo event (bypass validation for demos)
@@ -3916,7 +4219,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } else {
       const startDate = new Date(data.startDate);
       const now = new Date();
-      if (startDate < now) {
+      // An event that has already started can still be corrected — a typo in
+      // the description should not be gated on a date nobody is changing.
+      if (startDate < now && !options.allowPastStart) {
         errors.push("Experience start date must be in the future");
       }
     }
@@ -4009,293 +4314,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Convert date strings to Date objects
-      const experienceType = (draft.type as "one-day" | "multi-day" | "virtual") || "one-day";
-      const isSingleDayEvent = experienceType === "one-day";
-      const isMultiDayTrip = experienceType === "multi-day";
-      const startDate = draft.startDate ? new Date(draft.startDate) : new Date();
-      const endDate = isSingleDayEvent
-        ? startDate
-        : (draft.endDate ? new Date(draft.endDate) : startDate);
-      const normalizedRooms = isMultiDayTrip ? (draft.rooms || []) : [];
-      const sleepingCapacity = normalizedRooms.reduce((total: number, room: any) => {
-        const capacity = Number(room?.capacity || 0);
-        const quantity = Number(room?.quantity || 0);
-        return total + capacity * quantity;
-      }, 0);
-      const normalizedMaxParticipants = isSingleDayEvent
-        ? Number((draft as any).standingCapacity || (draft as any).seatedCapacity || draft.maxParticipants || 1)
-        : (sleepingCapacity || draft.maxParticipants || 10);
-      const resolvedMvgEnabled = draft.mvgEnabled !== undefined
-        ? draft.mvgEnabled
-        : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true);
-        
-      // A zero-day setting stays open through the end of the event's start date.
-      const mvgDeadlineDays = normalizeMvgDeadlineDays(draft.mvgDeadlineDays);
-      const mvgDeadline = resolvedMvgEnabled
-        ? calculateMvgDeadline(startDate, mvgDeadlineDays)
-        : null;
-      
-      // Check if this is a demo event for placeholder image fallback
-      const isDemoEvent = draft.title?.toLowerCase().includes('mystic') && 
-                         draft.title?.toLowerCase().includes('marrakesh');
-      
-      // Default placeholder cover image for Marrakesh demo
-      const defaultMarrakeshImage = "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400";
-      
-      // Use placeholder image for demo if cover image is missing/empty
-      const coverImageUrl = (isDemoEvent && (!draft.coverImageUrl || draft.coverImageUrl.trim() === '')) 
-        ? defaultMarrakeshImage 
-        : draft.coverImageUrl;
-      
-      // Service and Amenity mappings for converting IDs to structured objects
-      const serviceMap: Record<string, { name: string; description: string }> = {
-        yoga_instructor: { name: 'Yoga Instructor', description: 'Certified yoga instructor for sessions' },
-        meditation_guide: { name: 'Meditation Guide', description: 'Guided meditation and mindfulness' },
-        personal_trainer: { name: 'Personal Trainer', description: 'One-on-one fitness coaching' },
-        massage_therapist: { name: 'Massage Therapist', description: 'Professional massage services' },
-        nutrition_coach: { name: 'Nutrition Coach', description: 'Dietary guidance and meal planning' },
-        hiking_guide: { name: 'Hiking Guide', description: 'Experienced trail guide and safety' },
-        climbing_instructor: { name: 'Climbing Instructor', description: 'Rock climbing and safety instruction' },
-        surf_instructor: { name: 'Surf Instructor', description: 'Surfing lessons and water safety' },
-        dive_instructor: { name: 'Dive Instructor', description: 'Scuba diving instruction and certification' },
-        kayak_guide: { name: 'Kayak Guide', description: 'Kayaking instruction and tours' },
-        language_tutor: { name: 'Language Tutor', description: 'Local language instruction' },
-        cultural_guide: { name: 'Cultural Guide', description: 'Local culture and history expert' },
-        cooking_instructor: { name: 'Cooking Instructor', description: 'Local cuisine cooking classes' },
-        art_instructor: { name: 'Art Instructor', description: 'Creative arts and crafts guidance' },
-        music_instructor: { name: 'Music Instructor', description: 'Musical instrument or vocal instruction' },
-        photographer: { name: 'Photographer', description: 'Professional photography services' },
-        videographer: { name: 'Videographer', description: 'Video production and editing' },
-        chef: { name: 'Chef/Cook', description: 'Professional culinary services' },
-        driver: { name: 'Driver/Guide', description: 'Transportation and local guiding' },
-        childcare_provider: { name: 'Childcare Provider', description: 'Professional childcare services' },
-      };
-
-      const amenityMap: Record<string, { name: string; description: string }> = {
-        wifi: { name: 'Wi-Fi', description: 'High-speed internet access' },
-        projector: { name: 'Projector/Screen', description: 'Presentation equipment' },
-        sound_system: { name: 'Sound System', description: 'Audio equipment and speakers' },
-        charging_stations: { name: 'Charging Stations', description: 'Device charging areas' },
-        pool: { name: 'Swimming Pool', description: 'Swimming and water activities' },
-        spa: { name: 'Spa/Hot Tub', description: 'Relaxation and wellness facilities' },
-        sauna: { name: 'Sauna', description: 'Steam and heat therapy' },
-        gym: { name: 'Gym/Fitness Center', description: 'Exercise equipment and facilities' },
-        yoga_studio: { name: 'Yoga/Movement Studio', description: 'Dedicated space for movement practices' },
-        fire_pit: { name: 'Fire Pit/Bonfire Area', description: 'Outdoor gathering and warmth' },
-        bbq_grill: { name: 'BBQ/Grill', description: 'Outdoor cooking facilities' },
-        garden: { name: 'Garden/Terrace', description: 'Outdoor space and nature' },
-        sports_court: { name: 'Sports Court', description: 'Basketball, tennis, or multi-sport' },
-        hiking_trails: { name: 'Hiking Trails', description: 'Walking and nature paths' },
-        full_kitchen: { name: 'Full Kitchen', description: 'Complete cooking facilities' },
-        dining_area: { name: 'Dining Area', description: 'Shared meal space' },
-        coffee_station: { name: 'Coffee Station', description: 'Coffee and tea facilities' },
-        outdoor_dining: { name: 'Outdoor Dining', description: 'Al fresco eating area' },
-        air_conditioning: { name: 'Air Conditioning', description: 'Climate control' },
-        heating: { name: 'Heating', description: 'Warmth and comfort' },
-        parking: { name: 'Parking', description: 'Vehicle parking space' },
-        laundry: { name: 'Laundry Facilities', description: 'Washing and drying' },
-        library: { name: 'Library/Reading Area', description: 'Quiet space with books' },
-      };
-
-      // Convert selectedServiceIds to structured service objects
-      const services = isMultiDayTrip && Array.isArray((draft as any).selectedServiceIds)
-        ? (draft as any).selectedServiceIds.map((id: string) => ({
-            id,
-            name: serviceMap[id]?.name || id,
-            description: serviceMap[id]?.description,
-            custom: !serviceMap[id], // Mark as custom if not in standard list
-            approvedByAdmin: false
-          }))
-        : [];
-
-      // Convert selectedAmenityIds to structured amenity objects
-      const amenities = isMultiDayTrip && Array.isArray((draft as any).selectedAmenityIds)
-        ? (draft as any).selectedAmenityIds.map((id: string) => ({
-            id,
-            name: amenityMap[id]?.name || id,
-            description: amenityMap[id]?.description,
-            custom: !amenityMap[id], // Mark as custom if not in standard list
-            approvedByAdmin: false
-          }))
-        : [];
-
-      // Get roles from draft
-      const roles = Array.isArray((draft as any).roles) ? (draft as any).roles : [];
-      const resolvedPrice = Number((draft as any).pricePerPerson || draft.price || 0);
-      const resolvedParticipantReferralDealType = (draft as any).participantReferralDealType ?? null;
-      const resolvedParticipantReferralCommissionPct =
-        (draft as any).participantReferralCommissionPct ?? "0.00";
-      
-      // Prepare experience data from draft with explicit type mapping
-      const experienceData = applyMarketplaceEconomics({
-        title: draft.title || '',
-        description: draft.description || '',
-        shortDescription: draft.shortDescription,
-        category: (draft.category as "sports_wellness" | "retreats" | "community_social" | "adventure_trips" | "workations" | "festivals_events") || "community_social" as const,
-        experienceType,
-        greatPillars: normalizeGreatPillarsPayload((draft as any).greatPillars),
-        coverImageUrl,
-        gallery: draft.gallery || [],
-        location: draft.location || '',
-        venue: draft.venue,
-        startDate,
-        endDate,
-        startTime: isSingleDayEvent ? (draft as any).startTime || null : null,
-        endTime: isSingleDayEvent ? (draft as any).endTime || null : null,
-        maxParticipants: normalizedMaxParticipants,
-        currentParticipants: 0,
-        price: resolvedPrice.toString(),
-        pricePerPerson: resolvedPrice.toString(),
-        currency: draft.currency || 'usd',
-        depositEnabled: !!draft.depositEnabled || (Array.isArray((draft as any).ticketSkus)
-          && (draft as any).ticketSkus.some((sku: any) => numberOrZero(sku?.depositPerPerson) > 0)),
-        depositPercentage: draft.depositPercentage,
-        depositAmount: (draft as any).depositAmount || null,
-        balanceDueDays: draft.balanceDueDays || 14,
-        creatorId: userId,
-        status: "pending_approval" as const,
-        submittedAt: new Date(),
-
-        // ── Open-to-Venue-Offers fields ──────────────────────────────────────
-        // Stored so the venue discovery feed can match venues by city + space type.
-        venueType: (draft as any).venueType || null,
-        manualVenueName: (draft as any).manualVenueName || null,
-        manualVenueAddress: (draft as any).manualVenueAddress || null,
-        manualVenueContactName: (draft as any).manualVenueContactName || null,
-        manualVenueEmail: (draft as any).manualVenueEmail || null,
-        manualVenuePropertyUrl: (draft as any).manualVenuePropertyUrl || null,
-        manualVenueDescription: (draft as any).manualVenueDescription || null,
-        venueOpenSpaceType: (draft as any).venueOpenSpaceType || null,
-        // venueTargetDeal is a preference, not a binding contract — it tells bidding venues
-        // what commercial model the creator is hoping for.
-        venueTargetDeal: (draft as any).venueTargetDeal || null,
-        venueTargetDealValue: (draft as any).venueTargetDealValue || null,
-        // venue_pending means no venue is confirmed yet; venue_confirmed for all other modes.
-        venueStatus: (draft as any).venueType === "open" ? "venue_pending" : "venue_confirmed",
-
-        // Venue mapping: map selectedVenueId to linkedVenueId.
-        // For open bids, linkedVenueId stays null until a venue accepts —
-        // it gets populated when the Digital Handshake is completed.
-        linkedVenueId: (draft as any).venueType === "open" ? null : ((draft as any).selectedVenueId || null),
-        venueCompensationModel: ((draft as any).selectedVenueId && (draft as any).venueType !== "open")
-          ? ((draft as any).venueCompensationModel || "access_only")
-          : "access_only",
-        venueFixedFee: (draft as any).venueFixedFee || "0.00",
-        venuePerHeadAmount: (draft as any).venuePerHeadAmount || "0.00",
-        venueMinimumSpend: (draft as any).venueMinimumSpend || "0.00",
-        venueRevenueSharePct: (draft as any).venueRevenueSharePct || (draft as any).venueRevenuePercentage || "0.00",
-        venueAccessFee: (draft as any).venueAccessFee || "0.00",
-
-        // ── Self-Hosted / Manual Address logic ──────────────────────────────
-        // If no platform Space is linked the creator is bringing their own venue.
-        // Rules:
-        //   1. Space revenue share is forced to 0% — no external venue gets a cut.
-        //   2. The creator absorbs that % (their share = 100% - platform fee).
-        //   3. No Space Handshake needed — experience publishes immediately.
-        venueRevenuePercentage: ((draft as any).selectedVenueId)
-          ? String(draft.venueRevenuePercentage ?? '0.00')   // platform Space: keep draft value
-          : '0.00',                                           // self-hosted: always 0%
-
-        // MVG field mapping: Map frontend MVG fields to backend schema fields
-        // Use type assertion for fields that may exist from frontend but not in strict type
-        requireMinimumParticipants: resolvedMvgEnabled,
-        mvgEnabled: resolvedMvgEnabled,
-        // mvgMinimumSize (draft) → minimumParticipants, mvgMinimumSize, mvgMin (experience)
-        // Note: Frontend sends as minimumParticipants but draft schema stores as mvgMinimumSize
-        minimumParticipants: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
-        mvgMinimumSize: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
-        mvgMin: draft.mvgMinimumSize || (draft as any).minimumParticipants || 6,
-        // Persist the absolute deadline used by the scheduler and public countdowns.
-        mvgDeadline,
-        mvgStatus: resolvedMvgEnabled ? "pending" as const : undefined,
-        escrowEnabled: resolvedMvgEnabled || false,
-        monetisationMode: "creator_led" as const,
-        participantReferralDealType: resolvedParticipantReferralDealType,
-        participantReferralCommissionPct: resolvedParticipantReferralCommissionPct,
-        participantReferralMilestoneAttendeeTarget:
-          (draft as any).participantReferralMilestoneAttendeeTarget ?? null,
-        participantReferralMilestoneRewardDescription: (draft as any).participantReferralMilestoneRewardDescription || null,
-        promotionDealType: (draft as any).promotionDealType
-          ?? null,
-        promotionMilestoneAttendeeTarget: (draft as any).promotionMilestoneAttendeeTarget || null,
-        promotionMilestoneRewardTickets: (draft as any).promotionMilestoneRewardTickets || null,
-        promotionBrandPitch: (draft as any).promotionBrandPitch || null,
-        promotionSponsorshipAmount: (draft as any).promotionSponsorshipAmount || null,
-        promotionSelectedPartnerIds: Array.isArray((draft as any).promotionSelectedPartnerIds)
-          ? (draft as any).promotionSelectedPartnerIds
-          : [],
-        promotionExternalInvites: Array.isArray((draft as any).promotionExternalInvites)
-          ? (draft as any).promotionExternalInvites
-          : [],
-        promoterEnabled: (draft as any).promoterEnabled ?? true,
-        influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
-        promoterCommission: resolvedParticipantReferralCommissionPct,
-        commissionMode: resolvedParticipantReferralDealType === "commission_per_ticket" ? "percent" : null,
-        commissionValue: resolvedParticipantReferralDealType === "commission_per_ticket"
-          ? resolvedParticipantReferralCommissionPct
-          : null,
-        commissionBasis: resolvedParticipantReferralDealType === "commission_per_ticket" ? "per_spot" : null,
-        
-        // Revenue split fields
-        // Self-hosted: creator gets back whatever % was earmarked for the Space.
-        // Platform Space: use the split exactly as the creator configured it.
-        ...((() => {
-          const isLinked = !!((draft as any).selectedVenueId);
-          const platformPct = parseFloat(String(draft.platformPct ?? draft.platformRevenuePercentage ?? 15));
-          const venuePct    = isLinked ? parseFloat(String((draft as any).venueRevenuePercentage ?? 0)) : 0;
-          const creatorPct  = Math.max(0, 100 - platformPct - venuePct);
-          return {
-            creatorPct,
-            platformPct,
-            creatorRevenuePercentage: creatorPct,
-            platformRevenuePercentage: platformPct,
-          };
-        })()),
-        
-        // Soft-hold fields
-        softHoldEnabled: draft.softHoldEnabled || false,
-        softHoldDurationHours: draft.softHoldDurationHours || 48,
-        
-        // Services, Amenities, and Roles
-        services,
-        amenities,
-        roles,
-        
-        // Itinerary/Plan
-        itinerary: (draft as any).itinerary || [],
-        
-        // Rooms and accommodation
-        rooms: normalizedRooms,
-        ticketSkus: (((draft as any).ticketSkus && (draft as any).ticketSkus.length > 0)
-          ? normalizeTicketSkus((draft as any).ticketSkus)
-          : normalizedRooms.map((room: any, index: number) => ({
-              id: `sku-${Date.now()}-${index}`,
-              sourceRoomId: room.id || `room-${index}`,
-              ticketName: room.name || `Ticket ${index + 1}`,
-              pricePerPerson: room.pricePerPerson || 0,
-              ticketCapacity: room.quantity || 0,
-              soldCount: 0,
-              depositEnabled: room.depositEnabled || false,
-              depositType: room.depositType || 'fixed',
-              depositPerPerson: room.depositAmount || 0,
-              notes: room.notes || '',
-              gallery: room.gallery || [],
-            }))),
-        accommodationType: isMultiDayTrip ? draft.accommodationType : null,
-        
-        // Virtual meeting fields
-        virtualMeetingUrl: draft.virtualMeetingUrl,
-        virtualPlatform: draft.virtualPlatform,
-        virtualInstructions: draft.virtualInstructions,
-        
-        // Terms and conditions mapping
-        termsAndConditions: (draft as any).customTerms || null,
-        termsDocumentUrl: draft.termsDocumentUrl || null,
-        
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
+      const experienceData = buildExperienceFromBuilderPayload(draft, userId);
       
       // Create the published experience
       const experience = await storage.createExperience(experienceData);
@@ -4404,7 +4423,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const experience = await storage.getExperience(req.params.id);
 
-      if (!experience || experience.creatorId !== userId) {
+      // Admins moderate live listings, so they edit as well as read.
+      if (!experience || (experience.creatorId !== userId && !(await checkIsAdmin(req)))) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -4412,6 +4432,111 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updated);
     } catch (error) {
       console.error("Error updating experience:", error);
+      res.status(500).json({ message: "Failed to update experience" });
+    }
+  });
+
+  // Edit an experience that is already live, from the Event Builder.
+  //
+  // A published event is not finished: a venue signs on after the listing goes
+  // out, a partner joins, a paragraph gets rewritten. This writes the builder's
+  // payload onto the existing row through the same mapping publishing uses, and
+  // leaves everything the builder does not own — review state, head count,
+  // slug, preview token — untouched.
+  app.put("/api/experiences/:id/builder", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const existing = await storage.getExperience(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Experience not found" });
+      }
+
+      const isAdmin = await checkIsAdmin(req);
+      if (existing.creatorId !== userId && !isAdmin) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // The date gate only applies to a date the creator is actually moving.
+      const submittedStart = req.body?.startDate ? new Date(req.body.startDate) : null;
+      const startDateUnchanged = !!submittedStart
+        && !!existing.startDate
+        && submittedStart.getTime() === new Date(existing.startDate).getTime();
+      const validation = validateDraftForPublication(req.body, {
+        allowPastStart: startDateUnchanged,
+      });
+      if (!validation.isValid) {
+        return res.status(400).json({
+          message: "Draft validation failed",
+          errors: validation.errors,
+          missingFields: validation.missingFields,
+        });
+      }
+
+      const mapped = buildExperienceFromBuilderPayload(req.body, existing.creatorId);
+
+      // Columns the builder does not own. Rewriting them would reset an event
+      // that is already selling.
+      const {
+        status: _status,
+        submittedAt: _submittedAt,
+        currentParticipants: _currentParticipants,
+        createdAt: _createdAt,
+        mvgStatus: _mvgStatus,
+        creatorId: _creatorId,
+        ...updates
+      } = mapped as any;
+
+      // The builder shows whichever venue is selected, so that selection is the
+      // link. Reading it off the payload rather than the publish-time mapping
+      // keeps an open call whose venue already accepted from being unlinked:
+      // that mapping nulls the venue for anything still typed "open".
+      const previousVenueId = (existing as any).linkedVenueId || null;
+      const selectedVenueId = req.body?.selectedVenueId || null;
+      updates.linkedVenueId = selectedVenueId;
+      if (selectedVenueId) {
+        updates.venueStatus = "venue_confirmed";
+      }
+
+      const updated = await storage.updateExperience(existing.id, updates);
+      await syncBuilderParticipantRoles(updated);
+
+      // A venue added after the event went live still needs its contract row —
+      // the Deal Ledger and the venue's own dashboard both read from it.
+      if (selectedVenueId && selectedVenueId !== previousVenueId) {
+        await storage.upsertVenueContract(buildVenueContractObject(
+          mapped,
+          updated.id,
+          selectedVenueId,
+          existing.creatorId,
+        ));
+      }
+
+      // Same for a venue invited by email: publishing is no longer the only
+      // moment a claim link can be owed.
+      const manualEmail = String(updates.manualVenueEmail || "").trim();
+      const previousManualEmail = String((existing as any).manualVenueEmail || "").trim();
+      if (updates.venueType === "manual" && manualEmail && manualEmail.toLowerCase() !== previousManualEmail.toLowerCase()) {
+        (async () => {
+          const invite = await createVenueInviteForExperience({
+            ...updated,
+            creatorId: existing.creatorId,
+          });
+          await notificationService.sendExternalVenueInvitation({
+            ...updated,
+            inviteToken: invite?.token,
+          });
+        })().catch((error) => {
+          console.error("Failed to send external venue invitation:", error);
+        });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating experience from builder:", error);
       res.status(500).json({ message: "Failed to update experience" });
     }
   });
@@ -8921,7 +9046,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    */
   app.get("/api/venues/:venueId/date-conflicts", async (req: any, res) => {
     try {
-      const { startDate, endDate } = req.query;
+      const { startDate, endDate, excludeExperienceId } = req.query;
       if (!startDate) {
         return res.status(400).json({ message: "startDate is required" });
       }
@@ -8929,6 +9054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         req.params.venueId,
         String(startDate),
         endDate ? String(endDate) : null,
+        excludeExperienceId ? String(excludeExperienceId) : null,
       );
       res.json({ available: conflicts.length === 0, conflicts });
     } catch (error) {

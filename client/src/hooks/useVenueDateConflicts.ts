@@ -20,15 +20,18 @@ export function useVenueDateConflicts(
   venueId?: string | null,
   startDate?: string | null,
   endDate?: string | null,
+  /** The event asking, so its own booking is not read back as a clash. */
+  excludeExperienceId?: string | null,
 ) {
   const enabled = !!venueId && !!startDate;
 
   const { data, isLoading, isError } = useQuery<ConflictResponse>({
-    queryKey: ["/api/venues", venueId, "date-conflicts", startDate, endDate],
+    queryKey: ["/api/venues", venueId, "date-conflicts", startDate, endDate, excludeExperienceId ?? null],
     enabled,
     queryFn: async () => {
       const params = new URLSearchParams({ startDate: String(startDate) });
       if (endDate) params.set("endDate", String(endDate));
+      if (excludeExperienceId) params.set("excludeExperienceId", String(excludeExperienceId));
       const res = await apiRequest("GET", `/api/venues/${venueId}/date-conflicts?${params.toString()}`);
       return res.json();
     },

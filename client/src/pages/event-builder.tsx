@@ -52,12 +52,15 @@ export default function EventBuilderPage() {
     : (selectedType === 'one-day' || selectedType === 'single-day')
       ? 'one-day'
       : undefined;
-  const shouldCheckCreatorProfile = !!draftId || !!initialExperienceType;
+  // Admins moderate other people's listings, so the creator-profile gate below
+  // is not theirs to pass — they have no creator profile and never will.
+  const isAdmin = (user as any)?.role === 'admin';
+  const shouldCheckCreatorProfile = (!!draftId || !!initialExperienceType) && !isAdmin;
 
   // Check for creator profile completion
   const { data: creatorProfile, isLoading: profileLoading } = useQuery({ 
     queryKey: ['/api/creator-profile'],
-    enabled: isAuthenticated
+    enabled: isAuthenticated && !isAdmin
   });
 
   useEffect(() => {

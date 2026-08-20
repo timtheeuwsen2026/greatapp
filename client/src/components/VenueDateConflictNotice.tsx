@@ -34,13 +34,21 @@ export function VenueDateConflictNotice({
   endDate,
   /** Where to send them to fix it. The screen they are not currently on. */
   resolution = "dates",
+  excludeExperienceId,
 }: {
   venueId?: string | null;
   startDate?: string | null;
   endDate?: string | null;
   resolution?: "dates" | "venue";
+  /** Set when editing a live event, so its own booking is not a clash. */
+  excludeExperienceId?: string | null;
 }) {
-  const { hasConflict, conflicts, isIdle, isError } = useVenueDateConflicts(venueId, startDate, endDate);
+  const { hasConflict, conflicts, isIdle, isError } = useVenueDateConflicts(
+    venueId,
+    startDate,
+    endDate,
+    excludeExperienceId,
+  );
 
   if (isIdle || isError) return null;
 

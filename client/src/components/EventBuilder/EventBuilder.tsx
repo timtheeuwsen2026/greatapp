@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/form";
 import { SharedPhotoUpload, PhotoPreview } from "@/components/SharedPhotoUpload";
 import { getAccessToken } from "@/lib/authToken";
+import { experienceToBuilderFields, fetchJsonOrNull } from "@/lib/experienceEditing";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
@@ -483,6 +484,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const [saveError, setSaveError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [draftStatus, setDraftStatus] = useState<string>('draft');
+  // Set when the id in the URL resolved to a published experience rather than a
+  // draft. Everything downstream — autosave, the save button, the submit call —
+  // branches on this, because there is no draft row to write to.
+  const [editingExperienceId, setEditingExperienceId] = useState<string | undefined>(undefined);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -855,8 +860,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         return;
       }
       
-      // Skip if offline, hidden, or published
-      if (!navigator.onLine || document.hidden || isPublished) {
+      // Skip if offline, hidden, or published. Editing a live experience has
+      // no draft row behind it, and silently writing one would fork the event.
+      if (!navigator.onLine || document.hidden || isPublished || editingExperienceId) {
         return;
       }
       
@@ -868,7 +874,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       // Debounce autosave by 8 seconds
       autoSaveTimeoutRef.current = setTimeout(() => {
         // Re-check conditions using refs for fresh values
-        if (isSavingRef.current || autoSaveMutation.isPending || !navigator.onLine || document.hidden || isPublished) {
+        if (isSavingRef.current || autoSaveMutation.isPending || !navigator.onLine || document.hidden || isPublished || editingExperienceId) {
           return;
         }
         
@@ -899,7 +905,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPublished, hasMeaningfulData]);
+  }, [isPublished, hasMeaningfulData, editingExperienceId]);
 
   // Reset draftLoaded when navigating to a different draft
   useEffect(() => {
@@ -1043,38 +1049,39 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       if (!draftId || draftLoaded) return;
 
       try {
-        // First try loading as a draft
-        let response = await apiRequest("GET", `/api/experience-drafts/${draftId}`);
-        
-        if (response.ok) {
-          const draft = await response.json();
+        // The id can be either a saved draft or an already published
+        // experience, and only one of the two lookups will hit. Neither may
+        // throw on its miss, or the second one never runs.
+        const draft = await fetchJsonOrNull(`/api/experience-drafts/${draftId}`);
+
+        if (draft?.id) {
           const mappedData = normalizeLoadedData(draft);
-          
+
           form.reset(mappedData);
           setCurrentStep(draft.currentStep || 1);
           setCurrentDraftId(draft.id);
+          setEditingExperienceId(undefined);
           setDraftStatus(draft.status || 'draft');
           setDraftLoaded(true);
-          console.log("Loaded draft:", draft.id);
           return;
         }
-        
-        // If not found as draft, try loading as published experience
-        response = await apiRequest("GET", `/api/experiences/${draftId}`);
-        
-        if (response.ok) {
-          const experience = await response.json();
-          const mappedData = normalizeLoadedData(experience);
-          
+
+        const experience = await fetchJsonOrNull(`/api/experiences/${draftId}`);
+
+        if (experience?.id) {
+          const mappedData = normalizeLoadedData(
+            experienceToBuilderFields(experience, FIXED_PLATFORM_FEE_PCT),
+          );
+
           form.reset(mappedData);
           setCurrentStep(1); // Start from beginning when editing experience
           setCurrentDraftId(experience.id);
+          setEditingExperienceId(experience.id);
           setDraftStatus(experience.status || 'pending_approval');
           setDraftLoaded(true);
-          console.log("Loaded experience for editing:", experience.id);
           return;
         }
-        
+
         // Neither found
         console.log("ID not found as draft or experience:", draftId);
         toast({
@@ -1106,6 +1113,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     watchedVenueId,
     toDateOnly(watchedStartDate),
     toDateOnly(watchedEndDate),
+    editingExperienceId,
   );
 
   const nextStep = async () => {
@@ -1705,8 +1713,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       return;
     }
 
-    // Prevent submission if already submitted
-    if (draftStatus === 'pending' || draftStatus === 'pending_approval') {
+    // Prevent re-submitting a draft that is already in the review queue. An
+    // event that exists is a different case: saving it is an edit, not a
+    // second submission.
+    if (!editingExperienceId && (draftStatus === 'pending' || draftStatus === 'pending_approval')) {
       toast({
         title: "Already submitted",
         description: "This experience has already been submitted for review.",
@@ -1859,6 +1869,37 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       // Normalize dates to prevent bad payloads
       const publishPayload = normalizeDraftForSave(rawPublishPayload);
 
+      // The event already exists, so this is an edit: write straight to it and
+      // leave its status, bookings and review history alone. There is no draft
+      // row to publish, which is why the draft-publish call 404s here.
+      if (editingExperienceId) {
+        const response = await apiRequest(
+          "PUT",
+          `/api/experiences/${editingExperienceId}/builder`,
+          publishPayload,
+        );
+        const updated = await response.json();
+
+        setPublishError(null);
+        // Re-baseline the form so the unsaved-changes state clears.
+        form.reset(form.getValues());
+        queryClient.invalidateQueries({ queryKey: ["/api/experiences"] });
+        queryClient.invalidateQueries({ queryKey: [`/api/experiences/${editingExperienceId}`] });
+        queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
+        setLastSaved(new Date());
+
+        toast({
+          title: "Changes saved",
+          description: "Your live event has been updated.",
+          duration: 3000,
+        });
+
+        // An edit does not go back through review, so this does not belong on
+        // the dashboard's pending tab that `onComplete` navigates to.
+        void updated;
+        return;
+      }
+
       let publishDraftId = currentDraftId;
       if (!publishDraftId) {
         const createDraftResponse = await apiRequest("POST", "/api/experience-drafts", {
@@ -2002,7 +2043,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
           <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-                Create Experience
+                {editingExperienceId ? "Edit Experience" : "Create Experience"}
               </h1>
               <p className="text-gray-600 dark:text-gray-400">
                 Step {currentStepIndex + 1} of {activeSteps.length}: {currentStepData.title}
@@ -2198,7 +2239,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                     <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
                     <div>
                       <p className="text-sm font-medium text-red-900 dark:text-red-100">
-                        {saveError ? "Draft Save Failed" : "Publish Failed"}
+                        {saveError
+                          ? "Draft Save Failed"
+                          : editingExperienceId ? "Save Failed" : "Publish Failed"}
                       </p>
                       <p className="text-sm text-red-700 dark:text-red-300 mt-1">
                         {saveError || publishError}
@@ -2209,16 +2252,34 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
               )}
 
               <div className="flex items-center gap-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleSaveDraft}
-                  disabled={isSaving || isPublishing}
-                  data-testid="button-save-draft"
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  {isSaving ? "Saving..." : "Save Draft"}
-                </Button>
+                {editingExperienceId ? (
+                  // A live event has no draft behind it. The save is available
+                  // from every step so a one-field fix does not mean walking
+                  // the whole builder to reach the last one.
+                  !isLastStep && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleSubmit(form.getValues())}
+                      disabled={isPublishing}
+                      data-testid="button-save-live-changes"
+                    >
+                      <Save className="w-4 h-4 mr-2" />
+                      {isPublishing ? "Saving..." : "Save changes"}
+                    </Button>
+                  )
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSaveDraft}
+                    disabled={isSaving || isPublishing}
+                    data-testid="button-save-draft"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    {isSaving ? "Saving..." : "Save Draft"}
+                  </Button>
+                )}
 
                 {!isLastStep ? (
                   <Button
@@ -2228,6 +2289,17 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                   >
                     Next
                     <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                ) : editingExperienceId ? (
+                  <Button
+                    type="button"
+                    onClick={() => handleSubmit(form.getValues())}
+                    disabled={!currentValidation.isValid || isPublishing}
+                    data-testid="button-save-live-changes"
+                    className={(!currentValidation.isValid || isPublishing) ? "opacity-50 cursor-not-allowed" : ""}
+                  >
+                    {isPublishing ? "Saving..." : "Save changes"}
+                    <CheckCircle className="w-4 h-4 ml-2" />
                   </Button>
                 ) : (
                   <>
@@ -2271,9 +2343,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       case 2:
         return <MediaStep form={form} isSaving={isSaving} setIsSaving={setIsSaving} autoSaveMutation={autoSaveMutation} />;
       case 3:
-        return <DatesStep form={form} />;
+        return <DatesStep form={form} editingExperienceId={editingExperienceId} />;
       case 4:
-        return <VenueStepWrapper form={form} />;
+        return <VenueStepWrapper form={form} editingExperienceId={editingExperienceId} />;
       case 5:
         return <ServicesAndAmenitiesStep form={form} />;
       case 6:
@@ -2743,7 +2815,7 @@ function MediaStep({ form, isSaving, setIsSaving, autoSaveMutation }: { form: an
   );
 }
 
-function DatesStep({ form }: { form: any }) {
+function DatesStep({ form, editingExperienceId }: { form: any; editingExperienceId?: string }) {
   const startDate = form.watch('startDate');
   const endDate = form.watch('endDate');
   const selectedVenueId = form.watch('selectedVenueId');
@@ -2773,6 +2845,7 @@ function DatesStep({ form }: { form: any }) {
           venueId={selectedVenueId}
           startDate={toDateOnly(startDate)}
           endDate={toDateOnly(endDate)}
+          excludeExperienceId={editingExperienceId}
         />
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3045,16 +3118,16 @@ class VenueStepErrorBoundary extends Component<{ children: ReactNode; onRetry: (
   }
 }
 
-function VenueStepWrapper({ form }: { form: any }) {
+function VenueStepWrapper({ form, editingExperienceId }: { form: any; editingExperienceId?: string }) {
   const [retryKey, setRetryKey] = useState(0);
   return (
     <VenueStepErrorBoundary onRetry={() => setRetryKey(k => k + 1)} key={retryKey}>
-      <VenueStep form={form} />
+      <VenueStep form={form} editingExperienceId={editingExperienceId} />
     </VenueStepErrorBoundary>
   );
 }
 
-function VenueStep({ form }: { form: any }) {
+function VenueStep({ form, editingExperienceId }: { form: any; editingExperienceId?: string }) {
   const [venues, setVenues] = useState<any[]>([]);
   const [isLoadingVenues, setIsLoadingVenues] = useState(false);
   const [venuesError, setVenuesError] = useState<string | null>(null);
@@ -3134,6 +3207,7 @@ function VenueStep({ form }: { form: any }) {
         startDate={toDateOnly(chosenStartDate)}
         endDate={toDateOnly(chosenEndDate)}
         resolution="venue"
+        excludeExperienceId={editingExperienceId}
       />
 
       {/* Location Input */}

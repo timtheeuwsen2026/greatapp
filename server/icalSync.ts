@@ -331,8 +331,17 @@ export async function findVenueDateConflicts(
   venueId: string,
   startDate: Date | string,
   endDate: Date | string | null | undefined,
+  /**
+   * The event doing the asking, when there is one. Its own handshake block sits
+   * on exactly the dates it is asking about, so without this an event that has
+   * already secured its venue reads as clashing with itself the moment its
+   * creator reopens the builder.
+   */
+  excludeExperienceId?: string | null,
 ): Promise<VenueDateConflict[]> {
   if (!venueId || !startDate) return [];
+
+  const ownUid = excludeExperienceId ? `experience-${excludeExperienceId}` : null;
 
   const blocks = await db
     .select()
@@ -347,6 +356,7 @@ export async function findVenueDateConflicts(
   // goes to any creator who asks whether a venue is free. That a venue is
   // busy is the venue's business to share; what it is busy doing is not.
   return blocks
+    .filter((block) => !ownUid || block.externalUid !== ownUid)
     .filter((block) => rangesOverlap(startDate, endDate, block.startDate, block.endDate))
     .map((block) => ({
       startDate: new Date(block.startDate).toISOString(),

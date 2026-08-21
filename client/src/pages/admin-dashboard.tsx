@@ -1702,6 +1702,7 @@ export default function AdminDashboard() {
                         <TableHead>Status</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead>Capacity</TableHead>
+                        <TableHead>Payouts</TableHead>
                         <TableHead>Terms</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -1747,6 +1748,22 @@ export default function AdminDashboard() {
                               capacity is what an admin is actually reviewing. */}
                           <TableCell data-testid={`venue-capacity-${venue.id}`}>
                             <span className="text-xs">{venue.capacity ? `${venue.capacity} people` : '-'}</span>
+                          </TableCell>
+                          {/* Whether this venue can be paid. Asking the owner
+                              "did you connect Stripe?" over the phone was the
+                              only way to find this out. */}
+                          <TableCell data-testid={`venue-payouts-${venue.id}`}>
+                            {(() => {
+                              const accountId = (venue as any).stripeAccountId;
+                              const status = (venue as any).stripeVerificationStatus;
+                              if (!accountId) {
+                                return <Badge className="bg-gray-100 text-gray-700">Not connected</Badge>;
+                              }
+                              if (status === "verified") {
+                                return <Badge className="bg-green-100 text-green-800">Connected</Badge>;
+                              }
+                              return <Badge className="bg-amber-100 text-amber-800">Onboarding</Badge>;
+                            })()}
                           </TableCell>
                           <TableCell data-testid={`venue-terms-${venue.id}`}>
                             {(venue as any).termsConfirmed ? (

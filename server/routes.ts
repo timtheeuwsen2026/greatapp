@@ -55,6 +55,8 @@ import {
   normalizeVenueDealModel,
   getVenueDealTermsKey,
   validateExperienceVenueDeal,
+  calculateVenueEarnings,
+  formatVenueDealSummary,
 } from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
@@ -817,6 +819,26 @@ async function checkIsAdmin(req: any): Promise<boolean> {
     return dbUser.role === 'admin';
   }
   return false;
+}
+
+/**
+ * The deal's number as stored on the experience row.
+ *
+ * A contract written before its terms blob was populated still has the value
+ * in the experience's own columns, so the ledger falls back to them rather
+ * than reporting zero.
+ */
+function readExperienceVenueDealValueFor(experience: any, model: unknown): unknown {
+  switch (normalizeVenueDealModel(model)) {
+    case "revenue_share": return experience?.venueRevenueSharePct ?? experience?.venueRevenuePercentage;
+    case "fixed_fee":
+    case "upfront_rental":
+    case "venue_sponsored": return experience?.venueFixedFee;
+    case "per_head": return experience?.venuePerHeadAmount;
+    case "per_room_night": return experience?.venuePerRoomPerNight;
+    case "minimum_spend": return experience?.venueMinimumSpend;
+    default: return undefined;
+  }
 }
 
 function normalizeGreatPillarsPayload(value: unknown): string[] {
@@ -14182,31 +14204,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * What a venue has earned on the platform — and nothing else.
+   *
+   * This used to report the creator's gross ticket revenue as the venue's
+   * "Total Sales". A coffee shop being asked to sponsor an event for 50 could
+   * therefore see that the run club had taken 8 in ticket sales, which is not
+   * the venue's money and not their business. The creator's takings are gone
+   * from this response entirely; a venue sees what it is owed, what it owes,
+   * and which event each figure came from.
+   *
+   * The old "my share" was wrong too: it only ever applied
+   * venueRevenuePercentage, so a venue on a per-ticket deduction, a per-head
+   * package or a rental agreement was told it had earned nothing.
+   */
   app.get('/api/venue/ledger', isAuthenticated, async (req: any, res) => {
+    const empty = {
+      earned: 0,
+      owed: 0,
+      currency: 'eur',
+      eventsCount: 0,
+      attendees: 0,
+      mixedCurrencies: false,
+      events: [] as any[],
+    };
     try {
-      const userId = req.user.claims.sub;
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
       const userVenues = await storage.getVenuesByCreator(userId);
-      if (!userVenues.length) return res.json({ totalSales: 0, myShare: 0, bookingsCount: 0 });
+      if (!userVenues.length) return res.json(empty);
 
       const venueIds = userVenues.map((v: any) => v.id);
-      const bookings = await storage.getBookingsByVenueIds(venueIds);
+      // Only agreed deals count. An offer still being negotiated is not income.
+      const contracted = await storage.getVenueContractsByVenueIds(venueIds, 'accepted');
+      if (!contracted.length) return res.json(empty);
 
-      let totalGross = 0;
-      let myShare = 0;
+      const events = await Promise.all(contracted.map(async (row: any) => {
+        const contract = row.contract;
+        const model = contract?.model || row.venueCompensationModel;
+        const terms = contract?.terms || {};
 
-      for (const booking of bookings) {
-        const gross = parseFloat(booking.totalAmount || booking.totalPrice || '0');
-        totalGross += gross;
-        // venueRevenuePercentage stored on the experience
-        const venuePct = parseFloat(booking.experience?.venueRevenuePercentage || '0');
-        myShare += gross * (venuePct / 100);
-      }
+        const bookings = await storage.getBookingsByExperience(row.id);
+        const active = (bookings || []).filter((booking: any) =>
+          isActiveParticipantBooking(booking.status));
+        const attendees = sumBookingTicketQuantity(active);
+        const grossRevenue = active.reduce(
+          (sum: number, booking: any) => sum + numberOrZero(booking.amount), 0);
+
+        const termsKey = getVenueDealTermsKey(model);
+        const value = numberOrZero(
+          (termsKey ? terms[termsKey] : undefined)
+          ?? readExperienceVenueDealValueFor(row, model),
+        );
+
+        const rooms: any[] = Array.isArray(row.rooms) ? row.rooms : [];
+        const nights = row.startDate && row.endDate
+          ? Math.max(1, Math.round(
+              (new Date(row.endDate).getTime() - new Date(row.startDate).getTime()) / 86_400_000))
+          : 1;
+        const roomNights = rooms.reduce(
+          (total: number, room: any) => total + (numberOrZero(room?.quantity) * nights), 0);
+
+        const { earned, owed, offPlatform } = calculateVenueEarnings({
+          model,
+          value,
+          grossRevenue,
+          attendees,
+          roomNights,
+        });
+
+        return {
+          experienceId: row.id,
+          title: row.title,
+          startDate: row.startDate,
+          currency: (row.currency || terms.currency || 'eur').toLowerCase(),
+          model,
+          dealSummary: formatVenueDealSummary(model, terms, row.currency || 'eur'),
+          attendees,
+          earned: Math.round(earned * 100) / 100,
+          owed: Math.round(owed * 100) / 100,
+          offPlatform,
+          // Sponsorship is only real once it has cleared Stripe.
+          settled: model === 'venue_sponsored'
+            ? contract?.sponsorshipPaymentStatus === 'paid'
+            : true,
+        };
+      }));
+
+      const currencies = Array.from(new Set(events.map((event) => event.currency)));
+      const totals = events.reduce((sum, event) => ({
+        earned: sum.earned + event.earned,
+        owed: sum.owed + event.owed,
+        attendees: sum.attendees + event.attendees,
+      }), { earned: 0, owed: 0, attendees: 0 });
 
       res.json({
-        totalSales: Math.round(totalGross * 100) / 100,
-        myShare: Math.round(myShare * 100) / 100,
-        bookingsCount: bookings.length,
-        venues: userVenues.length,
+        earned: Math.round(totals.earned * 100) / 100,
+        owed: Math.round(totals.owed * 100) / 100,
+        attendees: totals.attendees,
+        eventsCount: events.length,
+        currency: currencies[0] || 'eur',
+        mixedCurrencies: currencies.length > 1,
+        events: events.sort((a, b) =>
+          new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime()),
       });
     } catch (err: any) {
       console.error('Error fetching venue ledger:', err);

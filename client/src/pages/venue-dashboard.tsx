@@ -153,6 +153,20 @@ function isVenueOfferFormValid(form: VenueOfferForm): boolean {
   return getVenueDealSelectionError(form.model, value) === null;
 }
 
+/**
+ * Money in the currency it was actually taken in.
+ *
+ * The ledger cards printed a literal "$" in front of every figure, so a venue
+ * on a EUR event read "8 dollars" for what was 8 euros.
+ */
+function formatVenueMoney(amount: number | null | undefined, currency?: string | null): string {
+  const value = Number(amount);
+  const safe = Number.isFinite(value) ? value : 0;
+  const code = String(currency || "EUR").toUpperCase();
+  const symbol = ({ USD: "$", EUR: "€", GBP: "£" } as Record<string, string>)[code] || `${code} `;
+  return `${symbol}${safe.toFixed(2)}`;
+}
+
 function VenueDealFields({ form, setForm, currency, isDaytime }: {
   form: VenueOfferForm;
   setForm: any;
@@ -505,7 +519,7 @@ function VenueDashboardContent() {
   const [openEventsCityFilter, setOpenEventsCityFilter] = useState("");
 
   // Task 4 — Venue Ledger (real sales + my share)
-  const { data: ledger = { totalSales: 0, myShare: 0, bookingsCount: 0 }, isLoading: ledgerLoading } = useQuery({
+  const { data: ledger = { earned: 0, owed: 0, attendees: 0, eventsCount: 0, currency: "eur", events: [] }, isLoading: ledgerLoading } = useQuery({
     queryKey: ["/api/venue/ledger"],
     enabled: isAuthenticated,
     retry: false,
@@ -775,22 +789,36 @@ function VenueDashboardContent() {
 
         {/* Task 4 — Ledger Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-2">
+          {/* What this venue has earned — never the creator's ticket takings,
+              which are not the venue's money and were shown here by mistake. */}
           <Card>
             <CardContent className="p-5">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Sales</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                ${ledger.totalSales?.toFixed(2) ?? '0.00'}
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">You've earned</p>
+              <p className="text-2xl font-bold text-green-600" data-testid="venue-ledger-earned">
+                {formatVenueMoney(ledger.earned, ledger.currency)}
               </p>
-              <p className="text-xs text-gray-500 mt-1">Gross across all linked experiences</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {ledger.mixedCurrencies
+                  ? "Across agreed deals — see the breakdown for each currency"
+                  : "Rev share, ticket deduction, per-head and rental across agreed deals"}
+              </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-5">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">My Share</p>
-              <p className="text-2xl font-bold text-green-600">
-                ${ledger.myShare?.toFixed(2) ?? '0.00'}
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                {ledger.owed > 0 ? "You owe" : "Guests hosted"}
               </p>
-              <p className="text-xs text-gray-500 mt-1">Based on accepted venue split %</p>
+              <p className={`text-2xl font-bold ${ledger.owed > 0 ? "text-amber-600" : "text-gray-900 dark:text-white"}`} data-testid="venue-ledger-owed">
+                {ledger.owed > 0
+                  ? formatVenueMoney(ledger.owed, ledger.currency)
+                  : (ledger.attendees ?? 0)}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {ledger.owed > 0
+                  ? "Sponsorship you've agreed to pay creators"
+                  : "People who booked events at your venue"}
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -808,6 +836,53 @@ function VenueDashboardContent() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Where each figure came from. A venue asked to sponsor an event
+            should be able to see the deal behind the number. */}
+        {(ledger.events?.length ?? 0) > 0 && (
+          <Card className="mb-2">
+            <CardContent className="p-0">
+              <div className="border-b px-5 py-4">
+                <p className="font-semibold">Your deals</p>
+                <p className="text-xs text-gray-500">Agreed agreements at your venues, newest first.</p>
+              </div>
+              <div className="divide-y">
+                {ledger.events.map((event: any) => (
+                  <div key={event.experienceId} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3" data-testid={`venue-ledger-row-${event.experienceId}`}>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{event.title}</p>
+                      <p className="text-xs text-gray-500">
+                        {event.dealSummary}
+                        {event.startDate ? ` · ${new Date(event.startDate).toLocaleDateString()}` : ""}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      {event.offPlatform ? (
+                        <p className="text-sm text-gray-500">Settled at your counter</p>
+                      ) : event.owed > 0 ? (
+                        <>
+                          <p className="font-semibold text-amber-600">
+                            −{formatVenueMoney(event.owed, event.currency)}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {event.settled ? "Sponsorship paid" : "Sponsorship due"}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-semibold text-green-600">
+                            {formatVenueMoney(event.earned, event.currency)}
+                          </p>
+                          <p className="text-xs text-gray-500">{event.attendees} guest{event.attendees === 1 ? "" : "s"}</p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>

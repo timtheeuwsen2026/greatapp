@@ -348,6 +348,76 @@ export function readVenueDealValue(
 }
 
 /** One-line human summary, used in emails, dashboards and contract cards. */
+/** Who pays whom under this deal. */
+export function getVenueDealDirection(model: unknown): VenueDealDefinition["direction"] | null {
+  const normalized = normalizeVenueDealModel(model);
+  return normalized ? DEFINITIONS[normalized].direction : null;
+}
+
+export type VenueEarningsInput = {
+  model: unknown;
+  /** The number this deal carries: a percentage, a per-ticket amount, a fee. */
+  value: number;
+  /** Gross ticket revenue taken for the event, in major units. */
+  grossRevenue: number;
+  /** Confirmed attendees, which for these models is also tickets sold. */
+  attendees: number;
+  /** Multi-day only: rooms multiplied by nights. */
+  roomNights?: number;
+};
+
+export type VenueEarnings = {
+  /** What the venue is due for this event, through the platform. */
+  earned: number;
+  /** What the venue owes the creator for this event. */
+  owed: number;
+  /**
+   * True when the money never passes through the platform — an access-only
+   * arrangement or a minimum-spend guarantee is settled at the counter, so
+   * reporting a number here would be inventing one.
+   */
+  offPlatform: boolean;
+};
+
+/**
+ * What a venue actually makes on one event.
+ *
+ * A venue's dashboard used to show the creator's gross ticket revenue, which
+ * is neither theirs nor any of their business — a coffee shop asked to sponsor
+ * an event for 50 could see the run club had taken 8 in ticket sales. This is
+ * the answer to the only question a venue should be asking of it: what am I
+ * owed, and what do I owe?
+ */
+export function calculateVenueEarnings(input: VenueEarningsInput): VenueEarnings {
+  const none: VenueEarnings = { earned: 0, owed: 0, offPlatform: false };
+  const normalized = normalizeVenueDealModel(input.model);
+  if (!normalized) return none;
+
+  const value = Number.isFinite(input.value) ? input.value : 0;
+  const gross = Number.isFinite(input.grossRevenue) ? input.grossRevenue : 0;
+  const attendees = Number.isFinite(input.attendees) ? input.attendees : 0;
+  const roomNights = Number.isFinite(input.roomNights ?? 0) ? (input.roomNights ?? 0) : 0;
+
+  switch (normalized) {
+    case "revenue_share":
+      return { ...none, earned: gross * (value / 100) };
+    // "A flat amount per ticket sold goes to the venue" — a deduction, not a
+    // single fee, which is why it scales with attendance.
+    case "fixed_fee":
+    case "per_head":
+      return { ...none, earned: value * attendees };
+    case "per_room_night":
+      return { ...none, earned: value * roomNights };
+    case "upfront_rental":
+      return { ...none, earned: value };
+    case "venue_sponsored":
+      return { ...none, owed: value };
+    case "access_only":
+    case "minimum_spend":
+      return { ...none, offPlatform: true };
+  }
+}
+
 export function formatVenueDealSummary(
   model: string | null | undefined,
   terms: Record<string, any> | null | undefined,

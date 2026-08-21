@@ -17,6 +17,8 @@ interface CreatorProfileCardProps {
     averageRating?: number;
     totalExperiences?: number;
     socialLink?: string | null;
+    /** The organiser's own square artwork, when they have uploaded one. */
+    brandKitSquareUrl?: string | null;
   };
   variant?: 'compact' | 'full';
 }
@@ -33,6 +35,16 @@ export default function CreatorProfileCard({ creator, variant = 'compact' }: Cre
   if (variant === 'compact') {
     return (
       <Card className="overflow-hidden hover:shadow-md transition-shadow">
+        {creator.brandKitSquareUrl && (
+          <div className="aspect-[3/1] w-full overflow-hidden bg-gray-100" data-testid="creator-brand-banner">
+            <img
+              src={creator.brandKitSquareUrl}
+              alt={`${displayName} brand image`}
+              loading="lazy"
+              className="h-full w-full object-cover"
+            />
+          </div>
+        )}
         <CardContent className="p-4">
           <div className="flex items-start gap-4">
             <Avatar className="h-16 w-16 flex-shrink-0">

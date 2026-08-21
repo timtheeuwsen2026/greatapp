@@ -133,6 +133,12 @@ export const creatorProfiles = pgTable("creator_profiles", {
     .array()
     .default(sql`'{}'::text[]`), // Up to 5 images
 
+  // Brand kit — the creator's own artwork, in the two shapes social platforms
+  // actually accept. Held separately from profilePhoto because that is a
+  // cropped circular avatar and cannot stand in for a shareable graphic.
+  brandKitSquareUrl: varchar("brand_kit_square_url"), // 1:1, for feed posts
+  brandKitVerticalUrl: varchar("brand_kit_vertical_url"), // 9:16, for stories and reels
+
   // Section B: Professional & Verification (Visible in dashboard, short version on event pages)
   location: varchar("location").notNull(), // Location/Base City
   experienceLevel: varchar("experience_level").notNull(), // Beginner|Experienced|Professional/Certified
@@ -2895,6 +2901,8 @@ export const insertCreatorProfileSchema = createInsertSchema(creatorProfiles)
     // Optional fields
     tagline: z.string().optional(),
     profilePhoto: z.string().optional(),
+    brandKitSquareUrl: z.string().optional().nullable(),
+    brandKitVerticalUrl: z.string().optional().nullable(),
     expertiseTags: z.array(z.string()).default([]),
     gallery: z.array(z.string()).max(5, "Maximum 5 gallery images").default([]),
     socialLinks: z

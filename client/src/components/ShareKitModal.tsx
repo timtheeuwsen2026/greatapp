@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { apiRequest } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
-import { Copy, Check, X, Rocket, MessageSquare, Phone } from "lucide-react";
+import { Copy, Check, X, Rocket, MessageSquare, Phone, Download, ImageIcon } from "lucide-react";
 import { getBaseUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -20,9 +20,18 @@ interface ShareKitModalProps {
     participantsNeeded?: number | null;
     currency?: string;
   };
+  /**
+   * The organiser's own artwork, in the shapes the social platforms accept.
+   * Optional: an organiser who has not uploaded one simply gets the message
+   * and the link, exactly as before.
+   */
+  brandKit?: {
+    squareUrl?: string | null;
+    verticalUrl?: string | null;
+  };
 }
 
-export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps) {
+export function ShareKitModal({ open, onClose, experience, brandKit }: ShareKitModalProps) {
   const { isAuthenticated } = useAuth();
   const { toast } = useToast();
   const [referralLink, setReferralLink] = useState<string>("");
@@ -67,6 +76,32 @@ export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps)
       setTimeout(() => setCopiedMessage(false), 2500);
     } catch {
       toast({ title: "Copy failed", description: "Please copy the message manually.", variant: "destructive" });
+    }
+  };
+
+  /**
+   * Saves a brand image to the participant's device.
+   *
+   * The assets live on object storage, so a plain `download` attribute would
+   * only navigate to them cross-origin. Fetching to a blob first is what
+   * actually puts the file in their downloads folder, ready to post.
+   */
+  const handleDownloadAsset = async (url: string, label: string) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(String(response.status));
+      const blob = await response.blob();
+      const extension = (blob.type.split("/")[1] || "png").split("+")[0];
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${experience.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${label}.${extension}`;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // Falling back to a new tab still gets them the image — long-press or
+      // right-click saves it — which beats a dead button.
+      window.open(url, "_blank", "noopener,noreferrer");
     }
   };
 
@@ -175,6 +210,52 @@ export function ShareKitModal({ open, onClose, experience }: ShareKitModalProps)
               <span>{copiedLink ? "Copied!" : "Copy Link"}</span>
             </Button>
           </div>
+
+          {/* Brand kit — the organiser's artwork, ready to post */}
+          {(brandKit?.squareUrl || brandKit?.verticalUrl) && (
+            <div className="mb-4 rounded-xl border border-gray-200 p-4 dark:border-gray-700" data-testid="share-kit-brand-assets">
+              <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                <ImageIcon className="h-3.5 w-3.5" />
+                Graphics from the organiser
+              </p>
+              <div className="flex gap-3">
+                {brandKit?.squareUrl && (
+                  <div className="flex-1">
+                    <div className="aspect-square w-full overflow-hidden rounded-lg border bg-gray-50">
+                      <img src={normalizeImageUrl(brandKit.squareUrl) ?? undefined} alt="Square graphic" className="h-full w-full object-cover" />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 w-full"
+                      onClick={() => handleDownloadAsset(brandKit.squareUrl as string, "square")}
+                      data-testid="download-square-asset"
+                    >
+                      <Download className="mr-1.5 h-3.5 w-3.5" />
+                      Post
+                    </Button>
+                  </div>
+                )}
+                {brandKit?.verticalUrl && (
+                  <div className="flex-1">
+                    <div className="aspect-[9/16] w-full overflow-hidden rounded-lg border bg-gray-50">
+                      <img src={normalizeImageUrl(brandKit.verticalUrl) ?? undefined} alt="Vertical graphic" className="h-full w-full object-cover" />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 w-full"
+                      onClick={() => handleDownloadAsset(brandKit.verticalUrl as string, "story")}
+                      data-testid="download-vertical-asset"
+                    >
+                      <Download className="mr-1.5 h-3.5 w-3.5" />
+                      Story
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Referral link display */}
           {referralLink && !loadingLink && (

@@ -45,6 +45,7 @@ import { scheduleExperiencePayout } from "./payout-scheduler";
 import { sumBookingPayoutGrossCents } from "./payoutRules";
 import {
   calculateTicketDeduction,
+  normalizeTicketQuantity,
   sumBookingTicketQuantity,
 } from "@shared/ticketDeduction";
 import { normalizePromotionCounterTerms } from "./promotionDealRules";
@@ -4436,6 +4437,127 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * Shifts a past date forward in whole weeks until it is in the future.
+   *
+   * A weekly organiser duplicating last Sunday's run wants next Sunday, not
+   * a date they then have to fix by hand — and the same weekday, which a plain
+   * "+7 days from today" would not give them.
+   */
+  const nextWeeklyOccurrence = (from: Date, reference = new Date()): Date => {
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const next = new Date(from.getTime() + WEEK_MS);
+    if (next > reference) return next;
+    const weeksBehind = Math.ceil((reference.getTime() - next.getTime()) / WEEK_MS);
+    return new Date(next.getTime() + weeksBehind * WEEK_MS);
+  };
+
+  // POST /api/experiences/:id/duplicate — run it again next week.
+  //
+  // Built on the draft table rather than a separate "templates" one: a
+  // duplicate is a draft the creator has not finished yet, which is exactly
+  // what a draft is. It also means the copy opens in the builder they already
+  // know, with every field editable, instead of a second half-parallel editor.
+  app.post("/api/experiences/:id/duplicate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const source = await storage.getExperience(req.params.id);
+      if (!source) return res.status(404).json({ message: "Experience not found" });
+
+      const isAdmin = await checkIsAdmin(req);
+      if (source.creatorId !== userId && !isAdmin) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const sourceStart = source.startDate ? new Date(source.startDate) : null;
+      const sourceEnd = source.endDate ? new Date(source.endDate) : null;
+      const startDate = sourceStart ? nextWeeklyOccurrence(sourceStart) : null;
+      // Keep the run length, whatever it was.
+      const endDate = sourceStart && sourceEnd && startDate
+        ? new Date(startDate.getTime() + (sourceEnd.getTime() - sourceStart.getTime()))
+        : startDate;
+
+      const skus: any[] = Array.isArray((source as any).ticketSkus) ? (source as any).ticketSkus : [];
+
+      const draft = await storage.createExperienceDraft({
+        creatorId: source.creatorId,
+        title: req.body?.title || `${source.title} (copy)`,
+        shortDescription: source.shortDescription || "",
+        description: source.description || "",
+        category: source.category as any,
+        type: (source as any).experienceType || "one-day",
+        greatPillars: normalizeGreatPillarsPayload((source as any).greatPillars),
+        coverImageUrl: source.coverImageUrl || "",
+        gallery: (source.gallery as any) || [],
+        startDate,
+        endDate,
+        startTime: (source as any).startTime || null,
+        endTime: (source as any).endTime || null,
+        maxParticipants: source.maxParticipants ?? 10,
+        location: source.location || "",
+        venue: source.venue || "",
+        selectedVenueId: (source as any).linkedVenueId || null,
+        venueType: (source as any).venueType || null,
+        manualVenueName: (source as any).manualVenueName || null,
+        manualVenueAddress: (source as any).manualVenueAddress || null,
+        manualVenueContactName: (source as any).manualVenueContactName || null,
+        manualVenueEmail: (source as any).manualVenueEmail || null,
+        manualVenuePropertyUrl: (source as any).manualVenuePropertyUrl || null,
+        manualVenueDescription: (source as any).manualVenueDescription || null,
+        standingCapacity: (source as any).standingCapacity ?? null,
+        seatedCapacity: (source as any).seatedCapacity ?? null,
+        venueOpenSpaceType: (source as any).venueOpenSpaceType || null,
+        venueTargetDeal: (source as any).venueTargetDeal || null,
+        venueTargetDealValue: (source as any).venueTargetDealValue ?? null,
+        virtualPlatform: (source as any).virtualPlatform || null,
+        virtualMeetingUrl: (source as any).virtualMeetingUrl || null,
+        virtualInstructions: (source as any).virtualInstructions || null,
+        // services/amenities are stored as objects on the experience and as id
+        // lists in the builder
+        selectedServiceIds: Array.isArray((source as any).services)
+          ? (source as any).services.map((service: any) => service?.id).filter(Boolean)
+          : [],
+        selectedAmenityIds: Array.isArray((source as any).amenities)
+          ? (source as any).amenities.map((amenity: any) => amenity?.id).filter(Boolean)
+          : [],
+        accommodationType: (source as any).accommodationType || null,
+        rooms: (source as any).rooms || [],
+        // The inventory carries over; what was sold against it does not.
+        ticketSkus: skus.map((sku: any, index: number) => ({
+          ...sku,
+          id: `sku-copy-${index}-${randomBytes(4).toString("hex")}`,
+          soldCount: 0,
+        })),
+        price: source.price ?? "0",
+        pricePerPerson: (source as any).pricePerPerson ?? source.price ?? "0",
+        currency: source.currency || "eur",
+        depositEnabled: source.depositEnabled ?? false,
+        depositPercentage: source.depositPercentage ?? "0.00",
+        balanceDueDays: source.balanceDueDays ?? 14,
+        roles: (source as any).roles || [],
+        itinerary: (source as any).itinerary || [],
+        mvgEnabled: source.mvgEnabled ?? true,
+        mvgMinimumSize: source.minimumParticipants ?? source.mvgMin ?? 6,
+        softHoldEnabled: source.softHoldEnabled ?? false,
+        softHoldDurationHours: source.softHoldDurationHours ?? 48,
+        customTerms: (source as any).termsAndConditions || null,
+        termsDocumentUrl: source.termsDocumentUrl || null,
+        // Deliberately not carried over: bookings, review state, the slug, the
+        // preview token, and every promotion deal already agreed on the
+        // original. A copy starts its own negotiations.
+        status: "draft",
+        currentStep: 1,
+      } as any);
+
+      res.status(201).json({ id: draft.id, draft });
+    } catch (error) {
+      console.error("Error duplicating experience:", error);
+      res.status(500).json({ message: "Failed to duplicate experience" });
+    }
+  });
+
   // Edit an experience that is already live, from the Event Builder.
   //
   // A published event is not finished: a venue signs on after the listing goes
@@ -7273,6 +7395,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         location: creatorProfile?.location || null,
         expertiseTags: creatorProfile?.expertiseTags || [],
         socialLink,
+        // The organiser's own artwork, so a participant sharing the event has
+        // something branded to post rather than a bare link.
+        brandKitSquareUrl: creatorProfile?.brandKitSquareUrl || null,
+        brandKitVerticalUrl: creatorProfile?.brandKitVerticalUrl || null,
       });
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -9912,6 +10038,199 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error archiving creator experience:", error);
       res.status(500).json({ message: "Failed to archive experience" });
+    }
+  });
+
+  // GET /api/creator/community — everyone who has ever booked or RSVP'd to one
+  // of this creator's events, collapsed to one row per person.
+  //
+  // Most creators on the platform have no CRM of their own, so this is where
+  // their audience lives. It is deliberately built from bookings rather than
+  // from a separate membership table: the list is then always true, and nobody
+  // has to remember to add anyone to it.
+  app.get("/api/creator/community", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const bookings = await storage.getBookingsByCreator(creatorId);
+      if (!bookings.length) {
+        return res.json({ members: [], totals: { members: 0, bookings: 0, repeat: 0 } });
+      }
+
+      const userIds = Array.from(new Set(bookings.map((booking: any) => booking.userId).filter(Boolean)));
+      const people = userIds.length
+        ? await db.select().from(users).where(inArray(users.id, userIds))
+        : [];
+      const personById = new Map(people.map((person: any) => [person.id, person]));
+
+      // A cancelled booking still means the person came into the creator's
+      // orbit, so they stay in the community — but their spend does not count.
+      const countsAsAttending = (status: string | null) =>
+        status === "confirmed" || status === "deposit_paid" || status === "fully_paid";
+
+      const byUser = new Map<string, any>();
+      for (const booking of bookings) {
+        if (!booking.userId) continue;
+        const person = personById.get(booking.userId);
+        const existing = byUser.get(booking.userId) ?? {
+          userId: booking.userId,
+          name: [person?.firstName, person?.lastName].filter(Boolean).join(" ") || null,
+          email: person?.email ?? null,
+          avatarUrl: person?.profileImageUrl ?? null,
+          joinedAt: person?.createdAt ?? null,
+          eventCount: 0,
+          bookingCount: 0,
+          totalSpend: 0,
+          currency: booking.experience?.currency || "eur",
+          lastEventTitle: null as string | null,
+          lastEventDate: null as Date | null,
+          events: [] as string[],
+          referredCount: 0,
+        };
+
+        existing.bookingCount += 1;
+        if (countsAsAttending(booking.status)) {
+          existing.totalSpend += numberOrZero(booking.amount);
+        }
+        if (booking.experienceId && !existing.events.includes(booking.experienceId)) {
+          existing.events.push(booking.experienceId);
+          existing.eventCount = existing.events.length;
+        }
+
+        const startDate = booking.experience?.startDate ? new Date(booking.experience.startDate) : null;
+        if (startDate && (!existing.lastEventDate || startDate > existing.lastEventDate)) {
+          existing.lastEventDate = startDate;
+          existing.lastEventTitle = booking.experience?.title ?? null;
+        }
+
+        byUser.set(booking.userId, existing);
+      }
+
+      // Someone who brought other people is the creator's most valuable
+      // contact, so the tab has to be able to show that.
+      for (const booking of bookings) {
+        if (!booking.promoterId) continue;
+        const promoter = byUser.get(booking.promoterId);
+        if (promoter) promoter.referredCount += 1;
+      }
+
+      const members = Array.from(byUser.values())
+        .map((member) => ({
+          ...member,
+          lastEventDate: member.lastEventDate ? member.lastEventDate.toISOString() : null,
+        }))
+        .sort((a, b) => (b.eventCount - a.eventCount) || (b.totalSpend - a.totalSpend));
+
+      res.json({
+        members,
+        totals: {
+          members: members.length,
+          bookings: bookings.length,
+          repeat: members.filter((member) => member.eventCount > 1).length,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching creator community:", error);
+      res.status(500).json({ message: "Failed to fetch community" });
+    }
+  });
+
+  // GET /api/creator/headcount — how many people are actually coming, and what
+  // they paid, per event and in total.
+  //
+  // The only place a true head count existed was the public event page, which
+  // recomputes it from live bookings. The dashboard read stale columns, so a
+  // creator could not answer "how many are coming and how much have I taken?"
+  // without opening their own listing. Same source as the public page here, so
+  // the two cannot disagree.
+  app.get("/api/creator/headcount", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const owned = await storage.getExperiencesByCreator(creatorId);
+      if (!owned.length) {
+        return res.json({
+          events: [],
+          totals: { rsvps: 0, ticketsSold: 0, attendees: 0, donations: 0, grossRevenue: 0, currency: "eur" },
+        });
+      }
+
+      const events = await Promise.all(owned.map(async (experience: any) => {
+        const all = await storage.getBookingsByExperience(experience.id);
+        const active = (all || []).filter((booking: any) => isActiveParticipantBooking(booking.status));
+
+        const skus: any[] = Array.isArray(experience.ticketSkus) ? experience.ticketSkus : [];
+        const skuById = new Map(skus.map((sku: any) => [sku.id, sku]));
+
+        let rsvps = 0;
+        let ticketsSold = 0;
+        let donations = 0;
+        let grossRevenue = 0;
+
+        for (const booking of active) {
+          const quantity = normalizeTicketQuantity(booking.ticketQuantity);
+          const sku = booking.ticketSkuId ? skuById.get(booking.ticketSkuId) : undefined;
+          const paid = numberOrZero(booking.amount);
+          grossRevenue += paid;
+
+          // A free RSVP is a head, not a sale. Counting the two together is
+          // what made the dashboard's single "bookings" number meaningless for
+          // an organiser running free community runs alongside paid workshops.
+          const mode = sku?.pricingMode
+            ?? (numberOrZero(sku?.pricePerPerson) === 0 && sku ? "free_rsvp" : "fixed");
+
+          if (mode === "free_rsvp") {
+            rsvps += quantity;
+            // Someone who chose to pay on a free ticket has donated.
+            if (paid > 0) donations += paid;
+          } else if (mode === "pwyw") {
+            ticketsSold += quantity;
+            donations += paid;
+          } else {
+            ticketsSold += quantity;
+          }
+        }
+
+        return {
+          id: experience.id,
+          title: experience.title,
+          status: experience.status,
+          startDate: experience.startDate,
+          currency: (experience.currency || "eur").toLowerCase(),
+          capacity: experience.maxParticipants ?? null,
+          minimumParticipants: experience.mvgEnabled
+            ? (experience.minimumParticipants ?? experience.mvgMin ?? null)
+            : null,
+          rsvps,
+          ticketsSold,
+          attendees: rsvps + ticketsSold,
+          donations,
+          grossRevenue,
+        };
+      }));
+
+      // Currency is per event, so a total only means something when they agree.
+      const currencies = Array.from(new Set(events.map((event) => event.currency)));
+      const totals = events.reduce((sum, event) => ({
+        rsvps: sum.rsvps + event.rsvps,
+        ticketsSold: sum.ticketsSold + event.ticketsSold,
+        attendees: sum.attendees + event.attendees,
+        donations: sum.donations + event.donations,
+        grossRevenue: sum.grossRevenue + event.grossRevenue,
+        currency: sum.currency,
+      }), { rsvps: 0, ticketsSold: 0, attendees: 0, donations: 0, grossRevenue: 0, currency: currencies[0] || "eur" });
+
+      res.json({
+        events: events.sort((a, b) =>
+          new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime()),
+        totals,
+        mixedCurrencies: currencies.length > 1,
+      });
+    } catch (error) {
+      console.error("Error fetching creator headcount:", error);
+      res.status(500).json({ message: "Failed to fetch headcount" });
     }
   });
 

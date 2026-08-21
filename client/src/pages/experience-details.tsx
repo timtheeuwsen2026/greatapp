@@ -71,6 +71,8 @@ type CreatorTrustProfile = {
   location?: string | null;
   expertiseTags?: string[];
   socialLink?: string | null;
+  brandKitSquareUrl?: string | null;
+  brandKitVerticalUrl?: string | null;
 };
 
 export default function ExperienceDetails() {
@@ -512,95 +514,27 @@ export default function ExperienceDetails() {
     <div className="min-h-screen bg-white">
       <Navigation />
       
-      {/* Hero Image */}
-      <div className="relative h-96 overflow-hidden">
-        <img 
-          src={normalizeImageUrl(experience.coverImageUrl) || "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=1920&h=600"} 
-          alt={experience.title}
-          className={`w-full h-full object-cover ${experience.lifecycleStatus === 'cancelled' ? 'grayscale opacity-70' : ''}`}
-        />
-        <div className="absolute inset-0 bg-black/20"></div>
-
-        {/* FORMING overlay — bold "HELP US MAKE IT HAPPEN" call-to-action */}
-        {experience.lifecycleStatus === 'forming' && experience.requireMinimumParticipants && (() => {
-          // liveParticipantCount comes from the live booking count (getMVGProgress) — not the stale DB column
-          const liveCurrent = liveParticipantCount;
-          const liveMin = experience.minimumParticipants ?? experience.mvgMin ?? 1;
-          const pct = Math.min(Math.round((liveCurrent / liveMin) * 100), 99);
-          const needed = Math.max(0, liveMin - liveCurrent);
-          return (
-            <div
-              className="absolute inset-x-0 bottom-0 flex flex-col justify-end pb-5 px-6 pt-16"
-              style={{ background: 'linear-gradient(to top, rgba(88,28,135,0.92) 0%, rgba(126,34,206,0.6) 50%, transparent 100%)' }}
-              data-testid="hero-forming-overlay"
-            >
-              <div className="h-2 rounded-full bg-white/30 overflow-hidden w-full max-w-sm mb-3">
-                <div
-                  className="h-full rounded-full bg-violet-400"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              <p className="text-xl sm:text-2xl font-black text-white leading-tight drop-shadow-lg">
-                {needed === 1
-                  ? '🔥 Just 1 more person to make this real!'
-                  : needed <= 3
-                  ? `🔥 Just ${needed} more people to make this real!`
-                  : needed <= 6
-                  ? `⚡ ${needed} more people needed to confirm this experience!`
-                  : `👥 ${needed} more people needed to make this happen!`}
-              </p>
+      {/* Hero — a square cover with the details beside it. The full-bleed crop
+          this replaces threw away most of a portrait photo and then set the
+          title on top of whatever survived. The lifecycle state that used to be
+          a gradient across the image is a card here, where it can be read. */}
+      <div className="border-b bg-white">
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <div className="grid gap-8 md:grid-cols-[minmax(0,360px)_1fr] lg:gap-12">
+            {/* Cover */}
+            <div className="aspect-square w-full overflow-hidden rounded-2xl bg-gray-100 shadow-sm">
+              <img
+                src={normalizeImageUrl(experience.coverImageUrl) || "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&h=1200"}
+                alt={experience.title}
+                className={`h-full w-full object-cover ${experience.lifecycleStatus === 'cancelled' ? 'grayscale opacity-70' : ''}`}
+                data-testid="img-experience-cover"
+              />
             </div>
-          );
-        })()}
 
-        {/* CONFIRMED overlay — green confirmation banner */}
-        {experience.lifecycleStatus === 'confirmed' && experience.requireMinimumParticipants && (
-          <div
-            className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-6 py-4"
-            style={{ background: 'linear-gradient(to top, rgba(6,78,59,0.90), transparent)' }}
-            data-testid="hero-confirmed-overlay"
-          >
-            <CheckCircle className="h-5 w-5 text-emerald-300 shrink-0" />
-            <div>
-              <p className="text-sm font-bold text-white">Group confirmed — this experience is happening!</p>
-              <p className="text-xs text-emerald-200">
-                {isFreeExperience ? "Your spot is secured" : "Your deposit is secured"}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* CANCELLED overlay — greyed-out badge */}
-        {experience.lifecycleStatus === 'cancelled' && (
-          <div className="absolute inset-0 flex items-center justify-center" data-testid="hero-cancelled-overlay">
-            <div className="bg-gray-900/75 backdrop-blur-sm text-white rounded-xl px-6 py-3 flex items-center gap-3">
-              <AlertCircle className="h-6 w-6 text-gray-300" />
-              <div>
-                <p className="font-bold text-gray-100">Experience Cancelled</p>
-                <p className="text-xs text-gray-300">
-                  {experience.cancellationReason || 'Minimum group size was not reached by the deadline'}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="absolute top-4 right-4 flex space-x-2">
-          <Button variant="secondary" size="sm">
-            <Heart className="h-4 w-4 mr-2" />
-            Save
-          </Button>
-          <ShareButton experienceId={experience.id} />
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Main Content */}
-          <div className="lg:col-span-2">
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
+            {/* Details */}
+            <div className="flex flex-col">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge className="bg-primary/10 text-primary">
                     {experience.category.replace("_", " & ")}
                   </Badge>
@@ -624,45 +558,134 @@ export default function ExperienceDetails() {
                     </Badge>
                   )}
                 </div>
-                <div className="flex items-center space-x-1">
-                  <Star className="h-4 w-4 text-yellow-400 fill-current" />
-                  <span className="text-sm font-medium">{averageRating.toFixed(1)}</span>
-                  <span className="text-sm text-gray-500">({experience.reviews?.length || 0} reviews)</span>
-                </div>
-              </div>
-              
-              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
-                {experience.title}
-              </h1>
-              
-              <div className="flex flex-wrap items-center gap-4 text-gray-600 mb-6">
-                <div className="flex items-center">
-                  <MapPin className="h-5 w-5 mr-2" />
-                  <span>{experience.location}</span>
-                </div>
-                <div className="flex items-center">
-                  <Calendar className="h-5 w-5 mr-2" />
-                  <span>{experience.startDate ? formatDate(experience.startDate.toString()) : 'TBD'}</span>
-                  {experience.startDate !== experience.endDate && experience.endDate && (
-                    <span> - {formatDate(experience.endDate.toString())}</span>
-                  )}
-                  {(experience as any).startTime && (
-                    <span className="ml-2 text-gray-500">
-                      · {(experience as any).startTime}
-                      {(experience as any).endTime ? ` – ${(experience as any).endTime}` : ''}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center">
-                  <Users className="h-5 w-5 mr-2" />
-                  {isMvgForming ? (
-                    <span>{formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)}</span>
-                  ) : (
-                    <span>{formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)}</span>
-                  )}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="outline" size="sm">
+                    <Heart className="h-4 w-4 mr-2" />
+                    Save
+                  </Button>
+                  <ShareButton experienceId={experience.id} />
                 </div>
               </div>
 
+              <h1 className="text-3xl font-bold text-gray-900 md:text-4xl lg:text-5xl">
+                {experience.title}
+              </h1>
+
+              <div className="mt-3 flex items-center space-x-1">
+                <Star className="h-4 w-4 text-yellow-400 fill-current" />
+                <span className="text-sm font-medium">{averageRating.toFixed(1)}</span>
+                <span className="text-sm text-gray-500">({experience.reviews?.length || 0} reviews)</span>
+              </div>
+
+              <div className="mt-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
+                    <Calendar className="h-5 w-5 text-gray-700" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {experience.startDate ? formatDate(experience.startDate.toString()) : 'TBD'}
+                      {experience.startDate !== experience.endDate && experience.endDate && (
+                        <span> – {formatDate(experience.endDate.toString())}</span>
+                      )}
+                    </p>
+                    {(experience as any).startTime && (
+                      <p className="text-sm text-gray-600">
+                        {(experience as any).startTime}
+                        {(experience as any).endTime ? ` – ${(experience as any).endTime}` : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
+                    <MapPin className="h-5 w-5 text-gray-700" />
+                  </div>
+                  <p className="font-medium text-gray-900">{experience.location}</p>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
+                    <Users className="h-5 w-5 text-gray-700" />
+                  </div>
+                  <p className="font-medium text-gray-900">
+                    {isMvgForming
+                      ? formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)
+                      : formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)}
+                  </p>
+                </div>
+              </div>
+
+              {/* FORMING — the "help us make it happen" call to action */}
+              {experience.lifecycleStatus === 'forming' && experience.requireMinimumParticipants && (() => {
+                // liveParticipantCount comes from the live booking count (getMVGProgress) — not the stale DB column
+                const liveCurrent = liveParticipantCount;
+                const liveMin = experience.minimumParticipants ?? experience.mvgMin ?? 1;
+                const pct = Math.min(Math.round((liveCurrent / liveMin) * 100), 99);
+                const needed = Math.max(0, liveMin - liveCurrent);
+                return (
+                  <div
+                    className="mt-6 rounded-xl bg-violet-50 p-5 border border-violet-200"
+                    data-testid="hero-forming-overlay"
+                  >
+                    <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-violet-200">
+                      <div className="h-full rounded-full bg-violet-500" style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="text-lg font-black leading-tight text-violet-900 sm:text-xl">
+                      {needed === 1
+                        ? '🔥 Just 1 more person to make this real!'
+                        : needed <= 3
+                        ? `🔥 Just ${needed} more people to make this real!`
+                        : needed <= 6
+                        ? `⚡ ${needed} more people needed to confirm this experience!`
+                        : `👥 ${needed} more people needed to make this happen!`}
+                    </p>
+                  </div>
+                );
+              })()}
+
+              {/* CONFIRMED */}
+              {experience.lifecycleStatus === 'confirmed' && experience.requireMinimumParticipants && (
+                <div
+                  className="mt-6 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-5"
+                  data-testid="hero-confirmed-overlay"
+                >
+                  <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
+                  <div>
+                    <p className="text-sm font-bold text-emerald-900">Group confirmed — this experience is happening!</p>
+                    <p className="text-xs text-emerald-700">
+                      {isFreeExperience ? "Your spot is secured" : "Your deposit is secured"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* CANCELLED */}
+              {experience.lifecycleStatus === 'cancelled' && (
+                <div
+                  className="mt-6 flex items-center gap-3 rounded-xl border border-gray-300 bg-gray-100 p-5"
+                  data-testid="hero-cancelled-overlay"
+                >
+                  <AlertCircle className="h-6 w-6 shrink-0 text-gray-500" />
+                  <div>
+                    <p className="font-bold text-gray-900">Experience Cancelled</p>
+                    <p className="text-xs text-gray-600">
+                      {experience.cancellationReason || 'Minimum group size was not reached by the deadline'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main Content */}
+          <div className="lg:col-span-2">
+            <div className="mb-6">
               {/* Social Proof Avatar Gallery — real confirmed participants */}
               <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700" data-testid="social-proof-section">
                 <SocialProofGallery experienceId={experience.id} />
@@ -712,6 +735,7 @@ export default function ExperienceDetails() {
                     baseLocation: creatorProfile?.location || undefined,
                     expertise: creatorProfile?.expertiseTags || [],
                     socialLink: creatorProfile?.socialLink || null,
+                    brandKitSquareUrl: creatorProfile?.brandKitSquareUrl || null,
                   }}
                   variant="compact"
                 />
@@ -1754,6 +1778,10 @@ export default function ExperienceDetails() {
           lifecycleStatus: experience.lifecycleStatus ?? undefined,
           participantsNeeded: Math.max(0, (experience.minimumParticipants ?? 0) - liveParticipantCount),
           currency: experience.currency ?? undefined,
+        }}
+        brandKit={{
+          squareUrl: creatorProfile?.brandKitSquareUrl,
+          verticalUrl: creatorProfile?.brandKitVerticalUrl,
         }}
       />
       <EventSocialProofToast experienceId={experience.id} />

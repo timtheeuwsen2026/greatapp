@@ -28,7 +28,13 @@ import {
   MapPin,
   AlertCircle,
   Send,
+  Download,
+  UserPlus,
+  Repeat,
+  Copy,
 } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -391,6 +397,81 @@ function CreatorDashboardContent() {
   });
 
   // Get onboarding checklist data
+  // Run it again next week. The copy lands as a draft in the builder rather
+  // than going live, so the creator confirms the date before anyone can book.
+  const duplicateExperience = useMutation({
+    mutationFn: async (experienceId: string) => {
+      const response = await apiRequest("POST", `/api/experiences/${experienceId}/duplicate`);
+      return response.json();
+    },
+    onSuccess: (result: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/experience-drafts"] });
+      toast({
+        title: "Copy created",
+        description: "Dates moved to the next week — check them before submitting.",
+      });
+      setLocation(`/event-builder/${result.id}`);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not duplicate",
+        description: readableError(error, "Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  // How many people are actually coming, and what they paid. Same live source
+  // as the public event page, so the two can never disagree.
+  type HeadcountEvent = {
+    id: string;
+    title: string;
+    status: string;
+    startDate: string | null;
+    currency: string;
+    capacity: number | null;
+    minimumParticipants: number | null;
+    rsvps: number;
+    ticketsSold: number;
+    attendees: number;
+    donations: number;
+    grossRevenue: number;
+  };
+  const { data: headcount } = useQuery<{
+    events: HeadcountEvent[];
+    totals: {
+      rsvps: number; ticketsSold: number; attendees: number;
+      donations: number; grossRevenue: number; currency: string;
+    };
+    mixedCurrencies?: boolean;
+  }>({
+    queryKey: ["/api/creator/headcount"],
+  });
+
+  // Everyone who has booked one of this creator's events. Built from bookings,
+  // so it is true without anyone maintaining it.
+  const { data: community } = useQuery<{
+    members: Array<{
+      userId: string;
+      name: string | null;
+      email: string | null;
+      avatarUrl: string | null;
+      eventCount: number;
+      bookingCount: number;
+      totalSpend: number;
+      currency: string;
+      lastEventTitle: string | null;
+      lastEventDate: string | null;
+      referredCount: number;
+    }>;
+    totals: { members: number; bookings: number; repeat: number };
+  }>({
+    queryKey: ["/api/creator/community"],
+  });
+  const communityMembers = Array.isArray(community?.members) ? community.members : [];
+  const [communitySearch, setCommunitySearch] = useState("");
+  const headcountEvents = Array.isArray(headcount?.events) ? headcount.events : [];
+
   const { data: onboardingData, isLoading: onboardingLoading } = useQuery({
     queryKey: ['/api/creator/onboard'],
     enabled: isAuthenticated && !!creatorProfile,
@@ -900,6 +981,63 @@ function CreatorDashboardContent() {
           </Card>
         </div>
 
+        {/* Attendance — the numbers a creator was previously only able to get by
+            opening their own public event page. */}
+        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-4">
+          <Card>
+            <CardContent className="flex items-center justify-between p-6">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">People coming</p>
+                <p className="text-2xl font-bold" data-testid="headcount-attendees">
+                  {headcount?.totals?.attendees ?? 0}
+                </p>
+                <p className="text-xs text-gray-500">Across every live event</p>
+              </div>
+              <Users className="h-8 w-8 text-primary" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center justify-between p-6">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Free RSVPs</p>
+                <p className="text-2xl font-bold" data-testid="headcount-rsvps">
+                  {headcount?.totals?.rsvps ?? 0}
+                </p>
+                <p className="text-xs text-gray-500">Reserved a free spot</p>
+              </div>
+              <CheckCircle className="h-8 w-8 text-blue-500" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center justify-between p-6">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Tickets sold</p>
+                <p className="text-2xl font-bold" data-testid="headcount-tickets">
+                  {headcount?.totals?.ticketsSold ?? 0}
+                </p>
+                <p className="text-xs text-gray-500">Paid tickets</p>
+              </div>
+              <Gift className="h-8 w-8 text-purple-500" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center justify-between p-6">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Donations</p>
+                <p className="text-2xl font-bold" data-testid="headcount-donations">
+                  {formatCurrency(headcount?.totals?.donations ?? 0, headcount?.totals?.currency)}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {headcount?.mixedCurrencies
+                    ? "Events use more than one currency — see the breakdown"
+                    : "Pay-what-you-want and free-ticket gifts"}
+                </p>
+              </div>
+              <DollarSign className="h-8 w-8 text-amber-500" />
+            </CardContent>
+          </Card>
+        </div>
+
         <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") || (isFirstTimeCreator ? "setup" : "experiences")} className="space-y-6">
           <TabsList className="h-auto flex-wrap justify-start">
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
@@ -941,6 +1079,14 @@ function CreatorDashboardContent() {
               {perkFulfillments.filter((item: any) => item.status === "unlocked").length > 0 && (
                 <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-green-600 text-xs text-white">
                   {perkFulfillments.filter((item: any) => item.status === "unlocked").length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="community" className="relative">
+              Community
+              {(community?.totals?.members ?? 0) > 0 && (
+                <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-xs text-white">
+                  {community?.totals?.members}
                 </span>
               )}
             </TabsTrigger>
@@ -1157,6 +1303,17 @@ function CreatorDashboardContent() {
                               <Button
                                 size="sm"
                                 variant="outline"
+                                title="Duplicate for next week"
+                                aria-label={`Duplicate ${experience.title}`}
+                                onClick={() => duplicateExperience.mutate(experience.id)}
+                                disabled={duplicateExperience.isPending}
+                                data-testid={`button-duplicate-pending-${experience.id}`}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 title="Archive experience"
                                 aria-label={`Archive ${experience.title}`}
                                 onClick={() => {
@@ -1337,6 +1494,17 @@ function CreatorDashboardContent() {
                           >
                             <Edit className="w-3 h-3 mr-1" />
                             Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title="Duplicate for next week"
+                            aria-label={`Duplicate ${experience.title}`}
+                            onClick={() => duplicateExperience.mutate(experience.id)}
+                            disabled={duplicateExperience.isPending}
+                            data-testid={`button-duplicate-${experience.id}`}
+                          >
+                            <Copy className="h-3 w-3" />
                           </Button>
                           <Button
                             size="sm"
@@ -2343,7 +2511,225 @@ function CreatorDashboardContent() {
             </div>
           </TabsContent>
 
+          <TabsContent value="community" className="space-y-6">
+            {(() => {
+              const needle = communitySearch.trim().toLowerCase();
+              const filtered = needle
+                ? communityMembers.filter((member) =>
+                    [member.name, member.email, member.lastEventTitle]
+                      .filter(Boolean)
+                      .some((value) => String(value).toLowerCase().includes(needle)))
+                : communityMembers;
+
+              const exportCsv = () => {
+                const header = ["Name", "Email", "Events", "Bookings", "Total spend", "Currency", "Referred", "Last event", "Last event date"];
+                const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+                const rows = filtered.map((member) => [
+                  member.name, member.email, member.eventCount, member.bookingCount,
+                  member.totalSpend.toFixed(2), member.currency.toUpperCase(),
+                  member.referredCount, member.lastEventTitle,
+                  member.lastEventDate ? new Date(member.lastEventDate).toLocaleDateString() : "",
+                ].map(escape).join(","));
+                const csv = [header.map(escape).join(","), ...rows].join("\n");
+                // A blob URL rather than a data: URI — a community of any size
+                // outgrows what a URL can carry.
+                const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "community.csv";
+                link.click();
+                URL.revokeObjectURL(url);
+              };
+
+              return (
+                <>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <Card>
+                      <CardContent className="flex items-center justify-between p-6">
+                        <div>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">Community size</p>
+                          <p className="text-2xl font-bold" data-testid="community-total-members">
+                            {community?.totals?.members ?? 0}
+                          </p>
+                          <p className="text-xs text-gray-500">People who have joined an event</p>
+                        </div>
+                        <Users className="h-8 w-8 text-primary" />
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="flex items-center justify-between p-6">
+                        <div>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">Came back</p>
+                          <p className="text-2xl font-bold" data-testid="community-repeat-members">
+                            {community?.totals?.repeat ?? 0}
+                          </p>
+                          <p className="text-xs text-gray-500">Attended more than one</p>
+                        </div>
+                        <Repeat className="h-8 w-8 text-green-600" />
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="flex items-center justify-between p-6">
+                        <div>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">Total sign-ups</p>
+                          <p className="text-2xl font-bold" data-testid="community-total-bookings">
+                            {community?.totals?.bookings ?? 0}
+                          </p>
+                          <p className="text-xs text-gray-500">Across every event</p>
+                        </div>
+                        <UserPlus className="h-8 w-8 text-blue-600" />
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <Card>
+                    <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <CardTitle>Your community</CardTitle>
+                        <CardDescription>
+                          Everyone who has booked or RSVP'd to one of your events, newest interest first.
+                        </CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          placeholder="Search name, email or event"
+                          value={communitySearch}
+                          onChange={(event) => setCommunitySearch(event.target.value)}
+                          className="w-full sm:w-64"
+                          data-testid="input-community-search"
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={exportCsv}
+                          disabled={filtered.length === 0}
+                          data-testid="button-export-community"
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Export
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="overflow-x-auto p-0">
+                      {communityMembers.length === 0 ? (
+                        <div className="py-12 text-center">
+                          <Users className="mx-auto mb-4 h-12 w-12 text-gray-400" />
+                          <h3 className="mb-2 text-lg font-medium">No one has joined yet</h3>
+                          <p className="text-gray-600 dark:text-gray-400">
+                            The moment someone books one of your events, they show up here.
+                          </p>
+                        </div>
+                      ) : filtered.length === 0 ? (
+                        <div className="py-12 text-center text-gray-500">No one matches that search.</div>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Person</TableHead>
+                              <TableHead>Events</TableHead>
+                              <TableHead>Spend</TableHead>
+                              <TableHead>Brought others</TableHead>
+                              <TableHead>Most recent event</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {filtered.map((member) => (
+                              <TableRow key={member.userId} data-testid={`community-row-${member.userId}`}>
+                                <TableCell className="min-w-52">
+                                  <p className="font-medium">{member.name || "Unnamed participant"}</p>
+                                  {member.email && (
+                                    <a href={`mailto:${member.email}`} className="text-xs text-muted-foreground hover:underline">
+                                      {member.email}
+                                    </a>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {member.eventCount}
+                                  {member.eventCount > 1 && (
+                                    <Badge className="ml-2 bg-green-100 text-green-800">Repeat</Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell>{formatCurrency(member.totalSpend, member.currency)}</TableCell>
+                                <TableCell>
+                                  {member.referredCount > 0 ? (
+                                    <Badge className="bg-amber-100 text-amber-800">{member.referredCount}</Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="min-w-48">
+                                  <p>{member.lastEventTitle || "—"}</p>
+                                  {member.lastEventDate && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {new Date(member.lastEventDate).toLocaleDateString()}
+                                    </p>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </CardContent>
+                  </Card>
+                </>
+              );
+            })()}
+          </TabsContent>
+
           <TabsContent value="analytics" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Attendance and revenue by event</CardTitle>
+                <CardDescription>
+                  Counted from live bookings — the same figures your public event pages show.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="overflow-x-auto p-0">
+                {(headcountEvents.length ?? 0) === 0 ? (
+                  <div className="py-12 text-center text-gray-500">
+                    No events with bookings yet.
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Event</TableHead>
+                        <TableHead>RSVPs</TableHead>
+                        <TableHead>Tickets</TableHead>
+                        <TableHead>Coming</TableHead>
+                        <TableHead>Donations</TableHead>
+                        <TableHead>Gross</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {headcountEvents.map((event) => (
+                        <TableRow key={event.id} data-testid={`headcount-row-${event.id}`}>
+                          <TableCell className="min-w-56">
+                            <p className="font-medium">{event.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {event.startDate ? new Date(event.startDate).toLocaleDateString() : "Date TBC"}
+                            </p>
+                          </TableCell>
+                          <TableCell>{event.rsvps}</TableCell>
+                          <TableCell>{event.ticketsSold}</TableCell>
+                          <TableCell>
+                            <span className="font-medium">{event.attendees}</span>
+                            {event.minimumParticipants ? (
+                              <span className="text-muted-foreground"> / {event.minimumParticipants} needed</span>
+                            ) : event.capacity ? (
+                              <span className="text-muted-foreground"> / {event.capacity} spots</span>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>{formatCurrency(event.donations, event.currency)}</TableCell>
+                          <TableCell>{formatCurrency(event.grossRevenue, event.currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>

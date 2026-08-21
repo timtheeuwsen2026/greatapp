@@ -17,6 +17,8 @@ type CreatorProfileForm = {
   displayName: string;
   bio: string;
   profilePhoto: string;
+  brandKitSquareUrl: string;
+  brandKitVerticalUrl: string;
   socialLink: string;
   termsAccepted: boolean;
 };
@@ -25,6 +27,8 @@ const initialForm: CreatorProfileForm = {
   displayName: "",
   bio: "",
   profilePhoto: "",
+  brandKitSquareUrl: "",
+  brandKitVerticalUrl: "",
   socialLink: "",
   termsAccepted: false,
 };
@@ -54,6 +58,8 @@ export default function SimpleCreatorProfileSetup() {
       displayName: profile.displayName || "",
       bio: profile.bio || "",
       profilePhoto: profile.profilePhoto || "",
+      brandKitSquareUrl: profile.brandKitSquareUrl || "",
+      brandKitVerticalUrl: profile.brandKitVerticalUrl || "",
       socialLink:
         profile.socialLinks?.website ||
         profile.socialLinks?.instagram ||
@@ -79,6 +85,8 @@ export default function SimpleCreatorProfileSetup() {
         expertiseTags: [],
         gallery: [],
         profilePhoto: form.profilePhoto,
+        brandKitSquareUrl: form.brandKitSquareUrl || null,
+        brandKitVerticalUrl: form.brandKitVerticalUrl || null,
         payoutEmail: fallbackEmail(user),
         termsAccepted: form.termsAccepted,
         completed: true,
@@ -165,6 +173,89 @@ export default function SimpleCreatorProfileSetup() {
                   variant={form.profilePhoto ? "compact" : "default"}
                   className={form.profilePhoto ? "" : "w-full"}
                 />
+              </div>
+            </div>
+
+            {/* Brand kit — the profile picture is a cropped circle, which is no
+                use as a social graphic. These are the two shapes a participant
+                sharing the event can actually post. */}
+            <div className="space-y-3 rounded-lg border p-4">
+              <div>
+                <Label>Brand kit</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Optional. Your own artwork, shown on your profile and handed to participants
+                  in the share kit when they invite people to your events.
+                </p>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label className="text-sm font-normal text-muted-foreground">Square — feed posts (1:1)</Label>
+                  <div className="flex flex-col gap-3">
+                    {form.brandKitSquareUrl && (
+                      <div className="aspect-square w-full max-w-40 overflow-hidden rounded-lg border bg-gray-50">
+                        <img
+                          src={form.brandKitSquareUrl}
+                          alt="Square brand image"
+                          className="h-full w-full object-cover"
+                          data-testid="brand-kit-square-preview"
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <SharedPhotoUpload
+                        onUploadComplete={(url) => updateField("brandKitSquareUrl", url)}
+                        onPreviewReady={(url) => updateField("brandKitSquareUrl", url)}
+                        variant="compact"
+                      />
+                      {form.brandKitSquareUrl && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => updateField("brandKitSquareUrl", "")}
+                          data-testid="brand-kit-square-remove"
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm font-normal text-muted-foreground">Vertical — stories and reels (9:16)</Label>
+                  <div className="flex flex-col gap-3">
+                    {form.brandKitVerticalUrl && (
+                      <div className="aspect-[9/16] w-full max-w-28 overflow-hidden rounded-lg border bg-gray-50">
+                        <img
+                          src={form.brandKitVerticalUrl}
+                          alt="Vertical brand image"
+                          className="h-full w-full object-cover"
+                          data-testid="brand-kit-vertical-preview"
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <SharedPhotoUpload
+                        onUploadComplete={(url) => updateField("brandKitVerticalUrl", url)}
+                        onPreviewReady={(url) => updateField("brandKitVerticalUrl", url)}
+                        variant="compact"
+                      />
+                      {form.brandKitVerticalUrl && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => updateField("brandKitVerticalUrl", "")}
+                          data-testid="brand-kit-vertical-remove"
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 

@@ -57,3 +57,46 @@ export function LocationMap({
 }
 
 export default LocationMap;
+
+/**
+ * An address that opens in Google Maps.
+ *
+ * Every address on the platform was plain text, so a participant standing
+ * outside on the morning of a run had to retype it into their phone. Used
+ * anywhere an address is shown but a full map would be too much.
+ */
+export function AddressLink({
+  address,
+  name,
+  className = "",
+  showIcon = true,
+  "data-testid": testId,
+}: {
+  address?: string | null;
+  /** Venue name, prepended so a well-known place resolves more precisely. */
+  name?: string | null;
+  className?: string;
+  showIcon?: boolean;
+  "data-testid"?: string;
+}) {
+  const label = address || name;
+  if (!label) return null;
+
+  const query = encodeURIComponent([name, address].filter(Boolean).join(", ").trim());
+
+  return (
+    <a
+      href={`https://www.google.com/maps/search/?api=1&query=${query}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      // Stops the link from also triggering a card that wraps it.
+      onClick={(event) => event.stopPropagation()}
+      className={`inline-flex items-center gap-1.5 hover:text-primary hover:underline ${className}`}
+      title="Open in Google Maps"
+      data-testid={testId ?? "address-link"}
+    >
+      {showIcon && <MapPin className="h-4 w-4 shrink-0" />}
+      <span>{label}</span>
+    </a>
+  );
+}

@@ -8168,16 +8168,119 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Review routes
+  /** An event is open for review once it has finished. */
+  const experienceHasFinished = (experience: any): boolean => {
+    const ends = experience?.endDate || experience?.startDate;
+    if (!ends) return false;
+    const end = new Date(ends);
+    if (Number.isNaN(end.getTime())) return false;
+    // The stored date is the day, not the finishing time, so an event is
+    // reviewable from the end of the day it ran on.
+    end.setHours(23, 59, 59, 999);
+    return end.getTime() < Date.now();
+  };
+
+  /**
+   * Events this person went to and has not reviewed yet.
+   *
+   * The rating on an event page had no way of ever being written to: the table
+   * and the endpoint existed, but nothing asked anyone. This is the nudge.
+   */
+  app.get("/api/me/reviewable", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const bookings = await storage.getUserBookings(userId);
+      const attended = bookings.filter((booking: any) => isActiveParticipantBooking(booking.status));
+      if (!attended.length) return res.json({ pending: [] });
+
+      const seen = new Set<string>();
+      const pending: any[] = [];
+
+      for (const booking of attended) {
+        if (!booking.experienceId || seen.has(booking.experienceId)) continue;
+        seen.add(booking.experienceId);
+
+        // getUserBookings returns bare booking rows, with no experience joined.
+        const experience = await storage.getExperience(booking.experienceId);
+        if (!experience || !experienceHasFinished(experience)) continue;
+        if (experience.status === "cancelled") continue;
+
+        const existing = await storage.getReviewsByExperience(experience.id);
+        if (existing.some((review: any) => review.userId === userId)) continue;
+
+        pending.push({
+          experienceId: experience.id,
+          title: experience.title,
+          coverImageUrl: experience.coverImageUrl,
+          location: experience.location,
+          startDate: experience.startDate,
+          endDate: experience.endDate,
+        });
+      }
+
+      res.json({ pending });
+    } catch (error) {
+      console.error("Error fetching reviewable experiences:", error);
+      res.status(500).json({ message: "Failed to fetch reviewable experiences" });
+    }
+  });
+
+  /**
+   * Leave a review.
+   *
+   * This previously took whatever it was handed and wrote it: any rating, on
+   * any event, by anyone signed in, as many times as they liked. A review now
+   * has to come from someone who actually went, after the event has happened,
+   * and only once.
+   */
   app.post("/api/reviews", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const reviewData = {
-        ...req.body,
-        userId,
-      };
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-      const review = await storage.createReview(reviewData);
-      res.json(review);
+      const experienceId = String(req.body?.experienceId || "").trim();
+      if (!experienceId) {
+        return res.status(400).json({ message: "Which experience is this review for?" });
+      }
+
+      const rating = Number(req.body?.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ message: "Give the experience a rating from 1 to 5 stars" });
+      }
+
+      const comment = typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
+      if (comment.length > 2000) {
+        return res.status(400).json({ message: "That review is too long — keep it under 2000 characters" });
+      }
+
+      const experience = await storage.getExperience(experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+
+      if (!experienceHasFinished(experience)) {
+        return res.status(400).json({ message: "You can review this once the event has finished" });
+      }
+
+      const bookings = await storage.getBookingsByExperience(experienceId);
+      const attended = bookings.some((booking: any) =>
+        booking.userId === userId && isActiveParticipantBooking(booking.status));
+      if (!attended) {
+        return res.status(403).json({ message: "Only people who joined this experience can review it" });
+      }
+
+      const existing = await storage.getReviewsByExperience(experienceId);
+      if (existing.some((review: any) => review.userId === userId)) {
+        return res.status(409).json({ message: "You have already reviewed this experience" });
+      }
+
+      const review = await storage.createReview({
+        experienceId,
+        userId,
+        rating,
+        comment: comment || null,
+      } as any);
+      res.status(201).json(review);
     } catch (error) {
       console.error("Error creating review:", error);
       res.status(500).json({ message: "Failed to create review" });

@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Calendar, MapPin, CreditCard, Clock, Image as ImageIcon } from "lucide-react";
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
+import { LocationMap, AddressLink } from "@/components/LocationMap";
+import { ReviewPrompt } from "@/components/ReviewPrompt";
 
 interface EnrichedBooking {
   id: string;
@@ -142,11 +144,22 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
               </div>
             )}
             
+            {/* Somebody opening this the morning of the event wants directions,
+                not an address to retype into their phone. */}
             {(booking.experience?.location || booking.experience?.venue) && (
-              <div className="flex items-center gap-2" data-testid="text-detail-location">
-                <MapPin className="h-4 w-4 text-gray-500" />
-                <span>{booking.experience.venue || booking.experience.location}</span>
-              </div>
+              <>
+                <AddressLink
+                  address={booking.experience.location}
+                  name={booking.experience.venue}
+                  className="text-gray-700"
+                  data-testid="text-detail-location"
+                />
+                <LocationMap
+                  address={booking.experience.location}
+                  name={booking.experience.venue}
+                  height={200}
+                />
+              </>
             )}
           </div>
 
@@ -314,6 +327,11 @@ export default function TravelerBookings() {
             </Button>
           </div>
 
+          {/* Asked here rather than by email: this is the page someone opens
+              after an event anyway, and it renders nothing when there is
+              nothing left to review. */}
+          <ReviewPrompt className="mb-6" />
+
           {!bookings || bookings.length === 0 ? (
             <Card>
               <CardContent className="pt-8 pb-8 text-center">
@@ -387,10 +405,11 @@ export default function TravelerBookings() {
                               </div>
                             )}
                             {(booking.experience?.location || booking.experience?.venue) && (
-                              <div className="flex items-center gap-1" data-testid={`text-booking-location-${booking.id}`}>
-                                <MapPin className="h-4 w-4" />
-                                <span>{booking.experience.venue || booking.experience.location}</span>
-                              </div>
+                              <AddressLink
+                                address={booking.experience.location}
+                                name={booking.experience.venue}
+                                data-testid={`text-booking-location-${booking.id}`}
+                              />
                             )}
                           </div>
                           

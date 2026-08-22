@@ -12,7 +12,7 @@ import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
-import { LocationMap } from "@/components/LocationMap";
+import { LocationMap, AddressLink } from "@/components/LocationMap";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
@@ -602,7 +602,13 @@ export default function ExperienceDetails() {
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
                     <MapPin className="h-5 w-5 text-gray-700" />
                   </div>
-                  <p className="font-medium text-gray-900">{experience.location}</p>
+                  <AddressLink
+                    address={experience.location}
+                    name={(experience as any).venue || undefined}
+                    showIcon={false}
+                    className="font-medium text-gray-900"
+                    data-testid="hero-address-link"
+                  />
                 </div>
 
                 <div className="flex items-start gap-3">
@@ -684,7 +690,7 @@ export default function ExperienceDetails() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Content */}
-          <div className="lg:col-span-2">
+          <div className="order-last lg:order-none lg:col-span-2">
             <div className="mb-6">
               {/* Social Proof Avatar Gallery — real confirmed participants */}
               <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-100 dark:border-gray-700" data-testid="social-proof-section">
@@ -706,10 +712,11 @@ export default function ExperienceDetails() {
             {experience.location && (
               <div className="mb-8">
                 <h2 className="text-2xl font-semibold mb-4">Where</h2>
-                <div className="mb-3 flex items-center gap-2 text-gray-600">
-                  <MapPin className="h-5 w-5" />
-                  <span>{experience.location}</span>
-                </div>
+                <AddressLink
+                  address={experience.location}
+                  name={(experience as any).venue || undefined}
+                  className="mb-3 text-gray-600"
+                />
                 <LocationMap
                   name={(experience as any).venue || undefined}
                   address={experience.location}
@@ -1313,8 +1320,11 @@ export default function ExperienceDetails() {
             )}
           </div>
 
-          {/* Booking Sidebar */}
-          <div className="lg:col-span-1">
+          {/* Booking Sidebar — first thing under the hero on a phone.
+              The grid stacks in source order on mobile, so this card used to
+              sit below every section on the page: most of the traffic is
+              mobile, and the ticket was the last thing anyone reached. */}
+          <div className="order-first lg:order-none lg:col-span-1">
             <Card className="sticky top-4">
               <CardContent className="p-6">
                 <div className="text-center mb-4">

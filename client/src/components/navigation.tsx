@@ -9,7 +9,7 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, X } from "lucide-react";
+import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, Users, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
@@ -169,6 +169,23 @@ export default function Navigation() {
                   {user?.role === 'creator' && (
                     <DropdownMenuItem asChild>
                       <Link href="/creator">Creator Dashboard</Link>
+                    </DropdownMenuItem>
+                  )}
+                  {/* Straight to the people, rather than the dashboard and then
+                      hunting for the tab. */}
+                  {user?.role === 'creator' ? (
+                    <DropdownMenuItem asChild>
+                      <Link href="/creator-dashboard?tab=community" className="gap-2">
+                        <Users className="h-4 w-4 text-muted-foreground" />
+                        My Community
+                      </Link>
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem asChild>
+                      <Link href="/community-hub?tab=groups" className="gap-2">
+                        <Users className="h-4 w-4 text-muted-foreground" />
+                        Community
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'participant' && (

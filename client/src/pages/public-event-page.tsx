@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { VenueInfoCard } from "@/components/VenueInfoCard";
-import { LocationMap } from "@/components/LocationMap";
+import { LocationMap, AddressLink } from "@/components/LocationMap";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
@@ -521,7 +521,13 @@ export default function PublicEventPage() {
                       <MapPin className="h-5 w-5 text-gray-700" />
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">{event.venue.name || event.venue.location}</p>
+                      <AddressLink
+                        address={event.venue.location}
+                        name={event.venue.name}
+                        showIcon={false}
+                        className="font-medium text-gray-900"
+                        data-testid="hero-address-link"
+                      />
                       {event.venue.name && event.venue.location && (
                         <p className="text-sm text-gray-600">{event.venue.location}</p>
                       )}
@@ -997,10 +1003,11 @@ export default function PublicEventPage() {
               <h2 className="mb-4 text-2xl font-bold text-gray-900" data-testid="heading-location">
                 Where
               </h2>
-              <div className="mb-4 flex items-center gap-2 text-gray-600">
-                <MapPin className="h-5 w-5" />
-                <span className="text-base" data-testid="text-location-address">{event.location}</span>
-              </div>
+              <AddressLink
+                address={event.location}
+                className="mb-4 text-base text-gray-600"
+                data-testid="text-location-address"
+              />
               <LocationMap address={event.location} />
             </CardContent>
           </Card>

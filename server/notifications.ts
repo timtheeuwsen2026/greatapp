@@ -758,6 +758,49 @@ class NotificationService {
     return result;
   }
 
+  /**
+   * "How was it?", two hours after the event finished.
+   *
+   * Nothing ever asked for a review, so every event sat at 0.0 stars. Ten
+   * seconds of ask: the button lands straight on the rating for this event, so
+   * nobody has to go looking for where to leave one.
+   */
+  async sendReviewRequestEmail(opts: {
+    to: string;
+    userId?: string | null;
+    userFirstName?: string | null;
+    experienceId: string;
+    experienceTitle: string;
+    eventKey: string;
+  }): Promise<EmailSendResult> {
+    const subject = `How was ${opts.experienceTitle}?`;
+    const bodyText = `Hey ${opts.userFirstName || 'there'},\n\nHope you had a good one at ${opts.experienceTitle}. Got 10 seconds to rate how it went?`;
+
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: {
+        label: `Rate ${opts.experienceTitle}`,
+        href: `${APP_BASE_URL}/my-bookings?review=${encodeURIComponent(opts.experienceId)}`,
+      },
+      preheader: `Rate ${opts.experienceTitle} in 10 seconds.`,
+    });
+
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey,
+      emailType: 'event_review_request',
+      category: 'reminder',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send review request email');
+    }
+    return result;
+  }
+
   async sendBookingCreatedEmail(userId: string, experience: Experience, booking: Booking): Promise<void> {
     try {
       if (await hasEmailBeenSentSuccessfully(booking.id, 'booking_created')) {

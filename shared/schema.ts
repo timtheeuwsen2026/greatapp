@@ -1101,6 +1101,12 @@ export const reviews = pgTable("reviews", {
     .notNull(),
   rating: integer("rating").notNull(), // 1-5
   comment: text("comment"),
+  // One reply, from the organiser or the venue being reviewed. Deliberately a
+  // column rather than a thread table: a right of reply is not a conversation,
+  // and an open thread is an argument in public.
+  reply: text("reply"),
+  repliedAt: timestamp("replied_at"),
+  repliedBy: varchar("replied_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

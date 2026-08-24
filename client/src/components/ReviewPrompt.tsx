@@ -73,7 +73,13 @@ export function ReviewPrompt({ className = "" }: { className?: string }) {
   });
 
   // One at a time. A stack of review forms is a wall, not a request.
-  const event = data?.pending?.[0];
+  //
+  // The "Rate this" button in the post-event email carries the event it is
+  // asking about, so somebody arriving from it lands on that one rather than
+  // on whatever happens to be at the top of their list.
+  const pending = data?.pending ?? [];
+  const requested = new URLSearchParams(window.location.search).get("review");
+  const event = (requested && pending.find((item) => item.experienceId === requested)) || pending[0];
 
   const submit = useMutation({
     mutationFn: async () => {
@@ -163,10 +169,10 @@ export function ReviewPrompt({ className = "" }: { className?: string }) {
               </div>
             )}
 
-            {(data?.pending?.length ?? 0) > 1 && (
+            {pending.length > 1 && (
               <p className="mt-3 text-xs text-muted-foreground">
-                {(data?.pending?.length ?? 1) - 1} more event
-                {(data?.pending?.length ?? 1) - 1 === 1 ? "" : "s"} to review after this one.
+                {pending.length - 1} more event
+                {pending.length - 1 === 1 ? "" : "s"} to review after this one.
               </p>
             )}
           </div>

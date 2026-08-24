@@ -9,6 +9,7 @@ const migrationUrls = [
   new URL("../migrations/20260726_booking_ticket_quantity.sql", import.meta.url),
   new URL("../migrations/20260815_venue_stripe_connect_payouts.sql", import.meta.url),
   new URL("../migrations/20260821_creator_brand_kit.sql", import.meta.url),
+  new URL("../migrations/20260823_review_replies.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

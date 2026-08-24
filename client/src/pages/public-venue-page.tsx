@@ -20,6 +20,7 @@ import type { Venue, Experience } from "@shared/schema";
 import { format } from "date-fns";
 import { normalizeImageUrl } from "@/lib/utils";
 import Navigation from "@/components/navigation";
+import { ReviewSummary } from "@/components/ReviewSummary";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function fmt(amount: number | string | null | undefined, currency = "EUR") {
@@ -249,6 +250,16 @@ export default function PublicVenuePage() {
                 </div>
               </section>
             )}
+
+            {/* What people who actually went thought. The same reviews they
+                left on the event, rolled up to the venue that hosted it. */}
+            <section>
+              <ReviewSummary
+                endpoint={`/api/venues/${venue.id}/reviews`}
+                title="Reviews"
+                emptyText="No one has reviewed an event at this venue yet."
+              />
+            </section>
 
             {/* House Rules */}
             {venue.houseRules && (

@@ -13,7 +13,7 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals } from "@shared/schema";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
 import { paymentService } from "./payments";
@@ -59,6 +59,7 @@ import {
   formatVenueDealSummary,
 } from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
+import { summariseReviewScore } from "@shared/reviewScore";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
@@ -8168,6 +8169,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Review routes
+  /**
+   * Every review belonging to a set of experiences, newest first, with the
+   * reviewer's name and the event it came from.
+   *
+   * One review, two destinations: the same "how was it?" a participant leaves
+   * on an event rolls up to the venue's public page and to the organiser's
+   * public profile. There is no second review flow to fill in.
+   */
+  const collectReviewsForExperiences = async (experienceIds: string[]) => {
+    if (!experienceIds.length) return [];
+
+    const rows = await db
+      .select({ review: reviews, experience: experiences, author: users })
+      .from(reviews)
+      .leftJoin(experiences, eq(reviews.experienceId, experiences.id))
+      .leftJoin(users, eq(reviews.userId, users.id))
+      .where(inArray(reviews.experienceId, experienceIds))
+      .orderBy(desc(reviews.createdAt));
+
+    return rows.map((row) => ({
+      id: row.review.id,
+      rating: row.review.rating,
+      comment: row.review.comment,
+      createdAt: row.review.createdAt,
+      reply: row.review.reply,
+      repliedAt: row.review.repliedAt,
+      experienceId: row.review.experienceId,
+      experienceTitle: row.experience?.title ?? null,
+      // A first name is enough to make a review feel like a person; a full
+      // name and an email address are not the reviewer's to give away here.
+      authorId: row.author?.id ?? null,
+      authorName: row.author?.firstName || "Participant",
+      authorAvatarUrl: row.author?.profileImageUrl ?? null,
+    }));
+  };
+
+  /** Public review score and reviews for one venue. */
+  app.get("/api/venues/:id/reviews", async (req, res) => {
+    try {
+      const venue = await storage.getVenue(req.params.id);
+      if (!venue) return res.status(404).json({ message: "Venue not found" });
+
+      const hosted = await storage.getExperiencesByVenueIds([venue.id]);
+      const collected = await collectReviewsForExperiences(hosted.map((row: any) => row.id));
+      res.json({ score: summariseReviewScore(collected), reviews: collected });
+    } catch (error) {
+      console.error("Error fetching venue reviews:", error);
+      res.status(500).json({ message: "Failed to fetch venue reviews" });
+    }
+  });
+
+  /** Public review score and reviews for one organiser. */
+  app.get("/api/users/:id/reviews", async (req, res) => {
+    try {
+      const hosted = await storage.getExperiencesByCreator(req.params.id);
+      const collected = await collectReviewsForExperiences(hosted.map((row: any) => row.id));
+      res.json({ score: summariseReviewScore(collected), reviews: collected });
+    } catch (error) {
+      console.error("Error fetching organiser reviews:", error);
+      res.status(500).json({ message: "Failed to fetch organiser reviews" });
+    }
+  });
+
+  /**
+   * The organiser's or the venue's single reply to a review.
+   *
+   * Only the two parties being scored can answer, and only once. Editing a
+   * standing reply is allowed; a second reply is not, because that is a thread.
+   */
+  app.post("/api/reviews/:id/reply", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const text = typeof req.body?.reply === "string" ? req.body.reply.trim() : "";
+      if (!text) return res.status(400).json({ message: "Write a reply first" });
+      if (text.length > 1000) {
+        return res.status(400).json({ message: "Keep the reply under 1000 characters" });
+      }
+
+      const [existing] = await db.select().from(reviews).where(eq(reviews.id, req.params.id));
+      if (!existing) return res.status(404).json({ message: "Review not found" });
+
+      const experience = await storage.getExperience(existing.experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+
+      const isOrganiser = experience.creatorId === userId;
+      const venue = (experience as any).linkedVenueId
+        ? await storage.getVenue((experience as any).linkedVenueId)
+        : undefined;
+      const isVenueOwner = !!venue && venue.createdBy === userId;
+
+      if (!isOrganiser && !isVenueOwner && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Only the organiser or the venue can reply to this review" });
+      }
+
+      const [updated] = await db
+        .update(reviews)
+        .set({ reply: text, repliedAt: new Date(), repliedBy: userId })
+        .where(eq(reviews.id, req.params.id))
+        .returning();
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error replying to review:", error);
+      res.status(500).json({ message: "Failed to reply to review" });
+    }
+  });
+
   /** An event is open for review once it has finished. */
   const experienceHasFinished = (experience: any): boolean => {
     const ends = experience?.endDate || experience?.startDate;

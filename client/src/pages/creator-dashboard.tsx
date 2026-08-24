@@ -2635,7 +2635,15 @@ function CreatorDashboardContent() {
                             {filtered.map((member) => (
                               <TableRow key={member.userId} data-testid={`community-row-${member.userId}`}>
                                 <TableCell className="min-w-52">
-                                  <p className="font-medium">{member.name || "Unnamed participant"}</p>
+                                  {/* Their public profile, same one every other
+                                      avatar on the platform opens. */}
+                                  <a
+                                    href={`/community/profile/${member.userId}`}
+                                    className="font-medium hover:text-primary hover:underline"
+                                    data-testid={`community-profile-link-${member.userId}`}
+                                  >
+                                    {member.name || "Unnamed participant"}
+                                  </a>
                                   {member.email && (
                                     <a href={`mailto:${member.email}`} className="text-xs text-muted-foreground hover:underline">
                                       {member.email}

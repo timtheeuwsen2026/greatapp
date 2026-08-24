@@ -13,6 +13,7 @@ import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
+import { ReviewSummary } from "@/components/ReviewSummary";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
@@ -723,6 +724,17 @@ export default function ExperienceDetails() {
                 />
               </div>
             )}
+
+            {/* Reviews of this event, and the organiser's standing. Below the
+                threshold neither shows a number. */}
+            <div className="mb-8">
+              <ReviewSummary
+                endpoint={`/api/users/${experience.creatorId}/reviews`}
+                title="Reviews of this organiser"
+                canReply={user?.id === experience.creatorId}
+                emptyText="This organiser has no reviews yet."
+              />
+            </div>
 
             {/* Creator Profile Section - Always show when we have a creatorId */}
             {experience.creatorId && (

@@ -1075,6 +1075,66 @@ export const perkFulfillments = pgTable(
   }),
 );
 
+// Attendance milestones — "come to 10 of my runs and the t-shirt is yours".
+//
+// Held against the organiser rather than an event, because that is what the
+// reward is about: a regular of Good Soles, not somebody who happened to book
+// one particular Sunday. Referral barters ("bring 3 friends") stay where they
+// are on the experience; the two loops are deliberately separate.
+export const creatorAttendanceMilestones = pgTable("creator_attendance_milestones", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  creatorId: varchar("creator_id")
+    .references(() => users.id)
+    .notNull(),
+  /** Events with this organiser needed to unlock it. */
+  target: integer("target").notNull(),
+  /**
+   * instant — granted automatically, nothing for the organiser to do.
+   * manual  — the organiser hands it over themselves, using the instructions
+   *           below. Covers physical items and service bookings alike: both
+   *           are really just a conversation, so neither gets a stock system
+   *           or a scheduling form.
+   */
+  rewardType: varchar("reward_type", { length: 20 }).notNull().default("manual"),
+  rewardDescription: text("reward_description").notNull(),
+  /** What the participant is told to do once they unlock it. */
+  fulfillmentInstructions: text("fulfillment_instructions"),
+  active: boolean("active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Who has reached one, and whether the organiser has handed it over.
+//
+// The count itself is derived from bookings rather than stored — a stored
+// counter drifts the first time a booking is cancelled. Only the handover
+// state needs persisting, which is what this row is.
+export const attendanceMilestoneUnlocks = pgTable(
+  "attendance_milestone_unlocks",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    milestoneId: varchar("milestone_id")
+      .references(() => creatorAttendanceMilestones.id)
+      .notNull(),
+    userId: varchar("user_id")
+      .references(() => users.id)
+      .notNull(),
+    /** Attendance at the moment it unlocked, kept for the record. */
+    attendedCount: integer("attended_count").notNull().default(0),
+    status: varchar("status", { length: 20 }).notNull().default("unlocked"),
+    notes: text("notes"),
+    unlockedAt: timestamp("unlocked_at").defaultNow(),
+    fulfilledAt: timestamp("fulfilled_at"),
+    fulfilledBy: varchar("fulfilled_by").references(() => users.id),
+  },
+  (table) => ({
+    oneUnlockPerPerson: unique().on(table.milestoneId, table.userId),
+  }),
+);
+
+export type CreatorAttendanceMilestone = typeof creatorAttendanceMilestones.$inferSelect;
+export type AttendanceMilestoneUnlock = typeof attendanceMilestoneUnlocks.$inferSelect;
+
 // Experience gallery
 export const experienceGallery = pgTable("experience_gallery", {
   id: varchar("id")

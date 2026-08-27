@@ -14,6 +14,7 @@ import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
 import { ReviewSummary } from "@/components/ReviewSummary";
+import { EventAttendanceProgress } from "@/components/AttendanceProgress";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Button } from "@/components/ui/button";
@@ -1348,6 +1349,16 @@ export default function ExperienceDetails() {
                     <span className="text-gray-500 ml-1">/person</span>
                   </div>
                   
+                  {/* Loyalty progress at the decision moment, rather than only
+                      on a stats page nobody opens before booking. */}
+                  {isAuthenticated && experience.creatorId && (
+                    <EventAttendanceProgress
+                      creatorId={experience.creatorId}
+                      organiserName={creatorProfile?.displayName || undefined}
+                      className="mb-3 text-left"
+                    />
+                  )}
+
                   {/* Primary CTA - Only show when NO ticket options (single price experience) */}
                   {isAuthenticated && spotsLeft > 0 && !userActiveReservation && ticketSkus.length === 0 && (
                     <Link href={`/checkout/${experience.id}`}>

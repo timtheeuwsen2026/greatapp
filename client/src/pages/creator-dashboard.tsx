@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -397,6 +398,84 @@ function CreatorDashboardContent() {
   });
 
   // Get onboarding checklist data
+  // Attendance rewards: "come to 10 of my runs and the t-shirt is yours".
+  type AttendanceMilestone = {
+    id: string;
+    target: number;
+    rewardType: string;
+    rewardDescription: string;
+    fulfillmentInstructions: string | null;
+    active: boolean;
+  };
+  type AttendanceUnlock = {
+    id: string;
+    userId: string;
+    personName: string | null;
+    personEmail: string | null;
+    attendedCount: number;
+    status: string;
+    unlockedAt: string | null;
+    target: number | null;
+    rewardType: string | null;
+    rewardDescription: string | null;
+  };
+
+  const { data: attendanceMilestones = [] } = useQuery<AttendanceMilestone[]>({
+    queryKey: ["/api/creator/attendance-milestones"],
+  });
+  const { data: attendanceUnlocks = [] } = useQuery<AttendanceUnlock[]>({
+    queryKey: ["/api/creator/attendance-unlocks"],
+  });
+
+  const [milestoneForm, setMilestoneForm] = useState({
+    target: "5",
+    rewardType: "manual",
+    rewardDescription: "",
+    fulfillmentInstructions: "",
+  });
+
+  const createMilestone = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/creator/attendance-milestones", {
+        target: Number(milestoneForm.target),
+        rewardType: milestoneForm.rewardType,
+        rewardDescription: milestoneForm.rewardDescription.trim(),
+        fulfillmentInstructions: milestoneForm.fulfillmentInstructions.trim(),
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      setMilestoneForm({ target: "5", rewardType: "manual", rewardDescription: "", fulfillmentInstructions: "" });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/attendance-milestones"] });
+      toast({ title: "Reward added", description: "People will start working towards it from their next booking." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Couldn't add that reward", description: readableError(error, "Please try again."), variant: "destructive" });
+    },
+  });
+
+  const toggleMilestone = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
+      const response = await apiRequest("PATCH", `/api/creator/attendance-milestones/${id}`, { active });
+      return response.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/creator/attendance-milestones"] }),
+  });
+
+  const markUnlockFulfilled = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("PATCH", `/api/creator/attendance-unlocks/${id}`, { status: "fulfilled" });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/attendance-unlocks"] });
+      toast({ title: "Marked as handed over" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Couldn't update that", description: readableError(error, "Please try again."), variant: "destructive" });
+    },
+  });
+
   // Run it again next week. The copy lands as a draft in the builder rather
   // than going live, so the creator confirms the date before anyone can book.
   const duplicateExperience = useMutation({
@@ -457,6 +536,8 @@ function CreatorDashboardContent() {
       email: string | null;
       avatarUrl: string | null;
       eventCount: number;
+      eventsWithMe: number;
+      eventsPlatformWide: number;
       bookingCount: number;
       totalSpend: number;
       currency: string;
@@ -2522,10 +2603,13 @@ function CreatorDashboardContent() {
                 : communityMembers;
 
               const exportCsv = () => {
-                const header = ["Name", "Email", "Events", "Bookings", "Total spend", "Currency", "Referred", "Last event", "Last event date"];
+                const header = ["Name", "Email", "Events with you", "Events platform-wide", "Bookings", "Total spend", "Currency", "Referred", "Last event", "Last event date"];
                 const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
                 const rows = filtered.map((member) => [
-                  member.name, member.email, member.eventCount, member.bookingCount,
+                  member.name, member.email,
+                  member.eventsWithMe ?? member.eventCount,
+                  member.eventsPlatformWide ?? member.eventCount,
+                  member.bookingCount,
                   member.totalSpend.toFixed(2), member.currency.toUpperCase(),
                   member.referredCount, member.lastEventTitle,
                   member.lastEventDate ? new Date(member.lastEventDate).toLocaleDateString() : "",
@@ -2582,6 +2666,152 @@ function CreatorDashboardContent() {
                     </Card>
                   </div>
 
+                  {/* Attendance rewards. Deliberately no stock system and no
+                      scheduling form: handing over a t-shirt is a conversation,
+                      so the organiser just writes how to start it. */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Attendance rewards</CardTitle>
+                      <CardDescription>
+                        Reward regulars for coming back. Counts only your events.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {attendanceMilestones.length > 0 && (
+                        <ul className="space-y-2">
+                          {attendanceMilestones.map((milestone) => (
+                            <li
+                              key={milestone.id}
+                              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+                              data-testid={`attendance-milestone-${milestone.id}`}
+                            >
+                              <div className="min-w-0">
+                                <p className="font-medium">
+                                  {milestone.target} events → {milestone.rewardDescription}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {milestone.rewardType === "instant"
+                                    ? "Granted automatically"
+                                    : milestone.fulfillmentInstructions || "You hand this one over"}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {!milestone.active && <Badge variant="outline">Paused</Badge>}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => toggleMilestone.mutate({ id: milestone.id, active: !milestone.active })}
+                                  disabled={toggleMilestone.isPending}
+                                >
+                                  {milestone.active ? "Pause" : "Resume"}
+                                </Button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <div className="grid gap-3 rounded-lg border border-dashed p-4 sm:grid-cols-2">
+                        <div>
+                          <Label htmlFor="milestone-target">After how many events?</Label>
+                          <Input
+                            id="milestone-target"
+                            type="number"
+                            min={1}
+                            max={200}
+                            value={milestoneForm.target}
+                            onChange={(event) => setMilestoneForm((form) => ({ ...form, target: event.target.value }))}
+                            data-testid="input-milestone-target"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="milestone-type">How is it given?</Label>
+                          <select
+                            id="milestone-type"
+                            value={milestoneForm.rewardType}
+                            onChange={(event) => setMilestoneForm((form) => ({ ...form, rewardType: event.target.value }))}
+                            className="mt-1 w-full rounded-md border bg-white px-3 py-2 text-sm dark:bg-gray-800"
+                            data-testid="select-milestone-type"
+                          >
+                            <option value="manual">I hand it over myself</option>
+                            <option value="instant">Automatically</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <Label htmlFor="milestone-reward">What do they get?</Label>
+                          <Input
+                            id="milestone-reward"
+                            placeholder="Free t-shirt"
+                            value={milestoneForm.rewardDescription}
+                            onChange={(event) => setMilestoneForm((form) => ({ ...form, rewardDescription: event.target.value }))}
+                            data-testid="input-milestone-reward"
+                          />
+                        </div>
+                        {milestoneForm.rewardType === "manual" && (
+                          <div className="sm:col-span-2">
+                            <Label htmlFor="milestone-instructions">How do they claim it?</Label>
+                            <Input
+                              id="milestone-instructions"
+                              placeholder="Message me on WhatsApp: https://wa.me/..."
+                              value={milestoneForm.fulfillmentInstructions}
+                              onChange={(event) => setMilestoneForm((form) => ({ ...form, fulfillmentInstructions: event.target.value }))}
+                              data-testid="input-milestone-instructions"
+                            />
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Shown to them the moment they unlock it.
+                            </p>
+                          </div>
+                        )}
+                        <div className="sm:col-span-2">
+                          <Button
+                            onClick={() => createMilestone.mutate()}
+                            disabled={createMilestone.isPending || !milestoneForm.rewardDescription.trim()}
+                            data-testid="button-add-milestone"
+                          >
+                            {createMilestone.isPending ? "Adding..." : "Add reward"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {attendanceUnlocks.length > 0 && (
+                        <div>
+                          <p className="mb-2 text-sm font-semibold">Ready to hand over</p>
+                          <ul className="space-y-2">
+                            {attendanceUnlocks.map((unlock) => (
+                              <li
+                                key={unlock.id}
+                                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+                                data-testid={`attendance-unlock-${unlock.id}`}
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-medium">
+                                    {unlock.personName || unlock.personEmail || "Participant"} — {unlock.rewardDescription}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {unlock.attendedCount} events with you
+                                    {unlock.personEmail ? ` · ${unlock.personEmail}` : ""}
+                                  </p>
+                                </div>
+                                {unlock.status === "fulfilled" ? (
+                                  <Badge className="bg-green-100 text-green-800">Handed over</Badge>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => markUnlockFulfilled.mutate(unlock.id)}
+                                    disabled={markUnlockFulfilled.isPending}
+                                    data-testid={`button-fulfil-${unlock.id}`}
+                                  >
+                                    Mark as given
+                                  </Button>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
                   <Card>
                     <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                       <div>
@@ -2625,7 +2855,8 @@ function CreatorDashboardContent() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Person</TableHead>
-                              <TableHead>Events</TableHead>
+                              <TableHead>With you</TableHead>
+                              <TableHead>All events</TableHead>
                               <TableHead>Spend</TableHead>
                               <TableHead>Brought others</TableHead>
                               <TableHead>Most recent event</TableHead>
@@ -2650,11 +2881,17 @@ function CreatorDashboardContent() {
                                     </a>
                                   )}
                                 </TableCell>
-                                <TableCell>
-                                  {member.eventCount}
-                                  {member.eventCount > 1 && (
+                                {/* Two different questions. "With you" is what a
+                                    loyalty reward is about; the platform total
+                                    says how active they are generally. */}
+                                <TableCell data-testid={`community-with-me-${member.userId}`}>
+                                  {member.eventsWithMe ?? member.eventCount}
+                                  {(member.eventsWithMe ?? member.eventCount) > 1 && (
                                     <Badge className="ml-2 bg-green-100 text-green-800">Repeat</Badge>
                                   )}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground" data-testid={`community-platform-${member.userId}`}>
+                                  {member.eventsPlatformWide ?? member.eventCount}
                                 </TableCell>
                                 <TableCell>{formatCurrency(member.totalSpend, member.currency)}</TableCell>
                                 <TableCell>

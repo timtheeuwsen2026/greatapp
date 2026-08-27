@@ -163,7 +163,7 @@ export default function Navigation() {
                   <DropdownMenuItem asChild>
                     <Link href="/promoter" className="gap-2">
                       <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                      My Impact
+                      Rewards & Referrals
                     </Link>
                   </DropdownMenuItem>
                   {user?.role === 'creator' && (
@@ -351,7 +351,7 @@ export default function Navigation() {
                     data-testid="mobile-link-my-impact"
                   >
                     <TrendingUp className="h-4 w-4" />
-                    My Impact
+                    Rewards & Referrals
                   </Link>
 
                   {/* Role dashboard shortcut */}

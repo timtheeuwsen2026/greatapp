@@ -506,7 +506,7 @@ export default function RecruitSquad() {
               <span className="font-semibold text-gray-800">Your personal referral link</span>
             </div>
             <p className="text-sm text-gray-500">
-              When a friend books using this link, the booking is attributed to you automatically. Track referral bookings and unlocked rewards in My Impact.
+              When a friend books using this link, the booking is attributed to you automatically. Track referral bookings and unlocked rewards in Rewards & Referrals.
             </p>
 
             {referralLink && (
@@ -625,7 +625,7 @@ export default function RecruitSquad() {
         <div className="space-y-3 pt-2" data-testid="continue-actions">
           <Link href="/my-impact">
             <Button variant="outline" className="w-full" data-testid="view-earnings-dashboard">
-              View My Impact dashboard
+              View Rewards & Referrals
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           </Link>

@@ -544,7 +544,7 @@ class NotificationService {
     const email = renderBaseEmail({
       to: opts.to,
       bodyText,
-      cta: { label: 'View My Impact Dashboard', href: `${APP_BASE_URL}/my-impact` },
+      cta: { label: 'View Rewards & Referrals', href: `${APP_BASE_URL}/my-impact` },
       preheader: `You earned ${opts.earnedAmount} from a referral booking.`,
       growthFooterContext: 'none',
     });
@@ -577,7 +577,7 @@ class NotificationService {
     const email = renderBaseEmail({
       to: opts.to,
       bodyText,
-      cta: { label: 'View My Impact', href: `${APP_BASE_URL}/my-impact` },
+      cta: { label: 'View Rewards & Referrals', href: `${APP_BASE_URL}/my-impact` },
       preheader: `Your ${opts.eventName} referral progress just increased.`,
       growthFooterContext: 'none',
     });
@@ -608,7 +608,7 @@ class NotificationService {
     const email = renderBaseEmail({
       to: opts.to,
       bodyText,
-      cta: { label: 'View My Impact', href: `${APP_BASE_URL}/my-impact` },
+      cta: { label: 'View Rewards & Referrals', href: `${APP_BASE_URL}/my-impact` },
       preheader: `You unlocked ${opts.rewardDescription} for ${opts.eventName}.`,
       growthFooterContext: 'none',
     });

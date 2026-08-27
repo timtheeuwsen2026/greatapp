@@ -13,7 +13,7 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews } from "@shared/schema";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
 import { paymentService } from "./payments";
@@ -60,6 +60,12 @@ import {
 } from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { summariseReviewScore } from "@shared/reviewScore";
+import {
+  getAttendanceCounts,
+  getAttendanceCountsForUsers,
+  getMilestoneProgress,
+  recordAttendanceUnlocks,
+} from "./attendanceMilestones";
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
@@ -2016,7 +2022,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
 
   // Get impact stats for any authenticated user (no promoter role required)
-  // Powers the My Impact page recruitment stats + gamification
+  // Powers the Rewards & Referrals page recruitment stats + gamification
   app.get('/api/me/impact-stats', isAuthenticated, async (req: any, res) => {
     try {
       const userId = resolveCurrentUserId(req);
@@ -5274,6 +5280,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }).catch(() => {});
       }
 
+      // ── Attendance rewards ────────────────────────────────────────────────
+      // A booking is what moves somebody toward "10 runs with Good Soles", so
+      // this is where the count is re-read and any newly reached reward
+      // recorded. Fire-and-forget: a loyalty t-shirt must never be the reason
+      // a checkout fails.
+      if (booking?.id && booking.userId && experience.creatorId) {
+        recordAttendanceUnlocks(booking.userId, experience.creatorId).catch((error) => {
+          console.error("Failed to record attendance unlocks:", error);
+        });
+      }
+
       // Prepare response message
       let message;
       if (!paymentReadyForNotifications) {
@@ -8278,6 +8295,237 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Attendance milestones ─────────────────────────────────────────────
+  //
+  // "Come to 10 of my runs and the t-shirt is yours." Defined against the
+  // organiser rather than an event, because that is what the reward is about.
+
+  /** The organiser's own attendance rewards. */
+  app.get("/api/creator/attendance-milestones", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const milestones = await db
+        .select()
+        .from(creatorAttendanceMilestones)
+        .where(eq(creatorAttendanceMilestones.creatorId, creatorId))
+        .orderBy(creatorAttendanceMilestones.target);
+
+      res.json(milestones);
+    } catch (error) {
+      console.error("Error fetching attendance milestones:", error);
+      res.status(500).json({ message: "Failed to fetch attendance milestones" });
+    }
+  });
+
+  app.post("/api/creator/attendance-milestones", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const target = Number(req.body?.target);
+      if (!Number.isInteger(target) || target < 1 || target > 200) {
+        return res.status(400).json({ message: "How many events should it take? Pick a number from 1 to 200." });
+      }
+
+      const rewardType = req.body?.rewardType === "instant" ? "instant" : "manual";
+      const rewardDescription = String(req.body?.rewardDescription || "").trim();
+      if (!rewardDescription) {
+        return res.status(400).json({ message: "Describe what they get" });
+      }
+
+      const fulfillmentInstructions = String(req.body?.fulfillmentInstructions || "").trim();
+      // A manual reward the organiser hands over needs to say how. Without it
+      // the participant unlocks something and is told nothing.
+      if (rewardType === "manual" && !fulfillmentInstructions) {
+        return res.status(400).json({
+          message: "Tell them how to claim it, for example \"message me on WhatsApp: <link>\"",
+        });
+      }
+
+      const [created] = await db
+        .insert(creatorAttendanceMilestones)
+        .values({
+          creatorId,
+          target,
+          rewardType,
+          rewardDescription,
+          fulfillmentInstructions: fulfillmentInstructions || null,
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("Error creating attendance milestone:", error);
+      res.status(500).json({ message: "Failed to create attendance milestone" });
+    }
+  });
+
+  app.patch("/api/creator/attendance-milestones/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const [existing] = await db
+        .select()
+        .from(creatorAttendanceMilestones)
+        .where(eq(creatorAttendanceMilestones.id, req.params.id));
+      if (!existing) return res.status(404).json({ message: "Milestone not found" });
+      if (existing.creatorId !== creatorId) return res.status(403).json({ message: "Access denied" });
+
+      const updates: Record<string, any> = { updatedAt: new Date() };
+      if (req.body?.active !== undefined) updates.active = !!req.body.active;
+      if (req.body?.rewardDescription !== undefined) {
+        const description = String(req.body.rewardDescription).trim();
+        if (!description) return res.status(400).json({ message: "Describe what they get" });
+        updates.rewardDescription = description;
+      }
+      if (req.body?.fulfillmentInstructions !== undefined) {
+        updates.fulfillmentInstructions = String(req.body.fulfillmentInstructions).trim() || null;
+      }
+
+      const [updated] = await db
+        .update(creatorAttendanceMilestones)
+        .set(updates)
+        .where(eq(creatorAttendanceMilestones.id, req.params.id))
+        .returning();
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating attendance milestone:", error);
+      res.status(500).json({ message: "Failed to update attendance milestone" });
+    }
+  });
+
+  /** Everyone who has reached one of this organiser's rewards. */
+  app.get("/api/creator/attendance-unlocks", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const rows = await db
+        .select({ unlock: attendanceMilestoneUnlocks, milestone: creatorAttendanceMilestones, person: users })
+        .from(attendanceMilestoneUnlocks)
+        .leftJoin(creatorAttendanceMilestones, eq(attendanceMilestoneUnlocks.milestoneId, creatorAttendanceMilestones.id))
+        .leftJoin(users, eq(attendanceMilestoneUnlocks.userId, users.id))
+        .where(eq(creatorAttendanceMilestones.creatorId, creatorId))
+        .orderBy(desc(attendanceMilestoneUnlocks.unlockedAt));
+
+      res.json(rows.map((row) => ({
+        id: row.unlock.id,
+        userId: row.unlock.userId,
+        personName: [row.person?.firstName, row.person?.lastName].filter(Boolean).join(" ") || null,
+        personEmail: row.person?.email ?? null,
+        attendedCount: row.unlock.attendedCount,
+        status: row.unlock.status,
+        notes: row.unlock.notes,
+        unlockedAt: row.unlock.unlockedAt,
+        target: row.milestone?.target ?? null,
+        rewardType: row.milestone?.rewardType ?? null,
+        rewardDescription: row.milestone?.rewardDescription ?? null,
+      })));
+    } catch (error) {
+      console.error("Error fetching attendance unlocks:", error);
+      res.status(500).json({ message: "Failed to fetch attendance unlocks" });
+    }
+  });
+
+  app.patch("/api/creator/attendance-unlocks/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const creatorId = resolveCurrentUserId(req);
+      if (!creatorId) return res.status(401).json({ message: "Unauthorized" });
+
+      const status = req.body?.status;
+      if (status !== "unlocked" && status !== "fulfilled") {
+        return res.status(400).json({ message: "Status must be unlocked or fulfilled" });
+      }
+
+      const [row] = await db
+        .select({ unlock: attendanceMilestoneUnlocks, milestone: creatorAttendanceMilestones })
+        .from(attendanceMilestoneUnlocks)
+        .leftJoin(creatorAttendanceMilestones, eq(attendanceMilestoneUnlocks.milestoneId, creatorAttendanceMilestones.id))
+        .where(eq(attendanceMilestoneUnlocks.id, req.params.id));
+      if (!row) return res.status(404).json({ message: "Unlock not found" });
+      if (row.milestone?.creatorId !== creatorId) return res.status(403).json({ message: "Access denied" });
+
+      const [updated] = await db
+        .update(attendanceMilestoneUnlocks)
+        .set({
+          status,
+          notes: req.body?.notes !== undefined ? String(req.body.notes).trim() || null : row.unlock.notes,
+          fulfilledAt: status === "fulfilled" ? new Date() : null,
+          fulfilledBy: status === "fulfilled" ? creatorId : null,
+        })
+        .where(eq(attendanceMilestoneUnlocks.id, req.params.id))
+        .returning();
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating attendance unlock:", error);
+      res.status(500).json({ message: "Failed to update attendance unlock" });
+    }
+  });
+
+  /**
+   * The signed-in participant's own attendance and reward progress.
+   *
+   * With no organiser named it answers "how many events have I been to";
+   * with one it also answers "and how many of theirs", which is the number
+   * the reward is actually about.
+   */
+  app.get("/api/me/attendance", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const creatorId = req.query.creatorId ? String(req.query.creatorId) : null;
+      const counts = await getAttendanceCounts(userId, creatorId);
+      const milestones = creatorId ? await getMilestoneProgress(userId, creatorId) : [];
+
+      res.json({ ...counts, milestones });
+    } catch (error) {
+      console.error("Error fetching attendance:", error);
+      res.status(500).json({ message: "Failed to fetch attendance" });
+    }
+  });
+
+  /** Every organiser this person has attended, with their reward progress. */
+  app.get("/api/me/reward-progress", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const mine = await storage.getUserBookings(userId);
+      const attended = mine.filter((booking: any) => isActiveParticipantBooking(booking.status));
+
+      const creatorIds = new Set<string>();
+      for (const booking of attended) {
+        const experience = await storage.getExperience(booking.experienceId);
+        if (experience?.creatorId) creatorIds.add(experience.creatorId);
+      }
+
+      const organisers = [];
+      for (const creatorId of Array.from(creatorIds)) {
+        const milestones = await getMilestoneProgress(userId, creatorId);
+        if (!milestones.length) continue;
+        const profile = await storage.getCreatorProfileByUserId(creatorId);
+        organisers.push({
+          creatorId,
+          organiserName: profile?.displayName || "Organiser",
+          attended: milestones[0]?.attended ?? 0,
+          milestones,
+        });
+      }
+
+      const counts = await getAttendanceCounts(userId, null);
+      res.json({ platformWide: counts.platformWide, organisers });
+    } catch (error) {
+      console.error("Error fetching reward progress:", error);
+      res.status(500).json({ message: "Failed to fetch reward progress" });
+    }
+  });
+
   /** An event is open for review once it has finished. */
   const experienceHasFinished = (experience: any): boolean => {
     const ends = experience?.endDate || experience?.startDate;
@@ -10350,9 +10598,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (promoter) promoter.referredCount += 1;
       }
 
+      // The "events" figure already on this tab counts only this organiser's
+      // events, which is the number a loyalty reward is about. The
+      // platform-wide total answers a different question, so both are shown.
+      const attendance = await getAttendanceCountsForUsers(userIds as string[], creatorId);
+
       const members = Array.from(byUser.values())
         .map((member) => ({
           ...member,
+          eventsWithMe: attendance.get(member.userId)?.withOrganiser ?? member.eventCount,
+          eventsPlatformWide: attendance.get(member.userId)?.platformWide ?? member.eventCount,
           lastEventDate: member.lastEventDate ? member.lastEventDate.toISOString() : null,
         }))
         .sort((a, b) => (b.eventCount - a.eventCount) || (b.totalSpend - a.totalSpend));

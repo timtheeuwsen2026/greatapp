@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import Navigation from "@/components/navigation";
+import { AttendanceRewardsSection } from "@/components/AttendanceProgress";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import { getParticipantReferralSummary, getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
@@ -1295,7 +1296,7 @@ export default function PromoterDashboard() {
             <div className="p-2 bg-primary/10 dark:bg-primary/20 rounded-lg">
               <Rocket className="h-6 w-6 text-primary dark:text-primary/80" />
             </div>
-            My Impact
+            Rewards & Referrals
           </h1>
           <p className="text-muted-foreground mt-2 max-w-2xl">
             Every person you invite brings your experience one step closer to confirming.
@@ -1311,6 +1312,10 @@ export default function PromoterDashboard() {
           onInviteClick={() => setShowShareModal(true)}
           official={isOfficialDashboard}
         />
+
+        {/* Attendance rewards, alongside the referral stats. Both are "what
+            have I earned", which is why this page is no longer My Impact. */}
+        <AttendanceRewardsSection className="mb-8" />
 
         {/* Impact explainer banner */}
         <Card className="mb-8 border-primary/20 dark:border-primary/30 bg-gradient-to-r from-primary/5 to-white dark:from-primary/10 dark:to-gray-900">

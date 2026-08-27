@@ -6661,7 +6661,7 @@ function PricingStep({ form }: { form: any }) {
                   
                   <div className="bg-purple-50 dark:bg-purple-950 p-3 rounded text-sm">
                     <p className="text-purple-700 dark:text-purple-300">
-                      Participant referral links use B2C cashback language in My Impact.
+                      Participant referral links use B2C cashback language in Rewards & Referrals.
                     </p>
                   </div>
                 </div>

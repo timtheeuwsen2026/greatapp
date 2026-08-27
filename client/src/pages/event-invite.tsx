@@ -6,6 +6,7 @@ import Navigation from "@/components/navigation";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { formatMoney } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/useAuth";
@@ -36,6 +37,8 @@ type Experience = {
   minimumParticipants?: number;
   mvgMin?: number;
   mvgDeadline?: string;
+  currency?: string | null;
+  ticketSkus?: Array<{ pricePerPerson?: number | string | null }>;
 };
 
 type User = {
@@ -106,6 +109,20 @@ export default function EventInvite() {
   }
 
   const spotsLeft = experience.maxParticipants - experience.currentParticipants;
+
+  // The headline price lives on the ticket when the creator set one up, and
+  // only falls back to the experience column for older single-price events.
+  // Reading experience.price alone showed 0 for anything ticketed.
+  const ticketSkus: any[] = Array.isArray((experience as any).ticketSkus)
+    ? (experience as any).ticketSkus
+    : [];
+  const ticketPrices = ticketSkus
+    .map((sku: any) => Number(sku?.pricePerPerson))
+    .filter((price: number) => Number.isFinite(price) && price > 0);
+  const displayPrice = ticketPrices.length
+    ? Math.min(...ticketPrices)
+    : Number((experience as any).price ?? 0);
+  const isFree = displayPrice <= 0;
   const averageRating = 4.8; // Placeholder
 
   return (
@@ -196,7 +213,9 @@ export default function EventInvite() {
               <CardContent className="p-6">
                 <div className="text-center mb-6">
                   <div className="flex items-center justify-center mb-2">
-                    <span className="text-3xl font-bold text-gray-900">${experience.price}</span>
+                    <span className="text-3xl font-bold text-gray-900" data-testid="invite-price">
+                      {formatMoney(displayPrice, experience.currency)}
+                    </span>
                     <span className="text-gray-500 ml-1">/person</span>
                   </div>
                   <p className="text-sm text-gray-600">
@@ -234,29 +253,35 @@ export default function EventInvite() {
                 )}
 
                 <div className="space-y-3">
-                  {isAuthenticated ? (
-                    <>
-                      {spotsLeft > 0 ? (
-                        <Link href={`/checkout/${experience.id}${referrerId ? `?ref=${referrerId}` : ''}`}>
-                          <Button className="w-full btn-gradient" size="lg" data-testid="button-book-now">
-                            Join Experience - ${experience.price}
-                          </Button>
-                        </Link>
-                      ) : (
-                        <Button className="w-full" size="lg" disabled>
-                          Fully Booked
-                        </Button>
-                      )}
-                    </>
+                  {spotsLeft <= 0 ? (
+                    <Button className="w-full" size="lg" disabled>
+                      Fully Booked
+                    </Button>
+                  ) : isAuthenticated ? (
+                    <Link href={`/checkout/${experience.id}${referrerId ? `?ref=${referrerId}` : ''}`}>
+                      <Button className="w-full btn-gradient" size="lg" data-testid="button-book-now">
+                        {isFree
+                          ? "Reserve your spot"
+                          : `Join Experience - ${formatMoney(displayPrice, experience.currency)}`}
+                      </Button>
+                    </Link>
                   ) : (
                     <div className="space-y-3">
-                      <a href={`/api/login?redirect=${encodeURIComponent(window.location.href)}`}>
-                        <Button className="w-full btn-gradient" size="lg">
-                          Sign in to Join
+                      {/* A shared link is opened by someone signed out, which is
+                          the whole point of sharing it. They used to get a bare
+                          "Sign in to Join" with no price anywhere on the button,
+                          so a paid event looked like it had no paid option. The
+                          price goes on the button, and returnTo brings them back
+                          to this event instead of dropping them on a dashboard. */}
+                      <Link href={`/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
+                        <Button className="w-full btn-gradient" size="lg" data-testid="button-book-now">
+                          {isFree
+                            ? "Sign in to reserve your spot"
+                            : `Join Experience - ${formatMoney(displayPrice, experience.currency)}`}
                         </Button>
-                      </a>
+                      </Link>
                       <p className="text-xs text-center text-gray-500">
-                        Join thousands of explorers creating meaningful experiences
+                        You'll be brought straight back here after signing in.
                       </p>
                     </div>
                   )}

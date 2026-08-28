@@ -1,4 +1,5 @@
 import { createCanvas, loadImage, type SKRSContext2D } from "@napi-rs/canvas";
+import { getPublicAppBaseUrl } from "./publicUrl";
 import type { Express, Request, Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -283,13 +284,14 @@ export function registerOGRoutes(app: Express) {
   app.get("/api/og/experience/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const experience = await storage.getExperience(id);
+      const experience = await storage.getExperience(id)
+        || await storage.getExperienceBySlug(id);
 
       if (!experience) {
         return res.status(404).send("Experience not found");
       }
 
-      const mvgRaw = await storage.getMVGProgress(id);
+      const mvgRaw = await storage.getMVGProgress(experience.id);
       const mvg: MVGData = {
         current: mvgRaw.current_participants ?? 0,
         minimum: mvgRaw.minimum_participants ?? 0,
@@ -308,43 +310,47 @@ export function registerOGRoutes(app: Express) {
     }
   });
 
-  // ── Social bot middleware ── GET /experience/:id
+  // ── Social bot middleware ─────────────────────────────────────────────
   // Must be registered before Vite catches all routes.
   // Regular browsers fall through; bots get a prerendered HTML shell.
-  app.get("/experience/:id", async (req: Request, res: Response, next) => {
+  //
+  // Every route that shares an event, not just one of the three. A creator
+  // sharing /event/<id> got the generic Great logo and title in WhatsApp,
+  // because only /experience/<id> was ever handled — and /event/ is the route
+  // the referral link builder actually produces.
+  app.get(["/experience/:id", "/event/:id", "/e/:id"], async (req: Request, res: Response, next) => {
     const ua = req.headers["user-agent"] || "";
     if (!isSocialBot(ua)) return next();
 
     try {
       const { id } = req.params;
-      const experience = await storage.getExperience(id);
+      // /e/ accepts a slug as well as an id, and the short links this will
+      // hand out are slugs, so a slug must not fall through to the bare shell.
+      const experience = await storage.getExperience(id)
+        || await storage.getExperienceBySlug(id);
 
       if (!experience) return next();
 
-      const mvgRaw = await storage.getMVGProgress(id);
+      const mvgRaw = await storage.getMVGProgress(experience.id);
       const mvg: MVGData = {
         current: mvgRaw.current_participants ?? 0,
         minimum: mvgRaw.minimum_participants ?? 0,
         met: mvgRaw.mvg_met ?? false,
       };
 
-      // Derive public-facing base URL.
-      // Priority: REPLIT_DOMAINS env var → X-Forwarded-Host header → Host header.
-      // REPLIT_DOMAINS is always set in both dev and deployed Replit environments,
-      // ensuring the og:image URL is publicly reachable by WhatsApp / Facebook crawlers.
-      const replitDomain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
-      const forwardedProto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0]?.trim() || "https";
-      const forwardedHost = (req.headers["x-forwarded-host"] as string)?.split(",")[0]?.trim();
-      const origin = replitDomain
-        ? `https://${replitDomain}`
-        : forwardedHost
-          ? `${forwardedProto}://${forwardedHost}`
-          : `${req.protocol}://${req.get("host")}`;
+      // The crawler has to be able to fetch the image, so this must be the
+      // real public origin. It used to be built from REPLIT_DOMAINS, which on
+      // Railway holds a leftover value — the tag went out as
+      // https://sfdbz/api/og/... and every preview fell back to the site logo.
+      // getPublicAppBaseUrl reads the configured app URL, the same one every
+      // email and share link already uses.
+      const origin = getPublicAppBaseUrl(req);
 
-      const refParam = req.query.ref ? `?ref=${req.query.ref}` : "";
-      const appBaseUrl = process.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || origin;
-      const ogUrl = `${appBaseUrl}/experience/${id}${refParam}`;
-      const ogImageUrl = `${origin}/api/og/experience/${id}`;
+      const refParam = req.query.ref ? `?ref=${encodeURIComponent(String(req.query.ref))}` : "";
+      // Send the crawler, and anyone following the preview, to the same route
+      // they were on rather than silently rewriting it.
+      const ogUrl = `${origin}${req.path}${refParam}`;
+      const ogImageUrl = `${origin}/api/og/experience/${experience.id}`;
       const ogTitle = buildOGTitle(experience, mvg);
       const ogDesc = buildOGDescription(experience, mvg);
 

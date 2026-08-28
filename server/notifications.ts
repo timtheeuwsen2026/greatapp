@@ -8,7 +8,7 @@ import type { Booking, Experience } from '@shared/schema';
 import { renderMasterEmailTemplate, type EmailReceiptRow, type GrowthFooterContext, type GrowthFooterData } from './emailTemplates';
 import { createEmailPreferenceToken, getConfiguredEmailPreferenceSecret } from './emailPreferenceTokens';
 import { isEmailCategoryEnabled, type EmailCategory } from './emailPreferences';
-import { claimImmediateEmailEvent, completeEmailEvent, retryOrFailEmailJob } from './emailDeliveryLedger';
+import { claimImmediateEmailEvent, completeEmailEvent, getEmailJobAttempts, retryOrFailEmailJob } from './emailDeliveryLedger';
 import { resolveBookingEmailDecision } from './emailRules';
 import { getConfiguredPublicAppBaseUrl } from './publicUrl';
 import { formatVenueDealSummary, getVenueDealTermsKey, normalizeVenueDealModel } from '@shared/venueDealModels';
@@ -269,7 +269,14 @@ async function sendEmailOnce(opts: {
 
   const result = await sendEmail(opts.to, opts.subject, opts.text, opts.html, { category });
   if (result.success) await completeEmailEvent(opts.eventKey, result);
-  else await retryOrFailEmailJob(opts.eventKey, 1, result.error || 'Email provider delivery failed');
+  // Carry the ledger's real attempt count into the backoff. Passing a literal 1
+  // here reset it on every fresh trigger, so a failing address never aged out
+  // of its five-minute retry.
+  else await retryOrFailEmailJob(
+    opts.eventKey,
+    await getEmailJobAttempts(opts.eventKey),
+    result.error || 'Email provider delivery failed',
+  );
   return result;
 }
 

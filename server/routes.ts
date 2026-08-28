@@ -560,30 +560,55 @@ async function notifyCommunityOpenRoleAlerts(experience: any): Promise<void> {
     .where(and(eq(participantProfiles.willingToTakeRoles, true), ne(users.id, experience.creatorId)))
     .limit(Number(process.env.ROLE_ALERT_MAX_PROFILES || 200));
 
+  const perRoleCap = Number(process.env.ROLE_ALERT_MAX_RECIPIENTS_PER_ROLE || 25);
+  // The per-role cap alone left the real total at cap x number of open roles —
+  // three roles was already 75 emails off a single publish, sent back to back
+  // with nothing pacing them. The provider rate-limits partway through, and
+  // every rejected send used to become a permanent retry.
+  const perSweepCap = Number(process.env.ROLE_ALERT_MAX_RECIPIENTS_PER_SWEEP || 50);
+  const sendGapMs = Number(process.env.ROLE_ALERT_SEND_GAP_MS || 250);
+  let sentForSweep = 0;
+
   for (const role of openRoles) {
     let sentForRole = 0;
     for (const row of profileRows) {
+      if (sentForSweep >= perSweepCap) {
+        console.warn(`[Open role alerts] Sweep cap of ${perSweepCap} reached for experience ${experience.id}; remaining recipients skipped`);
+        return;
+      }
       if (!row.user.email || !roleMatchesProfile(role, row.profile, city)) continue;
       const key = `${experience.id}:${role.id}:${row.user.id}`;
 
-      const referralCode = row.user.promoterCode || await storage.ensureUserReferralCode(row.user.id);
-      const params = new URLSearchParams({ ref: referralCode, role: role.id });
-      if ((experience as any).shareToken) params.set('share', (experience as any).shareToken);
-      const referralUrl = `${baseUrl}/experience/${publicExperienceSlugOrId(experience)}?${params.toString()}`;
+      // One recipient must not be able to end the sweep: this email throws when
+      // the provider rejects it, which previously abandoned everyone after the
+      // first failure and started over from the top on the next publish.
+      try {
+        const referralCode = row.user.promoterCode || await storage.ensureUserReferralCode(row.user.id);
+        const params = new URLSearchParams({ ref: referralCode, role: role.id });
+        if ((experience as any).shareToken) params.set('share', (experience as any).shareToken);
+        const referralUrl = `${baseUrl}/experience/${publicExperienceSlugOrId(experience)}?${params.toString()}`;
 
-      const delivery = await notificationService.sendOpenRoleReferralAlertEmail({
-        to: row.user.email,
-        userFirstName: row.user.firstName,
-        roleName: role.name,
-        city,
-        eventName: experience.title || 'a new experience',
-        eventSlugOrId: publicExperienceSlugOrId(experience),
-        referralUrl,
-        eventKey: `open_role_referral:${key}`,
-      });
+        const delivery = await notificationService.sendOpenRoleReferralAlertEmail({
+          to: row.user.email,
+          userFirstName: row.user.firstName,
+          roleName: role.name,
+          city,
+          eventName: experience.title || 'a new experience',
+          eventSlugOrId: publicExperienceSlugOrId(experience),
+          referralUrl,
+          eventKey: `open_role_referral:${key}`,
+        });
 
-      if (!delivery.duplicate) sentForRole += 1;
-      if (sentForRole >= Number(process.env.ROLE_ALERT_MAX_RECIPIENTS_PER_ROLE || 25)) break;
+        if (!delivery.duplicate) {
+          sentForRole += 1;
+          sentForSweep += 1;
+          if (sendGapMs > 0) await new Promise((resolve) => setTimeout(resolve, sendGapMs));
+        }
+      } catch (error: any) {
+        console.error(`[Open role alerts] Failed for ${row.user.id} on role ${role.id}:`, error?.message || error);
+      }
+
+      if (sentForRole >= perRoleCap) break;
     }
   }
 }

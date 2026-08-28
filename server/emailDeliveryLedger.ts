@@ -34,6 +34,11 @@ export async function claimImmediateEmailEvent(
     .returning({ id: emailNotificationEvents.id });
   if (inserted) return true;
 
+  // A row already exists. It may be reclaimed when the previous attempt failed,
+  // or when a claim was left dangling by a crash mid-send — but only while
+  // attempts remain. Without the cap a permanently undeliverable address was
+  // re-sent on every subsequent trigger, forever: one rate-limited burst turned
+  // every one of its failures into a standing instruction to try again.
   const staleBefore = new Date(now.getTime() - STALE_CLAIM_MS);
   const [reclaimed] = await db
     .update(emailNotificationEvents)
@@ -49,10 +54,28 @@ export async function claimImmediateEmailEvent(
     .where(and(
       eq(emailNotificationEvents.eventKey, input.eventKey),
       inArray(emailNotificationEvents.status, ["failed", "sending"]),
+      lt(emailNotificationEvents.attempts, MAX_JOB_ATTEMPTS),
       sql`${emailNotificationEvents.status} = 'failed' OR ${emailNotificationEvents.lastAttemptAt} < ${staleBefore}`,
     ))
     .returning({ id: emailNotificationEvents.id });
   return Boolean(reclaimed);
+}
+
+/**
+ * The attempt count the ledger currently holds for an event key.
+ *
+ * claimImmediateEmailEvent has just incremented it, so this is the number of
+ * the attempt that failed. sendEmailOnce used to pass a literal 1 instead,
+ * which reset the backoff every time a fresh trigger came through and kept a
+ * broken send in permanent five-minute retry.
+ */
+export async function getEmailJobAttempts(eventKey: string): Promise<number> {
+  const [row] = await db
+    .select({ attempts: emailNotificationEvents.attempts })
+    .from(emailNotificationEvents)
+    .where(eq(emailNotificationEvents.eventKey, eventKey))
+    .limit(1);
+  return row?.attempts ?? 1;
 }
 
 export async function completeEmailEvent(
@@ -109,6 +132,10 @@ export async function claimScheduledEmailJob(eventKey: string): Promise<boolean>
       eq(emailNotificationEvents.eventKey, eventKey),
       eq(emailNotificationEvents.status, "scheduled"),
       lte(emailNotificationEvents.scheduledFor, now),
+      // Rows that ran away before the backoff was fixed sit at attempt counts in
+      // the dozens. Without this they would each get one more delivery the
+      // moment the scheduler next ticks.
+      lt(emailNotificationEvents.attempts, MAX_JOB_ATTEMPTS),
     ))
     .returning({ id: emailNotificationEvents.id });
   return Boolean(claimed);

@@ -2429,8 +2429,22 @@ export class DatabaseStorage implements IStorage {
     return this.getParticipantProfile(userId);
   }
 
+  /**
+   * Profiles for the public community directory.
+   *
+   * Every caller of this is an unauthenticated endpoint, so it must honour the
+   * member's own visibility setting — it previously returned the bio, location
+   * and occupation of people who had set their profile to private. The value is
+   * written as both 'Private' and 'private' depending on which setup screen
+   * saved it, hence the case-insensitive compare; a null predates the setting
+   * and takes the column's 'Public' default.
+   */
   async getAllParticipantProfiles(): Promise<ParticipantProfile[]> {
-    return await db.select().from(participantProfiles).orderBy(desc(participantProfiles.createdAt));
+    return await db
+      .select()
+      .from(participantProfiles)
+      .where(sql`lower(coalesce(${participantProfiles.profileVisibility}, 'public')) <> 'private'`)
+      .orderBy(desc(participantProfiles.createdAt));
   }
 
   async updateParticipantProfile(userId: string, updates: Partial<InsertParticipantProfile>): Promise<ParticipantProfile> {
@@ -2786,7 +2800,6 @@ export class DatabaseStorage implements IStorage {
           firstName: users.firstName,
           lastName: users.lastName,
           profileImageUrl: users.profileImageUrl,
-          email: users.email,
         }
       })
       .from(experienceMessages)
@@ -3651,7 +3664,6 @@ export class DatabaseStorage implements IStorage {
           firstName: users.firstName,
           lastName: users.lastName,
           profileImageUrl: users.profileImageUrl,
-          email: users.email,
         },
         profile: {
           id: participantProfiles.id,

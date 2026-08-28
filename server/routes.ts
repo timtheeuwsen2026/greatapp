@@ -7463,6 +7463,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Experience not found" });
       }
 
+      // Resolving MVG captures or refunds every deposit on the event and emails
+      // the attendees, so it belongs to the creator, not to any signed-in user.
+      const userId = resolveCurrentUserId(req);
+      if (experience.creatorId !== userId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Only the event creator can resolve this experience" });
+      }
+
       if (!experience.requireMinimumParticipants) {
         return res.status(400).json({ message: "Experience does not have MVG enabled" });
       }
@@ -7511,8 +7518,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Check and process MVG deadlines (cron job endpoint)
-  app.post("/api/mvg/check-deadlines", async (req, res) => {
+  // Sweeps every MVG experience: captures or refunds deposits through Stripe and
+  // emails every participant of each one. That is the MVG scheduler's own job on
+  // its 15-minute cron; as an open endpoint it was a way for anyone to replay the
+  // whole thing on demand.
+  app.post("/api/mvg/check-deadlines", isAuthenticated, async (req: any, res) => {
     try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
       const experiences = await storage.getAllMVGExperiences();
       const now = new Date();
       const processedExperiences = [];
@@ -11120,9 +11134,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/experiences/:experienceId/participants-with-skills", async (req, res) => {
+  // Carries every attendee's bio, occupation and skills, so it is restricted to
+  // people who are actually on the event: the creator, an admin, or someone
+  // holding an active booking. It was public, which handed the whole roster to
+  // anyone who opened the page.
+  app.get("/api/experiences/:experienceId/participants-with-skills", isAuthenticated, async (req: any, res) => {
     try {
       const { experienceId } = req.params;
+      const userId = resolveCurrentUserId(req);
+      if (!userId || !(await canAccessExperienceChat(userId, experienceId))) {
+        return res.status(403).json({ message: "A valid booking is required to view participants" });
+      }
       const participants = await storage.getParticipantsWithSkillsAndRoles(experienceId);
       res.json(participants);
     } catch (error: any) {
@@ -11828,43 +11850,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Participant Hub routes
-  app.get("/api/experiences/:id/participants", async (req, res) => {
-    try {
-      const participants = await storage.getExperienceParticipants(req.params.id);
-      
-      // Transform the data to match the expected format
-      const formattedParticipants = participants.map(participant => ({
-        id: participant.userId,
-        userId: participant.userId,
-        firstName: participant.firstName,
-        lastName: participant.lastName,
-        name: `${participant.firstName || ""} ${participant.lastName || ""}`.trim() || "Anonymous",
-        displayName: participant.displayName,
-        profileImage: participant.avatarUrl || participant.profileImageUrl,
-        profileImageUrl: participant.profileImageUrl,
-        avatarUrl: participant.avatarUrl,
-        bookingId: participant.bookingId,
-        joinedAt: participant.bookingDate,
-        bookingDate: participant.bookingDate,
-        role: "Participant" // This could be enhanced with actual roles
-      }));
-      
-      res.json(formattedParticipants);
-    } catch (error) {
-      console.error("Error fetching participants:", error);
-      res.status(500).json({ message: "Failed to fetch participants" });
-    }
-  });
-
-  app.get("/api/experiences/:id/announcements", async (req, res) => {
-    try {
-      const announcements = await storage.getAnnouncements(req.params.id);
-      res.json(announcements);
-    } catch (error) {
-      console.error("Error fetching announcements:", error);
-      res.status(500).json({ message: "Failed to fetch announcements" });
-    }
-  });
+  // The unauthenticated /participants and /announcements handlers that used to
+  // sit here were shadowed by the guarded registrations above, so they never
+  // ran — but the /participants one called getExperienceParticipants with no
+  // requesting user, which skips the showParticipantList privacy check. A
+  // reorder of this file would have silently made the roster public.
 
   app.get("/api/services", async (req, res) => {
     try {

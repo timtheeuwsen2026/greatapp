@@ -184,12 +184,6 @@ export default function ExperienceDetails() {
   // Check if user is authorized to see participant lists (privacy OR creator)
   const canViewParticipants = experience?.showParticipantList || isCreator;
 
-  // Fetch participants with skills and role assignments
-  const { data: participantsWithSkills } = useQuery({
-    queryKey: ["/api/experiences", experienceId, "participants-with-skills"],
-    enabled: !!experienceId && canViewParticipants,
-  });
-
   // Fetch participants using the standard participants endpoint
   const { data: participants, isLoading: participantsLoading } = useQuery({
     queryKey: ["/api/experiences", experienceId, "participants"],

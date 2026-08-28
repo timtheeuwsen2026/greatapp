@@ -60,6 +60,7 @@ import {
 } from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { summariseReviewScore } from "@shared/reviewScore";
+import { resolveUniqueExperienceSlug } from "./experienceSlug";
 import {
   getAttendanceCounts,
   getAttendanceCountsForUsers,
@@ -4347,7 +4348,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experienceData = buildExperienceFromBuilderPayload(draft, userId);
       
       // Create the published experience
-      const experience = await storage.createExperience(experienceData);
+      // The short link, derived from the title once and then fixed. Renaming
+      // the event later must not break a link already on a poster.
+      const slug = await resolveUniqueExperienceSlug(experienceData.title);
+      const experience = await storage.createExperience({ ...experienceData, slug } as any);
       await syncBuilderParticipantRoles(experience);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);
@@ -4425,7 +4429,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         endDate,
       });
 
-      const experience = await storage.createExperience(experienceData);
+      const slug = await resolveUniqueExperienceSlug(experienceData.title || "event");
+      const experience = await storage.createExperience({ ...experienceData, slug } as any);
       await syncBuilderParticipantRoles(experience);
       if (status !== "draft") {
         notifyCreatorEventSubmittedForReview(experience).catch((error) => {
@@ -7395,7 +7400,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Generate unique invite link with user reference
       const baseUrl = getAppBaseUrl(req);
-      const inviteLink = `${baseUrl}/event/${experienceId}?ref=${userId}`;
+      // Prefer the slug: this is the link a creator pastes into a story, and
+      // a raw UUID is unreadable there. The id keeps working either way.
+      const inviteLink = `${baseUrl}/event/${publicExperienceSlugOrId(experience)}?ref=${userId}`;
       
       res.json({ 
         inviteLink,

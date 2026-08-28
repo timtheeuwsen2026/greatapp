@@ -11,6 +11,7 @@ const migrationUrls = [
   new URL("../migrations/20260821_creator_brand_kit.sql", import.meta.url),
   new URL("../migrations/20260823_review_replies.sql", import.meta.url),
   new URL("../migrations/20260827_attendance_milestones.sql", import.meta.url),
+  new URL("../migrations/20260828_experience_slugs.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

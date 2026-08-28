@@ -24,6 +24,7 @@ export type VenueDealTerms = {
   minimumSpend?: number;
   revenueSharePct?: number;
   accessFee?: number;
+  counterRevenuePct?: number;
   currency?: string;
 };
 
@@ -66,6 +67,13 @@ export function normalizeVenueDealTerms(
       const accessFee = Number(terms.accessFee || 0);
       if (!Number.isFinite(accessFee) || accessFee < 0) throw new Error("Access fee cannot be negative");
       return { accessFee, currency };
+    }
+    // The platform never collects this one, but the agreed percentage is the
+    // whole point of recording the deal, so it is validated like any other.
+    case "manual_counter_revenue": {
+      const counterRevenuePct = positiveNumber(terms.counterRevenuePct, "Counter revenue percentage");
+      if (counterRevenuePct > 100) throw new Error("Counter revenue percentage cannot exceed 100");
+      return { counterRevenuePct, currency };
     }
   }
 }

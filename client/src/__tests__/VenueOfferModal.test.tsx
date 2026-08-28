@@ -139,7 +139,8 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /venue sponsorship/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByRole('option')).toHaveLength(4);
+    // Four the platform can settle, plus the manual exception below them.
+    expect(screen.getAllByRole('option')).toHaveLength(5);
     for (const label of [
       /revenue split/i,
       /ticket deduction/i,
@@ -149,6 +150,23 @@ describe('Venue "Offer to Host" modal', () => {
       expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
     }
     expect(screen.queryByRole('option', { name: /access-only|pay-at-counter/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the manual deal out of the trackable list, under its own warning', async () => {
+    const { user, dialog } = await openOfferModal([dayEvent]);
+
+    await user.click(within(dialog).getByTestId('select-venue-offer-model'));
+
+    const manual = await screen.findByRole('option', { name: /manual agreement \(untracked\)/i });
+
+    // It has to be reachable — Brendan's event cannot be booked without it —
+    // but never presented as an equal of the deals the app actually settles.
+    expect(manual).toBeInTheDocument();
+    expect(screen.getByText(/exception — the app cannot track this/i)).toBeInTheDocument();
+
+    // Last, so every trackable deal is read before this one is reached.
+    const labels = screen.getAllByRole('option').map((option) => option.textContent || '');
+    expect(labels.at(-1)).toMatch(/manual agreement \(untracked\)/i);
   });
 
   it('never lands a multi-day event on a deal it cannot be offered', async () => {
@@ -161,7 +179,7 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /per room \/ per night/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByRole('option')).toHaveLength(4);
+    expect(screen.getAllByRole('option')).toHaveLength(5);
     expect(screen.queryByRole('option', { name: /access-only/i })).not.toBeInTheDocument();
   });
 });

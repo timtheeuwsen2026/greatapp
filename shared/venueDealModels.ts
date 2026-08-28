@@ -20,6 +20,10 @@ export const VENUE_DEAL_MODELS = [
   "upfront_rental",
   "access_only",
   "venue_sponsored",
+  // An escape hatch, not a pricing model: the money is taken at the venue's own
+  // register and the platform never sees it. Kept last, and marked untracked
+  // everywhere it is offered, so it reads as the exception it is.
+  "manual_counter_revenue",
   // Retained so events and venues saved before the V14 sync still render.
   "minimum_spend",
 ] as const;
@@ -37,13 +41,18 @@ type VenueDealDefinition = {
   description: string;
   valueKind: VenueDealValueKind;
   /** Key inside venueContracts.terms that carries the number. */
-  termsKey: "revenueSharePct" | "fixedFee" | "perHeadAmount" | "perRoomPerNight" | "minimumSpend" | "accessFee" | null;
+  termsKey: "revenueSharePct" | "fixedFee" | "perHeadAmount" | "perRoomPerNight" | "minimumSpend" | "accessFee" | "counterRevenuePct" | null;
   /** Label for the amount input next to the dropdown. */
   valueLabel: string;
   /** Who pays whom. Drives which side gets charged. */
   direction: "attendee_funded" | "creator_pays_venue" | "venue_pays_creator";
   /** Kept for existing records but no longer offered in any dropdown. */
   legacy?: boolean;
+  /**
+   * The platform cannot see, verify or split this money. Surfaces must present
+   * these apart from the trackable deals rather than as a peer of them.
+   */
+  untracked?: boolean;
 };
 
 const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
@@ -110,6 +119,17 @@ const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
     valueLabel: "Sponsorship the venue pays you ({cur})",
     direction: "venue_pays_creator",
   },
+  manual_counter_revenue: {
+    model: "manual_counter_revenue",
+    label: "Manual agreement (untracked) — % revenue over the counter",
+    description:
+      "Guests pay the venue directly at the register. The organiser and venue agree the percentage between themselves and settle it themselves — the platform records the figure but cannot see, verify or collect it.",
+    valueKind: "percent",
+    termsKey: "counterRevenuePct",
+    valueLabel: "Agreed share of counter revenue (%)",
+    direction: "attendee_funded",
+    untracked: true,
+  },
   minimum_spend: {
     model: "minimum_spend",
     label: "Minimum Spend Guarantee ({cur})",
@@ -128,6 +148,7 @@ const MULTI_DAY_MODELS: VenueDealModel[] = [
   "per_head",
   "upfront_rental",
   "per_room_night",
+  "manual_counter_revenue",
 ];
 
 const DAY_EVENT_MODELS: VenueDealModel[] = [
@@ -135,6 +156,7 @@ const DAY_EVENT_MODELS: VenueDealModel[] = [
   "fixed_fee",
   "upfront_rental",
   "venue_sponsored",
+  "manual_counter_revenue",
 ];
 
 // Temporarily disabled for every creator/venue dropdown. Keep the definition
@@ -180,6 +202,8 @@ export type VenueDealOption = {
   valueLabel: string;
   termsKey: VenueDealDefinition["termsKey"];
   direction: VenueDealDefinition["direction"];
+  /** Settled off-platform. Render apart from the trackable deals, never beside them. */
+  untracked: boolean;
 };
 
 function render(definition: VenueDealDefinition, currencySymbol: string): VenueDealOption {
@@ -191,7 +215,14 @@ function render(definition: VenueDealDefinition, currencySymbol: string): VenueD
     valueLabel: definition.valueLabel.replace("{cur}", currencySymbol),
     termsKey: definition.termsKey,
     direction: definition.direction,
+    untracked: definition.untracked === true,
   };
+}
+
+/** True for deals the platform records but cannot verify or collect. */
+export function isUntrackedVenueDeal(model: unknown): boolean {
+  const normalized = normalizeVenueDealModel(model);
+  return !!normalized && DEFINITIONS[normalized].untracked === true;
 }
 
 export type VenueDealOptionsInput = {
@@ -275,7 +306,11 @@ type ExperienceVenueDealInput = {
 
 function readExperienceVenueDealValue(input: ExperienceVenueDealInput, model: unknown): unknown {
   switch (model) {
-    case "revenue_share": return input.venueRevenueSharePct;
+    case "revenue_share":
+    // Shares the existing percentage column rather than adding one for a
+    // stopgap. Both are a percentage the creator types in, and the model
+    // stored alongside it is what decides whether anything is collected.
+    case "manual_counter_revenue": return input.venueRevenueSharePct;
     case "fixed_fee":
     case "upfront_rental":
     case "venue_sponsored": return input.venueFixedFee;
@@ -414,6 +449,7 @@ export function calculateVenueEarnings(input: VenueEarningsInput): VenueEarnings
       return { ...none, owed: value };
     case "access_only":
     case "minimum_spend":
+    case "manual_counter_revenue":
       return { ...none, offPlatform: true };
   }
 }
@@ -453,6 +489,8 @@ export function formatVenueDealSummary(
       return `Venue Sponsorship — venue pays ${code} ${amount} to the creator`;
     case "minimum_spend":
       return `Minimum Spend Guarantee — ${code} ${amount}`;
+    case "manual_counter_revenue":
+      return `Manual agreement (untracked) — ${amount}% of counter revenue, settled directly between organiser and venue`;
     default:
       return definition.label.replace("{cur}", code);
   }

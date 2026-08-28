@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -203,12 +203,32 @@ function VenueDealFields({ form, setForm, currency, isDaytime }: {
         <Select value={form.model} onValueChange={(model) => setForm((current: VenueOfferForm) => ({ ...current, model }))}>
           <SelectTrigger data-testid="select-venue-offer-model"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {options.map((option) => (
+            {options.filter((option) => !option.untracked).map((option) => (
               <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
+            {options.some((option) => option.untracked) && (
+              <SelectGroup>
+                <SelectSeparator />
+                <SelectLabel className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
+                  Exception — the app cannot track this
+                </SelectLabel>
+                {options.filter((option) => option.untracked).map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="text-amber-800">
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
           </SelectContent>
         </Select>
-        {selected && <p className="mt-1 text-xs text-gray-500">{selected.description}</p>}
+        {selected?.untracked ? (
+          <p className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+            {selected.description} Use this only when there is no way to take the
+            money through the app.
+          </p>
+        ) : (
+          selected && <p className="mt-1 text-xs text-gray-500">{selected.description}</p>
+        )}
       </div>
 
       {selected && field && (

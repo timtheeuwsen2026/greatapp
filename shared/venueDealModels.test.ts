@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  calculateVenueEarnings,
   getVenueDealOptions,
+  isUntrackedVenueDeal,
   getVenueDealLabel,
   getVenueDealSelectionError,
   isVenueDealSelectable,
@@ -23,12 +25,14 @@ describe("venue deal vocabulary", () => {
       "per_head",
       "upfront_rental",
       "per_room_night",
+      "manual_counter_revenue",
     ]);
     expect(options.map((o) => o.label)).toEqual([
       "Revenue Split (%)",
       "Per-Participant Package (€)",
       "Upfront Rental / Flat Fee (€)",
       "Per Room / Per Night (€)",
+      "Manual agreement (untracked) — % revenue over the counter",
     ]);
   });
 
@@ -40,6 +44,7 @@ describe("venue deal vocabulary", () => {
       "Ticket Deduction / Per-Head Fee (€)",
       "Upfront Rental / Flat Fee (€)",
       "Venue Sponsorship (€)",
+      "Manual agreement (untracked) — % revenue over the counter",
     ]);
   });
 
@@ -171,5 +176,62 @@ describe("venue deal vocabulary", () => {
     // Legacy rows still read correctly.
     expect(formatVenueDealSummary("flat_rental", { fixedFee: 300 }, "eur"))
       .toBe("Upfront Rental — creator pays EUR 300");
+  });
+});
+
+// A stopgap for one event whose money is taken at the venue's register. It has
+// to be selectable, and it has to be impossible to mistake for a deal the
+// platform is actually settling.
+describe("manual counter-revenue deal", () => {
+  const surfaces = ["event", "venue"] as const;
+
+  it("is offered last, after every deal the platform can track", () => {
+    for (const surface of surfaces) {
+      for (const isDaytime of [true, false]) {
+        const options = getVenueDealOptions({ isDaytime, surface });
+        expect(options.at(-1)?.value).toBe("manual_counter_revenue");
+      }
+    }
+  });
+
+  it("is the only option flagged untracked, so surfaces can separate it", () => {
+    const options = getVenueDealOptions({ isDaytime: true, surface: "event" });
+    const untracked = options.filter((option) => option.untracked);
+
+    expect(untracked.map((option) => option.value)).toEqual(["manual_counter_revenue"]);
+    expect(isUntrackedVenueDeal("manual_counter_revenue")).toBe(true);
+    expect(isUntrackedVenueDeal("revenue_share")).toBe(false);
+  });
+
+  it("is selectable, unlike the pay-at-counter deal it replaces", () => {
+    expect(isVenueDealSelectable("manual_counter_revenue")).toBe(true);
+    expect(isVenueDealSelectable("access_only")).toBe(false);
+  });
+
+  it("still insists on a usable percentage", () => {
+    expect(getVenueDealSelectionError("manual_counter_revenue", 15)).toBeNull();
+    expect(getVenueDealSelectionError("manual_counter_revenue", 0)).toBe("Enter a percentage greater than zero");
+    expect(getVenueDealSelectionError("manual_counter_revenue", 140)).toBe("Revenue share percentage cannot exceed 100");
+  });
+
+  it("never produces a number to settle, whatever the event took", () => {
+    const earnings = calculateVenueEarnings({
+      model: "manual_counter_revenue",
+      value: 20,
+      grossRevenue: 900,
+      attendees: 30,
+    });
+
+    // The platform cannot see counter takings, so quoting a figure here would
+    // be inventing one and a payout would try to move money it never held.
+    expect(earnings).toEqual({ earned: 0, owed: 0, offPlatform: true });
+  });
+
+  it("says in its summary that nobody is tracking it", () => {
+    const summary = formatVenueDealSummary("manual_counter_revenue", { counterRevenuePct: 15 }, "eur");
+
+    expect(summary).toContain("Manual agreement (untracked)");
+    expect(summary).toContain("15%");
+    expect(summary).toContain("settled directly between organiser and venue");
   });
 });

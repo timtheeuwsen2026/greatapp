@@ -57,6 +57,7 @@ import {
   validateExperienceVenueDeal,
   calculateVenueEarnings,
   formatVenueDealSummary,
+  isUntrackedVenueDeal,
 } from "@shared/venueDealModels";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { summariseReviewScore } from "@shared/reviewScore";
@@ -478,6 +479,23 @@ async function approveExperienceForPublication(
 
 function publicExperienceSlugOrId(experience: any): string {
   return String(experience?.slug || experience?.id || "");
+}
+
+/**
+ * Records that an event chose a deal the platform cannot verify.
+ *
+ * The manual counter-revenue deal was added as a stopgap for one event where
+ * the money genuinely could not run through the app. It is meant to stay rare,
+ * and the only way to notice it has not is to be able to count it — grep the
+ * logs for MANUAL-DEAL to see who is reaching for it.
+ */
+function logUntrackedVenueDeal(experience: any, model: unknown): void {
+  if (!isUntrackedVenueDeal(model)) return;
+  console.warn(
+    `[MANUAL-DEAL] Untracked venue deal "${normalizeVenueDealModel(model)}" selected`
+    + ` — event ${experience?.id || "unknown"} (${experience?.title || "untitled"}),`
+    + ` creator ${experience?.creatorId || "unknown"}`,
+  );
 }
 
 async function notifyCreatorEventSubmittedForReview(experience: any): Promise<void> {
@@ -4377,6 +4395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the event later must not break a link already on a poster.
       const slug = await resolveUniqueExperienceSlug(experienceData.title);
       const experience = await storage.createExperience({ ...experienceData, slug } as any);
+      logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);
@@ -4456,6 +4475,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const slug = await resolveUniqueExperienceSlug(experienceData.title || "event");
       const experience = await storage.createExperience({ ...experienceData, slug } as any);
+      logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
       if (status !== "draft") {
         notifyCreatorEventSubmittedForReview(experience).catch((error) => {
@@ -6193,6 +6213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create the experience from the draft
       const experience = await storage.createExperience(experienceData as any);
+      logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);

@@ -5421,6 +5421,10 @@ function PricingStep({ form }: { form: any }) {
     (option) => option.value === form.watch('venueTargetDeal'),
   );
 
+  const selectedVenueDeal = venueDealOptions.find(
+    (option) => option.value === form.watch('venueCompensationModel'),
+  );
+
   // A target deal that no longer applies (e.g. the creator switched a day event
   // to multi-day) is swapped for a valid one so the saved terms stay coherent.
   useEffect(() => {
@@ -6231,15 +6235,35 @@ function PricingStep({ form }: { form: any }) {
                       <SelectValue placeholder="Select model" />
                     </SelectTrigger>
                     <SelectContent>
-                      {venueDealOptions.map((opt) => (
+                      {venueDealOptions.filter((opt) => !opt.untracked).map((opt) => (
                         <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                       ))}
+                      {venueDealOptions.some((opt) => opt.untracked) && (
+                        <SelectGroup>
+                          <SelectSeparator />
+                          <SelectLabel className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
+                            Exception — the app cannot track this
+                          </SelectLabel>
+                          {venueDealOptions.filter((opt) => opt.untracked).map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value} className="text-amber-800">
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {venueDealOptions.find((opt) => opt.value === venueCompensationModel)?.description
-                      || 'Propose a commercial deal to your venue partner.'}
-                  </p>
+                  {selectedVenueDeal?.untracked ? (
+                    <p className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                      {selectedVenueDeal.description} Use this only when there is no
+                      way to take the money through the app.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {selectedVenueDeal?.description
+                        || 'Propose a commercial deal to your venue partner.'}
+                    </p>
+                  )}
                 </div>
               )}
               <div>

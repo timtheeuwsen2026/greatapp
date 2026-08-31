@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { emailNotificationEvents } from "@shared/schema";
 import { db } from "./db";
 import type { EmailCategory } from "./emailPreferences";
@@ -13,6 +13,33 @@ export interface EmailJobInput {
   recipientEmail?: string | null;
   scheduledFor: Date;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Which row claimImmediateEmailEvent is allowed to take over.
+ *
+ * The failed-or-stale test has to be one grouped condition. Written as a raw
+ * sql`` fragment it was spliced into and() unparenthesised, and SQL precedence
+ * then read the whole predicate as
+ *
+ *   (event_key = … and status = 'failed') OR last_attempt_at < …
+ *
+ * so the claim matched every row in the table last attempted over fifteen
+ * minutes ago, whatever its key or status. It always found one, so it always
+ * granted the claim: nothing was ever deduplicated, and the update rewrote
+ * recipient, payload and attempts across the whole ledger on every send.
+ * or() emits its own parentheses, which is why this is built with it.
+ */
+export function buildReclaimCondition(eventKey: string, staleBefore: Date) {
+  return and(
+    eq(emailNotificationEvents.eventKey, eventKey),
+    inArray(emailNotificationEvents.status, ["failed", "sending"]),
+    lt(emailNotificationEvents.attempts, MAX_JOB_ATTEMPTS),
+    or(
+      eq(emailNotificationEvents.status, "failed"),
+      lt(emailNotificationEvents.lastAttemptAt, staleBefore),
+    ),
+  );
 }
 
 export async function claimImmediateEmailEvent(
@@ -51,12 +78,7 @@ export async function claimImmediateEmailEvent(
       payload: input.payload || {},
       updatedAt: now,
     })
-    .where(and(
-      eq(emailNotificationEvents.eventKey, input.eventKey),
-      inArray(emailNotificationEvents.status, ["failed", "sending"]),
-      lt(emailNotificationEvents.attempts, MAX_JOB_ATTEMPTS),
-      sql`${emailNotificationEvents.status} = 'failed' OR ${emailNotificationEvents.lastAttemptAt} < ${staleBefore}`,
-    ))
+    .where(buildReclaimCondition(input.eventKey, staleBefore))
     .returning({ id: emailNotificationEvents.id });
   return Boolean(reclaimed);
 }

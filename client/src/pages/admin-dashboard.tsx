@@ -412,6 +412,37 @@ export default function AdminDashboard() {
     }),
   });
 
+  /**
+   * Allow (or withdraw) the untracked "Manual agreement" deal on one event.
+   *
+   * It settles off-platform — the app records a percentage it can never see,
+   * verify or collect — so it is granted case by case on request, rather than
+   * sitting in the organiser's deal dropdown where it became the easy default.
+   */
+  const setManualDealUnlock = useMutation({
+    mutationFn: async ({ id, unlocked }: { id: string; unlocked: boolean }) => {
+      const response = await apiRequest("PATCH", `/api/admin/experiences/${id}/manual-deal`, { unlocked });
+      return response.json();
+    },
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/experiences"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/experiences"] }),
+      ]);
+      toast({
+        title: variables.unlocked ? "Manual agreement enabled" : "Manual agreement disabled",
+        description: variables.unlocked
+          ? "The organiser can now select the untracked deal on this event only."
+          : "The organiser can no longer select it. Any deal already agreed is untouched.",
+      });
+    },
+    onError: () => toast({
+      title: "Could not change manual deal availability",
+      description: "Please try again.",
+      variant: "destructive",
+    }),
+  });
+
   // Approve/Reject Community Application
   const updateApplicationStatus = useMutation({
     mutationFn: async ({ id, status, notes }: { id: string; status: string; notes?: string }) => {
@@ -880,6 +911,26 @@ export default function AdminDashboard() {
                           >
                             <Edit className="w-4 h-4 mr-1" />
                             Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={experience.manualDealUnlocked ? "default" : "outline"}
+                            title={experience.manualDealUnlocked
+                              ? "Stop this event offering the untracked manual agreement"
+                              : "Let this event offer the untracked manual agreement"}
+                            onClick={() => {
+                              const turningOn = !experience.manualDealUnlocked;
+                              const question = turningOn
+                                ? `Allow "${experience.title}" to use the untracked manual agreement? The app cannot see, verify or collect this money.`
+                                : `Stop "${experience.title}" offering the untracked manual agreement? Any deal already agreed stays as it is.`;
+                              if (window.confirm(question)) {
+                                setManualDealUnlock.mutate({ id: experience.id, unlocked: turningOn });
+                              }
+                            }}
+                            disabled={setManualDealUnlock.isPending}
+                            data-testid={`button-manual-deal-${experience.id}`}
+                          >
+                            {experience.manualDealUnlocked ? "Manual deal: on" : "Manual deal: off"}
                           </Button>
                           {experience.status !== "cancelled" && (
                             <Button

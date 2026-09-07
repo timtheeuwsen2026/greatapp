@@ -146,11 +146,11 @@ function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
   return { [termsKey]: Number(form[field] || 0) };
 }
 
-function isVenueOfferFormValid(form: VenueOfferForm): boolean {
+function isVenueOfferFormValid(form: VenueOfferForm, allowUntracked = false): boolean {
   const termsKey = getVenueDealTermsKey(form.model);
   if (!termsKey) return false;
   const value = Number(form[OFFER_FIELD_BY_TERMS_KEY[termsKey]] || 0);
-  return getVenueDealSelectionError(form.model, value) === null;
+  return getVenueDealSelectionError(form.model, value, allowUntracked) === null;
 }
 
 /**
@@ -167,11 +167,13 @@ function formatVenueMoney(amount: number | null | undefined, currency?: string |
   return `${symbol}${safe.toFixed(2)}`;
 }
 
-function VenueDealFields({ form, setForm, currency, isDaytime }: {
+function VenueDealFields({ form, setForm, currency, isDaytime, allowUntracked = false }: {
   form: VenueOfferForm;
   setForm: any;
   currency?: string;
   isDaytime: boolean;
+  /** The event's admin unlock for the untracked manual agreement. */
+  allowUntracked?: boolean;
 }) {
   const currencyCode = String(currency || "EUR").toUpperCase();
   const symbol = ({ USD: "$", EUR: "€", GBP: "£" } as Record<string, string>)[currencyCode] || currencyCode;
@@ -182,6 +184,7 @@ function VenueDealFields({ form, setForm, currency, isDaytime }: {
     surface: "venue",
     currencySymbol: symbol,
     currentValue: form.model,
+    allowUntracked,
   });
   const selected = options.find((option) => option.value === form.model);
   const field = selected?.termsKey ? OFFER_FIELD_BY_TERMS_KEY[selected.termsKey] : null;
@@ -1705,6 +1708,7 @@ function VenueDashboardContent() {
               form={offerForm}
               setForm={setOfferForm}
               currency={offerModal.event?.currency}
+              allowUntracked={offerModal.event?.manualDealUnlocked === true}
               isDaytime={isSingleDayExperience({
                 experienceType: offerModal.event?.experienceType,
                 startDate: offerModal.event?.startDate,
@@ -1737,7 +1741,7 @@ function VenueDashboardContent() {
             <Button
               className="w-full bg-blue-600 hover:bg-blue-700 text-white"
               onClick={handleSubmitOffer}
-              disabled={submitOffer.isPending || !offerForm.venueId || !isVenueOfferFormValid(offerForm)}
+              disabled={submitOffer.isPending || !offerForm.venueId || !isVenueOfferFormValid(offerForm, offerModal.event?.manualDealUnlocked === true)}
             >
               <Send className="w-4 h-4 mr-2" />
               {submitOffer.isPending ? "Submitting…" : "Submit Offer to Creator"}
@@ -1774,6 +1778,7 @@ function VenueDashboardContent() {
               form={counterForm}
               setForm={setCounterForm}
               currency={counterModal.offer?.currency}
+              allowUntracked={counterModal.offer?.manualDealUnlocked === true}
               isDaytime={isSingleDayExperience({
                 experienceType: counterModal.offer?.experienceType,
                 startDate: counterModal.offer?.startDate,
@@ -1794,7 +1799,7 @@ function VenueDashboardContent() {
             <Button
               className="w-full bg-blue-600 hover:bg-blue-700 text-white"
               onClick={handleSubmitCounter}
-              disabled={counterOffer.isPending || !isVenueOfferFormValid(counterForm)}
+              disabled={counterOffer.isPending || !isVenueOfferFormValid(counterForm, counterModal.offer?.manualDealUnlocked === true)}
             >
               <Send className="w-4 h-4 mr-2" />
               {counterOffer.isPending ? "Sending..." : "Send Counter Offer"}

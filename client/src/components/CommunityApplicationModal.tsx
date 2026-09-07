@@ -291,7 +291,7 @@ export function CommunityApplicationModal({ isOpen, onClose }: CommunityApplicat
                 <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
                   <li>• We'll review your application within 2-3 business days</li>
                   <li>• If approved, you'll get access to our community platform</li>
-                  <li>• You'll be able to join experiences and connect with fellow travelers</li>
+                  <li>• You'll be able to join experiences and connect with other members</li>
                   <li>• Welcome to the Great. tribe! 🎉</li>
                 </ul>
               </div>

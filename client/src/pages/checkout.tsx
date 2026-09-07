@@ -91,6 +91,10 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
     pricingMode?: 'fixed' | 'pwyw';
     suggestedPrice?: number | null;
     minPrice?: number;
+    addonName?: string | null;
+    addonUnitPrice?: number;
+    addonQuantity?: number;
+    addonTotal?: number;
   } | null;
 }) => {
   const stripe = useStripe();
@@ -147,6 +151,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
             ticketQuantity: paymentInfo?.ticketQuantity || 1,
+            addonQuantity: paymentInfo?.addonQuantity || 0,
             paymentType: paymentMode
           });
           
@@ -215,6 +220,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             shareToken: attribution.shareToken,
             ticketSkuId: paymentInfo?.ticketSkuId,
             ticketQuantity: paymentInfo?.ticketQuantity || 1,
+            addonQuantity: paymentInfo?.addonQuantity || 0,
             paymentType: paymentMode
           });
           
@@ -387,6 +393,10 @@ export default function Checkout() {
     pricingMode?: 'fixed' | 'pwyw';
     suggestedPrice?: number | null;
     minPrice?: number;
+    addonName?: string | null;
+    addonUnitPrice?: number;
+    addonQuantity?: number;
+    addonTotal?: number;
   } | null>(null);
 
   // ── PWYW state ─────────────────────────────────────────────────────────
@@ -411,6 +421,14 @@ export default function Checkout() {
       ? requestedTicketQuantity
       : 1,
   );
+  // Combi-Ticket add-ons carried over from the event page. The server re-prices
+  // and re-clamps this against the ticket, so it is a request, not a price.
+  const requestedAddonQuantity = Number(urlParams.get('addonQuantity') || 0);
+  const [addonQuantity, setAddonQuantity] = useState<number>(
+    Number.isInteger(requestedAddonQuantity) && requestedAddonQuantity > 0
+      ? requestedAddonQuantity
+      : 0,
+  );
 
   const [paymentMode, setPaymentMode] = useState<'deposit' | 'full'>(initialPaymentMode || 'deposit');
 
@@ -425,8 +443,13 @@ export default function Checkout() {
     refetchInterval: 30000,
   });
 
-  const createPaymentIntent = useCallback(async (mode: 'deposit' | 'full', userPrice?: number) => {
+  const createPaymentIntent = useCallback(async (
+    mode: 'deposit' | 'full',
+    userPrice?: number,
+    addonOverride?: number,
+  ) => {
     if (!experience || !experienceId) return;
+    const requestedAddons = addonOverride ?? addonQuantity;
 
     setPaymentIntentLoading(true);
     setPaymentInitError(null);
@@ -440,6 +463,7 @@ export default function Checkout() {
         experienceId: experienceId,
         ticketSkuId: ticketSkuId || undefined,
         ticketQuantity,
+        addonQuantity: requestedAddons,
         paymentMode: mode,
         promoterId: attribution.promoterId,
         referralCode: attribution.referralCode,
@@ -471,6 +495,10 @@ export default function Checkout() {
           pricingMode: data.pricingMode || 'fixed',
           suggestedPrice: data.suggestedPrice ?? null,
           minPrice: data.minPrice ?? 0,
+          addonName: data.addonName ?? null,
+          addonUnitPrice: data.addonUnitPrice ?? 0,
+          addonQuantity: data.addonQuantity ?? 0,
+          addonTotal: data.addonTotal ?? 0,
         });
         setClientSecret("");
         return;
@@ -481,6 +509,9 @@ export default function Checkout() {
       if (!data.clientSecret) {
         throw new Error("Payment setup did not return a client secret.");
       }
+      // Taking the add-on turns a free RSVP into a payment, so the free
+      // confirmation screen must not stay up behind the Stripe form.
+      setFreeRsvpInfo(null);
       setClientSecret(data.clientSecret);
       setPaymentInfo({
         isMVGExperience: data.isMVGExperience || false,
@@ -497,6 +528,10 @@ export default function Checkout() {
         pricingMode: data.pricingMode || 'fixed',
         suggestedPrice: data.suggestedPrice ?? null,
         minPrice: data.minPrice ?? 0,
+        addonName: data.addonName ?? null,
+        addonUnitPrice: data.addonUnitPrice ?? 0,
+        addonQuantity: data.addonQuantity ?? 0,
+        addonTotal: data.addonTotal ?? 0,
       });
 
       if (data.hasDeposit === false && mode === 'deposit') {
@@ -522,7 +557,7 @@ export default function Checkout() {
     } finally {
       setPaymentIntentLoading(false);
     }
-  }, [experience, experienceId, ticketSkuId, ticketQuantity, toast]);
+  }, [experience, experienceId, ticketSkuId, ticketQuantity, addonQuantity, toast]);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -718,6 +753,14 @@ export default function Checkout() {
   }
 
   if (freeRsvpInfo) {
+    // The ticket may still offer a paid extra. Without this the buyer would be
+    // sent straight past it into a free RSVP, which is exactly how add-ons
+    // ended up unsellable in the first place.
+    const offeredAddonName = paymentInfo?.addonName;
+    const offeredAddonPrice = Number(paymentInfo?.addonUnitPrice || 0);
+    const offersAddon = !!offeredAddonName && offeredAddonPrice > 0;
+    const rsvpQuantity = freeRsvpInfo.ticketQuantity || ticketQuantity || 1;
+
     return (
       <div className="min-h-screen bg-gray-50">
         <Navigation />
@@ -725,21 +768,58 @@ export default function Checkout() {
           <Card>
             <CardContent className="py-10 text-center">
               <CheckCircle className="mx-auto mb-4 h-10 w-10 text-green-600" />
-              <h2 className="mb-2 text-xl font-semibold text-gray-900">Free Event — No Payment Required</h2>
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">
+                {offersAddon ? "Your RSVP is free" : "Free Event — No Payment Required"}
+              </h2>
               <p className="mb-6 text-sm text-gray-600">
-                This ticket is €0.00, so Stripe checkout is bypassed entirely. Click below to confirm your RSVP and unlock the community chat.
+                {offersAddon
+                  ? "Entry costs nothing. You can add an extra below, or confirm your RSVP as it is."
+                  : "This ticket is €0.00, so Stripe checkout is bypassed entirely. Click below to confirm your RSVP and unlock the community chat."}
               </p>
+
+              {offersAddon && (
+                <div
+                  className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4 text-left"
+                  data-testid="free-rsvp-addon-offer"
+                >
+                  <p className="text-sm font-medium text-gray-900">
+                    Add {offeredAddonName}?
+                  </p>
+                  <p className="mt-1 text-xs text-gray-600">
+                    {formatCurrency(offeredAddonPrice, experience.currency)} each
+                    {rsvpQuantity > 1 ? ` · ${rsvpQuantity} available for your booking` : ""}
+                  </p>
+                  <Button
+                    variant="outline"
+                    className="mt-3 w-full"
+                    disabled={paymentIntentLoading || freeRsvpSubmitting}
+                    onClick={() => createPaymentIntent(paymentMode, undefined, rsvpQuantity)}
+                    data-testid="button-add-addon"
+                  >
+                    {paymentIntentLoading
+                      ? "Loading…"
+                      : `Add for ${formatCurrency(offeredAddonPrice * rsvpQuantity, experience.currency)}`}
+                  </Button>
+                </div>
+              )}
+
               {freeRsvpError && (
                 <p className="mb-4 text-sm text-red-600">{freeRsvpError}</p>
               )}
               <Button
-                disabled={freeRsvpSubmitting}
+                variant={offersAddon ? "ghost" : "default"}
+                disabled={freeRsvpSubmitting || paymentIntentLoading}
                 onClick={() => {
                   freeRsvpStartedRef.current = false;
                   completeFreeRsvp();
                 }}
+                data-testid="button-confirm-free-rsvp"
               >
-                {freeRsvpSubmitting ? "Confirming..." : freeRsvpError ? "Try Again" : "Confirm RSVP"}
+                {freeRsvpSubmitting
+                  ? "Confirming..."
+                  : freeRsvpError
+                    ? "Try Again"
+                    : offersAddon ? "No thanks — just RSVP" : "Confirm RSVP"}
               </Button>
             </CardContent>
           </Card>
@@ -1053,6 +1133,20 @@ export default function Checkout() {
                     </span>
                   </div>
                   
+                  {/* The add-on shows on its own line: a €0 RSVP with a €5.50
+                      coffee must not read as a €5.50 ticket. */}
+                  {!!paymentInfo?.addonQuantity && paymentInfo.addonQuantity > 0 && (
+                    <div className="flex justify-between items-center" data-testid="summary-addon-line">
+                      <span className="text-sm text-gray-600">
+                        {paymentInfo.addonName || "Add-on"}
+                        {paymentInfo.addonQuantity > 1 ? ` × ${paymentInfo.addonQuantity}` : ""}
+                      </span>
+                      <span className="font-medium">
+                        {formatCurrency(paymentInfo.addonTotal || 0, experience.currency)}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Full Price</span>
                     <span className="font-medium">{formatCurrency(paymentInfo?.fullPrice || experience.price, experience.currency)}</span>

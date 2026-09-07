@@ -31,7 +31,7 @@ export default function About() {
             </h2>
             <p className="text-lg text-gray-700 dark:text-gray-300 leading-relaxed mb-6">
               We believe transformative travel experiences should be accessible, risk-free, and community-driven. 
-              Great. connects travelers before they go, ensuring every adventure is backed by real people and only 
+              Great. connects people before they go, ensuring every event is backed by real people and only 
               confirms when the group reaches its Minimum Viable Group (MVG).
             </p>
             <p className="text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
@@ -130,7 +130,7 @@ export default function About() {
               </p>
               <p className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-primary text-white rounded-full flex items-center justify-center text-sm font-bold">2</span>
-                <span><strong>Connect & Build:</strong> Meet fellow travelers in pre-trip chat. Watch the MVG progress together.</span>
+                <span><strong>Connect & Build:</strong> Meet the others going in the group chat. Watch the MVG progress together.</span>
               </p>
               <p className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 bg-success text-white rounded-full flex items-center justify-center text-sm font-bold">3</span>

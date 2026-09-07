@@ -126,7 +126,7 @@ function buildOGDescription(experience: any, mvg: MVGData): string {
 
   if (state === "FORMING") {
     return target.remaining !== null && target.remaining > 0
-      ? `I just reserved my spot! Join ${target.remaining} more traveler${target.remaining === 1 ? "" : "s"} and ${target.kind === "mvg" ? "help confirm this trip" : "fill the remaining spots"}.`
+      ? `I just reserved my spot! Join ${target.remaining} more ${target.remaining === 1 ? "person" : "people"} and ${target.kind === "mvg" ? "help confirm this event" : "fill the remaining spots"}.`
       : `I just reserved my spot! Join me on this incredible experience.`;
   }
   if (state === "CONFIRMED") {

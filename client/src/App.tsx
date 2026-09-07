@@ -41,6 +41,7 @@ import HowItWorks from "@/pages/how-it-works";
 import Profile from "@/pages/profile";
 import Bookings from "@/pages/bookings";
 import TravelerBookings from "@/pages/TravelerBookings";
+import EventCheckIn from "@/pages/event-check-in";
 import BookingSuccess from "@/pages/booking-success";
 import RecruitSquad from "@/pages/recruit-squad";
 import EventInvite from "@/pages/event-invite";
@@ -206,6 +207,8 @@ function Router() {
       <Route path="/profile" component={Profile} />
       <Route path="/bookings" component={Bookings} />
       <Route path="/my-bookings" component={TravelerBookings} />
+      {/* The organiser door list: check people in and hand over add-ons. */}
+      <Route path="/events/:id/check-in" component={EventCheckIn} />
       <Route path="/my-experiences" component={MyExperiences} />
       <Route path="/user-dashboard" component={UserDashboard} />
       <Route path="/role-switch-test" component={RoleSwitchTest} />

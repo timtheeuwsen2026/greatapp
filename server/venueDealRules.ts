@@ -25,6 +25,8 @@ export type VenueDealTerms = {
   revenueSharePct?: number;
   accessFee?: number;
   counterRevenuePct?: number;
+  /** Commitment Fee + Revenue Split: the venue's one-off payment to the creator. */
+  commitmentFee?: number;
   currency?: string;
 };
 
@@ -61,6 +63,18 @@ export function normalizeVenueDealTerms(
         perRoomPerNight: positiveNumber(terms.perRoomPerNight, "Per room per night rate"),
         currency,
       };
+    case "commitment_plus_revenue_share": {
+      const revenueSharePct = positiveNumber(terms.revenueSharePct, "Revenue share percentage");
+      if (revenueSharePct > 100) throw new Error("Revenue share percentage cannot exceed 100");
+      // The fee is a gesture the two sides agree between themselves, with no
+      // floor set by the platform — so zero is a legitimate answer, unlike the
+      // share, which has to actually be a share.
+      const commitmentFee = Number(terms.commitmentFee ?? 0);
+      if (!Number.isFinite(commitmentFee) || commitmentFee < 0) {
+        throw new Error("Commitment fee cannot be negative");
+      }
+      return { revenueSharePct, commitmentFee, currency };
+    }
     case "minimum_spend":
       return { minimumSpend: positiveNumber(terms.minimumSpend, "Minimum spend"), currency };
     case "access_only": {

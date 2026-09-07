@@ -113,6 +113,23 @@ import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillme
 import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
 import { getVenueDealTermsKey, normalizeVenueDealModel } from "@shared/venueDealModels";
 
+/**
+ * Drops the untracked-deal unlock from any ordinary write.
+ *
+ * `manualDealUnlocked` decides whether an event may choose a deal the platform
+ * cannot see, verify or collect. It is set by an admin, per event, on request —
+ * so an event payload arriving from a builder must never carry it, whether by
+ * a creator posting the field directly or by a form round-tripping a value it
+ * read back. `setManualDealUnlock` is the only way in.
+ */
+function withoutManualDealUnlock<T extends Record<string, any>>(payload: T): T {
+  if (!payload || typeof payload !== "object" || !("manualDealUnlocked" in payload)) {
+    return payload;
+  }
+  const { manualDealUnlocked: _ignored, ...rest } = payload as Record<string, any>;
+  return rest as T;
+}
+
 function withoutSingleDayDeposits(experience: Record<string, any>): any {
   if (!isSingleDayExperience(experience)) return experience;
 
@@ -591,7 +608,7 @@ export class DatabaseStorage implements IStorage {
 
   // Experience operations
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
-    const normalizedExperience = withoutSingleDayDeposits(experienceData);
+    const normalizedExperience = withoutManualDealUnlock(withoutSingleDayDeposits(experienceData));
     const [experience] = await db.insert(experiences).values([normalizedExperience]).returning();
     this.syncDirectPromotionDeals(experience.id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
@@ -810,7 +827,10 @@ export class DatabaseStorage implements IStorage {
           ticketSkus: updates.ticketSkus ?? current.ticketSkus,
         })
       : updates;
-    const updateData = { ...normalizedUpdates, updatedAt: new Date() } as any;
+    const updateData = {
+      ...withoutManualDealUnlock(normalizedUpdates),
+      updatedAt: new Date(),
+    } as any;
     const [experience] = await db
       .update(experiences)
       .set(updateData)
@@ -819,6 +839,20 @@ export class DatabaseStorage implements IStorage {
     this.syncDirectPromotionDeals(id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
     );
+    return experience;
+  }
+
+  /**
+   * Admin-only: permit (or withdraw) the untracked manual agreement on one
+   * event. Deliberately the sole path that writes this column — every other
+   * experience write strips it.
+   */
+  async setManualDealUnlock(id: string, unlocked: boolean): Promise<Experience | undefined> {
+    const [experience] = await db
+      .update(experiences)
+      .set({ manualDealUnlocked: unlocked, updatedAt: new Date() })
+      .where(eq(experiences.id, id))
+      .returning();
     return experience;
   }
 
@@ -1315,6 +1349,55 @@ export class DatabaseStorage implements IStorage {
 
   async getBooking(id: string): Promise<Booking | undefined> {
     const [booking] = await db.select().from(bookings).where(eq(bookings.id, id));
+    return booking;
+  }
+
+  /** Resolve a scanned ticket. The token is the scan's only credential. */
+  async getBookingByQrToken(qrToken: string): Promise<Booking | undefined> {
+    if (!qrToken) return undefined;
+    const [booking] = await db.select().from(bookings).where(eq(bookings.qrToken, qrToken));
+    return booking;
+  }
+
+  /**
+   * Record whether someone turned up.
+   *
+   * `source` says how it was answered — scanned at the door, or ticked off a
+   * list — but never changes what the answer is worth. Turnout is built from
+   * confirmed attendance however it was confirmed, because events that do not
+   * scan consistently still have people at them.
+   */
+  async markBookingAttendance(
+    id: string,
+    status: "unknown" | "attended" | "no_show",
+    source: "organiser" | "qr",
+  ): Promise<Booking | undefined> {
+    const [booking] = await db
+      .update(bookings)
+      .set({
+        attendanceStatus: status,
+        // Clearing a mark clears its timestamp too, so an event reset back to
+        // unmarked reads as never answered rather than as answered with nothing.
+        attendanceMarkedAt: status === "unknown" ? null : new Date(),
+        attendanceSource: status === "unknown" ? null : source,
+      })
+      .where(eq(bookings.id, id))
+      .returning();
+    return booking;
+  }
+
+  /**
+   * Hand over the add-on this booking paid for.
+   *
+   * Only ever sets the timestamp when it is still empty, so a second scan of
+   * the same ticket cannot quietly redeem a second coffee.
+   */
+  async redeemBookingAddon(id: string, redeemedBy: string): Promise<Booking | undefined> {
+    const [booking] = await db
+      .update(bookings)
+      .set({ addonRedeemedAt: new Date(), addonRedeemedBy: redeemedBy })
+      .where(and(eq(bookings.id, id), isNull(bookings.addonRedeemedAt)))
+      .returning();
     return booking;
   }
 
@@ -3091,7 +3174,7 @@ export class DatabaseStorage implements IStorage {
   async createExperienceDraft(draft: InsertExperienceDraft): Promise<ExperienceDraft> {
     const [created] = await db
       .insert(experienceDrafts)
-      .values(draft)
+      .values(withoutManualDealUnlock(draft))
       .returning();
     return created;
   }
@@ -3108,7 +3191,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(experienceDrafts)
       .set({
-        ...updates,
+        ...withoutManualDealUnlock(updates),
         updatedAt: new Date(),
       })
       .where(and(

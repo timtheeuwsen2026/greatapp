@@ -56,9 +56,28 @@ import {
   getVenueDealTermsKey,
   validateExperienceVenueDeal,
   calculateVenueEarnings,
+  canSelectVenueDeal,
   formatVenueDealSummary,
+  getVenueDealSelectionError,
   isUntrackedVenueDeal,
+  UNTRACKED_DEAL_LOCKED_MESSAGE,
 } from "@shared/venueDealModels";
+import {
+  buildBookingAddonRecord,
+  calculateBookingTotal,
+  clampAddonQuantity,
+  getTicketAddon,
+} from "@shared/ticketAddons";
+import { findDealConflicts } from "@shared/dealExclusions";
+import {
+  calculateAverageTurnout,
+  isAttendanceStatus,
+  summariseEventAttendance,
+} from "@shared/attendance";
+import {
+  buildProposedPerkTerms,
+  formatPerkForVenue,
+} from "@shared/perkApproval";
 import { resolveEventCapacity, summariseTicketTypes } from "@shared/inviteContext";
 import { summariseReviewScore } from "@shared/reviewScore";
 import { resolveUniqueExperienceSlug } from "./experienceSlug";
@@ -154,6 +173,27 @@ async function getAvailableTicketQuantity(
     : bookedQuantity;
 
   return Math.max(0, capacity - soldQuantity);
+}
+
+/**
+ * Add-ons already sold against one ticket.
+ *
+ * Counted apart from attendance: a creator may put 32 coffees behind an event
+ * 80 people are coming to, so the add-on runs out long before the tickets do.
+ */
+async function getSoldAddonQuantity(
+  experienceId: string,
+  ticketSkuId: string | null,
+): Promise<number> {
+  if (!ticketSkuId) return 0;
+
+  const existingBookings = await storage.getBookingsByExperience(experienceId);
+  return existingBookings.reduce((total, booking: any) => {
+    if (!isActiveParticipantBooking(booking.status)) return total;
+    if (booking.ticketSkuId !== ticketSkuId) return total;
+    const quantity = Number(booking.addonQuantity);
+    return total + (Number.isInteger(quantity) && quantity > 0 ? quantity : 0);
+  }, 0);
 }
 
 function applyMarketplaceEconomics(input: any = {}) {
@@ -2420,6 +2460,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Not authenticated" });
       }
 
+      // An organiser choosing who to invite needs to recognise a person, not to
+      // hold their contact details. This list is readable by every signed-in
+      // user, so it carries an avatar and a name — the same shape as picking a
+      // venue from the catalogue — and nothing else. Email and bio are the
+      // partner's to share once a deal is actually under way.
       const promoters = await storage.getAllPromoters();
       const partners = await Promise.all(promoters.map(async (promoter) => {
         const profile = await storage.getPromoterProfileByUserId(promoter.id);
@@ -2428,16 +2473,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return {
           id: promoter.id,
           role: "promoter",
-          displayName: profile?.displayName || fallbackName || promoter.email || "Platform partner",
-          bio: profile?.bio || null,
+          // Never the email: falling back to it published an address under the
+          // heading of a name.
+          displayName: profile?.displayName || fallbackName || "Platform partner",
           profilePhoto: profile?.profilePhoto || promoter.profileImageUrl || null,
-          email: promoter.email,
-          promoterCode: promoter.promoterCode || null,
           completed: !!profile?.completed,
         };
       }));
 
-      res.json(partners.filter((partner) => partner.completed));
+      res.json(partners
+        .filter((partner) => partner.completed)
+        .map(({ completed: _completed, ...partner }) => partner));
     } catch (error) {
       console.error("Error fetching promotion platform partners:", error);
       res.status(500).json({ message: "Failed to fetch platform partners" });
@@ -3419,7 +3465,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      errors.push(...validateExperienceVenueDeal(req.body));
+      errors.push(...validateExperienceVenueDeal({
+        ...req.body,
+        manualDealUnlocked: (existingDraft as any).manualDealUnlocked === true,
+      }));
+
+      for (const conflict of findDealConflicts([
+        req.body?.promotionDealType,
+        req.body?.participantReferralDealType,
+      ])) {
+        errors.push(conflict.reason);
+      }
 
       // Pricing validation - conditional logic based on rooms
       const rooms = req.body.rooms || [];
@@ -4239,7 +4295,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Validation function for required fields - strict HTTPS validation
   const validateDraftForPublication = (
     data: any,
-    options: { allowPastStart?: boolean } = {},
+    options: { allowPastStart?: boolean; manualDealUnlocked?: boolean } = {},
   ) => {
     const errors: string[] = [];
     
@@ -4346,7 +4402,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
 
-    errors.push(...validateExperienceVenueDeal(data));
+    errors.push(...validateExperienceVenueDeal({
+      ...data,
+      // Read from the stored row the caller resolved, never from the payload:
+      // the unlock is an admin decision about this event, not a form field.
+      manualDealUnlocked: options.manualDealUnlocked === true,
+    }));
+
+    // A partner must not both pay into the event and take a cut of the same
+    // tickets back out. The builder disables the conflicting option, but an
+    // older draft may already carry the pair.
+    for (const conflict of findDealConflicts([data.promotionDealType, data.participantReferralDealType])) {
+      errors.push(conflict.reason);
+    }
     
     return {
       isValid: errors.length === 0,
@@ -4379,7 +4447,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       draft = { ...draft, ...req.body, creatorId: draft.creatorId };
       
       // Validate draft against publication requirements
-      const validation = validateDraftForPublication(draft);
+      const validation = validateDraftForPublication(draft, {
+        manualDealUnlocked: (draft as any).manualDealUnlocked === true,
+      });
       if (!validation.isValid) {
         return res.status(400).json({
           message: "Draft validation failed",
@@ -4668,6 +4738,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         && submittedStart.getTime() === new Date(existing.startDate).getTime();
       const validation = validateDraftForPublication(req.body, {
         allowPastStart: startDateUnchanged,
+        manualDealUnlocked: (existing as any).manualDealUnlocked === true,
       });
       if (!validation.isValid) {
         return res.status(400).json({
@@ -4792,6 +4863,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ticketSkuId?: string | null;
     ticketQuantity?: unknown;
     quantity?: unknown;
+    /** Combi-Ticket add-ons the buyer opted into. Priced from the ticket, not from here. */
+    addonQuantity?: unknown;
     /** Set only when rebuilding a booking for a payment Stripe has already taken. */
     paymentAlreadyCaptured?: boolean;
     /** The buyer's email from their auth session — used to self-heal a missing users row. */
@@ -5037,6 +5110,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
       }
 
+      // The add-on is priced off the ticket here too, so a booking request that
+      // claims a different add-on total than the PaymentIntent was created for
+      // cannot widen the gap — the amount check below compares against this.
+      const addon = getTicketAddon(selectedTicket);
+      const resolvedAddonQuantity = clampAddonQuantity(
+        input.addonQuantity,
+        ticketQuantity,
+        selectedTicket,
+        await getSoldAddonQuantity(experienceId, resolvedTicketSkuId),
+      );
+      const addonRecord = buildBookingAddonRecord(addon, resolvedAddonQuantity);
+      const addonTotal = Number(addonRecord.addonTotal);
+      fullPrice = Math.round((fullPrice + addonTotal) * 100) / 100;
+
       if (fullPrice < 0) {
         return { status: 400, body: { message: "Unable to determine booking price for this experience" } };
       }
@@ -5097,6 +5184,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             fullPrice: fullPrice.toString(),
             ticketSkuId: resolvedTicketSkuId || "",
             ticketQuantity: ticketQuantity.toString(),
+            addonName: addonRecord.addonName || "",
+            addonUnitPrice: addonRecord.addonUnitPrice,
+            addonQuantity: resolvedAddonQuantity.toString(),
             depositAmount: depositAmount.toString(),
             balanceAmount: balanceAmount.toString()
           },
@@ -5135,6 +5225,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             && paymentIntent.metadata.ticketQuantity !== ticketQuantity.toString()
           ) {
             return { status: 400, body: { message: "Payment quantity does not match this booking" } };
+          }
+          // Checked on its own so an add-on added or dropped between paying and
+          // booking reads as that, rather than as a bare amount mismatch.
+          if (
+            paymentIntent.metadata?.addonQuantity !== undefined
+            && paymentIntent.metadata.addonQuantity !== ""
+            && paymentIntent.metadata.addonQuantity !== resolvedAddonQuantity.toString()
+          ) {
+            return { status: 400, body: { message: "Add-on selection does not match this payment" } };
           }
           if (paymentIntent.amount !== expectedAmount || paymentIntent.currency !== expectedCurrency) {
             return { status: 400, body: { message: "Payment amount or currency does not match this booking" } };
@@ -5236,6 +5335,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ticketSkuId: resolvedTicketSkuId,
           ticketName: selectedTicket?.ticketName || selectedTicket?.name || null,
           ticketQuantity,
+          // Add-on money is already inside `amount`; these columns record what
+          // it was for, so it can be reported apart from ticket revenue.
+          ...addonRecord,
+          // The ticket's QR, minted here so every booking has one from the
+          // moment it exists: it is what gets scanned at the door and at the
+          // counter, and a booking without one cannot be checked in.
+          qrToken: randomBytes(32).toString("hex"),
         });
       } catch (insertError: any) {
         // The idempotency check above is read-then-insert, so two concurrent
@@ -5458,6 +5564,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       stripePaymentIntentId: paymentIntent.id,
       ticketSkuId: metadata.ticketSkuId || undefined,
       ticketQuantity: metadata.ticketQuantity || 1,
+      // A buyer who never made it back from a redirect-based payment still
+      // paid for their add-on; rebuilding without this would drop it.
+      addonQuantity: metadata.addonQuantity ? Number(metadata.addonQuantity) : 0,
       paymentType: isDepositPayment ? 'deposit' : 'full',
       promoterId: metadata.promoterId || options.attribution?.promoterId || null,
       referralCode: metadata.referralCode || options.attribution?.referralCode || null,
@@ -5561,6 +5670,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user bookings:", error);
       res.status(500).json({ message: "Failed to fetch bookings" });
+    }
+  });
+
+  /**
+   * The participant's own ticket QR.
+   *
+   * The token has been written at booking since QR check-in was added, and the
+   * door scanner has always known how to read it — but nothing ever showed it
+   * to the person holding the ticket, so there was never anything to scan.
+   *
+   * It is a bearer credential: whoever holds it can be checked in and can
+   * redeem the add-on. So it is returned for the buyer's own booking only, and
+   * rendered as an image here rather than handed out as a raw string.
+   */
+  app.get("/api/bookings/:id/qr", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const booking = await storage.getBooking(req.params.id);
+      if (!booking) return res.status(404).json({ message: "Booking not found" });
+      if (booking.userId !== userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      if (!booking.qrToken) {
+        // Bookings taken before QR check-in existed carry no token. Say so
+        // plainly rather than rendering an unscannable square.
+        return res.status(404).json({ message: "This booking has no check-in code" });
+      }
+
+      const { toDataURL } = await import("qrcode");
+      const dataUrl = await toDataURL(booking.qrToken, {
+        errorCorrectionLevel: "M",
+        margin: 1,
+        width: 320,
+      });
+
+      res.json({
+        bookingId: booking.id,
+        qrDataUrl: dataUrl,
+        attendanceStatus: booking.attendanceStatus || "unknown",
+        addonName: booking.addonName || null,
+        addonQuantity: booking.addonQuantity || 0,
+        addonRedeemedAt: booking.addonRedeemedAt || null,
+      });
+    } catch (error) {
+      console.error("Error building booking QR:", error);
+      res.status(500).json({ message: "Failed to build check-in code" });
     }
   });
 
@@ -6030,6 +6185,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  /**
+   * Admin-only: allow (or withdraw) the untracked manual agreement on one event.
+   *
+   * The manual deal settles off-platform, so the app records a percentage it can
+   * never see, verify or collect. Left in the ordinary dropdown it became the
+   * default rather than the exception — the same organiser reached for it twice
+   * on separate venue deals. It is now granted here, per event, on request.
+   *
+   * Withdrawing it does not rewrite a deal already agreed: an event whose saved
+   * model is the manual one keeps rendering its terms, it simply cannot be
+   * re-selected or countered into.
+   */
+  app.patch("/api/admin/experiences/:id/manual-deal", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      if (typeof req.body?.unlocked !== "boolean") {
+        return res.status(400).json({ message: "unlocked must be true or false" });
+      }
+
+      const experience = await storage.setManualDealUnlock(req.params.id, req.body.unlocked);
+      if (!experience) {
+        return res.status(404).json({ message: "Experience not found" });
+      }
+
+      // Rare and deliberate, so it belongs in the log next to the [MANUAL-DEAL]
+      // lines that record events actually choosing it.
+      console.warn(
+        `[MANUAL-DEAL] Untracked deal ${req.body.unlocked ? "unlocked" : "locked"}`
+        + ` for event ${experience.id} (${experience.title || "untitled"})`
+        + ` by admin ${req.user?.claims?.sub || "unknown"}`,
+      );
+
+      res.json({
+        id: experience.id,
+        manualDealUnlocked: experience.manualDealUnlocked === true,
+      });
+    } catch (error: any) {
+      console.error("Error updating manual deal unlock:", error);
+      res.status(500).json({ message: "Failed to update manual deal availability" });
+    }
+  });
+
   app.get("/api/admin/experiences/pending", isAuthenticated, async (req: any, res) => {
     try {
       // TODO: Add admin role check
@@ -6880,7 +7079,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/create-payment-intent", async (req: any, res) => {
     try {
       // userPrice: buyer-entered amount for PWYW tickets (optional)
-      const { amount, experienceId, ticketSkuId, paymentMode, userPrice } = req.body;
+      // addonQuantity: how many Combi-Ticket add-ons the buyer opted into (optional)
+      const { amount, experienceId, ticketSkuId, paymentMode, userPrice, addonQuantity } = req.body;
       // Stamped onto the PaymentIntent so the booking can be rebuilt from the
       // payment alone if the browser never makes it back from a redirect-based
       // payment method (iDEAL, Bancontact, full-page 3DS).
@@ -6966,7 +7166,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!Number.isFinite(unitPrice) || unitPrice < 0) {
         return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
       }
-      const fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
+
+      // ── Combi-Ticket add-on ──────────────────────────────────────────────
+      // Priced from the ticket, never from the request: the buyer says how many
+      // they want, the event says what one costs. A ticket offering no add-on
+      // clamps any requested quantity to zero.
+      const addon = getTicketAddon(selectedTicket);
+      const soldAddons = addon
+        ? await getSoldAddonQuantity(experienceId, resolvedTicketSkuId)
+        : 0;
+      const resolvedAddonQuantity = clampAddonQuantity(
+        addonQuantity,
+        ticketQuantity,
+        selectedTicket,
+        soldAddons,
+      );
+      // Asked for an add-on that has since sold out: say so, rather than
+      // quietly charging for the ticket alone and leaving the buyer to discover
+      // the missing coffee at the counter.
+      if (Number(addonQuantity) > 0 && resolvedAddonQuantity === 0 && addon) {
+        return res.status(409).json({
+          message: `${addon.name} is sold out`,
+          addonSoldOut: true,
+        });
+      }
+      const { addonTotal, fullPrice } = calculateBookingTotal({
+        unitPrice,
+        ticketQuantity,
+        addonUnitPrice: addon?.unitPrice,
+        addonQuantity: resolvedAddonQuantity,
+      });
 
       const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
@@ -6988,11 +7217,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ticketName = selectedTicket?.ticketName || selectedTicket?.name || null;
       const acceptedVenueContract = await storage.getAcceptedVenueContractForExperience(experienceId);
 
-      // Mode C: free RSVP (including PWYW where user chose €0 and minPrice is 0)
+      // Mode C: free RSVP (including PWYW where user chose €0 and minPrice is 0).
+      // A combi whose add-on was taken is never free, so it does not land here.
       if (fullPrice === 0) {
         return res.json({
           freeRsvp: true,
           clientSecret: null,
+          addonName: addon?.name ?? null,
+          addonUnitPrice: addon?.unitPrice ?? 0,
+          addonQuantity: 0,
+          addonTotal: 0,
           isMVGExperience,
           isDepositPayment: false,
           depositAmount: 0,
@@ -7060,6 +7294,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           pricingMode: isPWYW ? "pwyw" : "fixed",
           ticketQuantity: ticketQuantity.toString(),
           unitPrice: unitPrice.toString(),
+          addonName: addon?.name || "",
+          addonUnitPrice: (addon?.unitPrice ?? 0).toString(),
+          addonQuantity: resolvedAddonQuantity.toString(),
           isMVGExperience: isMVGExperience?.toString() || "false",
           isDepositPayment: isDepositPayment.toString(),
           fullPrice: fullPrice.toString(),
@@ -7093,6 +7330,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount,
         fullPrice,
         unitPrice,
+        addonName: addon?.name ?? null,
+        addonUnitPrice: addon?.unitPrice ?? 0,
+        addonQuantity: resolvedAddonQuantity,
+        addonTotal,
         ticketQuantity,
         ticketName,
         ticketSkuId: resolvedTicketSkuId,
@@ -10701,6 +10942,215 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // creator could not answer "how many are coming and how much have I taken?"
   // without opening their own listing. Same source as the public page here, so
   // the two cannot disagree.
+  /**
+   * The organiser's check-in list for one event.
+   *
+   * Attendance is the organiser's to confirm. A scan is one way to set it and
+   * ticking the list by hand is another; both carry the same weight, because an
+   * event where nobody scanned did not have nobody turn up.
+   */
+  app.get("/api/experiences/:id/check-in", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+
+      const isAdmin = await checkIsAdmin(req);
+      if (experience.creatorId !== userId && !isAdmin) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const bookings = await storage.getBookingsByExperience(experience.id);
+      const active = (bookings || []).filter((booking: any) =>
+        isActiveParticipantBooking(booking.status));
+
+      const attendees = await Promise.all(active.map(async (booking: any) => {
+        const user = await storage.getUser(booking.userId);
+        return {
+          bookingId: booking.id,
+          name: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Guest",
+          ticketName: booking.ticketName,
+          ticketQuantity: normalizeTicketQuantity(booking.ticketQuantity),
+          attendanceStatus: booking.attendanceStatus || "unknown",
+          attendanceSource: booking.attendanceSource || null,
+          addonName: booking.addonName,
+          addonQuantity: Number(booking.addonQuantity) || 0,
+          addonRedeemedAt: booking.addonRedeemedAt,
+        };
+      }));
+
+      res.json({
+        experienceId: experience.id,
+        title: experience.title,
+        attendance: summariseEventAttendance(active as any[]),
+        attendees,
+      });
+    } catch (error) {
+      console.error("Error loading check-in list:", error);
+      res.status(500).json({ message: "Failed to load check-in list" });
+    }
+  });
+
+  /** Mark one booking present or absent. */
+  app.patch("/api/bookings/:id/attendance", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const { status } = req.body || {};
+      if (!isAttendanceStatus(status)) {
+        return res.status(400).json({ message: "status must be attended, no_show or unknown" });
+      }
+
+      const booking = await storage.getBooking(req.params.id);
+      if (!booking) return res.status(404).json({ message: "Booking not found" });
+
+      const experience = await storage.getExperience(booking.experienceId);
+      const isAdmin = await checkIsAdmin(req);
+      if (!experience || (experience.creatorId !== userId && !isAdmin)) {
+        return res.status(403).json({ message: "Only the organiser can mark attendance" });
+      }
+
+      const updated = await storage.markBookingAttendance(booking.id, status, "organiser");
+      res.json({
+        bookingId: updated?.id,
+        attendanceStatus: updated?.attendanceStatus,
+      });
+    } catch (error) {
+      console.error("Error marking attendance:", error);
+      res.status(500).json({ message: "Failed to mark attendance" });
+    }
+  });
+
+  /**
+   * Scan a ticket's QR.
+   *
+   * Does two jobs at once because they happen at the same moment: it checks the
+   * guest in, and it redeems whatever add-on they bought. Redeeming is the part
+   * that needs a scan — before this, a venue had only the guest's word that
+   * their coffee was paid for.
+   */
+  app.post("/api/check-in/scan", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+      const { qrToken, redeemAddon } = req.body || {};
+      if (typeof qrToken !== "string" || qrToken.trim() === "") {
+        return res.status(400).json({ message: "A ticket code is required" });
+      }
+
+      const booking = await storage.getBookingByQrToken(qrToken.trim());
+      if (!booking) {
+        return res.status(404).json({ message: "That ticket was not recognised" });
+      }
+
+      const experience = await storage.getExperience(booking.experienceId);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+
+      // The organiser, the venue hosting it, or an admin. A venue has to be able
+      // to redeem at its own counter without the organiser standing there.
+      const isAdmin = await checkIsAdmin(req);
+      const venues = await storage.getVenuesByCreator(userId);
+      const hostsThisEvent = venues.some((venue: any) => venue.id === experience.linkedVenueId);
+      if (experience.creatorId !== userId && !hostsThisEvent && !isAdmin) {
+        return res.status(403).json({ message: "You cannot scan tickets for this event" });
+      }
+
+      if (!isActiveParticipantBooking(booking.status)) {
+        return res.status(409).json({
+          message: "That booking is cancelled or refunded",
+          attendanceStatus: booking.attendanceStatus,
+        });
+      }
+
+      const alreadyCheckedIn = booking.attendanceStatus === "attended";
+      const updated = alreadyCheckedIn
+        ? booking
+        : await storage.markBookingAttendance(booking.id, "attended", "qr");
+
+      let addonRedeemedAt = booking.addonRedeemedAt;
+      let addonAlreadyRedeemed = false;
+      const addonQuantity = Number(booking.addonQuantity) || 0;
+
+      if (redeemAddon === true && addonQuantity > 0) {
+        if (booking.addonRedeemedAt) {
+          addonAlreadyRedeemed = true;
+        } else {
+          const redeemed = await storage.redeemBookingAddon(booking.id, userId);
+          addonRedeemedAt = redeemed?.addonRedeemedAt ?? null;
+        }
+      }
+
+      res.json({
+        bookingId: booking.id,
+        experienceId: experience.id,
+        experienceTitle: experience.title,
+        ticketName: booking.ticketName,
+        ticketQuantity: normalizeTicketQuantity(booking.ticketQuantity),
+        attendanceStatus: updated?.attendanceStatus || "attended",
+        alreadyCheckedIn,
+        addonName: booking.addonName,
+        addonQuantity,
+        addonRedeemedAt,
+        addonAlreadyRedeemed,
+      });
+    } catch (error) {
+      console.error("Error scanning ticket:", error);
+      res.status(500).json({ message: "Failed to scan ticket" });
+    }
+  });
+
+  /**
+   * An organiser's average verified turnout.
+   *
+   * Built only from events that have finished and that the organiser actually
+   * confirmed. Events left unmarked are excluded rather than counted as zero —
+   * forgetting to mark a list is not a bad turnout — and the event currently
+   * being proposed is never included, or the figure could be inflated simply by
+   * listing something with a large capacity.
+   */
+  app.get("/api/creators/:id/turnout", async (req: any, res) => {
+    try {
+      const experiences = await storage.getExperiencesByCreator(req.params.id);
+      const now = Date.now();
+
+      const events = await Promise.all((experiences || []).map(async (experience: any) => {
+        const bookings = await storage.getBookingsByExperience(experience.id);
+        const active = (bookings || []).filter((booking: any) =>
+          isActiveParticipantBooking(booking.status));
+        const endsAt = experience.endDate || experience.startDate;
+
+        return {
+          experienceId: experience.id,
+          hasFinished: !!endsAt
+            && new Date(endsAt).getTime() < now
+            && experience.status !== "cancelled",
+          attendance: summariseEventAttendance(active as any[]),
+        };
+      }));
+
+      const summary = calculateAverageTurnout(events, {
+        excludeExperienceId: typeof req.query.excludeExperienceId === "string"
+          ? req.query.excludeExperienceId
+          : null,
+      });
+
+      res.json(summary ?? {
+        averageTurnout: 0,
+        eventsCounted: 0,
+        totalAttendees: 0,
+        eventsUnconfirmed: events.filter((event) =>
+          event.hasFinished && !event.attendance.isConfirmed).length,
+      });
+    } catch (error) {
+      console.error("Error computing creator turnout:", error);
+      res.status(500).json({ message: "Failed to compute turnout" });
+    }
+  });
+
   app.get("/api/creator/headcount", isAuthenticated, async (req: any, res) => {
     try {
       const creatorId = resolveCurrentUserId(req);
@@ -10710,7 +11160,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!owned.length) {
         return res.json({
           events: [],
-          totals: { rsvps: 0, ticketsSold: 0, attendees: 0, donations: 0, grossRevenue: 0, currency: "eur" },
+          totals: {
+            rsvps: 0,
+            ticketsSold: 0,
+            attendees: 0,
+            donations: 0,
+            grossRevenue: 0,
+            addOnRevenue: 0,
+            addOnsSold: 0,
+            currency: "eur",
+          },
         });
       }
 
@@ -10725,12 +11184,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         let ticketsSold = 0;
         let donations = 0;
         let grossRevenue = 0;
+        let addOnRevenue = 0;
+        let addOnsSold = 0;
 
         for (const booking of active) {
           const quantity = normalizeTicketQuantity(booking.ticketQuantity);
           const sku = booking.ticketSkuId ? skuById.get(booking.ticketSkuId) : undefined;
           const paid = numberOrZero(booking.amount);
           grossRevenue += paid;
+
+          // Add-on money is part of gross — it ran through the platform like
+          // any other charge — but an organiser needs it broken out, because
+          // "32 people came and 11 bought a coffee" is two different numbers.
+          const addonMoney = numberOrZero(booking.addonTotal);
+          addOnRevenue += addonMoney;
+          addOnsSold += Math.max(0, Number(booking.addonQuantity) || 0);
 
           // A free RSVP is a head, not a sale. Counting the two together is
           // what made the dashboard's single "bookings" number meaningless for
@@ -10745,6 +11213,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } else if (mode === "pwyw") {
             ticketsSold += quantity;
             donations += paid;
+          } else if (mode === "combi") {
+            // A combi is one RSVP with an optional extra on top. Free entry is
+            // a head; paid entry is a sale. The add-on decides neither — it is
+            // already counted in addOnsSold.
+            if (numberOrZero(sku?.pricePerPerson) > 0) {
+              ticketsSold += quantity;
+            } else {
+              rsvps += quantity;
+            }
           } else {
             ticketsSold += quantity;
           }
@@ -10765,6 +11242,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           attendees: rsvps + ticketsSold,
           donations,
           grossRevenue,
+          addOnRevenue,
+          addOnsSold,
         };
       }));
 
@@ -10776,8 +11255,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         attendees: sum.attendees + event.attendees,
         donations: sum.donations + event.donations,
         grossRevenue: sum.grossRevenue + event.grossRevenue,
+        addOnRevenue: sum.addOnRevenue + event.addOnRevenue,
+        addOnsSold: sum.addOnsSold + event.addOnsSold,
         currency: sum.currency,
-      }), { rsvps: 0, ticketsSold: 0, attendees: 0, donations: 0, grossRevenue: 0, currency: currencies[0] || "eur" });
+      }), {
+        rsvps: 0,
+        ticketsSold: 0,
+        attendees: 0,
+        donations: 0,
+        grossRevenue: 0,
+        addOnRevenue: 0,
+        addOnsSold: 0,
+        currency: currencies[0] || "eur",
+      });
 
       res.json({
         events: events.sort((a, b) =>
@@ -14260,6 +14750,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }).catch((error) => {
         console.error("Failed to send event published email:", error);
       });
+      // Accepting the deal also signs off any perk that was proposed alongside
+      // it. The venue was shown the perk with the money terms, so agreeing to
+      // one is agreeing to both — and only now may participants be told of it.
+      if ((experience as any).participantReferralVenueBacked === true
+        && !(experience as any).participantReferralVenueApprovedAt) {
+        await storage.updateExperience(experienceId, {
+          participantReferralVenueApprovedAt: new Date(),
+        } as any);
+      }
+
       notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'accepted');
       res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
     } catch (err: any) {
@@ -14312,6 +14812,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         capacity: resolveEventCapacity(experience),
         ticketTypes: summariseTicketTypes((experience as any).ticketSkus, experience.currency),
       } : null,
+      // So the venue can look up the organiser's verified track record. The id
+      // rather than the numbers: turnout is computed from completed events, and
+      // this invite's own event is excluded from it.
+      creatorId: experience?.creatorId || invite.creatorId || null,
       creator: creator ? {
         firstName: creator.firstName,
         lastName: creator.lastName,
@@ -14332,9 +14836,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getUser(invite.creatorId),
       ]);
 
+      // A perk the organiser marked as venue-backed spends the venue's product,
+      // so the venue has to see it here, alongside the money terms, rather than
+      // discovering it when a guest arrives asking for a free coffee.
+      const proposedPerk = buildProposedPerkTerms(experience as any);
+
       res.json({
         ...summariseVenueInvite(invite, experience, creator),
         status: expired && invite.status === 'pending' ? 'expired' : invite.status,
+        proposedPerk,
+        proposedPerkSummary: formatPerkForVenue(proposedPerk),
+        counter: invite.counteredAt ? {
+          model: invite.counterModel,
+          value: invite.counterValue,
+          commitmentFee: invite.counterCommitmentFee,
+          message: invite.counterMessage,
+          counteredAt: invite.counteredAt,
+        } : null,
       });
     } catch (error: any) {
       console.error('Error loading venue invite:', error);
@@ -14456,6 +14974,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error('Error claiming venue invite:', error);
       res.status(500).json({ message: 'Failed to claim this venue', detail: error?.message });
+    }
+  });
+
+  /**
+   * Counter an invitation instead of walking away from it.
+   *
+   * Declining used to be the only way to say "not on those terms". The venue
+   * had to decline, make an account separately, and then wait for the organiser
+   * to build a fresh proposal from scratch — three steps and two dead ends for
+   * what is one sentence of negotiation. A counter keeps it to a single thread,
+   * and the invitation stays live while the organiser considers it.
+   */
+  app.post('/api/venue-invites/:token/counter', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const invite = await storage.getVenueInviteByToken(String(req.params.token));
+      if (!invite) return res.status(404).json({ message: 'This invitation link is not valid' });
+      if (invite.claimedByUserId && invite.claimedByUserId !== userId) {
+        return res.status(403).json({ message: 'This invitation belongs to another account' });
+      }
+      if (!['pending', 'claimed', 'countered'].includes(String(invite.status))) {
+        return res.status(409).json({ message: 'This invitation has already been answered' });
+      }
+
+      const { model, value, commitmentFee, message } = req.body || {};
+      const experience = await storage.getExperience(invite.experienceId);
+      if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      if (!isVenueDealModel(model)) {
+        return res.status(400).json({ message: 'Unsupported venue deal model' });
+      }
+      const allowUntracked = (experience as any).manualDealUnlocked === true;
+      if (!canSelectVenueDeal(model, allowUntracked)) {
+        return res.status(400).json({
+          message: isUntrackedVenueDeal(model)
+            ? UNTRACKED_DEAL_LOCKED_MESSAGE
+            : 'This venue deal model is currently unavailable',
+        });
+      }
+
+      const selectionError = getVenueDealSelectionError(model, value, allowUntracked);
+      if (selectionError) return res.status(400).json({ message: selectionError });
+
+      const countered = await storage.updateVenueInvite(invite.id, {
+        status: 'countered',
+        counterModel: model,
+        counterValue: String(Number(value) || 0),
+        counterCommitmentFee: commitmentFee != null ? String(Number(commitmentFee) || 0) : null,
+        counterMessage: typeof message === 'string' ? message.slice(0, 1000) : null,
+        counteredAt: new Date(),
+        // Countering identifies the venue, so the organiser can see who answered
+        // without the venue having to claim the space first.
+        claimedByUserId: userId,
+        respondedAt: new Date(),
+      });
+
+      // The same email a venue's counter sends on the contract path: it is the
+      // creator's move now, and the invite is still live while they consider it.
+      (async () => {
+        const creator = await storage.getUser(experience.creatorId);
+        if (!creator?.email) return;
+        const termsKey = getVenueDealTermsKey(model);
+        await notificationService.sendVenueBidReceivedEmail({
+          to: creator.email,
+          recipientName: creator.firstName,
+          venueName: invite.venueName || 'The invited venue',
+          experienceTitle: experience.title,
+          experienceSlugOrId: (experience as any).slug || experience.id,
+          model,
+          terms: {
+            ...(termsKey ? { [termsKey]: Number(value) || 0 } : {}),
+            ...(commitmentFee != null ? { commitmentFee: Number(commitmentFee) || 0 } : {}),
+            currency: experience.currency || 'eur',
+          },
+          currency: experience.currency,
+          message: typeof message === 'string' ? message.slice(0, 1000) : null,
+        });
+      })().catch((err) =>
+        console.error('Venue counter email failed:', err?.message || err));
+
+      res.json({
+        success: true,
+        invite: {
+          status: countered.status,
+          counterModel: countered.counterModel,
+          counterValue: countered.counterValue,
+          counterCommitmentFee: countered.counterCommitmentFee,
+        },
+        message: 'Your counter-offer has been sent to the organiser',
+      });
+    } catch (error: any) {
+      console.error('Error countering venue invite:', error);
+      res.status(500).json({ message: 'Failed to send your counter-offer' });
     }
   });
 
@@ -14649,12 +15260,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isVenueDealModel(model)) {
         return res.status(400).json({ message: 'Unsupported venue deal model' });
       }
-      if (!isVenueDealSelectable(model)) {
-        return res.status(400).json({ message: 'This venue deal model is currently unavailable' });
-      }
 
       const experience = await storage.getExperience(experienceId);
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      // A venue cannot counter into an untracked deal the event was never
+      // unlocked for — that would reintroduce the manual agreement from the
+      // other side of the handshake.
+      if (!canSelectVenueDeal(model, (experience as any).manualDealUnlocked === true)) {
+        return res.status(400).json({
+          message: isUntrackedVenueDeal(model)
+            ? UNTRACKED_DEAL_LOCKED_MESSAGE
+            : 'This venue deal model is currently unavailable',
+        });
+      }
 
       const userVenues = await storage.getVenuesByCreator(userId);
       const linkedVenue = userVenues.find((venue: any) => venue.id === experience.linkedVenueId);
@@ -14760,8 +15379,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const active = (bookings || []).filter((booking: any) =>
           isActiveParticipantBooking(booking.status));
         const attendees = sumBookingTicketQuantity(active);
+
+        // Ticket money only. An add-on is the venue's own product, sold through
+        // the platform at a rate the venue already discounted for the collab and
+        // paid to them directly — taking a share of it again would pay them for
+        // the same coffee twice.
+        const addOnRevenue = active.reduce(
+          (sum: number, booking: any) => sum + numberOrZero(booking.addonTotal), 0);
         const grossRevenue = active.reduce(
-          (sum: number, booking: any) => sum + numberOrZero(booking.amount), 0);
+          (sum: number, booking: any) =>
+            sum + numberOrZero(booking.amount) - numberOrZero(booking.addonTotal),
+          0,
+        );
+
+        // A per-head fee is charged for tickets that were actually sold, never
+        // for a free RSVP that happens to be attending.
+        const paidAttendees = sumBookingTicketQuantity(
+          active.filter((booking: any) =>
+            numberOrZero(booking.amount) - numberOrZero(booking.addonTotal) > 0),
+        );
 
         const termsKey = getVenueDealTermsKey(model);
         const value = numberOrZero(
@@ -14781,8 +15417,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           model,
           value,
           grossRevenue,
-          attendees,
+          attendees: paidAttendees,
           roomNights,
+          secondaryValue: numberOrZero(
+            terms.commitmentFee ?? (row as any).venueCommitmentFee,
+          ),
         });
 
         return {
@@ -14793,9 +15432,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           model,
           dealSummary: formatVenueDealSummary(model, terms, row.currency || 'eur'),
           attendees,
+          paidAttendees,
           earned: Math.round(earned * 100) / 100,
           owed: Math.round(owed * 100) / 100,
           offPlatform,
+          // Reported so a venue can see what it took over the counter through
+          // the app, without that figure entering its share of ticket revenue.
+          addOnRevenue: Math.round(addOnRevenue * 100) / 100,
           // Sponsorship is only real once it has cleared Stripe.
           settled: model === 'venue_sponsored'
             ? contract?.sponsorshipPaymentStatus === 'paid'
@@ -14917,13 +15560,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isVenueDealModel(model)) {
         return res.status(400).json({ message: 'Unsupported venue deal model' });
       }
-      if (!isVenueDealSelectable(model)) {
-        return res.status(400).json({ message: 'This venue deal model is currently unavailable' });
-      }
 
       // Verify the experience is actually open for bids
       const experience = await storage.getExperience(experienceId);
       if (!experience) return res.status(404).json({ message: 'Experience not found' });
+
+      if (!canSelectVenueDeal(model, (experience as any).manualDealUnlocked === true)) {
+        return res.status(400).json({
+          message: isUntrackedVenueDeal(model)
+            ? UNTRACKED_DEAL_LOCKED_MESSAGE
+            : 'This venue deal model is currently unavailable',
+        });
+      }
       if ((experience as any).venueStatus !== 'venue_pending') {
         return res.status(400).json({ message: 'This event is not accepting venue bids' });
       }

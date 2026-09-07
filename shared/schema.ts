@@ -334,6 +334,9 @@ export const experienceDrafts = pgTable("experience_drafts", {
   venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
   venueTargetDealValue: decimal("venue_target_deal_value", { precision: 10, scale: 2 }), // target amount (€) or % for the deal type
   venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
+  // Mirrors experiences.manualDealUnlocked so a draft round-trips the flag
+  // instead of silently dropping an admin unlock on the next autosave.
+  manualDealUnlocked: boolean("manual_deal_unlocked").default(false),
   // Virtual venue fields
   virtualPlatform: varchar("virtual_platform"),
   virtualMeetingUrl: varchar("virtual_meeting_url"),
@@ -359,8 +362,16 @@ export const experienceDrafts = pgTable("experience_drafts", {
         pricePerPerson: number;
         minPrice?: number;
         suggestedPrice?: number;
+        // The add-on attaches to any ticket type, so it is a toggle rather than
+        // a pricing mode of its own. `addonPrice` is what a participant pays and
+        // is derived from the two below; it is kept for tickets saved before the
+        // venue price and the organiser's margin were separated.
+        addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
+        addonVenuePrice?: number;
+        addonMargin?: number;
+        addonInventory?: number;
         depositPerPerson: number;
         ticketCapacity: number;
         sourceRoomId?: string;
@@ -420,6 +431,13 @@ export const experienceDrafts = pgTable("experience_drafts", {
   }).default("0.00"), // Commission for promoters/affiliates
 
   // Participant referral perk fields (B2C loop)
+  //
+  // A perk like "bring 3 friends, get a coffee at Bandido" spends the venue's
+  // product, not the organiser's. Marked venue-backed, it travels with the
+  // venue proposal and stays hidden from participants until the venue accepts —
+  // an organiser must not promise someone else's coffee on their behalf.
+  participantReferralVenueBacked: boolean("participant_referral_venue_backed").default(false),
+  participantReferralVenueApprovedAt: timestamp("participant_referral_venue_approved_at"),
   participantReferralDealType: varchar("participant_referral_deal_type"),
   participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
     precision: 5,
@@ -500,6 +518,9 @@ export const experienceDrafts = pgTable("experience_drafts", {
   venuePerRoomPerNight: decimal("venue_per_room_per_night", { precision: 10, scale: 2 }).default("0.00"),
   venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
   venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
+  // Commitment Fee + Revenue Split: the one-off amount the venue pays the
+  // organiser upfront, alongside the share they take of ticket revenue.
+  venueCommitmentFee: decimal("venue_commitment_fee", { precision: 10, scale: 2 }).default("0.00"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)
@@ -637,8 +658,16 @@ export const experiences = pgTable("experiences", {
         pricePerPerson: number;
         minPrice?: number;
         suggestedPrice?: number;
+        // The add-on attaches to any ticket type, so it is a toggle rather than
+        // a pricing mode of its own. `addonPrice` is what a participant pays and
+        // is derived from the two below; it is kept for tickets saved before the
+        // venue price and the organiser's margin were separated.
+        addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
+        addonVenuePrice?: number;
+        addonMargin?: number;
+        addonInventory?: number;
         depositPerPerson: number;
         ticketCapacity: number;
         sourceRoomId?: string;
@@ -697,6 +726,13 @@ export const experiences = pgTable("experiences", {
   }).default("0.00"), // Commission for promoters/affiliates
 
   // Participant referral perk fields (B2C loop)
+  //
+  // A perk like "bring 3 friends, get a coffee at Bandido" spends the venue's
+  // product, not the organiser's. Marked venue-backed, it travels with the
+  // venue proposal and stays hidden from participants until the venue accepts —
+  // an organiser must not promise someone else's coffee on their behalf.
+  participantReferralVenueBacked: boolean("participant_referral_venue_backed").default(false),
+  participantReferralVenueApprovedAt: timestamp("participant_referral_venue_approved_at"),
   participantReferralDealType: varchar("participant_referral_deal_type"),
   participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
     precision: 5,
@@ -844,6 +880,9 @@ export const experiences = pgTable("experiences", {
   venuePerRoomPerNight: decimal("venue_per_room_per_night", { precision: 10, scale: 2 }).default("0.00"),
   venueMinimumSpend: decimal("venue_minimum_spend", { precision: 10, scale: 2 }).default("0.00"),
   venueRevenueSharePct: decimal("venue_revenue_share_pct", { precision: 5, scale: 2 }).default("0.00"),
+  // Commitment Fee + Revenue Split: the one-off amount the venue pays the
+  // organiser upfront, alongside the share they take of ticket revenue.
+  venueCommitmentFee: decimal("venue_commitment_fee", { precision: 10, scale: 2 }).default("0.00"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)
@@ -872,6 +911,16 @@ export const experiences = pgTable("experiences", {
   venueTargetDeal: varchar("venue_target_deal"),        // target commercial model creator is seeking
   venueTargetDealValue: decimal("venue_target_deal_value", { precision: 10, scale: 2 }), // target amount (€) or % for the deal type
   venueStatus: varchar("venue_status").default("venue_confirmed"), // "venue_confirmed" | "venue_pending"
+
+  // Admin unlock for the untracked "Manual agreement" deal.
+  //
+  // That deal settles off-platform: the app records a percentage it can never
+  // see, verify or collect. Offered as an ordinary dropdown choice it became
+  // the easy default — the same organiser reached for it twice rather than
+  // commit to a trackable deal — so it is no longer selectable on its own.
+  // An admin turns it on for one event, on request, and only then does it
+  // appear. Existing events that already use it are unlocked by backfill.
+  manualDealUnlocked: boolean("manual_deal_unlocked").default(false),
 
   // Participant Visibility
   showParticipantList: boolean("show_participant_list").default(true), // Whether to show participant list publicly
@@ -939,6 +988,35 @@ export const bookings = pgTable("bookings", {
   ticketSkuId: varchar("ticket_sku_id"),
   ticketName: varchar("ticket_name"),
   ticketQuantity: integer("ticket_quantity").notNull().default(1),
+
+  // Point 11: the ticket's own QR, generated at booking. Scanned at the door to
+  // check someone in, and at the counter to redeem an add-on without anyone
+  // having to take the guest's word for it.
+  qrToken: varchar("qr_token", { length: 64 }).unique(),
+  addonRedeemedAt: timestamp("addon_redeemed_at"),
+  addonRedeemedBy: varchar("addon_redeemed_by").references(() => users.id),
+
+  // Point 7: did this person actually turn up?
+  //
+  // Deliberately not derived from QR scans. Casual events will not scan
+  // consistently, so a turnout figure built on scan counts would under-report
+  // every one of them. The organiser confirms attendance — a scan is one way to
+  // set this, marking the list by hand is another, and both count equally.
+  attendanceStatus: varchar("attendance_status", { length: 20 }).default("unknown"),
+  // unknown | attended | no_show
+  attendanceMarkedAt: timestamp("attendance_marked_at"),
+  attendanceSource: varchar("attendance_source", { length: 20 }),
+  // organiser | qr
+
+  // Combi-Ticket add-on chosen at checkout — the optional extra bought on top
+  // of this RSVP, never a second ticket. Name and price are copied from the
+  // ticket at purchase time so re-pricing the add-on later cannot restate what
+  // an existing buyer agreed to pay. addonTotal is already inside `amount`.
+  addonName: varchar("addon_name"),
+  addonUnitPrice: decimal("addon_unit_price", { precision: 10, scale: 2 }).default("0.00"),
+  addonQuantity: integer("addon_quantity").notNull().default(0),
+  addonTotal: decimal("addon_total", { precision: 10, scale: 2 }).default("0.00"),
+
   bookingDate: timestamp("booking_date").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -1714,6 +1792,8 @@ export const venueContracts = pgTable("venue_contracts", {
       minimumSpend?: number;
       revenueSharePct?: number;
       accessFee?: number;
+      /** Commitment Fee + Revenue Split: the venue's one-off payment to the creator. */
+      commitmentFee?: number;
       currency?: string;
       platformPct?: number;
       creatorPct?: number;
@@ -1780,8 +1860,17 @@ export const venueInvites = pgTable("venue_invites", {
   proposedValue: decimal("proposed_value", { precision: 10, scale: 2 }),
   currency: varchar("currency", { length: 10 }).default("eur"),
 
-  // pending → claimed → accepted | declined, or expired
+  // pending → claimed → accepted | countered | declined, or expired
+  //
+  // "countered" exists because declining used to be the only way to say "not on
+  // those terms": the venue had to decline, make an account separately, and wait
+  // for the organiser to start again from scratch. A counter keeps one thread.
   status: varchar("status", { length: 20 }).default("pending"),
+  counterModel: varchar("counter_model", { length: 50 }),
+  counterValue: decimal("counter_value", { precision: 10, scale: 2 }),
+  counterCommitmentFee: decimal("counter_commitment_fee", { precision: 10, scale: 2 }),
+  counterMessage: text("counter_message"),
+  counteredAt: timestamp("countered_at"),
   claimedByUserId: varchar("claimed_by_user_id").references(() => users.id),
   claimedVenueId: varchar("claimed_venue_id").references(() => venues.id),
   declineReason: text("decline_reason"),
@@ -1821,6 +1910,7 @@ export const venueOffers = pgTable("venue_offers", {
       minimumSpend?: number;
       revenueSharePct?: number;
       accessFee?: number;
+      commitmentFee?: number;
       currency?: string;
     }>()
     .default({}),

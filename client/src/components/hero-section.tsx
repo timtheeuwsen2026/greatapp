@@ -46,7 +46,7 @@ export default function HeroSection() {
         
         {/* Community stats */}
         <div className="mt-12 text-center">
-          <p className="text-gray-300 text-sm mb-4">Join 500+ travelers already part of our community</p>
+          <p className="text-gray-300 text-sm mb-4">Join 500+ people already part of our community</p>
           <div className="flex justify-center items-center gap-8 text-sm">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-green-400 rounded-full"></div>

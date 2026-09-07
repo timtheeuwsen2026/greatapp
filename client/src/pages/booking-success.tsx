@@ -4,6 +4,7 @@ import { Link, useLocation } from "wouter";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import Navigation from "@/components/navigation";
+import TicketQr from "@/components/TicketQr";
 import MVGProgressWidget from "@/components/MVGProgressWidget";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -545,6 +546,19 @@ export default function BookingSuccess() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">
+            {/* The check-in code, offered at the moment the ticket is real.
+                This is the first place a participant looks for it. */}
+            {booking?.id && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Your check-in code</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <TicketQr bookingId={booking.id} />
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader>
                 <CardTitle>Experience Details</CardTitle>

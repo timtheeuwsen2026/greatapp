@@ -1,91 +1,124 @@
 import { describe, it, expect } from "vitest";
-import { safeAdd, safeMultiply } from "./pricingService";
+import { getSkuEntryPrice, summariseTicketRevenue } from "./ticketRevenue";
 
 /**
  * V14 QA #4: "a $1,000 ticket with capacity 20 doesn't calculate."
+ * Sep 2026 points 1 and 3: free tickets were entering venue deduction maths, and
+ * add-on money was being counted as ticket revenue.
  *
- * These mirror the Event Builder's Step 8 helpers exactly. Gross revenue is
- * price × capacity, per ticket and in total, whatever shape the inputs arrive
- * in — the builder reads them from text inputs, so strings and blanks are
+ * The builder reads these values from text inputs, so strings and blanks are
  * normal, and a lone ticket with no capacity of its own covers the whole event.
  */
 
-const toNumber = (value: unknown): number => {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const parsed = parseFloat(String(value ?? "").replace(/[^0-9.-]/g, ""));
-  return Number.isFinite(parsed) ? parsed : 0;
-};
+const gross = (skus: any[], maxParticipants: unknown = 0) =>
+  summariseTicketRevenue(skus, maxParticipants).ticketGross;
 
-const skuEffectivePrice = (sku: any): number => {
-  switch (sku?.pricingMode) {
-    case "free_rsvp": return 0;
-    case "pwyw": return toNumber(sku.suggestedPrice ?? sku.minPrice);
-    case "combi": return safeAdd(toNumber(sku.pricePerPerson), toNumber(sku.addonPrice));
-    default: return toNumber(sku.pricePerPerson);
-  }
-};
-
-const skuEffectiveCapacity = (sku: any, skuCount: number, maxParticipants: unknown): number => {
-  const own = toNumber(sku?.ticketCapacity);
-  if (own > 0) return own;
-  return skuCount === 1 ? toNumber(maxParticipants) : 0;
-};
-
-const grossRevenue = (skus: any[], maxParticipants: unknown = 0): number =>
-  skus.reduce(
-    (total, sku) =>
-      safeAdd(total, safeMultiply(skuEffectivePrice(sku), skuEffectiveCapacity(sku, skus.length, maxParticipants))),
-    0,
-  );
-
-describe("Step 8 gross revenue", () => {
+describe("gross ticket revenue", () => {
   it("multiplies price by capacity — the reported case", () => {
-    expect(grossRevenue([{ pricePerPerson: 1000, ticketCapacity: 20 }])).toBe(20000);
+    expect(gross([{ pricePerPerson: 1000, ticketCapacity: 20 }])).toBe(20000);
   });
 
   it("uses the event capacity when a lone ticket has none of its own", () => {
-    // Creator sets 20 spots on the Dates step, then adds one 1,000 ticket.
-    expect(grossRevenue([{ pricePerPerson: 1000 }], 20)).toBe(20000);
+    expect(gross([{ pricePerPerson: 1000 }], 20)).toBe(20000);
   });
 
   it("handles values arriving from text inputs as strings", () => {
-    expect(grossRevenue([{ pricePerPerson: "1000", ticketCapacity: "20" }])).toBe(20000);
-    expect(grossRevenue([{ pricePerPerson: "1,000.50", ticketCapacity: "20" }])).toBe(20010);
+    expect(gross([{ pricePerPerson: "1000", ticketCapacity: "20" }])).toBe(20000);
+    expect(gross([{ pricePerPerson: "1,000.50", ticketCapacity: "20" }])).toBe(20010);
   });
 
   it("adds several ticket types together", () => {
-    expect(grossRevenue([
+    expect(gross([
       { pricePerPerson: 1000, ticketCapacity: 20 },
       { pricePerPerson: 500, ticketCapacity: 10 },
     ])).toBe(25000);
   });
 
-  it("counts a combi ticket's add-on and a free RSVP's zero", () => {
-    expect(grossRevenue([{ pricingMode: "combi", pricePerPerson: 100, addonPrice: 25, ticketCapacity: 10 }])).toBe(1250);
-    expect(grossRevenue([{ pricingMode: "free_rsvp", pricePerPerson: 100, ticketCapacity: 10 }])).toBe(0);
-  });
-
   it("prices a pay-what-you-want ticket at its suggested amount", () => {
-    expect(grossRevenue([{ pricingMode: "pwyw", suggestedPrice: 30, minPrice: 10, ticketCapacity: 10 }])).toBe(300);
+    expect(gross([{ pricingMode: "pwyw", suggestedPrice: 30, minPrice: 10, ticketCapacity: 10 }])).toBe(300);
   });
 
   it("never returns NaN for blank or malformed input", () => {
-    expect(grossRevenue([{ pricePerPerson: "", ticketCapacity: "" }], "")).toBe(0);
-    expect(grossRevenue([{ pricePerPerson: undefined, ticketCapacity: null }])).toBe(0);
-    expect(grossRevenue([])).toBe(0);
+    expect(gross([{ pricePerPerson: "", ticketCapacity: "" }], "")).toBe(0);
+    expect(gross([{ pricePerPerson: undefined, ticketCapacity: null }])).toBe(0);
+    expect(gross([])).toBe(0);
   });
 
   it("keeps large totals exact rather than drifting on floating point", () => {
-    expect(grossRevenue([{ pricePerPerson: 1999.99, ticketCapacity: 300 }])).toBe(599997);
-    expect(grossRevenue([{ pricePerPerson: 0.1, ticketCapacity: 3 }])).toBe(0.3);
+    expect(gross([{ pricePerPerson: 1999.99, ticketCapacity: 300 }])).toBe(599997);
+    expect(gross([{ pricePerPerson: 0.1, ticketCapacity: 3 }])).toBe(0.3);
   });
 
   it("a second ticket without capacity does not silently absorb the event total", () => {
-    // Two tickets, one blank: only the explicit capacity counts, so the number
-    // never doubles behind the creator's back.
-    expect(grossRevenue([
+    expect(gross([
       { pricePerPerson: 1000, ticketCapacity: 20 },
       { pricePerPerson: 500 },
     ], 20)).toBe(20000);
+  });
+});
+
+describe("free tickets are attendance, never money", () => {
+  it("contributes nothing to gross", () => {
+    expect(gross([{ pricingMode: "free_rsvp", pricePerPerson: 100, ticketCapacity: 10 }])).toBe(0);
+  });
+
+  // The reported bug: 32 free + 32 paid had venue maths applied across all 64.
+  it("keeps free seats out of the capacity a venue deal may charge for", () => {
+    const summary = summariseTicketRevenue([
+      { id: "free", pricingMode: "free_rsvp", pricePerPerson: 0, ticketCapacity: 32 },
+      { id: "paid", pricingMode: "fixed", pricePerPerson: 5, ticketCapacity: 32 },
+    ]);
+
+    expect(summary.totalCapacity).toBe(64);
+    expect(summary.paidCapacity).toBe(32);
+    expect(summary.ticketGross).toBe(160);
+    expect(summary.hasFreeTickets).toBe(true);
+
+    // A €4 per-ticket deduction is €128 across the paid tickets, not €256.
+    expect(summary.paidCapacity * 4).toBe(128);
+  });
+
+  it("reports no free tickets when every seat is paid", () => {
+    expect(summariseTicketRevenue([
+      { pricePerPerson: 5, ticketCapacity: 10 },
+    ]).hasFreeTickets).toBe(false);
+  });
+});
+
+describe("add-on money is separate from ticket money", () => {
+  it("leaves the add-on out of the entry price a venue deal is calculated on", () => {
+    expect(getSkuEntryPrice({ pricingMode: "combi", pricePerPerson: 100, addonPrice: 25 })).toBe(100);
+  });
+
+  it("reports add-on gross on its own, never inside ticket gross", () => {
+    const summary = summariseTicketRevenue([
+      { pricingMode: "combi", pricePerPerson: 100, addonPrice: 25, addonName: "Dinner", ticketCapacity: 10 },
+    ]);
+
+    expect(summary.ticketGross).toBe(1000);
+    expect(summary.addOnGross).toBe(250);
+    expect(summary.addOnCapacity).toBe(10);
+  });
+
+  // The run-club shape: free to turn up, and only the coffee carries money.
+  it("counts a free entry with a paid add-on as no ticket revenue at all", () => {
+    const summary = summariseTicketRevenue([
+      { pricingMode: "combi", pricePerPerson: 0, addonPrice: 5.5, addonName: "Coffee", ticketCapacity: 32 },
+    ]);
+
+    expect(summary.ticketGross).toBe(0);
+    expect(summary.paidCapacity).toBe(0);
+    expect(summary.totalCapacity).toBe(32);
+    expect(summary.addOnGross).toBe(176);
+  });
+
+  it("ignores an add-on that was never priced", () => {
+    const summary = summariseTicketRevenue([
+      { pricingMode: "combi", pricePerPerson: 10, addonPrice: 0, ticketCapacity: 5 },
+    ]);
+
+    expect(summary.addOnGross).toBe(0);
+    expect(summary.addOnCapacity).toBe(0);
+    expect(summary.ticketGross).toBe(50);
   });
 });

@@ -25,6 +25,7 @@ import { format } from "date-fns";
 import { VenueInfoCard } from "@/components/VenueInfoCard";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
 import CreatorProfileCard from "@/components/creator-profile-card";
+import OrganiserTurnout from "@/components/OrganiserTurnout";
 import Navigation from "@/components/navigation";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
@@ -1022,6 +1023,15 @@ export default function PublicEventPage() {
               Your Host
             </h2>
           </div>
+          {/* Verified turnout from events that have already finished. This page
+              is what a venue reads before agreeing to anything, so the claim is
+              worth more here than anywhere. The event being viewed is excluded
+              from its own evidence. */}
+          <OrganiserTurnout
+            creatorId={event.creator.id}
+            excludeExperienceId={event.id}
+            className="mb-4"
+          />
           <CreatorProfileCard
             creator={{
               id: event.creator.id,

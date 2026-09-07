@@ -58,6 +58,9 @@ const multiDayEvent = {
   endDate: '2026-09-07T00:00:00.000Z',
 };
 
+// An admin has allowed the untracked manual agreement on this one event.
+const unlockedDayEvent = { ...dayEvent, id: 'exp-day-unlocked', manualDealUnlocked: true };
+
 function renderDashboard(openEvents: any[]) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -139,28 +142,47 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /venue sponsorship/i })).toBeInTheDocument();
     });
-    // Four the platform can settle, plus the manual exception below them.
+    // The five the platform can settle. The manual exception is not among them
+    // unless an admin unlocked this specific event.
     expect(screen.getAllByRole('option')).toHaveLength(5);
     for (const label of [
-      /revenue split/i,
+      /^revenue split/i,
       /ticket deduction/i,
       /upfront rental/i,
       /venue sponsorship/i,
+      /commitment fee \+ revenue split/i,
     ]) {
       expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
     }
     expect(screen.queryByRole('option', { name: /access-only|pay-at-counter/i })).not.toBeInTheDocument();
   });
 
-  it('keeps the manual deal out of the trackable list, under its own warning', async () => {
+  it('does not offer the manual deal on an ordinary event', async () => {
+    // Left in the dropdown it became the default rather than the exception —
+    // one organiser reached for it on two separate venue deals — so a venue
+    // cannot counter into it either.
     const { user, dialog } = await openOfferModal([dayEvent]);
+
+    await user.click(within(dialog).getByTestId('select-venue-offer-model'));
+
+    await waitFor(() => {
+      // Anchored: "Commitment Fee + Revenue Split" also contains the phrase.
+      expect(screen.getByRole('option', { name: /^revenue split/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('option', { name: /manual agreement \(untracked\)/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/exception — the app cannot track this/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the manual deal out of the trackable list on an unlocked event', async () => {
+    const { user, dialog } = await openOfferModal([unlockedDayEvent]);
 
     await user.click(within(dialog).getByTestId('select-venue-offer-model'));
 
     const manual = await screen.findByRole('option', { name: /manual agreement \(untracked\)/i });
 
-    // It has to be reachable — Brendan's event cannot be booked without it —
-    // but never presented as an equal of the deals the app actually settles.
+    // Reachable where it has been allowed — an event that genuinely cannot take
+    // payment through the app still has to be bookable — but never presented as
+    // an equal of the deals the app actually settles.
     expect(manual).toBeInTheDocument();
     expect(screen.getByText(/exception — the app cannot track this/i)).toBeInTheDocument();
 

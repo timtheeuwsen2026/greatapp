@@ -172,7 +172,7 @@ export default function Community() {
                 {activityLoading ? "—" : `${stats.totalTravelers}+`}
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1">
-                <Users className="h-3 w-3" /> Total Travelers
+                <Users className="h-3 w-3" /> Total Members
               </p>
             </div>
             <div>
@@ -283,7 +283,7 @@ export default function Community() {
               👥 Your Tribe is Already Here
             </h2>
             <p className="text-gray-500 dark:text-gray-400">
-              These travelers are looking for their next adventure. Find your people and make the trip happen together.
+              These members are looking for their next experience. Find your people and make it happen together.
             </p>
           </div>
 

@@ -18,14 +18,17 @@ import { normalizeImageUrl } from "@/lib/utils";
 import { type InviteTicketLine } from "@shared/inviteContext";
 import {
   formatVenueDealSummary,
+  getVenueDealOptions,
+  getVenueDealSelectionError,
   getVenueDealTermsKey,
   normalizeVenueDealModel,
 } from "@shared/venueDealModels";
 import { InviteValueContext } from "@/components/InviteValueContext";
+import OrganiserTurnout from "@/components/OrganiserTurnout";
 
 type VenueInvite = {
   token: string;
-  status: 'pending' | 'claimed' | 'accepted' | 'declined' | 'expired';
+  status: 'pending' | 'claimed' | 'accepted' | 'countered' | 'declined' | 'expired';
   expiresAt: string | null;
   contactName: string | null;
   email: string;
@@ -42,6 +45,15 @@ type VenueInvite = {
     value: number | null;
     currency: string;
   };
+  /** A perk the organiser is asking this venue to provide, if any. */
+  proposedPerkSummary?: string | null;
+  counter?: {
+    model: string | null;
+    value: string | number | null;
+    commitmentFee: string | number | null;
+    message: string | null;
+    counteredAt: string | null;
+  } | null;
   experience: {
     id: string;
     slug: string | null;
@@ -58,6 +70,7 @@ type VenueInvite = {
     capacity: number | null;
     ticketTypes: InviteTicketLine[];
   } | null;
+  creatorId: string | null;
   creator: { firstName: string | null; lastName: string | null } | null;
   claimedVenueId: string | null;
 };
@@ -84,6 +97,13 @@ export default function VenueInvitePage() {
   const token = params?.token;
   const [declineReason, setDeclineReason] = useState("");
   const [showDecline, setShowDecline] = useState(false);
+  // Countering used to mean declining, signing up separately, and waiting for a
+  // brand-new proposal. It is one form now, on the same page as the offer.
+  const [showCounter, setShowCounter] = useState(false);
+  const [counterModel, setCounterModel] = useState<string>("");
+  const [counterValue, setCounterValue] = useState<string>("");
+  const [counterFee, setCounterFee] = useState<string>("");
+  const [counterMessage, setCounterMessage] = useState<string>("");
 
   const { data: invite, isLoading, error } = useQuery<VenueInvite>({
     queryKey: ["/api/venue-invites", token],
@@ -92,6 +112,19 @@ export default function VenueInvitePage() {
 
   // Claiming creates the venue from the details the organiser entered and links
   // it to the event; the money terms are confirmed by the accept step after.
+  const counterOptions = getVenueDealOptions({
+    isDaytime: true,
+    surface: "venue",
+    currencySymbol: ({ USD: "$", EUR: "€", GBP: "£" } as Record<string, string>)[
+      String(invite?.deal?.currency || "EUR").toUpperCase()
+    ] || "€",
+    currentValue: counterModel || invite?.deal?.model,
+  });
+  const selectedCounterOption = counterOptions.find((option) => option.value === counterModel);
+  const counterError = counterModel
+    ? getVenueDealSelectionError(counterModel, Number(counterValue) || 0)
+    : "Choose a deal type";
+
   const claimMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/venue-invites/${token}/claim`, {});
@@ -124,6 +157,29 @@ export default function VenueInvitePage() {
         description: readableError(err),
         variant: "destructive",
       });
+    },
+  });
+
+  const counterMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/venue-invites/${token}/counter`, {
+        model: counterModel,
+        value: Number(counterValue) || 0,
+        commitmentFee: counterFee === "" ? undefined : Number(counterFee) || 0,
+        message: counterMessage,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/venue-invites", token] });
+      toast({
+        title: "Counter-offer sent",
+        description: "The organiser has your terms. The invitation stays open while they consider it.",
+      });
+      setShowCounter(false);
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not send your counter", description: readableError(err), variant: "destructive" });
     },
   });
 
@@ -291,8 +347,34 @@ export default function VenueInvitePage() {
                 ticketTypes={experience?.ticketTypes}
               />
 
+              {/* What the organiser has actually delivered before. Capacity is a
+                  hope; this is a record — and it deliberately excludes the event
+                  being proposed, so it cannot be inflated by listing a big room. */}
+              <OrganiserTurnout
+                creatorId={invite.creatorId}
+                excludeExperienceId={experience?.id}
+              />
+
+              {/* If the organiser attached a perk that spends this venue's own
+                  stock, it belongs beside the money terms — it is part of what
+                  they are being asked to agree to, not a detail to discover when
+                  a guest turns up asking for a free coffee. */}
+              {invite.proposedPerkSummary && (
+                <div
+                  className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+                  data-testid="invite-proposed-perk"
+                >
+                  <p className="font-medium">The organiser is also asking you to provide:</p>
+                  <p className="mt-1">{invite.proposedPerkSummary}</p>
+                  <p className="mt-1 text-xs">
+                    Participants are not told about this unless you accept.
+                  </p>
+                </div>
+              )}
+
               <p className="text-sm text-gray-600">
-                Nothing is agreed until you accept. You can decline and the organiser will be told.
+                Nothing is agreed until you accept. You can counter the terms, or decline — the
+                organiser is told either way.
               </p>
             </CardContent>
           </Card>
@@ -331,6 +413,95 @@ export default function VenueInvitePage() {
                   Sign in or create an account
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
+              </CardContent>
+            </Card>
+          ) : showCounter ? (
+            <Card>
+              <CardContent className="space-y-3 py-6">
+                <p className="text-sm font-medium text-gray-900">Propose your own terms</p>
+                <p className="text-xs text-gray-500">
+                  The invitation stays open while the organiser considers this — you do not have to
+                  turn it down to negotiate.
+                </p>
+
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700" htmlFor="counter-model">
+                    Deal type
+                  </label>
+                  <select
+                    id="counter-model"
+                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                    value={counterModel}
+                    onChange={(event) => setCounterModel(event.target.value)}
+                    data-testid="invite-counter-model"
+                  >
+                    <option value="">Select a deal type</option>
+                    {counterOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedCounterOption && selectedCounterOption.valueKind !== 'none' && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-700" htmlFor="counter-value">
+                      {selectedCounterOption.valueLabel}
+                    </label>
+                    <input
+                      id="counter-value"
+                      type="number"
+                      min="0"
+                      max={selectedCounterOption.valueKind === 'percent' ? 100 : undefined}
+                      step={selectedCounterOption.valueKind === 'percent' ? 1 : 0.01}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={counterValue}
+                      onChange={(event) => setCounterValue(event.target.value)}
+                      data-testid="invite-counter-value"
+                    />
+                  </div>
+                )}
+
+                {selectedCounterOption?.secondaryTermsKey === 'commitmentFee' && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-700" htmlFor="counter-fee">
+                      {selectedCounterOption.secondaryValueLabel}
+                    </label>
+                    <input
+                      id="counter-fee"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={counterFee}
+                      onChange={(event) => setCounterFee(event.target.value)}
+                      data-testid="invite-counter-fee"
+                    />
+                  </div>
+                )}
+
+                <Textarea
+                  value={counterMessage}
+                  onChange={(event) => setCounterMessage(event.target.value)}
+                  placeholder="We'd rather do 20% than a flat fee — Tuesdays are quiet for us anyway."
+                  rows={3}
+                  data-testid="invite-counter-message"
+                />
+
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => counterMutation.mutate()}
+                    disabled={counterMutation.isPending || !!counterError}
+                    data-testid="invite-counter-confirm"
+                  >
+                    {counterMutation.isPending ? 'Sending…' : 'Send counter-offer'}
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowCounter(false)}>
+                    Back
+                  </Button>
+                </div>
+                {counterError && (
+                  <p className="text-xs text-red-600" data-testid="invite-counter-error">{counterError}</p>
+                )}
               </CardContent>
             </Card>
           ) : showDecline ? (
@@ -379,6 +550,14 @@ export default function VenueInvitePage() {
               </Button>
               <Button
                 variant="outline"
+                className="w-full"
+                onClick={() => setShowCounter(true)}
+                data-testid="invite-counter"
+              >
+                Counter the terms
+              </Button>
+              <Button
+                variant="ghost"
                 className="w-full"
                 onClick={() => setShowDecline(true)}
                 data-testid="invite-decline"

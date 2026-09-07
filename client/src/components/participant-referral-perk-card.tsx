@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { getParticipantReferralSummary } from "@/lib/promotionDeals";
+import { canPromisePerk } from "@shared/perkApproval";
 import { CheckCircle2, Gift, Sparkles } from "lucide-react";
 
 export type ParticipantReferralPerkOffer = {
@@ -7,6 +8,8 @@ export type ParticipantReferralPerkOffer = {
   participantReferralCommissionPct?: string | number | null;
   participantReferralMilestoneAttendeeTarget?: string | number | null;
   participantReferralMilestoneRewardDescription?: string | null;
+  participantReferralVenueBacked?: boolean | null;
+  participantReferralVenueApprovedAt?: string | Date | null;
 };
 
 type ParticipantReferralPerkCardProps = {
@@ -15,17 +18,15 @@ type ParticipantReferralPerkCardProps = {
   className?: string;
 };
 
+/**
+ * Is there a perk to show?
+ *
+ * A perk the organiser marked as the venue's is held back until the venue has
+ * actually agreed to it. Showing it earlier promises someone else's coffee on
+ * their behalf, and the first they would hear of it is a guest at the counter.
+ */
 export function hasActiveParticipantReferralPerk(experience?: ParticipantReferralPerkOffer | null): boolean {
-  if (experience?.participantReferralDealType === "commission_per_ticket") {
-    return Number(experience.participantReferralCommissionPct || 0) > 0;
-  }
-
-  if (experience?.participantReferralDealType === "milestone_barter") {
-    return Number(experience.participantReferralMilestoneAttendeeTarget || 0) > 0
-      && Boolean(experience.participantReferralMilestoneRewardDescription?.trim());
-  }
-
-  return false;
+  return canPromisePerk(experience);
 }
 
 export default function ParticipantReferralPerkCard({

@@ -74,7 +74,7 @@ export default function WhyUs() {
               </CardHeader>
               <CardContent>
                 <p className="text-gray-600 mb-4">
-                  See who's joining before you book. Connect with fellow travelers and build your tribe before the journey begins.
+                  See who's joining before you book. Connect with the other people going and build your tribe before the day arrives.
                 </p>
                 <Badge variant="secondary" className="text-xs">
                   Connect Before You Book
@@ -277,7 +277,7 @@ export default function WhyUs() {
               Impact by the Numbers
             </h2>
             <p className="text-xl text-gray-600">
-              Real results from our community of transformational travelers
+              Real results from the people in our community
             </p>
           </div>
 
@@ -337,7 +337,7 @@ export default function WhyUs() {
                 <BrandLogo className="h-20 w-auto rounded-xl" />
               </div>
               <p className="text-gray-400 mb-6 max-w-md">
-                Discover and create life-changing experiences. Join transformative retreats, adventures, and workations with like-minded people.
+                Discover and create local experiences worth showing up for. Join runs, workshops, socials and more with people near you.
               </p>
             </div>
 

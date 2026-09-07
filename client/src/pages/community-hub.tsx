@@ -378,7 +378,7 @@ export default function CommunityHub() {
             <Users className="h-12 w-12 text-primary mx-auto mb-4" />
             <h2 className="text-xl font-semibold mb-2">Join the Community</h2>
             <p className="text-gray-600 mb-4">
-              Sign in to access the community hub and connect with fellow travelers.
+              Sign in to access the community hub and connect with other members.
             </p>
             <Button onClick={() => window.location.href = '/api/login'} className="w-full">
               Sign In

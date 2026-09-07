@@ -14,6 +14,7 @@ import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
 import { ReviewSummary } from "@/components/ReviewSummary";
+import OrganiserTurnout from "@/components/OrganiserTurnout";
 import { EventAttendanceProgress } from "@/components/AttendanceProgress";
 import PromoterReferralCard, { type PromoterReferralProfile } from "@/components/promoter-referral-card";
 import ParticipantReferralPerkCard from "@/components/participant-referral-perk-card";
@@ -29,6 +30,7 @@ import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { isMvgStillForming } from "@/lib/experienceAvailability";
+import { getTicketAddon } from "@shared/ticketAddons";
 import { formatCapacityParticipantCount, formatMvgParticipantCount } from "@/lib/participantCounts";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { 
@@ -96,6 +98,10 @@ export default function ExperienceDetails() {
   // Ticket selection state - auto-select first ticket when available
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [ticketQuantities, setTicketQuantities] = useState<Record<string, number>>({});
+  // Combi-Ticket add-ons the buyer has opted into, per ticket. Nothing is
+  // pre-selected: the add-on is an offer, and a buyer who ignores it books the
+  // plain RSVP they came for.
+  const [addonQuantities, setAddonQuantities] = useState<Record<string, number>>({});
   const [showShareModal, setShowShareModal] = useState(false);
 
   const { data: experience, isLoading, error } = useQuery<ExperienceWithStats>({
@@ -722,7 +728,15 @@ export default function ExperienceDetails() {
 
             {/* Reviews of this event, and the organiser's standing. Below the
                 threshold neither shows a number. */}
-            <div className="mb-8">
+            <div className="mb-8 space-y-4">
+              {/* Turnout sits with the reviews because it answers the same
+                  question from the other side: reviews say what people thought,
+                  this says how many actually came. Excludes this event, which
+                  has not happened yet. */}
+              <OrganiserTurnout
+                creatorId={experience.creatorId}
+                excludeExperienceId={experience.id}
+              />
               <ReviewSummary
                 endpoint={`/api/users/${experience.creatorId}/reviews`}
                 title="Reviews of this organiser"
@@ -1454,6 +1468,20 @@ export default function ExperienceDetails() {
                             Math.max(1, ticketQuantities[ticketId] || 1),
                             Math.max(1, spotsAvailable),
                           );
+                          // A Combi-Ticket carries an optional extra. It is never
+                          // pre-selected, and never more than one per attendee, so
+                          // lowering the ticket count lowers the add-ons with it.
+                          const addon = getTicketAddon(ticket);
+                          const addonQuantity = addon
+                            ? Math.min(addonQuantities[ticketId] ?? 0, selectedQuantity)
+                            : 0;
+                          const addonTotal = addon ? addon.unitPrice * addonQuantity : 0;
+                          const orderTotal =
+                            Number(ticket.pricePerPerson || 0) * selectedQuantity + addonTotal;
+                          const checkoutHref =
+                            `/checkout/${experience.id}?ticketSkuId=${ticketId}`
+                            + `&quantity=${selectedQuantity}`
+                            + `&addonQuantity=${addonQuantity}`;
                           return (
                             <div 
                               key={ticketId}
@@ -1515,6 +1543,78 @@ export default function ExperienceDetails() {
                                   />
                                 </div>
                               )}
+                              {/* Combi-Ticket add-on — the optional extra bought on
+                                  top of this RSVP, never a second ticket. */}
+                              {!isSoldOut && addon && (
+                                <div
+                                  className="mb-3 rounded-lg border border-primary/30 bg-primary/5 p-3"
+                                  data-testid={`ticket-addon-${index}`}
+                                >
+                                  <label className="flex cursor-pointer items-start gap-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={addonQuantity > 0}
+                                      onChange={(event) => {
+                                        setAddonQuantities((current) => ({
+                                          ...current,
+                                          [ticketId]: event.target.checked ? selectedQuantity : 0,
+                                        }));
+                                      }}
+                                      className="mt-0.5 h-4 w-4 accent-primary"
+                                      data-testid={`checkbox-ticket-addon-${index}`}
+                                    />
+                                    <span className="flex-1">
+                                      <span className="block text-sm font-medium text-gray-900 dark:text-white">
+                                        Add {addon.name}
+                                      </span>
+                                      <span className="block text-xs text-gray-500 dark:text-gray-400">
+                                        {formatCurrency(addon.unitPrice, experience.currency)} each · optional
+                                      </span>
+                                    </span>
+                                  </label>
+
+                                  {addonQuantity > 0 && selectedQuantity > 1 && (
+                                    <div className="mt-3 flex items-center justify-between gap-3">
+                                      <label
+                                        htmlFor={`ticket-addon-quantity-${index}`}
+                                        className="text-xs font-medium text-gray-700 dark:text-gray-300"
+                                      >
+                                        How many?
+                                      </label>
+                                      <Input
+                                        id={`ticket-addon-quantity-${index}`}
+                                        type="number"
+                                        min={1}
+                                        max={selectedQuantity}
+                                        value={addonQuantity}
+                                        onChange={(event) => {
+                                          const next = Math.min(
+                                            selectedQuantity,
+                                            Math.max(0, Number.parseInt(event.target.value, 10) || 0),
+                                          );
+                                          setAddonQuantities((current) => ({
+                                            ...current,
+                                            [ticketId]: next,
+                                          }));
+                                        }}
+                                        className="w-20"
+                                        data-testid={`input-ticket-addon-quantity-${index}`}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {addonQuantity > 0 && (
+                                    <div
+                                      className="mt-3 flex justify-between border-t border-primary/20 pt-2 text-xs font-medium text-gray-700 dark:text-gray-300"
+                                      data-testid={`ticket-addon-total-${index}`}
+                                    >
+                                      <span>{addon.name} × {addonQuantity}</span>
+                                      <span>{formatCurrency(addonTotal, experience.currency)}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
                               {/* Explicit Book This Ticket CTA - Professional styling */}
                               <div className="mt-4">
                                 {isSoldOut ? (
@@ -1522,7 +1622,7 @@ export default function ExperienceDetails() {
                                     Sold Out
                                   </Button>
                                 ) : isAuthenticated ? (
-                                  <Link href={`/checkout/${experience.id}?ticketSkuId=${ticketId}&quantity=${selectedQuantity}`}>
+                                  <Link href={checkoutHref}>
                                     <Button 
                                       className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" 
                                       size="lg"
@@ -1534,10 +1634,17 @@ export default function ExperienceDetails() {
                                           · {formatCurrency(ticketDeposit * selectedQuantity, experience.currency)} deposit
                                         </span>
                                       )}
+                                      {/* A free RSVP that took the add-on is no longer
+                                          free — say so before the buyer clicks. */}
+                                      {ticketDeposit <= 0 && addonQuantity > 0 && (
+                                        <span className="ml-2 text-purple-200">
+                                          · {formatCurrency(orderTotal, experience.currency)}
+                                        </span>
+                                      )}
                                     </Button>
                                   </Link>
                                 ) : (
-                                  <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}?ticketSkuId=${ticketId}&quantity=${selectedQuantity}`)}`}>
+                                  <a href={`/login?returnTo=${encodeURIComponent(checkoutHref)}`}>
                                     <Button className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" size="lg" data-testid={`button-login-ticket-${index}`}>
                                       Sign In to Book
                                     </Button>

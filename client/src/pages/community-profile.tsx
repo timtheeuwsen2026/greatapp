@@ -1,6 +1,7 @@
 import { useParams, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import OrganiserTurnout from "@/components/OrganiserTurnout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, MapPin, Briefcase, Globe, Calendar } from "lucide-react";
@@ -93,7 +94,7 @@ export default function CommunityProfile() {
         <div className="text-center max-w-sm">
           <div className="text-5xl mb-4">🌍</div>
           <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Profile not found</h2>
-          <p className="text-gray-500 mb-6">This traveler's profile isn't available.</p>
+          <p className="text-gray-500 mb-6">This member's profile isn't available.</p>
           <Button onClick={() => navigate("/community")}>Back to Community</Button>
         </div>
       </div>
@@ -186,6 +187,11 @@ export default function CommunityProfile() {
             )}
           </div>
         </div>
+
+        {/* Verified turnout — the one number on a profile that cannot be
+            claimed. It renders nothing for someone who has never hosted, so a
+            participant's profile is unchanged. */}
+        <OrganiserTurnout creatorId={userId} className="mb-8" />
 
         {/* Trips section */}
         {profile.trips.length > 0 && (

@@ -216,7 +216,7 @@ export default function ConversationalGuestOnboarding({
       id: 'complete',
       title: 'All set!',
       icon: <CheckCircle className="w-6 h-6" />,
-      question: "Perfect! Your profile is ready. You can now discover experiences, connect with other travelers, and start planning amazing adventures.",
+      question: "Perfect! Your profile is ready. You can now discover experiences, connect with other members, and start planning.",
       subtitle: "Welcome to the Great community!"
     }
   ];
@@ -602,7 +602,7 @@ export default function ConversationalGuestOnboarding({
             <div className="space-y-2">
               <h3 className="text-xl font-semibold text-gray-900">Profile Complete!</h3>
               <p className="text-gray-600">
-                You're all set to discover amazing experiences and connect with fellow travelers.
+                You're all set to discover experiences and connect with the people going.
               </p>
             </div>
           </div>

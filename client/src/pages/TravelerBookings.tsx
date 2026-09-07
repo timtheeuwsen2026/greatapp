@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import TicketQr from "@/components/TicketQr";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -416,6 +417,10 @@ export default function TravelerBookings() {
                           <p className="mt-2 text-xs text-gray-500" data-testid={`text-booking-created-${booking.id}`}>
                             Booked on {new Date(booking.bookingDate || booking.createdAt).toLocaleDateString()}
                           </p>
+
+                          {/* The code the door scans. Collapsed until asked for:
+                              it admits whoever holds it. */}
+                          <TicketQr bookingId={booking.id} className="mt-3" />
                         </div>
                       </div>
                     </CardContent>

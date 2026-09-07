@@ -12,6 +12,9 @@ const migrationUrls = [
   new URL("../migrations/20260823_review_replies.sql", import.meta.url),
   new URL("../migrations/20260827_attendance_milestones.sql", import.meta.url),
   new URL("../migrations/20260828_experience_slugs.sql", import.meta.url),
+  new URL("../migrations/20260904_combi_addons_and_manual_deal_lock.sql", import.meta.url),
+  new URL("../migrations/20260906_commitment_fee_deal.sql", import.meta.url),
+  new URL("../migrations/20260906_perks_attendance_qr_counters.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

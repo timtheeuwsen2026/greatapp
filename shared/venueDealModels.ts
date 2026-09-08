@@ -449,7 +449,7 @@ function affordabilityErrors(
     ticketGross: summary.ticketGross,
     paidTickets: summary.paidCapacity,
     platformPct: Number.isFinite(platformPct) ? platformPct : 0,
-    currencySymbol: currencySymbolFor(input.currency),
+    currencyDisplay: currencyDisplay(input.currency),
   });
 
   return check.message ? [check.message] : [];
@@ -489,6 +489,13 @@ export function validateExperienceVenueDeal(input: ExperienceVenueDealInput): st
 export function getVenueDealDefinition(model: unknown): VenueDealOption | null {
   const normalized = normalizeVenueDealModel(model);
   return normalized ? render(DEFINITIONS[normalized], "€") : null;
+}
+
+
+/** Currency symbol for a deal label. Without one every label reads as euros. */
+export function dealCurrencySymbol(currency: unknown): string {
+  const code = String(currency || "eur").trim().toLowerCase();
+  return ({ usd: "$", eur: "€", gbp: "£" } as Record<string, string>)[code] || code.toUpperCase() + " ";
 }
 
 export function getVenueDealLabel(model: unknown, currencySymbol = "€"): string {
@@ -613,11 +620,11 @@ export type VenuePayoutCapInput = {
   /** Multi-day only: rooms multiplied by nights. */
   roomNights?: number;
   /**
-   * Currency symbol for the message. The publication checklist renders this
-   * text verbatim, so an unformatted number there reads as a different figure
-   * from the identical one on the Pricing step.
+   * Symbol and which side it sits on. The publication checklist renders this
+   * text verbatim, so a number formatted differently here reads as a different
+   * figure from the identical one on the Pricing step.
    */
-  currencySymbol?: string;
+  currencyDisplay?: { symbol: string; before: boolean };
 };
 
 export type VenuePayoutCapResult = {
@@ -668,7 +675,7 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
   const totalTakePct = gross > 0 ? round2(((venueCost + platformFee) / gross) * 100) : 0;
   const exceedsGross = gross > 0 && venueCost + platformFee > gross + 0.005;
 
-  const money = (value: number) => formatMoneyish(value, input.currencySymbol);
+  const money = (value: number) => formatMoneyish(value, input.currencyDisplay);
 
   return {
     venueCost,
@@ -690,10 +697,22 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
   };
 }
 
-/** Minimal symbol lookup for the warning text; the UI has its own formatter. */
-function currencySymbolFor(currency: unknown): string {
+/**
+ * Symbol and side for the warning text.
+ *
+ * Side matters: the Pricing calculator writes "$2,000.00" while this sentence
+ * wrote "2,000.00 $", so the same amount appeared formatted two different ways
+ * on one screen. The euro genuinely does trail in this locale; the dollar does
+ * not.
+ */
+function currencyDisplay(currency: unknown): { symbol: string; before: boolean } {
   const code = String(currency || "").trim().toLowerCase();
-  return ({ usd: "$", eur: "€", gbp: "£" } as Record<string, string>)[code] || "";
+  const table: Record<string, { symbol: string; before: boolean }> = {
+    usd: { symbol: "$", before: true },
+    gbp: { symbol: "£", before: true },
+    eur: { symbol: "€", before: false },
+  };
+  return table[code] || { symbol: "", before: false };
 }
 
 function round2(value: number): number {
@@ -705,13 +724,18 @@ function round2(value: number): number {
  * currency symbol when the caller supplied one. The checklist prints this
  * message as-is, so it has to be readable on its own.
  */
-function formatMoneyish(value: number, currencySymbol?: string): string {
+function formatMoneyish(value: number, display?: { symbol: string; before: boolean }): string {
   const negative = value < 0;
   const formatted = Math.abs(value).toLocaleString("en-GB", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  const withSymbol = currencySymbol ? `${formatted} ${currencySymbol}` : formatted;
+  const symbol = display?.symbol;
+  const withSymbol = !symbol
+    ? formatted
+    : display!.before
+      ? `${symbol}${formatted}`
+      : `${formatted} ${symbol}`;
   return negative ? `-${withSymbol}` : withSymbol;
 }
 

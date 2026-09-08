@@ -72,7 +72,9 @@ export default function VenueHome() {
   // Same gate as /venue-dashboard. Without it this page showed venue-only cards
   // and live counts to whatever role happened to be active.
   if (!authLoading && !hasRequiredRole) {
-    return <AccessDenied requiredRole="venue_provider" />;
+    // isAuthenticated matters: without it the component defaults to "you must
+    // be logged in", which tells a signed-in creator their session broke.
+    return <AccessDenied requiredRole="venue_provider" isAuthenticated />;
   }
 
   return (

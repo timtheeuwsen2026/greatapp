@@ -3,6 +3,7 @@ import {
   calculateVenueEarnings,
   canSelectVenueDeal,
   checkVenuePayoutCap,
+  dealCurrencySymbol,
   getVenueDealOptions,
   isUntrackedVenueDeal,
   getVenueDealLabel,
@@ -464,5 +465,69 @@ describe("commitment fee plus revenue share", () => {
       .toBe("Enter a percentage greater than zero");
     expect(getVenueDealSelectionError("commitment_plus_revenue_share", 140))
       .toBe("Revenue share percentage cannot exceed 100");
+  });
+});
+
+
+describe("the over-limit warning reads the same as the calculator beside it", () => {
+  const overLimit = {
+    model: "revenue_share" as const,
+    value: 90,
+    ticketGross: 2000,
+    paidTickets: 20,
+    platformPct: 15,
+  };
+
+  it("puts a dollar in front of the number, the way the calculator does", () => {
+    const message = checkVenuePayoutCap({
+      ...overLimit,
+      currencyDisplay: { symbol: "$", before: true },
+    }).message!;
+
+    expect(message).toContain("$1,800.00");
+    expect(message).toContain("$300.00");
+    // The euro-style trailing symbol was what made one screen show the same
+    // amount two different ways.
+    expect(message).not.toContain("1,800.00 $");
+  });
+
+  it("keeps the euro after the number, which is correct for this locale", () => {
+    const message = checkVenuePayoutCap({
+      ...overLimit,
+      currencyDisplay: { symbol: "€", before: false },
+    }).message!;
+
+    expect(message).toContain("1,800.00 €");
+  });
+
+  it("groups thousands rather than printing a bare number", () => {
+    const message = checkVenuePayoutCap(overLimit).message!;
+    expect(message).toContain("1,800.00");
+    expect(message).not.toContain("1800.00");
+  });
+
+  it("still says the figure is on ticket sales alone", () => {
+    expect(checkVenuePayoutCap(overLimit).message).toContain("on ticket sales");
+  });
+});
+
+describe("deal labels carry the event's own currency", () => {
+  it("never falls back to euros for a dollar event", () => {
+    expect(dealCurrencySymbol("usd")).toBe("$");
+    expect(dealCurrencySymbol("USD")).toBe("$");
+    expect(getVenueDealLabel("venue_sponsored", dealCurrencySymbol("usd")))
+      .toBe("Venue Sponsorship ($)");
+    expect(getVenueDealLabel("commitment_plus_revenue_share", dealCurrencySymbol("usd")))
+      .toBe("Commitment Fee + Revenue Split ($ + %)");
+  });
+
+  it("defaults to euros only when no currency was given", () => {
+    expect(dealCurrencySymbol(null)).toBe("€");
+    expect(getVenueDealLabel("venue_sponsored", dealCurrencySymbol("eur")))
+      .toBe("Venue Sponsorship (€)");
+  });
+
+  it("falls back to the code itself for a currency with no symbol", () => {
+    expect(dealCurrencySymbol("sek")).toBe("SEK ");
   });
 });

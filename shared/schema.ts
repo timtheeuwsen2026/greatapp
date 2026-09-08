@@ -516,7 +516,7 @@ export const experienceDrafts = pgTable("experience_drafts", {
   ),
 
   // Pillar B: Commercial venue terms (decoupled from platform fee)
-  venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
+  venueCompensationModel: varchar("venue_compensation_model").default("revenue_share"),
   venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
   venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
   // Multi-day only: the venue's nightly rate for each room used.
@@ -878,7 +878,7 @@ export const experiences = pgTable("experiences", {
   ),
 
   // Pillar B: Commercial venue terms (decoupled from platform fee)
-  venueCompensationModel: varchar("venue_compensation_model").default("access_only"),
+  venueCompensationModel: varchar("venue_compensation_model").default("revenue_share"),
   venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
   venuePerHeadAmount: decimal("venue_per_head_amount", { precision: 10, scale: 2 }).default("0.00"),
   // Multi-day only: the venue's nightly rate for each room used.

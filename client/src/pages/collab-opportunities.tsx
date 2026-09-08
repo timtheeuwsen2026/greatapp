@@ -41,7 +41,10 @@ export default function CollabOpportunities() {
   const queryClient = useQueryClient();
   const [postOpen, setPostOpen] = useState(false);
 
-  const { data, isLoading } = useQuery<{ ready: Opportunity[]; forming: Opportunity[] }>({
+  const { data, isLoading, isError, refetch, isRefetching } = useQuery<{
+    ready: Opportunity[];
+    forming: Opportunity[];
+  }>({
     queryKey: ["/api/collab/opportunities"],
   });
 
@@ -93,6 +96,24 @@ export default function CollabOpportunities() {
 
         {isLoading ? (
           <p className="text-gray-500">Loading opportunities…</p>
+        ) : isError ? (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="py-8 text-center">
+              <p className="font-medium text-red-900">Couldn't load opportunities</p>
+              <p className="mt-1 text-sm text-red-800">
+                Nothing has gone missing — we just couldn't reach the feed. Try again.
+              </p>
+              <Button
+                variant="outline"
+                className="mt-4"
+                disabled={isRefetching}
+                onClick={() => refetch()}
+                data-testid="button-retry-collab"
+              >
+                {isRefetching ? "Retrying…" : "Try again"}
+              </Button>
+            </CardContent>
+          </Card>
         ) : (
           <>
             <section className="mb-10">

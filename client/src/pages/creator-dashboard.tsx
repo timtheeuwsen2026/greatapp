@@ -3,7 +3,8 @@ import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
-import { getVenueDealLabel, formatVenueDealSummary } from "@shared/venueDealModels";
+import { getVenueDealLabel,
+  dealCurrencySymbol as dealSymbol, formatVenueDealSummary } from "@shared/venueDealModels";
 import { Button } from "@/components/ui/button";
 import MyOpenPostings from "@/components/MyOpenPostings";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1923,7 +1924,7 @@ function CreatorDashboardContent() {
                     <CardContent className="text-sm text-gray-600 dark:text-gray-400">
                       {invite.proposedModel && (
                         <p>
-                          Proposed: {getVenueDealLabel(invite.proposedModel)}
+                          Proposed: {getVenueDealLabel(invite.proposedModel, dealSymbol(invite.currency))}
                           {invite.proposedValue != null && ` · ${invite.proposedValue}${invite.proposedModel === "revenue_share" ? "%" : ""}`}
                         </p>
                       )}

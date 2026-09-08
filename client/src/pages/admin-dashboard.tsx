@@ -48,7 +48,8 @@ import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
-import { getVenueDealLabel, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
+import { getVenueDealLabel,
+  dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
 interface VenueWithOwner extends Venue {
   ownerName: string | null;
@@ -2232,7 +2233,7 @@ function AdminVenueOffersTab() {
                     <div className="flex-1 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold">{venue?.name ?? "Unknown Venue"}</span>
-                        <Badge variant="outline" className="text-xs">{getVenueDealLabel(offer.model)}</Badge>
+                        <Badge variant="outline" className="text-xs">{getVenueDealLabel(offer.model, dealSymbol(offer.currency))}</Badge>
                         <Badge variant="secondary" className="text-xs">Hidden from creator</Badge>
                       </div>
                       <p className="text-sm text-gray-500">

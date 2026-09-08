@@ -53,6 +53,7 @@ import {
   getVenueDealSelectionError,
   getVenueDealTermsKey,
   getVenueDealLabel,
+  dealCurrencySymbol as venueCurrencySymbol,
   isVenueDealSelectable,
 } from "@shared/venueDealModels";
 import { isSingleDayExperience } from "@shared/depositRules";
@@ -1118,7 +1119,7 @@ function VenueDashboardContent() {
                               <div className="flex items-center gap-2 text-sm">
                                 <span className="text-gray-500">Preferred deal:</span>
                                 <Badge className="bg-green-100 text-green-800 border-green-300">
-                                  {getVenueDealLabel(event.venueTargetDeal)}
+                                  {getVenueDealLabel(event.venueTargetDeal, venueCurrencySymbol(event.currency))}
                                 </Badge>
                               </div>
                             )}

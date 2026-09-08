@@ -10050,16 +10050,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   /** Everything currently open, in the two groups the feed renders. */
   async function buildCollabOpportunities() {
+    // No per-source catch. A source that fails must not masquerade as a source
+    // with nothing in it: that turned a database hiccup into an empty feed and
+    // left the count and the list disagreeing with no way to tell which was
+    // right.
     const [openEvents, flashDeals, pool, ideas] = await Promise.all([
-      storage.getOpenVenueEvents().catch(() => [] as any[]),
+      storage.getOpenVenueEvents(),
       db
         .select({ deal: venueFlashDeals, venue: venues })
         .from(venueFlashDeals)
         .innerJoin(venues, eq(venueFlashDeals.venueId, venues.id))
-        .where(and(eq(venueFlashDeals.status, "active"), eq(venues.approved, true)))
-        .catch(() => [] as any[]),
-      storage.getPromotableExperiences().catch(() => [] as any[]),
-      storage.getOpenCollabIdeas().catch(() => [] as any[]),
+        .where(and(eq(venueFlashDeals.status, "active"), eq(venues.approved, true))),
+      storage.getPromotableExperiences(),
+      storage.getOpenCollabIdeas(),
     ]);
 
     // "Ready to act on": a real date, a real counterparty, a concrete button.
@@ -10125,7 +10128,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/collab/opportunities", isAuthenticated, async (_req: any, res) => {
     try {
-      res.json(await buildCollabOpportunities());
+      const { ready, forming } = await buildCollabOpportunities();
+      res.json({
+        ready,
+        forming,
+        // Same numbers the summary badge shows, from the same call, so a badge
+        // that disagrees with the list is immediately visible as a bug.
+        readyCount: ready.length,
+        formingCount: forming.length,
+      });
     } catch (error) {
       console.error("Error building collab opportunities:", error);
       res.status(500).json({ message: "Failed to load opportunities" });
@@ -10138,8 +10149,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { ready, forming } = await buildCollabOpportunities();
       res.json({ readyCount: ready.length, formingCount: forming.length });
     } catch (error) {
+      // Reported as unavailable, not as zero: a badge reading 13 over a page
+      // that renders nothing is worse than no badge at all.
       console.error("Error summarising collab opportunities:", error);
-      res.json({ readyCount: 0, formingCount: 0 });
+      res.status(500).json({ message: "Failed to summarise opportunities" });
     }
   });
 

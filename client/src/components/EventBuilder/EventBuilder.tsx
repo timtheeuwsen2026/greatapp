@@ -1149,6 +1149,42 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     editingExperienceId,
   );
 
+  /**
+   * Move to a step, persisting the current one on the way.
+   *
+   * Next did this; clicking a tab in the stepper row did not, and that is
+   * exactly how someone reviews a nearly-finished draft — hopping between
+   * steps to check their work. Every edit made that way was silently lost.
+   */
+  const goToStep = async (stepId: number) => {
+    if (stepId === currentStep) return;
+    setCurrentStep(stepId);
+
+    try {
+      const formData = form.getValues();
+
+      if (!currentDraftId) {
+        if (!user?.id) return;
+        const draftData = normalizeDraftForSave({
+          ...formData,
+          currentStep: stepId,
+          creatorId: user.id,
+        });
+        const response = await apiRequest("POST", "/api/experience-drafts", draftData);
+        const result = await response.json();
+        if (result.id) {
+          setCurrentDraftId(result.id);
+          window.history.replaceState(null, "", `/event-builder/${result.id}`);
+        }
+      } else {
+        autoSaveMutation.mutate({ ...formData, currentStep: stepId } as any);
+      }
+    } catch (error) {
+      console.error("Draft save during stepper navigation failed:", error);
+      setSaveError(error instanceof Error ? error.message : "Draft save failed");
+    }
+  };
+
   const nextStep = async () => {
     // A venue that is already booked on these dates cannot host this event.
     // Refuse to carry the creator deeper into a plan that cannot happen —
@@ -2138,7 +2174,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
                     "flex items-center gap-2",
                     isActive && "ring-2 ring-primary ring-offset-2"
                   )}
-                  onClick={() => setCurrentStep(step.id)}
+                  onClick={() => { void goToStep(step.id); }}
                   data-testid={`step-${step.id}-button`}
                 >
                   <Icon className="w-4 h-4" />
@@ -5952,7 +5988,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
     paidTickets: chargeableCapacity,
     platformPct,
     roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
-    currencySymbol: dealCurrencySymbol,
+    currencyDisplay: { symbol: dealCurrencySymbol, before: dealCurrencySymbol !== '€' },
   });
 
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';

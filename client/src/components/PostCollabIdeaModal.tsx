@@ -88,7 +88,18 @@ export default function PostCollabIdeaModal({
     },
   });
 
-  const canSubmit = form.title.trim() !== "" && form.seekingPartnerType !== "";
+  // The value of this feature is the matching, and the matching filters on
+  // location, capacity and category. A posting with none of those matches
+  // nobody by construction, and then tells the poster to "widen the area" they
+  // never entered. So the fields the filter needs are required.
+  const missing = [
+    form.title.trim() === "" ? "a title" : null,
+    form.seekingPartnerType === "" ? "who you are looking for" : null,
+    form.city.trim() === "" ? "an area" : null,
+    !form.groupSizeMin && !form.groupSizeMax ? "a group size" : null,
+    !form.estimatedStart && !form.estimatedEnd ? "an estimated period" : null,
+  ].filter(Boolean) as string[];
+  const canSubmit = missing.length === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -238,6 +249,12 @@ export default function PostCollabIdeaModal({
               data-testid="input-collab-notes"
             />
           </div>
+
+          {missing.length > 0 && (
+            <p className="text-xs text-amber-700" data-testid="text-collab-missing">
+              Still needed so the right people hear about it: {missing.join(", ")}.
+            </p>
+          )}
 
           <Button
             className="w-full"

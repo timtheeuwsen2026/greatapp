@@ -61,7 +61,9 @@ export function useDashboardRedirect() {
     getCurrentDashboard: () => user?.role ? dashboardRoutes[user.role] : "/",
     getCorrectDashboard: (role: UserRole) => dashboardRoutes[role],
     isOnCorrectDashboard: () => {
-      if (!user) return false;
+      // A signed-in account can still carry no role yet, and indexing the route
+      // map with null silently resolves to undefined rather than "not on it".
+      if (!user?.role) return false;
       return location === dashboardRoutes[user.role];
     }
   };

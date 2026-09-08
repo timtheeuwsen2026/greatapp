@@ -394,6 +394,7 @@ type ExperienceVenueDealInput = {
   platformPct?: unknown;
   /** The builder's legacy name for the same figure. */
   platformRevenuePercentage?: unknown;
+  currency?: unknown;
   venueCommitmentFee?: unknown;
 };
 
@@ -448,6 +449,7 @@ function affordabilityErrors(
     ticketGross: summary.ticketGross,
     paidTickets: summary.paidCapacity,
     platformPct: Number.isFinite(platformPct) ? platformPct : 0,
+    currencySymbol: currencySymbolFor(input.currency),
   });
 
   return check.message ? [check.message] : [];
@@ -610,6 +612,12 @@ export type VenuePayoutCapInput = {
   platformPct: number;
   /** Multi-day only: rooms multiplied by nights. */
   roomNights?: number;
+  /**
+   * Currency symbol for the message. The publication checklist renders this
+   * text verbatim, so an unformatted number there reads as a different figure
+   * from the identical one on the Pricing step.
+   */
+  currencySymbol?: string;
 };
 
 export type VenuePayoutCapResult = {
@@ -660,6 +668,8 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
   const totalTakePct = gross > 0 ? round2(((venueCost + platformFee) / gross) * 100) : 0;
   const exceedsGross = gross > 0 && venueCost + platformFee > gross + 0.005;
 
+  const money = (value: number) => formatMoneyish(value, input.currencySymbol);
+
   return {
     venueCost,
     platformFee,
@@ -667,26 +677,42 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
     totalTakePct,
     exceedsGross,
     message: exceedsGross
-      ? `This deal pays out more than the event takes. The venue's ${formatMoneyish(venueCost)} `
-        + `plus the ${platformPct}% platform fee (${formatMoneyish(platformFee)}) comes to `
-        + `${totalTakePct}% of ${formatMoneyish(gross)} in ticket sales, leaving you `
+      ? `This deal pays out more than the event takes. The venue's ${money(venueCost)} `
+        + `plus the ${platformPct}% platform fee (${money(platformFee)}) comes to `
+        + `${totalTakePct}% of ${money(gross)} in ticket sales, leaving you `
         // "on ticket sales" is load-bearing: the cap is a ticket-revenue rule,
         // so this figure deliberately excludes a commitment fee or an add-on
         // margin. Without the qualifier it read as a second, contradictory net
         // beside the calculator's.
-        + `${formatMoneyish(creatorNet)} on ticket sales. `
+        + `${money(creatorNet)} on ticket sales. `
         + `Lower the venue's terms or raise your ticket price.`
       : null,
   };
+}
+
+/** Minimal symbol lookup for the warning text; the UI has its own formatter. */
+function currencySymbolFor(currency: unknown): string {
+  const code = String(currency || "").trim().toLowerCase();
+  return ({ usd: "$", eur: "€", gbp: "£" } as Record<string, string>)[code] || "";
 }
 
 function round2(value: number): number {
   return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 }
 
-/** Plain number for a message; the caller's currency is added by the surface. */
-function formatMoneyish(value: number): string {
-  return value.toFixed(2);
+/**
+ * An amount inside the warning text, with a thousands separator and the
+ * currency symbol when the caller supplied one. The checklist prints this
+ * message as-is, so it has to be readable on its own.
+ */
+function formatMoneyish(value: number, currencySymbol?: string): string {
+  const negative = value < 0;
+  const formatted = Math.abs(value).toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const withSymbol = currencySymbol ? `${formatted} ${currencySymbol}` : formatted;
+  return negative ? `-${withSymbol}` : withSymbol;
 }
 
 export function formatVenueDealSummary(

@@ -27,7 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, authHeaders, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { isMvgStillForming } from "@/lib/experienceAvailability";
 import { getTicketAddon } from "@shared/ticketAddons";
@@ -104,9 +104,28 @@ export default function ExperienceDetails() {
   const [addonQuantities, setAddonQuantities] = useState<Record<string, number>>({});
   const [showShareModal, setShowShareModal] = useState(false);
 
+  // A pending experience is only visible to its creator, an admin, or a link
+  // carrying its preview token. The token arrives in the page URL and has to be
+  // forwarded to the API, or the creator's own Preview link 404s.
+  const previewToken = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("preview")
+    : null;
+
   const { data: experience, isLoading, error } = useQuery<ExperienceWithStats>({
-    queryKey: ["/api/experiences", experienceId],
+    queryKey: ["/api/experiences", experienceId, previewToken ?? ""],
     enabled: !!experienceId,
+    queryFn: async () => {
+      const url = `/api/experiences/${experienceId}`
+        + (previewToken ? `?preview=${encodeURIComponent(previewToken)}` : "");
+      const res = await fetch(url, { headers: authHeaders() });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const failure: any = new Error(body?.message || "Failed to load experience details.");
+        failure.reason = body?.reason;
+        throw failure;
+      }
+      return res.json();
+    },
   });
 
   // Helper function to get stable ticket ID (ticketSkus in JSON may not have id field, use sourceRoomId)

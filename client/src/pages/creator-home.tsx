@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import CollabOpportunitiesCard from "@/components/CollabOpportunitiesCard";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import type { CreatorProfile } from "@shared/schema";
@@ -191,6 +192,12 @@ export default function CreatorHome() {
               </CardContent>
             </Link>
           </Card>
+        </div>
+
+        {/* Creators post most of the ideas, so the feed cannot be invisible
+            from the screen they land on. */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+          <CollabOpportunitiesCard />
         </div>
       </div>
     </div>

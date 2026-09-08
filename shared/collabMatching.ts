@@ -121,6 +121,39 @@ export function formatCollabPeriod(
   return `${month(from!)} – ${month(to!)}`;
 }
 
+/**
+ * A flash deal's open dates, as days rather than months.
+ *
+ * The card was joining two Date objects with a dash, so a public feed showed
+ * "Sat Dec 05 2026 00:00:00 GMT+0000 (Coordinated Universal Time)".
+ */
+export function formatCollabDateRange(
+  start: Date | string | null | undefined,
+  end: Date | string | null | undefined,
+): string {
+  const toDate = (value: Date | string | null | undefined): Date | null => {
+    if (!value) return null;
+    const parsed = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  const from = toDate(start);
+  const to = toDate(end);
+  if (!from && !to) return "";
+
+  const day = (date: Date) => date.toLocaleDateString("en-GB", { day: "numeric" });
+  const full = (date: Date) =>
+    date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+  if (from && !to) return full(from);
+  if (!from && to) return full(to!);
+  if (full(from!) === full(to!)) return full(from!);
+  // Same month: "5–9 Dec 2026" rather than repeating the month and year.
+  if (from!.getMonth() === to!.getMonth() && from!.getFullYear() === to!.getFullYear()) {
+    return `${day(from!)}–${full(to!)}`;
+  }
+  return `${full(from!)} – ${full(to!)}`;
+}
+
 /** "12–16 guests", or nothing when the poster did not say. */
 export function formatCollabGroupSize(
   min: number | null | undefined,

@@ -2869,6 +2869,11 @@ function MediaStep({ form, isSaving, setIsSaving, autoSaveMutation }: { form: an
 }
 
 function DatesStep({ form, editingExperienceId }: { form: any; editingExperienceId?: string }) {
+  // Controlled so a selection closes the popover. Left open it overlays the
+  // time fields directly beneath it and swallows the next click.
+  const [startDateOpen, setStartDateOpen] = useState(false);
+  const [endDateOpen, setEndDateOpen] = useState(false);
+
   const startDate = form.watch('startDate');
   const endDate = form.watch('endDate');
   const selectedVenueId = form.watch('selectedVenueId');
@@ -2909,7 +2914,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
             render={({ field }) => (
               <FormItem className="flex flex-col">
                 <FormLabel>{isSingleDayEvent ? "Date *" : "Start Date *"}</FormLabel>
-                <Popover>
+                <Popover open={startDateOpen} onOpenChange={setStartDateOpen}>
                   <PopoverTrigger asChild>
                     <FormControl>
                       <Button
@@ -2935,6 +2940,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
                         if (isSingleDayEvent) {
                           form.setValue('endDate', date, { shouldDirty: true });
                         }
+                        setStartDateOpen(false);
                       }}
                       disabled={(date) => date < new Date()}
                       initialFocus
@@ -2957,7 +2963,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
             render={({ field }) => (
               <FormItem className="flex flex-col">
                 <FormLabel>End Date *</FormLabel>
-                <Popover>
+                <Popover open={endDateOpen} onOpenChange={setEndDateOpen}>
                   <PopoverTrigger asChild>
                     <FormControl>
                       <Button
@@ -2978,7 +2984,10 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
                     <CalendarComponent
                       mode="single"
                       selected={field.value}
-                      onSelect={field.onChange}
+                      onSelect={(date) => {
+                        field.onChange(date);
+                        setEndDateOpen(false);
+                      }}
                       disabled={(date) => date < new Date() || (startDate && date < startDate)}
                       initialFocus
                     />
@@ -5943,6 +5952,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
     paidTickets: chargeableCapacity,
     platformPct,
     roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
+    currencySymbol: dealCurrencySymbol,
   });
 
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';

@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import CollabOpportunitiesCard from "@/components/CollabOpportunitiesCard";
-import { useAuth } from "@/hooks/useAuth";
+import AccessDenied from "@/components/AccessDenied";
+import { useVenueAuth } from "@/hooks/useRoleAuth";
 import {
   Building2,
   Plus,
@@ -27,7 +28,7 @@ import {
  */
 export default function VenueHome() {
   const [location] = useLocation();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, hasRequiredRole, isLoading: authLoading } = useVenueAuth();
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
 
   useEffect(() => {
@@ -67,6 +68,12 @@ export default function VenueHome() {
   }
 
   if (!isAuthenticated) return null;
+
+  // Same gate as /venue-dashboard. Without it this page showed venue-only cards
+  // and live counts to whatever role happened to be active.
+  if (!authLoading && !hasRequiredRole) {
+    return <AccessDenied requiredRole="venue_provider" />;
+  }
 
   return (
     <div className="min-h-screen bg-white">

@@ -71,6 +71,7 @@ import {
 } from "@shared/ticketAddons";
 import { findDealConflicts } from "@shared/dealExclusions";
 import {
+  formatCollabDateRange,
   formatCollabGroupSize,
   formatCollabPeriod,
   resolveCollabExpiry,
@@ -1108,6 +1109,9 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       creatorId: userId,
       status: "pending_approval" as const,
       submittedAt: new Date(),
+      // Minted here so the creator's Preview link carries its own authority and
+      // does not depend on the session reaching a public endpoint.
+      previewToken: randomBytes(32).toString("hex"),
 
       // ── Open-to-Venue-Offers fields ──────────────────────────────────────
       // Stored so the venue discovery feed can match venues by city + space type.
@@ -3922,7 +3926,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Pending: requires valid preview token OR creator/admin
           if (!hasValidPreviewToken && !isCreator && !isAdmin) {
             console.log(`[Experience ${req.params.id}] Access denied - Pending requires preview token or creator/admin`);
-            return res.status(404).json({ message: "Experience not found" });
+            // Distinguishable from a genuinely missing record so the page can
+            // say "waiting for review" instead of a bare failure. Still leaks
+            // nothing: it only confirms the id belongs to something pending.
+            return res.status(404).json({
+              message: "This experience is awaiting review and is not public yet.",
+              reason: "pending_review",
+            });
           }
         } else {
           // Any other status: not accessible
@@ -10075,7 +10085,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tag: "venue free date",
         title: venue.name,
         location: venue.city || null,
-        detail: [deal.startDate, deal.endDate].filter(Boolean).join(" - "),
+        detail: formatCollabDateRange(deal.startDate, deal.endDate),
         href: "/creator-dashboard?tab=partners&sub=flash-deals",
         actionLabel: "See Deal",
       })),

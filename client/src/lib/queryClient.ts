@@ -2,7 +2,7 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { getAccessToken } from "@/lib/authToken";
 
 // ─── Auth header helper ───────────────────────────────────────────────────────
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const token = getAccessToken();
   return {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),

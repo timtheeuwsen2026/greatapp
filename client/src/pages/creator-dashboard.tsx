@@ -880,6 +880,31 @@ function CreatorDashboardContent() {
   // Partners groups the counterparty lifecycle: negotiating, agreed, fulfilling.
   // Community and Role Applications stay out — those are about participants and
   // applicants, not the organiser-venue relationship.
+  /**
+   * What a card should quote for an event.
+   *
+   * The event-level price is deprecated and a free ticket type drives it to
+   * zero, so a 100 event advertised itself as free. Quote the cheapest PAID
+   * ticket, and say "From" when the tiers differ.
+   */
+  const displayTicketPrice = (experience: any): string => {
+    const skus: any[] = Array.isArray(experience?.ticketSkus) ? experience.ticketSkus : [];
+    const paid = skus
+      .map((sku: any) => parseFloat(sku?.pricePerPerson || 0))
+      .filter((price: number) => Number.isFinite(price) && price > 0);
+
+    if (paid.length > 0) {
+      const lowest = Math.min(...paid);
+      const varies = paid.length < skus.length || new Set(paid).size > 1;
+      return varies
+        ? `From ${formatCurrency(lowest, experience.currency)}`
+        : formatCurrency(lowest, experience.currency);
+    }
+    // Genuinely free: every ticket is a free RSVP.
+    if (skus.length > 0) return "Free";
+    return formatCurrency(experience.price, experience.currency);
+  };
+
   const PARTNER_TABS = [
     "my-postings", "venue-offers", "active-deals", "promotion-deals", "fulfillment", "flash-deals",
   ];
@@ -1401,7 +1426,9 @@ function CreatorDashboardContent() {
                               )}
                             </div>
                             <div className="flex justify-between items-center text-xs text-gray-500 mb-3">
-                              <span className="font-medium">{formatCurrency(experience.price, experience.currency)}</span>
+                              <span className="font-medium" data-testid={`text-pending-price-${experience.id}`}>
+                                {displayTicketPrice(experience)}
+                              </span>
                               <span>
                                 <Users className="w-3 h-3 inline mr-1" />
                                 {experience.maxParticipants || experience.capacity || '—'} capacity
@@ -1411,7 +1438,14 @@ function CreatorDashboardContent() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => setLocation(`/experiences/${experience.id}`)}
+                                // Carry the preview token so the link works on its own
+                                // authority. Without it the page depends on the session
+                                // reaching a public endpoint, and 404s when it does not.
+                                onClick={() => setLocation(
+                                  experience.previewToken
+                                    ? `/experiences/${experience.id}?preview=${experience.previewToken}`
+                                    : `/experiences/${experience.id}`
+                                )}
                                 className="flex-1 text-xs"
                                 data-testid={`button-view-pending-${experience.id}`}
                               >
@@ -1544,20 +1578,7 @@ function CreatorDashboardContent() {
                         {/* Pricing from ticketSkus (source of truth) */}
                         <div className="flex justify-between items-center text-sm text-gray-500 mb-2">
                           <span className="font-medium" data-testid={`text-price-${experience.id}`}>
-                            {(() => {
-                              const skus = experience.ticketSkus || [];
-                              if (skus.length > 0) {
-                                const prices = skus.map((s: any) => parseFloat(s.pricePerPerson || 0)).filter((p: number) => p > 0);
-                                if (prices.length > 0) {
-                                  const minPrice = Math.min(...prices);
-                                  const hasMultiple = prices.length > 1 && new Set(prices).size > 1;
-                                  return hasMultiple 
-                                    ? `From ${formatCurrency(minPrice, experience.currency)}`
-                                    : formatCurrency(minPrice, experience.currency);
-                                }
-                              }
-                              return formatCurrency(experience.price, experience.currency);
-                            })()}
+                            {displayTicketPrice(experience)}
                           </span>
                           <span>
                             <Users className="w-3 h-3 inline mr-1" />

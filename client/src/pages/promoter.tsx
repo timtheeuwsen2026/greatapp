@@ -4,6 +4,7 @@ import { Rocket, AlertTriangle, DollarSign, TrendingUp, Users, Copy, Check, Exte
 import { Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import CollabOpportunitiesCard from "@/components/CollabOpportunitiesCard";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -1301,6 +1302,13 @@ export default function PromoterDashboard() {
           <p className="text-muted-foreground mt-2 max-w-2xl">
             Every person you invite brings your experience one step closer to confirming.
           </p>
+        </div>
+
+        {/* The cross-role feed belongs on every role home, not just the venue
+            one — a promoter spotting a "seeking venue" post and knowing a venue
+            owner is the whole reason the feed is shared. */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <CollabOpportunitiesCard />
         </div>
 
         {/* ── RECRUITMENT STATS SCOREBOARD ─────────────────────────── */}

@@ -310,6 +310,11 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // Step 4: Dates & Availability
   startDate: timestamp("start_date"),
   endDate: timestamp("end_date"),
+  // Single-day event times. The drafts table never had these columns, so a
+  // draft save silently dropped them: the date came back, the times did not,
+  // and the Dates step showed a green tick while the checklist demanded them.
+  startTime: varchar("start_time"),
+  endTime: varchar("end_time"),
   maxParticipants: integer("max_participants").default(10),
 
   // Step 5: Location & Venue
@@ -3422,6 +3427,16 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     venueMinimumSpend: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueRevenueSharePct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
     venueAccessFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    // Every remaining decimal the builder posts as a number. Missing one here
+    // does not drop that field — it 400s the entire draft save, so the
+    // creator loses the whole step while the header still reads "Saved".
+    venueTargetDealValue: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    venueCommitmentFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    depositAmount: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    balanceAmount: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    expectedPayout: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    platformCommission: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
+    stripeFee: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),
 
     // Influencer/promoter commission — DB stores as decimal string; accept number or string
     influencerCommissionPct: z.union([z.string(), z.number()]).transform(v => String(v)).optional(),

@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useEffect, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { getVenueImage } from "@/lib/utils";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -823,7 +823,7 @@ function VenueDashboardContent() {
               <p className="text-xs text-gray-500 mt-1">
                 {ledger.mixedCurrencies
                   ? "Across agreed deals — see the breakdown for each currency"
-                  : "Rev share, ticket deduction, per-head and rental across agreed deals"}
+                  : "Rev share, ticket deduction, per-head, rental, sponsorship and commitment-fee deals"}
               </p>
             </CardContent>
           </Card>
@@ -1098,13 +1098,35 @@ function VenueDashboardContent() {
                                     setOfferModal({ open: true, event });
                                   }}
                                   disabled={!hasApproved}
-                                  title={!hasApproved ? "Your venue must be approved by admin before you can submit offers" : undefined}
+                                  title={
+                                    hasApproved
+                                      ? undefined
+                                      : venues.length === 0
+                                        ? "List a venue before you can offer to host"
+                                        : "Your venue must be approved by admin before you can submit offers"
+                                  }
+                                  data-testid={`button-offer-to-host-${event.id}`}
                                 >
                                   <Send className="w-4 h-4 mr-2" />
                                   Offer to Host
                                 </Button>
-                                {!hasApproved && venues.length > 0 && (
-                                  <p className="text-xs text-amber-600 mt-1">Venue pending admin approval</p>
+                                {/* A disabled button fires nothing, so without a
+                                    reason beside it the click simply appeared to
+                                    do nothing. The no-venue case had no message
+                                    at all — only the pending-approval one did. */}
+                                {!hasApproved && (
+                                  venues.length > 0 ? (
+                                    <p className="text-xs text-amber-600 mt-1" data-testid="text-venue-pending">
+                                      Venue pending admin approval
+                                    </p>
+                                  ) : (
+                                    <p className="text-xs text-amber-600 mt-1" data-testid="text-no-venue-listed">
+                                      <Link href="/venue-profile-setup" className="underline">
+                                        List your venue
+                                      </Link>{" "}
+                                      to offer to host events.
+                                    </p>
+                                  )
                                 )}
                               </div>
                             );

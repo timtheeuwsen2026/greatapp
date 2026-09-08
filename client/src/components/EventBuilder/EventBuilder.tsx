@@ -500,6 +500,9 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [lastAutoSaveTime, setLastAutoSaveTime] = useState<number>(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // A save the server refused. Distinct from a network blip: retrying changes
+  // nothing, so the creator has to be told rather than shown a stale "Saved".
+  const [autosaveRejected, setAutosaveRejected] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [draftStatus, setDraftStatus] = useState<string>('draft');
   // Whether an admin has allowed this one event to use the untracked manual
@@ -685,6 +688,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     },
     onSuccess: async (response) => {
       setLastSaved(new Date());
+      setAutosaveRejected(false);
       setIsSaving(false);
       
       // If this was a POST (new draft), capture the draft ID
@@ -711,18 +715,19 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         !navigator.onLine
       );
       
-      // Absolutely silent operation - never show user notifications for autosave failures
-      // Only log in development for debugging purposes
+      // A dropped connection is worth ignoring — the next change retries and the
+      // creator loses nothing. A refusal from the server is not: the draft will
+      // never save until the payload changes, and staying silent about that is
+      // what let a whole pricing step disappear behind a "Saved 7:47 PM".
+      setAutosaveRejected(!isTransientError);
+
       if (import.meta.env.DEV) {
-        if (isTransientError) {
-          console.log("Autosave: Transient network error (ignored):", error?.message || error);
-        } else {
-          console.log("Autosave: Non-network error (silent):", error?.message || error);
-        }
+        console.log(
+          isTransientError
+            ? `Autosave: transient network error (ignored): ${error?.message || error}`
+            : `Autosave: rejected by server: ${error?.message || error}`,
+        );
       }
-      
-      // Complete silence - no toast notifications, no user alerts, no interruptions
-      // The user should never know autosave failed - it will retry on next change
     },
     // Add retry configuration for network failures
     retry: (failureCount, error: any) => {
@@ -2090,12 +2095,20 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
               </p>
             </div>
             <div className="flex items-center gap-4">
-              {lastSaved && (
+              {autosaveRejected ? (
+                <div
+                  className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400"
+                  data-testid="text-unsaved-changes"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  Unsaved changes — use Save Draft
+                </div>
+              ) : lastSaved ? (
                 <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                   <CheckCircle className="w-4 h-4 text-green-500" />
                   Saved {lastSaved.toLocaleTimeString()}
                 </div>
-              )}
+              ) : null}
               {isSaving && (
                 <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                   <Clock className="w-4 h-4 animate-spin" />
@@ -5174,7 +5187,7 @@ function PromotionStep({ form }: { form: any }) {
               </Label>
               <div className="mt-2 flex gap-2">
                 <span className="rounded-md border bg-gray-100 px-3 py-2 text-sm dark:bg-gray-800">
-                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '€'}
+                  {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '€'}
                 </span>
                 <Input
                   id="promotion-sponsorship-amount"
@@ -5563,7 +5576,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
   // Deal options come from the shared vocabulary so the Venue Builder offers the
   // same list and each event length receives only compatible on-platform deals.
   const dealCurrencySymbol =
-    CURRENCY_CONFIG[(form.watch('currency') || 'EUR').toUpperCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€';
+    CURRENCY_CONFIG[String(form.watch('currency') || 'eur').toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€';
   const isDaytimeDeal = !isMultiDayEvent;
 
   const targetDealOptions = useMemo(
@@ -5903,11 +5916,15 @@ function PricingStep({ form, manualDealUnlocked = false }: {
   const venueCommitmentFee = activeVenueDeal === 'commitment_plus_revenue_share'
     ? toNumber(form.watch('venueCommitmentFee'))
     : 0;
+  // The commitment fee is deliberately NOT folded in here. Netting it against
+  // the venue's share produced a row labelled "Venue Payout" reading +50.00 at
+  // zero sales — a payout row with a positive sign for money the venue pays.
+  // It gets its own line in the calculator instead.
   const venuePayout = activeVenueDeal === 'venue_sponsored'
     ? activeFlatVenueAmount
     : activeVenueDeal === 'upfront_rental'
       ? -activeFlatVenueAmount
-      : safeAdd(-venueCommercialEstimate, venueCommitmentFee);
+      : -venueCommercialEstimate;
   // Can the event pay for this deal at all? Checked on the ongoing venue terms
   // only — a one-off commitment fee is income and cannot overdraw anything.
   const venuePayoutCap = checkVenuePayoutCap({
@@ -5930,7 +5947,17 @@ function PricingStep({ form, manualDealUnlocked = false }: {
 
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
   const promoterBounty = isCommissionPromotion ? totalRevenue * influencerCommissionPct / 100 : 0;
-  const estimatedCreatorNet = revenueSplit.creatorAmount + venuePayout - promoterBounty;
+  // Add-on money splits two ways: the venue's own price for the item, and the
+  // organiser's flat margin on top. The margin is the organiser's earnings, so
+  // it belongs in the net — reporting the whole participant spend as "paid to
+  // the venue" understated what the organiser actually makes.
+  const addOnVenueRevenue = revenueSummary.addOnVenueGross;
+  const addOnCreatorMargin = revenueSummary.addOnCreatorGross;
+  const estimatedCreatorNet = revenueSplit.creatorAmount
+    + venuePayout
+    + venueCommitmentFee
+    + addOnCreatorMargin
+    - promoterBounty;
   const venueDealSummaryLabel = venueDealContext === "external"
     ? "No venue commercial deal"
     : activeVenueDeal
@@ -6164,7 +6191,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                             <Label htmlFor={`sku-price-${sku.id}`}>Price Per Person *</Label>
                             <div className="flex gap-2">
                               <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                               </span>
                               <Input
                                 id={`sku-price-${sku.id}`}
@@ -6185,7 +6212,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                           <div className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-md">
                             <span className="text-sm text-gray-500">Price locked at</span>
                             <span className="font-semibold">
-                              {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}0.00
+                              {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}0.00
                             </span>
                             <span className="text-xs text-gray-400">(free admission)</span>
                           </div>
@@ -6198,7 +6225,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                               <Label htmlFor={`sku-minprice-${sku.id}`}>Minimum Price</Label>
                               <div className="flex gap-2">
                                 <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                  {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                 </span>
                                 <Input
                                   id={`sku-minprice-${sku.id}`}
@@ -6217,7 +6244,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                               <Label htmlFor={`sku-suggested-${sku.id}`}>Suggested Price</Label>
                               <div className="flex gap-2">
                                 <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                  {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                  {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                 </span>
                                 <Input
                                   id={`sku-suggested-${sku.id}`}
@@ -6286,7 +6313,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                   <Label htmlFor={`sku-addon-venue-price-${sku.id}`}>Venue price</Label>
                                   <div className="flex gap-2">
                                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                     </span>
                                     <Input
                                       id={`sku-addon-venue-price-${sku.id}`}
@@ -6305,7 +6332,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                   <Label htmlFor={`sku-addon-margin-${sku.id}`}>Your margin</Label>
                                   <div className="flex gap-2">
                                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                     </span>
                                     <Input
                                       id={`sku-addon-margin-${sku.id}`}
@@ -6377,7 +6404,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                             <Label htmlFor={`sku-deposit-${sku.id}`}>Deposit Per Person</Label>
                             <div className="flex gap-2">
                               <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                                {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                               </span>
                               <Input
                                 id={`sku-deposit-${sku.id}`}
@@ -6764,7 +6791,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   <Label htmlFor="venue-commitment-fee">Commitment Fee the Venue Pays You ({currency?.toUpperCase()})</Label>
                   <div className="flex gap-2">
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
                     <Input
                       id="venue-commitment-fee"
@@ -6791,7 +6818,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   <Label htmlFor="venue-sponsorship-amount">Amount Venue Pays You ({currency?.toUpperCase()})</Label>
                   <div className="flex gap-2">
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
                     <Input
                       id="venue-sponsorship-amount"
@@ -6814,7 +6841,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   <Label htmlFor="venue-rental-amount">Amount You Pay the Venue ({currency?.toUpperCase()})</Label>
                   <div className="flex gap-2">
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                      {currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
+                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
                     <Input
                       id="venue-rental-amount"
@@ -6876,7 +6903,11 @@ function PricingStep({ form, manualDealUnlocked = false }: {
 
                 {/* Signed venue amount: costs are negative; sponsorship income is positive. */}
                 <div className="flex justify-between">
-                  <span>Venue Payout</span>
+                  <span>
+                    {activeVenueDeal === 'commitment_plus_revenue_share'
+                      ? `Venue Revenue Share (${activeRevenueSharePct}%)`
+                      : 'Venue Payout'}
+                  </span>
                   <span
                     className={venuePayout > 0 ? 'text-green-600 font-medium' : venuePayout < 0 ? 'text-red-600' : ''}
                     data-testid="text-venue-payout"
@@ -6884,6 +6915,28 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                     {venuePayout > 0 ? '+' : venuePayout < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(venuePayout), currency)}
                   </span>
                 </div>
+
+                {/* Its own line, travelling the other way. Folded into the payout
+                    row it made the venue look paid when the venue is paying. */}
+                {venueCommitmentFee > 0 && (
+                  <div className="flex justify-between" data-testid="text-commitment-fee">
+                    <span>Commitment Fee from Venue</span>
+                    <span className="text-green-600 font-medium">
+                      +{formatPriceByCurrency(venueCommitmentFee, currency)}
+                    </span>
+                  </div>
+                )}
+
+                {/* The organiser's own margin on add-ons: their earnings, so it
+                    counts toward the net rather than reading as venue money. */}
+                {addOnCreatorMargin > 0 && (
+                  <div className="flex justify-between" data-testid="text-addon-margin">
+                    <span>Your Add-on Margin</span>
+                    <span className="text-green-600 font-medium">
+                      +{formatPriceByCurrency(addOnCreatorMargin, currency)}
+                    </span>
+                  </div>
+                )}
 
                 {isCommissionPromotion && influencerCommissionPct > 0 && (
                   <div className="flex justify-between">
@@ -6898,15 +6951,16 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   </span>
                 </div>
 
-                {/* Add-ons are the venue's own product sold through the app, so
-                    they sit outside the split entirely — reported, never shared. */}
-                {addOnTotalRevenue > 0 && (
+                {/* The venue's own price for the add-on. Kept out of the split —
+                    the venue is paid for it directly — and stated separately
+                    from the organiser's margin, which is counted in the net above. */}
+                {addOnVenueRevenue > 0 && (
                   <div
                     className="mt-2 border-t pt-2 flex justify-between text-xs text-gray-600 dark:text-gray-400"
                     data-testid="text-addon-revenue"
                   >
-                    <span>Add-on sales (paid to the venue directly, not split)</span>
-                    <span>{formatPriceByCurrency(addOnTotalRevenue, currency)}</span>
+                    <span>Venue keeps (add-ons, paid directly — not split)</span>
+                    <span>{formatPriceByCurrency(addOnVenueRevenue, currency)}</span>
                   </div>
                 )}
               </div>
@@ -6924,7 +6978,8 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                 The venue's {formatPriceByCurrency(venuePayoutCap.venueCost, currency)} plus the{' '}
                 {platformPct}% platform fee ({formatPriceByCurrency(venuePayoutCap.platformFee, currency)}){' '}
                 comes to {venuePayoutCap.totalTakePct}% of {formatPriceByCurrency(totalRevenue, currency)}{' '}
-                in ticket sales, leaving you {formatPriceByCurrency(venuePayoutCap.creatorNet, currency)}.
+                in ticket sales, leaving you {formatPriceByCurrency(venuePayoutCap.creatorNet, currency)}{' '}
+                on ticket sales.
                 Lower the venue's terms or raise your ticket price before sending this.
               </div>
             )}
@@ -7227,7 +7282,7 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                       <div className="grid grid-cols-3 gap-4">
                         <div>
                           <Label htmlFor={`discount-value-${discount.id}`}>
-                            Value {discount.type === 'percentage' ? '(%)' : `(${currency ? CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol : '$'})`}
+                            Value {discount.type === 'percentage' ? '(%)' : `(${currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'})`}
                           </Label>
                           <Input
                             id={`discount-value-${discount.id}`}
@@ -7366,7 +7421,21 @@ function TermsStep({ form }: { form: any }) {
   };
 
   const currencySymbol = getCurrencySymbol(formData.currency);
-  const displayPrice = formData.pricePerPerson || formData.price || 0;
+  // Read from the ticket types, not the deprecated experience-level price: a
+  // free ticket alongside a paid one drove that field to zero and the summary
+  // then advertised a 100 event as free. Quote the cheapest PAID ticket, and
+  // say "From" when the prices differ.
+  const summaryTicketSkus = Array.isArray(formData.ticketSkus) ? formData.ticketSkus : [];
+  const summaryPaidPrices = summaryTicketSkus
+    .map((sku: any) => getSkuEntryPrice(sku))
+    .filter((price: number) => price > 0);
+  const lowestPaidPrice = summaryPaidPrices.length
+    ? Math.min(...summaryPaidPrices)
+    : Number(formData.pricePerPerson || formData.price || 0);
+  const hasMixedPrices = summaryPaidPrices.length > 0
+    && (summaryPaidPrices.length < summaryTicketSkus.length
+      || Math.max(...summaryPaidPrices) !== lowestPaidPrice);
+  const displayPrice = lowestPaidPrice;
 
   return (
     <div className="space-y-8">
@@ -7400,7 +7469,9 @@ function TermsStep({ form }: { form: any }) {
               </div>
               <div>
                 <span className="font-medium text-blue-900 dark:text-blue-100">Base Price:</span>{" "}
-                <span className="text-blue-800 dark:text-blue-200">{currencySymbol}{displayPrice}</span>
+                <span className="text-blue-800 dark:text-blue-200">
+                  {hasMixedPrices ? "From " : ""}{currencySymbol}{displayPrice}
+                </span>
               </div>
             </div>
           </div>

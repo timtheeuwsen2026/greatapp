@@ -1420,16 +1420,31 @@ function CreatorDashboardContent() {
                   <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto" />
                 </div>
               ) : typedExperiences.length === 0 ? (
-                <Card>
-                  <CardContent className="text-center py-12">
-                    <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                    <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No experiences yet</h3>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4">Start creating amazing experiences for your community</p>
-                    <Button onClick={() => setLocation('/event-builder')}>
-                      Create Your First Experience
-                    </Button>
-                  </CardContent>
-                </Card>
+                // Drafts and pending events are listed above this block. Saying
+                // "No experiences yet" underneath a populated "Drafts (1)" list
+                // contradicted the screen — so the first-run prompt is only for
+                // a creator who genuinely has nothing anywhere.
+                (experienceDrafts as any[]).length === 0
+                && (pendingExperiences as any[]).length === 0 ? (
+                  <Card>
+                    <CardContent className="text-center py-12">
+                      <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No experiences yet</h3>
+                      <p className="text-gray-600 dark:text-gray-400 mb-4">Start creating amazing experiences for your community</p>
+                      <Button onClick={() => setLocation('/event-builder')}>
+                        Create Your First Experience
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card>
+                    <CardContent className="text-center py-8">
+                      <p className="text-gray-600 dark:text-gray-400" data-testid="text-nothing-live-yet">
+                        Nothing live yet — your drafts and events awaiting approval are listed above.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {typedExperiences.map((experience: any) => (

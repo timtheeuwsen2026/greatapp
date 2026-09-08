@@ -670,7 +670,12 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
       ? `This deal pays out more than the event takes. The venue's ${formatMoneyish(venueCost)} `
         + `plus the ${platformPct}% platform fee (${formatMoneyish(platformFee)}) comes to `
         + `${totalTakePct}% of ${formatMoneyish(gross)} in ticket sales, leaving you `
-        + `${formatMoneyish(creatorNet)}. Lower the venue's terms or raise your ticket price.`
+        // "on ticket sales" is load-bearing: the cap is a ticket-revenue rule,
+        // so this figure deliberately excludes a commitment fee or an add-on
+        // margin. Without the qualifier it read as a second, contradictory net
+        // beside the calculator's.
+        + `${formatMoneyish(creatorNet)} on ticket sales. `
+        + `Lower the venue's terms or raise your ticket price.`
       : null,
   };
 }

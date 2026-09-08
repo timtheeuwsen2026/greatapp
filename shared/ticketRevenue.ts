@@ -79,6 +79,10 @@ export type TicketRevenueSummary = {
   totalCapacity: number;
   /** Add-on money if every seat took the extra. Reported apart from ticketGross. */
   addOnGross: number;
+  /** Of that, the venue's own price for the item. */
+  addOnVenueGross: number;
+  /** Of that, the organiser's flat margin — their earnings, not the venue's. */
+  addOnCreatorGross: number;
   /** Seats offered an add-on at all. */
   addOnCapacity: number;
   /** True once any ticket is free — the case the old maths got wrong. */
@@ -90,6 +94,8 @@ const EMPTY: TicketRevenueSummary = {
   paidCapacity: 0,
   totalCapacity: 0,
   addOnGross: 0,
+  addOnVenueGross: 0,
+  addOnCreatorGross: 0,
   addOnCapacity: 0,
   hasFreeTickets: false,
 };
@@ -117,6 +123,12 @@ export function summariseTicketRevenue(
       addOnGross: addon
         ? safeAdd(summary.addOnGross, safeMultiply(addon.unitPrice, capacity))
         : summary.addOnGross,
+      addOnVenueGross: addon
+        ? safeAdd(summary.addOnVenueGross, safeMultiply(addon.venueAmount, capacity))
+        : summary.addOnVenueGross,
+      addOnCreatorGross: addon
+        ? safeAdd(summary.addOnCreatorGross, safeMultiply(addon.creatorAmount, capacity))
+        : summary.addOnCreatorGross,
       addOnCapacity: addon ? summary.addOnCapacity + capacity : summary.addOnCapacity,
       hasFreeTickets: summary.hasFreeTickets || (capacity > 0 && entryPrice <= 0),
     };

@@ -149,7 +149,16 @@ export default function MVGProgressWidget({
         </div>
         
         <Progress 
-          value={Math.min(percentage, 100)}
+          // A missing or non-numeric percentage used to render the bar
+          // completely full at "0 of 6 joined" — reading as a confirmed event
+          // at a glance. Derive it from the counts when the API's figure is
+          // not a usable number.
+          value={(() => {
+            const supplied = Number(percentage);
+            const derived = mvgMin > 0 ? (Number(currentBookings) || 0) / mvgMin * 100 : 0;
+            const resolved = Number.isFinite(supplied) ? supplied : derived;
+            return Math.min(Math.max(resolved, 0), 100);
+          })()}
           className="h-3"
           data-testid="mvg-progress-bar"
         />

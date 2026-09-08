@@ -42,6 +42,8 @@ import Profile from "@/pages/profile";
 import Bookings from "@/pages/bookings";
 import TravelerBookings from "@/pages/TravelerBookings";
 import EventCheckIn from "@/pages/event-check-in";
+import VenueHome from "@/pages/venue-home";
+import CollabOpportunities from "@/pages/collab-opportunities";
 import BookingSuccess from "@/pages/booking-success";
 import RecruitSquad from "@/pages/recruit-squad";
 import EventInvite from "@/pages/event-invite";
@@ -168,6 +170,10 @@ function Router() {
       <Route path="/community/profile/:userId" component={CommunityProfile} />
       <Route path="/event/:id" component={EventInvite} />
       <Route path="/creator" component={CreatorHome} />
+      {/* Venue Home: the same two-step entry creators already had. The
+          avatar menu used to drop a venue owner straight into nine tabs. */}
+      <Route path="/venue" component={VenueHome} />
+      <Route path="/collab-opportunities" component={CollabOpportunities} />
       <Route path="/creator/earnings" component={CreatorEarnings} />
       <Route path="/creator/profile-setup" component={SimpleCreatorProfileSetup} />
       <Route path="/venue/profile-setup" component={VenueProfileSetupRoute} />

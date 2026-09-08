@@ -1886,6 +1886,85 @@ export const venueInvites = pgTable("venue_invites", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Collab Ideas — the stage that was missing before an event exists.
+//
+// Open Events and direct offers both require a fully-built event before a
+// counterparty can see anything. There was nowhere to put a rough idea: "a
+// four-day wellness retreat, somewhere on the Costa Brava, twelve to sixteen
+// people, some time in October or November". A retreat is agreed months out and
+// on a period rather than a date, so demanding a fixed date first is what kept
+// those conversations off the platform entirely.
+//
+// Posting one is not a booking and carries no headcount goal — on the partner
+// side a single good match is usually enough to move forward. It stays open
+// until it converts into a real event, at which point it becomes an ordinary
+// experience and leaves this table behind.
+export const collabIdeas = pgTable("collab_ideas", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  posterId: varchar("poster_id").references(() => users.id).notNull(),
+  /** Which hat the poster was wearing: creator | venue_provider | promoter | service_provider. */
+  posterRole: varchar("poster_role", { length: 30 }).notNull(),
+
+  title: varchar("title").notNull(),
+  description: text("description"),
+  /** What they are looking for: venue | organizer | promoter | service_provider. */
+  seekingPartnerType: varchar("seeking_partner_type", { length: 30 }).notNull(),
+  /** Free text — "yoga & breathwork groups". Shown, never matched on. */
+  audience: varchar("audience"),
+
+  // ── The fields the match query actually filters on ──────────────────────
+  city: varchar("city"),
+  region: varchar("region"),
+  /** Matched against a venue's own category/space type where one is set. */
+  venueCategory: varchar("venue_category"),
+  groupSizeMin: integer("group_size_min"),
+  groupSizeMax: integer("group_size_max"),
+
+  // A period, not a date. This is the whole reason a retreat fits here.
+  estimatedStart: timestamp("estimated_start"),
+  estimatedEnd: timestamp("estimated_end"),
+
+  /** "Revenue split, open to discuss" — an opening position, not terms. */
+  dealPreference: varchar("deal_preference"),
+
+  // open → matched (a deal was struck, record moves to Active Deals)
+  //      → closed (withdrawn by the poster) | expired
+  status: varchar("status", { length: 20 }).default("open"),
+  /** Set when the idea became a real event, so the two can be traced. */
+  convertedExperienceId: varchar("converted_experience_id").references(() => experiences.id),
+  /** Retreats need a long window; short collabs do not. Set on creation. */
+  expiresAt: timestamp("expires_at"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// "I'm interested" — the start of a conversation, never a booking.
+export const collabIdeaResponses = pgTable(
+  "collab_idea_responses",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    ideaId: varchar("idea_id").references(() => collabIdeas.id).notNull(),
+    responderId: varchar("responder_id").references(() => users.id).notNull(),
+    responderRole: varchar("responder_role", { length: 30 }),
+    /** The venue/space the responder is offering, when they have one. */
+    venueId: varchar("venue_id").references(() => venues.id),
+    message: text("message"),
+    // interested → withdrawn, or accepted once the poster takes it forward
+    status: varchar("status", { length: 20 }).default("interested"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    // One expression of interest per person per idea. A second click should
+    // reopen the conversation, not stack duplicates in the poster's inbox.
+    uniqueResponderPerIdea: unique().on(table.ideaId, table.responderId),
+  }),
+);
+
+export type CollabIdea = typeof collabIdeas.$inferSelect;
+export type InsertCollabIdea = typeof collabIdeas.$inferInsert;
+export type CollabIdeaResponse = typeof collabIdeaResponses.$inferSelect;
+
 // Venue Offers table — Reverse Handshake bids.
 // When a creator publishes an open event (venueStatus="venue_pending"), venue owners
 // can submit an "Offer to Host" here instead of waiting for the creator to approach them.

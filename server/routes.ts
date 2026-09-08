@@ -57,6 +57,7 @@ import {
   validateExperienceVenueDeal,
   calculateVenueEarnings,
   canSelectVenueDeal,
+  getVenueDealLabel,
   formatVenueDealSummary,
   getVenueDealSelectionError,
   isUntrackedVenueDeal,
@@ -69,6 +70,12 @@ import {
   getTicketAddon,
 } from "@shared/ticketAddons";
 import { findDealConflicts } from "@shared/dealExclusions";
+import {
+  formatCollabGroupSize,
+  formatCollabPeriod,
+  resolveCollabExpiry,
+  venueMatchesCollabIdea,
+} from "@shared/collabMatching";
 import {
   calculateAverageTurnout,
   isAttendanceStatus,
@@ -10018,6 +10025,305 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * and only from approved venues — an unapproved venue is not yet bookable,
    * so advertising its dates would send creators nowhere.
    */
+  // -- Collab Opportunities ------------------------------------------------
+  //
+  // A cross-role discovery layer. The mechanisms underneath already existed and
+  // worked; what was missing was distribution -- Open Events only reached
+  // venues, the Experience Pool only reached promoters, and neither reached
+  // someone who merely knows the right person. This aggregates them, tagged by
+  // source, and each card still links into its own existing flow.
+  //
+  // Kept deliberately outside any role's dashboard: nested under a role-specific
+  // menu it would just be Open Events again under a new name, and the one thing
+  // a shared feed is good for -- a promoter spotting a "seeking venue" post and
+  // knowing a venue owner -- needs it to sit outside the silo.
+
+  /** Everything currently open, in the two groups the feed renders. */
+  async function buildCollabOpportunities() {
+    const [openEvents, flashDeals, pool, ideas] = await Promise.all([
+      storage.getOpenVenueEvents().catch(() => [] as any[]),
+      db
+        .select({ deal: venueFlashDeals, venue: venues })
+        .from(venueFlashDeals)
+        .innerJoin(venues, eq(venueFlashDeals.venueId, venues.id))
+        .where(and(eq(venueFlashDeals.status, "active"), eq(venues.approved, true)))
+        .catch(() => [] as any[]),
+      storage.getPromotableExperiences().catch(() => [] as any[]),
+      storage.getOpenCollabIdeas().catch(() => [] as any[]),
+    ]);
+
+    // "Ready to act on": a real date, a real counterparty, a concrete button.
+    const ready = [
+      ...openEvents.map((event: any) => ({
+        kind: "open_event",
+        id: event.id,
+        tag: "seeking venue",
+        title: event.title,
+        location: event.location || event.city || null,
+        detail: [
+          event.maxParticipants ? `${event.maxParticipants} people` : null,
+          event.venueTargetDeal
+            ? getVenueDealLabel(event.venueTargetDeal)
+            : null,
+        ].filter(Boolean).join(" - "),
+        href: "/venue-dashboard?tab=open-events",
+        actionLabel: "Offer to Host",
+      })),
+      ...flashDeals.map(({ deal, venue }: any) => ({
+        kind: "flash_deal",
+        id: deal.id,
+        tag: "venue free date",
+        title: venue.name,
+        location: venue.city || null,
+        detail: [deal.startDate, deal.endDate].filter(Boolean).join(" - "),
+        href: "/creator-dashboard?tab=partners&sub=flash-deals",
+        actionLabel: "See Deal",
+      })),
+      ...pool.map((event: any) => ({
+        kind: "experience_pool",
+        id: event.id,
+        tag: "promote & earn",
+        title: event.title,
+        location: event.location || event.city || null,
+        detail: event.promotionDealType
+          ? String(event.promotionDealType).replace(/_/g, " ")
+          : "",
+        href: "/promoter-experience-pool",
+        actionLabel: "Promote This",
+      })),
+    ];
+
+    // "Still forming": no date, no partner, nothing to book -- only a
+    // conversation to start. Rendered distinctly so the two are never confused.
+    const forming = ideas.map((idea: any) => ({
+      kind: "collab_idea",
+      id: idea.id,
+      tag: "collab idea",
+      title: idea.title,
+      location: [idea.city, idea.region].filter(Boolean).join(", ") || null,
+      detail: [
+        formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
+        formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
+      ].filter(Boolean).join(" - "),
+      seekingPartnerType: idea.seekingPartnerType,
+      posterId: idea.posterId,
+      actionLabel: "I am interested",
+    }));
+
+    return { ready, forming };
+  }
+
+  app.get("/api/collab/opportunities", isAuthenticated, async (_req: any, res) => {
+    try {
+      res.json(await buildCollabOpportunities());
+    } catch (error) {
+      console.error("Error building collab opportunities:", error);
+      res.status(500).json({ message: "Failed to load opportunities" });
+    }
+  });
+
+  /** Just the counts, for the badge on each role's home card. */
+  app.get("/api/collab/opportunities/summary", isAuthenticated, async (_req: any, res) => {
+    try {
+      const { ready, forming } = await buildCollabOpportunities();
+      res.json({ readyCount: ready.length, formingCount: forming.length });
+    } catch (error) {
+      console.error("Error summarising collab opportunities:", error);
+      res.json({ readyCount: 0, formingCount: 0 });
+    }
+  });
+
+  /**
+   * Post a rough idea, then tell the profiles that plainly fit.
+   *
+   * A passive feed nobody remembers to open is the realistic failure mode at
+   * this stage, so posting runs a filter over existing venue profiles and
+   * notifies the matches. A filter and a notification -- no scoring, no ranking.
+   */
+  app.post("/api/collab/ideas", isAuthenticated, async (req: any, res) => {
+    try {
+      const posterId = resolveCurrentUserId(req);
+      if (!posterId) return res.status(401).json({ message: "Not authenticated" });
+
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      const seekingPartnerType = String(body.seekingPartnerType || "").trim();
+      if (!title) return res.status(400).json({ message: "Give your idea a title" });
+      if (!seekingPartnerType) {
+        return res.status(400).json({ message: "Say what kind of partner you are looking for" });
+      }
+
+      const toDate = (value: unknown) => {
+        if (!value) return null;
+        const parsed = new Date(String(value));
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      };
+      const estimatedStart = toDate(body.estimatedStart);
+      const estimatedEnd = toDate(body.estimatedEnd);
+
+      const poster = await storage.getUser(posterId);
+      const idea = await storage.createCollabIdea({
+        posterId,
+        posterRole: poster?.role || "creator",
+        title,
+        description: body.description ? String(body.description) : null,
+        seekingPartnerType,
+        audience: body.audience ? String(body.audience) : null,
+        city: body.city ? String(body.city) : null,
+        region: body.region ? String(body.region) : null,
+        venueCategory: body.venueCategory ? String(body.venueCategory) : null,
+        groupSizeMin: Number.isFinite(Number(body.groupSizeMin)) ? Number(body.groupSizeMin) : null,
+        groupSizeMax: Number.isFinite(Number(body.groupSizeMax)) ? Number(body.groupSizeMax) : null,
+        estimatedStart,
+        estimatedEnd,
+        dealPreference: body.dealPreference ? String(body.dealPreference) : null,
+        status: "open",
+        // A retreat is planned months out, so the window has to clear the
+        // period being proposed or it expires before anyone is thinking about
+        // those dates.
+        expiresAt: resolveCollabExpiry(estimatedEnd),
+      } as any);
+
+      // Match-and-notify. Never let a notification failure lose the posting --
+      // the idea is on the board either way.
+      let notified = 0;
+      try {
+        if (seekingPartnerType === "venue") {
+          const candidates = await storage.getApprovedVenuesForMatching();
+          const matches = candidates.filter((venue: any) =>
+            venueMatchesCollabIdea(idea as any, venue));
+
+          const period = formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd);
+          const size = formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax);
+
+          for (const venue of matches) {
+            const ownerId = venue.createdBy || venue.ownerId;
+            if (!ownerId || ownerId === posterId) continue;
+            const owner = await storage.getUser(ownerId);
+            if (!owner?.email) continue;
+
+            await notificationService.sendCollabIdeaMatchEmail({
+              to: owner.email,
+              venueName: venue.name || "your venue",
+              ideaTitle: idea.title,
+              location: [idea.city, idea.region].filter(Boolean).join(", "),
+              period,
+              groupSize: size,
+              ideaUrl: `${getAppBaseUrl(req)}/collab-opportunities`,
+              eventKey: `collab_idea_match:${idea.id}:${ownerId}`,
+            });
+            notified += 1;
+          }
+        }
+      } catch (notifyError) {
+        console.error("Collab idea posted, but match notifications failed:", notifyError);
+      }
+
+      res.status(201).json({ idea, notified });
+    } catch (error) {
+      console.error("Error posting collab idea:", error);
+      res.status(500).json({ message: "Failed to post your idea" });
+    }
+  });
+
+  /**
+   * Partners -> My Open Postings.
+   *
+   * The same rows the public feed shows, filtered to the poster, so nobody has
+   * to check two places for one posting. When a deal is struck the record moves
+   * to Active Deals rather than being copied there.
+   */
+  app.get("/api/collab/ideas/mine", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const ideas = await storage.getCollabIdeasByPoster(userId);
+      const counts = await storage.countCollabResponsesByIdea(ideas.map((idea) => idea.id));
+
+      res.json(ideas.map((idea) => ({
+        ...idea,
+        responseCount: counts.get(idea.id) || 0,
+        period: formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
+        groupSize: formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
+      })));
+    } catch (error) {
+      console.error("Error fetching own collab ideas:", error);
+      res.status(500).json({ message: "Failed to load your postings" });
+    }
+  });
+
+  /** "I am interested" -- opens a conversation. Never a booking. */
+  app.post("/api/collab/ideas/:id/interest", isAuthenticated, async (req: any, res) => {
+    try {
+      const responderId = resolveCurrentUserId(req);
+      if (!responderId) return res.status(401).json({ message: "Not authenticated" });
+
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "That idea is no longer listed" });
+      if (idea.posterId === responderId) {
+        return res.status(400).json({ message: "This is your own posting" });
+      }
+      if (idea.status !== "open") {
+        return res.status(409).json({ message: "This idea is no longer open" });
+      }
+
+      const responder = await storage.getUser(responderId);
+      const response = await storage.recordCollabInterest({
+        ideaId: idea.id,
+        responderId,
+        responderRole: responder?.role || null,
+        venueId: req.body?.venueId || null,
+        message: req.body?.message ? String(req.body.message) : null,
+      });
+
+      try {
+        const poster = await storage.getUser(idea.posterId);
+        if (poster?.email) {
+          await notificationService.sendCollabInterestEmail({
+            to: poster.email,
+            posterName: poster.firstName,
+            ideaTitle: idea.title,
+            responderName: responder?.firstName || "Someone",
+            ideaUrl: `${getAppBaseUrl(req)}/creator-dashboard?tab=partners&sub=my-postings`,
+            eventKey: `collab_interest:${idea.id}:${responderId}`,
+          });
+        }
+      } catch (notifyError) {
+        console.error("Interest recorded, but the poster was not emailed:", notifyError);
+      }
+
+      res.status(201).json({ response, message: "The organiser has been told you are interested" });
+    } catch (error) {
+      console.error("Error recording collab interest:", error);
+      res.status(500).json({ message: "Failed to register your interest" });
+    }
+  });
+
+  /** Withdraw a posting, or mark it matched once it becomes a real event. */
+  app.patch("/api/collab/ideas/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "Not found" });
+      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const status = String(req.body?.status || "");
+      if (!["open", "matched", "closed"].includes(status)) {
+        return res.status(400).json({ message: "Unsupported status" });
+      }
+
+      const updated = await storage.updateCollabIdea(idea.id, {
+        status,
+        convertedExperienceId: req.body?.convertedExperienceId || idea.convertedExperienceId,
+      } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating collab idea:", error);
+      res.status(500).json({ message: "Failed to update posting" });
+    }
+  });
+
   app.get("/api/venue-flash-deals", async (req: any, res) => {
     try {
       const today = new Date();

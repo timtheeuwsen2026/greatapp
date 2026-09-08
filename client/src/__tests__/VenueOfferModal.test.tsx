@@ -103,7 +103,9 @@ async function openOfferModal(openEvents: any[]) {
   const user = userEvent.setup();
   renderDashboard(openEvents);
 
-  await user.click(await screen.findByRole('tab', { name: /open events/i }));
+  // Open Events moved under the Partners group in the dashboard nav cleanup.
+  await user.click(await screen.findByTestId('tab-partners'));
+  await user.click(await screen.findByTestId('partners-subtab-open-events'));
   await user.click(await screen.findByRole('button', { name: /offer to host/i }));
 
   return { user, dialog: await screen.findByRole('dialog') };

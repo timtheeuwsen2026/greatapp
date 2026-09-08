@@ -5,6 +5,7 @@ import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
 import { getVenueDealLabel, formatVenueDealSummary } from "@shared/venueDealModels";
 import { Button } from "@/components/ui/button";
+import MyOpenPostings from "@/components/MyOpenPostings";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -876,6 +877,29 @@ function CreatorDashboardContent() {
   };
 
   // Type the data for better TypeScript support
+  // Partners groups the counterparty lifecycle: negotiating, agreed, fulfilling.
+  // Community and Role Applications stay out — those are about participants and
+  // applicants, not the organiser-venue relationship.
+  const PARTNER_TABS = [
+    "my-postings", "venue-offers", "active-deals", "promotion-deals", "fulfillment", "flash-deals",
+  ];
+  const PARTNER_SUBTABS = [
+    { value: "my-postings", label: "My Open Postings" },
+    { value: "venue-offers", label: "Offers" },
+    { value: "active-deals", label: "Active Deals" },
+    { value: "promotion-deals", label: "Promotion Deals" },
+    { value: "fulfillment", label: "Fulfillment" },
+    { value: "flash-deals", label: "Flash Deals" },
+  ];
+
+  // Summed so the top-level tab still shows anything waiting, now that the
+  // individual counts sit one level down.
+  const partnerAttentionCount =
+    venueOffers.length
+    + acceptedVenueDeals.length
+    + promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length
+    + perkFulfillments.filter((item: any) => item.status === "unlocked").length;
+
   const typedExperiences = (experiences as any[]).filter((exp: any) =>
     exp.status !== 'pending_approval' && exp.status !== 'pending' && !exp.archivedAt
   );
@@ -890,6 +914,17 @@ function CreatorDashboardContent() {
 
   // Determine states
   const isFirstTimeCreator = onboardingData && (onboardingData as any)?.progress?.percentage < 100;
+
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    // ?tab=partners has no content of its own; open the group on its first
+    // subtab so a link from elsewhere lands somewhere real.
+    if (requested === "partners") {
+      return new URLSearchParams(window.location.search).get("sub") || "venue-offers";
+    }
+    return requested || (isFirstTimeCreator ? "setup" : "experiences");
+  });
+
   const isReturningCreator = onboardingData && (onboardingData as any)?.progress?.percentage === 100;
 
   // Now handle conditional rendering AFTER all hooks are called
@@ -1119,7 +1154,7 @@ function CreatorDashboardContent() {
           </Card>
         </div>
 
-        <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") || (isFirstTimeCreator ? "setup" : "experiences")} className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="h-auto flex-wrap justify-start">
             {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
             <TabsTrigger value="experiences">My Experiences</TabsTrigger>
@@ -1131,35 +1166,19 @@ function CreatorDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="venue-offers" className="relative">
-              Venue Offers
-              {venueOffers.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
-                  {venueOffers.length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="active-deals" className="relative">
-              Active Deals
-              {acceptedVenueDeals.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-xs w-5 h-5">
-                  {acceptedVenueDeals.length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="promotion-deals" className="relative">
-              Promotion Deals
-              {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-pink-500 text-white text-xs w-5 h-5">
-                  {promotionDeals.filter((d: any) => d.status === 'countered' && d.pendingActionBy === 'creator').length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="fulfillment" className="relative">
-              Fulfillment
-              {perkFulfillments.filter((item: any) => item.status === "unlocked").length > 0 && (
-                <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-green-600 text-xs text-white">
-                  {perkFulfillments.filter((item: any) => item.status === "unlocked").length}
+            {/* Partners: offers, deals, fulfilment and postings are not separate
+                concerns — they are one relationship with a counterparty at
+                different stages. The badge sums the group so nothing needing
+                attention is hidden a level down. */}
+            <TabsTrigger
+              value={PARTNER_TABS.includes(activeTab) ? activeTab : "venue-offers"}
+              className="relative"
+              data-testid="tab-partners"
+            >
+              Partners
+              {partnerAttentionCount > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-600 text-white text-xs w-5 h-5">
+                  {partnerAttentionCount}
                 </span>
               )}
             </TabsTrigger>
@@ -1171,10 +1190,38 @@ function CreatorDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="flash-deals">Venue Flash Deals</TabsTrigger>
             <TabsTrigger value="earnings">Earnings</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
+
+          {/* Second row, shown only inside Partners. */}
+          {PARTNER_TABS.includes(activeTab) && (
+            <div className="mb-6 flex flex-wrap gap-2 rounded-lg bg-muted/60 p-1" data-testid="partners-subtabs">
+              {PARTNER_SUBTABS.map((sub) => (
+                <Button
+                  key={sub.value}
+                  type="button"
+                  variant={activeTab === sub.value ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setActiveTab(sub.value)}
+                  data-testid={`partners-subtab-${sub.value}`}
+                >
+                  {sub.label}
+                  {sub.value === "my-postings" && (
+                    <span className="ml-1.5 rounded bg-blue-100 px-1 text-[10px] font-medium uppercase text-blue-700">
+                      new
+                    </span>
+                  )}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          {/* My Open Postings — the same record Collab Opportunities shows,
+              filtered to what this creator posted and still has open. */}
+          <TabsContent value="my-postings" className="space-y-6">
+            <MyOpenPostings />
+          </TabsContent>
 
           <TabsContent value="setup" className="space-y-6">
             {onboardingData ? (

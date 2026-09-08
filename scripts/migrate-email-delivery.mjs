@@ -16,6 +16,7 @@ const migrationUrls = [
   new URL("../migrations/20260906_commitment_fee_deal.sql", import.meta.url),
   new URL("../migrations/20260906_perks_attendance_qr_counters.sql", import.meta.url),
   new URL("../migrations/20260908_draft_event_times.sql", import.meta.url),
+  new URL("../migrations/20260910_collab_ideas.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

@@ -9,7 +9,7 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Crown, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, Users, X } from "lucide-react";
+import { Building2, Crown, GraduationCap, Handshake, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, Users, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
@@ -200,7 +200,9 @@ export default function Navigation() {
                   )}
                   {user?.role === 'venue_provider' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/venue-dashboard">Venue Dashboard</Link>
+                      {/* /venue, not /venue-dashboard: the same short landing a
+                          creator gets, rather than nine tabs of zeroes. */}
+                      <Link href="/venue">Venue Dashboard</Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'service_provider' && (
@@ -213,6 +215,21 @@ export default function Navigation() {
                       <Link href="/promoter">Promoter Dashboard</Link>
                     </DropdownMenuItem>
                   )}
+                  {/* One account carries several roles, so the cross-role feed
+                      cannot live inside any one dashboard. It sits here, one
+                      click away from wherever someone happens to be. */}
+                  <DropdownMenuItem asChild>
+                    <Link href="/collab-opportunities" className="gap-2">
+                      <Handshake className="h-4 w-4 text-muted-foreground" />
+                      Collab Opportunities
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/how-it-works" className="gap-2">
+                      <GraduationCap className="h-4 w-4 text-muted-foreground" />
+                      Tutorials
+                    </Link>
+                  </DropdownMenuItem>
 
                   <DropdownMenuSeparator />
 

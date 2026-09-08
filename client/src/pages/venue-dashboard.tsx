@@ -3,6 +3,7 @@ import { apiRequest, readableError } from "@/lib/queryClient";
 import { useVenueAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
+import MyOpenPostings from "@/components/MyOpenPostings";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -457,6 +458,18 @@ function VenueDashboardContent() {
     () => new URLSearchParams(window.location.search).get("tab") || "venues",
   );
 
+  // Partners groups the counterparty lifecycle. My Venues, Payouts, Bookings,
+  // Availability and Analytics stay top-level: those are the venue's own
+  // business, not a relationship with an organiser.
+  const PARTNER_TABS = ["my-postings", "offers", "active-deals", "open-events", "flash-deals"];
+  const PARTNER_SUBTABS = [
+    { value: "my-postings", label: "My Open Postings" },
+    { value: "offers", label: "Offers" },
+    { value: "active-deals", label: "Active Deals" },
+    { value: "open-events", label: "Open Events" },
+    { value: "flash-deals", label: "Flash Deals" },
+  ];
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const success = params.get("stripe_success") === "true";
@@ -578,6 +591,11 @@ function VenueDashboardContent() {
     },
     onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to submit offer"), variant: "destructive" }),
   });
+
+  // Summed so the top-level tab still shows anything waiting, now that the
+  // individual counts sit one level down.
+  const partnerAttentionCount =
+    pendingOffers.length + activeVenueDeals.length + openEvents.length;
 
   const handleSubmitOffer = () => {
     if (!offerModal.event || !offerForm.venueId || !offerForm.model) return;
@@ -911,35 +929,56 @@ function VenueDashboardContent() {
           <TabsList>
             <TabsTrigger value="venues">My Venues</TabsTrigger>
             <TabsTrigger value="payouts">Payouts</TabsTrigger>
-            <TabsTrigger value="offers" className="relative">
-              Offers
-              {pendingOffers.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-amber-500 text-white text-xs w-5 h-5">
-                  {pendingOffers.length}
+            {/* Partners: offers, agreed deals, open events and flash deals are
+                one relationship with a counterparty at different stages, not
+                four separate concerns. The badge sums the group so nothing
+                waiting is hidden a level down. */}
+            <TabsTrigger
+              value={PARTNER_TABS.includes(activeTab) ? activeTab : "offers"}
+              className="relative"
+              data-testid="tab-partners"
+            >
+              Partners
+              {partnerAttentionCount > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-600 text-white text-xs w-5 h-5">
+                  {partnerAttentionCount}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="active-deals" className="relative">
-              Active Deals
-              {activeVenueDeals.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-xs w-5 h-5">
-                  {activeVenueDeals.length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="open-events" className="relative">
-              Open Events
-              {openEvents.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-500 text-white text-xs w-5 h-5">
-                  {openEvents.length}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="flash-deals">Flash Deals</TabsTrigger>
             <TabsTrigger value="bookings">Bookings</TabsTrigger>
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
+
+          {/* Second row, shown only inside Partners. */}
+          {PARTNER_TABS.includes(activeTab) && (
+            <div className="mb-6 flex flex-wrap gap-2 rounded-lg bg-muted/60 p-1" data-testid="partners-subtabs">
+              {PARTNER_SUBTABS.map((sub) => (
+                <Button
+                  key={sub.value}
+                  type="button"
+                  variant={activeTab === sub.value ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setActiveTab(sub.value)}
+                  data-testid={`partners-subtab-${sub.value}`}
+                >
+                  {sub.label}
+                  {sub.value === "my-postings" && (
+                    <span className="ml-1.5 rounded bg-blue-100 px-1 text-[10px] font-medium uppercase text-blue-700">
+                      new
+                    </span>
+                  )}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          {/* My Open Postings — the same record Collab Opportunities shows,
+              filtered to what this venue posted and still has open. */}
+          <TabsContent value="my-postings" className="space-y-4">
+            <h2 className="text-xl font-semibold">My Open Postings</h2>
+            <MyOpenPostings />
+          </TabsContent>
 
           {/* ── Payouts Tab ── */}
           <TabsContent value="payouts" className="space-y-4">

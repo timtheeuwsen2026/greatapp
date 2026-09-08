@@ -14,6 +14,8 @@ import {
   venueContracts,
   venueInvites,
   venueOffers,
+  collabIdeas,
+  collabIdeaResponses,
   experienceServices,
   experienceAmenities,
   amenities,
@@ -102,6 +104,9 @@ import {
   type InsertSplitRecipient,
   scheduledPayouts,
   type ScheduledPayout,
+  type CollabIdea,
+  type InsertCollabIdea,
+  type CollabIdeaResponse,
   type InsertScheduledPayout,
 } from "@shared/schema";
 import { db } from "./db";
@@ -5496,6 +5501,104 @@ export class DatabaseStorage implements IStorage {
       presetGrossCents: r.presetGrossCents ?? 0,
       additionalGrossCents: r.additionalGrossCents ?? 0,
     }));
+  }
+
+  // ── Collab Ideas ────────────────────────────────────────────────────────
+  // The stage before an event exists: a rough idea looking for a partner.
+
+  async createCollabIdea(idea: InsertCollabIdea): Promise<CollabIdea> {
+    const [created] = await db.insert(collabIdeas).values(idea).returning();
+    return created;
+  }
+
+  async getCollabIdea(id: string): Promise<CollabIdea | undefined> {
+    const [idea] = await db.select().from(collabIdeas).where(eq(collabIdeas.id, id));
+    return idea;
+  }
+
+  /** The public feed: still open, and not yet past its window. */
+  async getOpenCollabIdeas(limit = 50): Promise<CollabIdea[]> {
+    return db
+      .select()
+      .from(collabIdeas)
+      .where(
+        and(
+          eq(collabIdeas.status, "open"),
+          or(isNull(collabIdeas.expiresAt), sql`${collabIdeas.expiresAt} > NOW()`),
+        ),
+      )
+      .orderBy(desc(collabIdeas.createdAt))
+      .limit(limit);
+  }
+
+  /** Partners → My Open Postings. The same rows, filtered to one poster. */
+  async getCollabIdeasByPoster(posterId: string): Promise<CollabIdea[]> {
+    return db
+      .select()
+      .from(collabIdeas)
+      .where(eq(collabIdeas.posterId, posterId))
+      .orderBy(desc(collabIdeas.createdAt));
+  }
+
+  async updateCollabIdea(id: string, updates: Partial<InsertCollabIdea>): Promise<CollabIdea | undefined> {
+    const [updated] = await db
+      .update(collabIdeas)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(collabIdeas.id, id))
+      .returning();
+    return updated;
+  }
+
+  /**
+   * Record interest, or return what is already there.
+   *
+   * A second click means "where did my message go", not "send another" — the
+   * unique index makes the duplicate impossible, and this turns that into a
+   * no-op rather than an error the UI has to explain.
+   */
+  async recordCollabInterest(input: {
+    ideaId: string;
+    responderId: string;
+    responderRole?: string | null;
+    venueId?: string | null;
+    message?: string | null;
+  }): Promise<CollabIdeaResponse> {
+    const existing = await db
+      .select()
+      .from(collabIdeaResponses)
+      .where(
+        and(
+          eq(collabIdeaResponses.ideaId, input.ideaId),
+          eq(collabIdeaResponses.responderId, input.responderId),
+        ),
+      );
+    if (existing.length) return existing[0];
+
+    const [created] = await db.insert(collabIdeaResponses).values(input as any).returning();
+    return created;
+  }
+
+  async getCollabIdeaResponses(ideaId: string): Promise<CollabIdeaResponse[]> {
+    return db
+      .select()
+      .from(collabIdeaResponses)
+      .where(eq(collabIdeaResponses.ideaId, ideaId))
+      .orderBy(desc(collabIdeaResponses.createdAt));
+  }
+
+  async countCollabResponsesByIdea(ideaIds: string[]): Promise<Map<string, number>> {
+    if (!ideaIds.length) return new Map();
+    const rows = await db
+      .select({ ideaId: collabIdeaResponses.ideaId, total: count() })
+      .from(collabIdeaResponses)
+      .where(inArray(collabIdeaResponses.ideaId, ideaIds))
+      .groupBy(collabIdeaResponses.ideaId);
+    return new Map(rows.map((row: any) => [row.ideaId, Number(row.total) || 0]));
+  }
+
+  /** Every approved venue, for the match-and-notify filter to run over. */
+  async getApprovedVenuesForMatching(): Promise<any[]> {
+    return db.select().from(venues).where(eq(venues.status, "approved"));
   }
 }
 

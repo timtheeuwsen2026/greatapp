@@ -515,6 +515,91 @@ class NotificationService {
     }
   }
 
+  /**
+   * A new Collab Idea matches a venue this person owns.
+   *
+   * The whole point of match-and-notify: at this stage a passive feed will not
+   * be browsed often enough for a rough idea to find anybody, so the handful of
+   * profiles that plainly fit get told directly. The email opens a
+   * conversation -- it is not an offer and commits nobody to anything.
+   */
+  async sendCollabIdeaMatchEmail(opts: {
+    to: string;
+    venueName: string;
+    ideaTitle: string;
+    location?: string | null;
+    period?: string | null;
+    groupSize?: string | null;
+    ideaUrl: string;
+    eventKey?: string;
+  }): Promise<void> {
+    const facts = [opts.location, opts.groupSize, opts.period].filter(Boolean).join(' - ');
+    const subject = `New collab idea matches ${opts.venueName}`;
+    const bodyText =
+      `Someone is looking for a space and ${opts.venueName} fits what they described.\n\n` +
+      `"${opts.ideaTitle}"${facts ? `\n${facts}` : ''}\n\n` +
+      `Nothing is booked and no dates are held. If it sounds workable, say you are ` +
+      `interested and it opens a conversation with the organiser.`;
+
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'See the idea', href: opts.ideaUrl },
+      preheader: `${opts.ideaTitle} - looking for a space like yours.`,
+      growthFooterContext: 'creator_venue',
+    });
+
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('collab_idea_match', opts.to, opts.ideaTitle),
+      emailType: 'collab_idea_match',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send collab idea match email');
+    }
+  }
+
+  /** Someone answered a Collab Idea. Tells the poster, nothing more. */
+  async sendCollabInterestEmail(opts: {
+    to: string;
+    posterName?: string | null;
+    ideaTitle: string;
+    responderName: string;
+    ideaUrl: string;
+    eventKey?: string;
+  }): Promise<void> {
+    const subject = `${opts.responderName} is interested in your collab idea`;
+    const bodyText =
+      `Good news, ${opts.posterName || 'there'}. ${opts.responderName} responded to ` +
+      `"${opts.ideaTitle}".\n\n` +
+      `Nothing is agreed yet -- this is the start of a conversation. Once you settle ` +
+      `dates, numbers and terms between you, it moves into the event builder as a ` +
+      `normal event.`;
+
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'View your posting', href: opts.ideaUrl },
+      preheader: `${opts.responderName} responded to ${opts.ideaTitle}.`,
+      growthFooterContext: 'creator_venue',
+    });
+
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey || notificationEventKey('collab_interest', opts.to, opts.ideaTitle),
+      emailType: 'collab_interest',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send collab interest email');
+    }
+  }
+
   async sendCreatorCommunityHubNudgeEmail(opts: {
     to: string;
     creatorName?: string | null;

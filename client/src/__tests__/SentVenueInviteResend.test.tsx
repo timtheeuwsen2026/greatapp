@@ -97,7 +97,9 @@ function renderDashboard() {
 async function openVenueOffers() {
   const user = userEvent.setup();
   renderDashboard();
-  await user.click(await screen.findByRole('tab', { name: /venue offers/i }));
+  // Offers moved under the Partners group in the dashboard nav cleanup.
+  await user.click(await screen.findByTestId('tab-partners'));
+  await user.click(await screen.findByTestId('partners-subtab-venue-offers'));
   return user;
 }
 

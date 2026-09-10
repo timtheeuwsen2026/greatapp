@@ -75,11 +75,15 @@ function renderDashboard() {
     }
     const body = url.includes('/api/creator/venue-invites')
       ? [sentInvite]
-      : url.includes('/api/creator-profile')
-        ? { id: 'profile-1', completed: true }
-        : url.includes('/api/creator/onboard')
-          ? { completed: true }
-          : [];
+      // An approved creator: the Partners tab is gated on approval, not on the
+      // role, so the fixture has to say which of the two this account is.
+      : url.includes('/api/partner-access')
+        ? { state: "approved", canUseTooling: true, onboardingHref: null, title: "", message: "" }
+        : url.includes('/api/creator-profile')
+          ? { id: 'profile-1', completed: true, approved: true }
+          : url.includes('/api/creator/onboard')
+            ? { completed: true }
+            : [];
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

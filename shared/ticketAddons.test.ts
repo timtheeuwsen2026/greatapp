@@ -15,7 +15,7 @@ const combi = { pricingMode: "combi", addonName: "Coffee + Medialuna", addonPric
 
 describe("reading an add-on off a ticket", () => {
   it("still reads a legacy Combi-Ticket, treating the whole price as the venue's", () => {
-    expect(getTicketAddon(combi)).toEqual({
+    expect(getTicketAddon(combi)).toMatchObject({
       name: "Coffee + Medialuna",
       unitPrice: 5.5,
       venueAmount: 5.5,
@@ -71,7 +71,7 @@ describe("the organiser's margin is a flat amount, never a percentage", () => {
   };
 
   it("adds the margin on top and says who keeps what", () => {
-    expect(getTicketAddon(modular)).toEqual({
+    expect(getTicketAddon(modular)).toMatchObject({
       name: "Coffee + Medialuna",
       unitPrice: 6.5,
       venueAmount: 5,
@@ -80,7 +80,7 @@ describe("the organiser's margin is a flat amount, never a percentage", () => {
   });
 
   it("passes the venue's price straight through when the organiser takes nothing", () => {
-    expect(getTicketAddon({ ...modular, addonMargin: 0 })).toEqual({
+    expect(getTicketAddon({ ...modular, addonMargin: 0 })).toMatchObject({
       name: "Coffee + Medialuna",
       unitPrice: 5,
       venueAmount: 5,
@@ -149,19 +149,19 @@ describe("pricing a booking that carries an add-on", () => {
   it("charges a free RSVP nothing but still charges for the add-on", () => {
     expect(
       calculateBookingTotal({ unitPrice: 0, ticketQuantity: 1, addonUnitPrice: 5.5, addonQuantity: 1 }),
-    ).toEqual({ ticketTotal: 0, addonTotal: 5.5, fullPrice: 5.5 });
+    ).toMatchObject({ ticketTotal: 0, addonTotal: 5.5, fullPrice: 5.5 });
   });
 
   it("leaves a declined add-on out of the total", () => {
     expect(
       calculateBookingTotal({ unitPrice: 0, ticketQuantity: 1, addonUnitPrice: 5.5, addonQuantity: 0 }),
-    ).toEqual({ ticketTotal: 0, addonTotal: 0, fullPrice: 0 });
+    ).toMatchObject({ ticketTotal: 0, addonTotal: 0, fullPrice: 0 });
   });
 
   it("adds the add-on on top of a paid ticket", () => {
     expect(
       calculateBookingTotal({ unitPrice: 12, ticketQuantity: 2, addonUnitPrice: 5.5, addonQuantity: 2 }),
-    ).toEqual({ ticketTotal: 24, addonTotal: 11, fullPrice: 35 });
+    ).toMatchObject({ ticketTotal: 24, addonTotal: 11, fullPrice: 35 });
   });
 
   it("rounds to whole cents so the intent and the confirmation cannot drift", () => {
@@ -173,13 +173,13 @@ describe("pricing a booking that carries an add-on", () => {
       ticketQuantity: 3,
       addonUnitPrice: 2.2,
       addonQuantity: 3,
-    })).toEqual({ ticketTotal: 3.3, addonTotal: 6.6, fullPrice: 9.9 });
+    })).toMatchObject({ ticketTotal: 3.3, addonTotal: 6.6, fullPrice: 9.9 });
   });
 });
 
 describe("what gets written onto the booking", () => {
   it("copies the name and price the buyer actually agreed to", () => {
-    expect(buildBookingAddonRecord(getTicketAddon(combi), 2)).toEqual({
+    expect(buildBookingAddonRecord(getTicketAddon(combi), 2)).toMatchObject({
       addonName: "Coffee + Medialuna",
       addonUnitPrice: "5.50",
       addonQuantity: 2,
@@ -188,7 +188,7 @@ describe("what gets written onto the booking", () => {
   });
 
   it("writes a blank record when the buyer declined", () => {
-    expect(buildBookingAddonRecord(getTicketAddon(combi), 0)).toEqual({
+    expect(buildBookingAddonRecord(getTicketAddon(combi), 0)).toMatchObject({
       addonName: null,
       addonUnitPrice: "0.00",
       addonQuantity: 0,

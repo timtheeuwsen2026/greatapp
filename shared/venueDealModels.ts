@@ -287,6 +287,23 @@ export function isUntrackedVenueDeal(model: unknown): boolean {
   return !!normalized && DEFINITIONS[normalized].untracked === true;
 }
 
+/**
+ * Deals whose money never passes through the platform.
+ *
+ * Broader than `isUntrackedVenueDeal`: a manual counter agreement is the one
+ * the app is not allowed to *offer* by default, while access-only and
+ * minimum-spend are perfectly ordinary choices whose money is simply settled
+ * at the venue's own register. All three are alike to a calculator — reporting
+ * a figure for any of them would be inventing one.
+ */
+export function isOffPlatformVenueDeal(model: unknown): boolean {
+  const normalized = normalizeVenueDealModel(model);
+  if (!normalized) return false;
+  return normalized === "access_only"
+    || normalized === "minimum_spend"
+    || normalized === "manual_counter_revenue";
+}
+
 export type VenueDealOptionsInput = {
   /** A one-day event or a daytime space gets the day list. */
   isDaytime: boolean;

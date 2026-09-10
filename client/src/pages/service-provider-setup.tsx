@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MoneyInput } from "@/components/ui/money-input";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -702,7 +703,14 @@ export default function ServiceProviderSetup() {
                         <FormItem>
                           <FormLabel>Price (USD)</FormLabel>
                           <FormControl>
-                            <Input type="number" step="0.01" min={0} placeholder="75.00" {...field} />
+                            <MoneyInput
+                              placeholder="75.00"
+                              name={field.name}
+                              ref={field.ref}
+                              onBlur={field.onBlur}
+                              value={field.value}
+                              onValueChange={(amount) => field.onChange(amount ?? 0)}
+                            />
                           </FormControl>
                           <FormMessage />
                         </FormItem>

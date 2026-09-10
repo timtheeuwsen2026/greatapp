@@ -29,19 +29,31 @@ import {
   AlertCircle,
   AlertTriangle,
   Send,
-  Trash2
+  Trash2,
+  Check,
+  ChevronsUpDown,
+  X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { format } from "date-fns";
 import {
   Form,
@@ -76,7 +88,9 @@ import {
   safeAdd
 } from '@shared/pricingService';
 import { calculateTicketDeduction } from "@shared/ticketDeduction";
-import { getTicketAddon, isAddonEnabled } from "@shared/ticketAddons";
+import { getTicketAddon, isAddonEnabled, normalizeAddonMarginMode } from "@shared/ticketAddons";
+import { calculateEventEconomics } from "@shared/eventEconomics";
+import { usePlatformFee } from "@/hooks/usePlatformFee";
 import { findDealConflicts, getDealConflictReason } from "@shared/dealExclusions";
 import { getPerkApprovalMessage, getPerkApprovalState } from "@shared/perkApproval";
 import {
@@ -277,8 +291,16 @@ const eventBuilderSchema = z.object({
     pricePerPerson: z.number().min(0, "Price cannot be negative"),
     minPrice: z.number().min(0).default(0),
     suggestedPrice: z.number().min(0).optional(),
+    // The add-on's own fields. Absent from this list they are stripped on the
+    // way through the resolver, which is how a priced add-on can save as a
+    // ticket with no add-on at all.
+    addonEnabled: z.boolean().optional(),
     addonName: z.string().optional(),
     addonPrice: z.number().min(0).optional(),
+    addonVenuePrice: z.number().min(0).optional(),
+    addonMargin: z.number().min(0).optional(),
+    addonMarginMode: z.enum(["additive", "deduction"]).optional(),
+    addonInventory: z.number().min(0).optional(),
     depositPerPerson: z.number().min(0, "Deposit cannot be negative"),
     ticketCapacity: z.number().int().min(1, "Capacity must be at least 1"),
     sourceRoomId: z.string().optional(),
@@ -4743,6 +4765,7 @@ function PromotionStep({ form }: { form: any }) {
   const brandPitch = form.watch('promotionBrandPitch') || '';
   const sponsorshipAmount = form.watch('promotionSponsorshipAmount');
   const selectedPartnerIds = form.watch('promotionSelectedPartnerIds') || [];
+  const [partnerPickerOpen, setPartnerPickerOpen] = useState(false);
   const externalInvites = form.watch('promotionExternalInvites') || [];
   const openToOffers = !!form.watch('promoterEnabled');
 
@@ -5234,13 +5257,10 @@ function PromotionStep({ form }: { form: any }) {
                 <span className="rounded-md border bg-gray-100 px-3 py-2 text-sm dark:bg-gray-800">
                   {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '€'}
                 </span>
-                <Input
+                <MoneyInput
                   id="promotion-sponsorship-amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
                   value={sponsorshipAmount ?? ''}
-                  onChange={(e) => form.setValue('promotionSponsorshipAmount', e.target.value ? parseFloat(e.target.value) : undefined, { shouldDirty: true })}
+                  onValueChange={(amount) => form.setValue('promotionSponsorshipAmount', amount ?? undefined, { shouldDirty: true })}
                   placeholder="e.g. 250.00"
                   className="flex-1"
                   data-testid="input-promotion-sponsorship-amount"
@@ -5292,56 +5312,102 @@ function PromotionStep({ form }: { form: any }) {
                   No completed platform partner profiles are available yet.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {platformPartners.map((partner) => {
-                    const isSelected = selectedPartnerIds.includes(partner.id);
-                    return (
-                      <button
-                        key={partner.id}
+                /* A searchable list rather than a grid of photo cards. The grid
+                   read well at four promoters and stops being usable somewhere
+                   in the low dozens — a creator looking for one name they
+                   already have in mind should not have to scan a wall. The
+                   "n selected" counter above stays; it is what tells them the
+                   picks survived collapsing the list. */
+                <div className="space-y-3">
+                  <Popover open={partnerPickerOpen} onOpenChange={setPartnerPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
                         type="button"
-                        onClick={() => togglePartnerSelection(partner.id)}
-                        className={cn(
-                          "rounded-xl border p-4 text-left transition-colors",
-                          isSelected
-                            ? "border-blue-600 bg-blue-50 shadow-sm dark:border-blue-400 dark:bg-blue-950/40"
-                            : "border-gray-200 hover:border-blue-300 dark:border-gray-700 dark:hover:border-blue-500"
-                        )}
-                        data-testid={`promotion-platform-partner-${partner.id}`}
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={partnerPickerOpen}
+                        className="w-full justify-between font-normal"
+                        data-testid="button-promotion-partner-picker"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          {/* Avatar and name, the same as picking a venue from
-                              the catalogue. Contact details belong to the
-                              partner, and are theirs to share once a deal is
-                              actually under way. */}
-                          <div className="flex items-center gap-3">
-                            {partner.profilePhoto ? (
-                              <img
-                                src={partner.profilePhoto}
-                                alt=""
-                                className="h-10 w-10 rounded-full object-cover"
-                              />
-                            ) : (
-                              <span
-                                className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-200"
-                                aria-hidden="true"
-                              >
-                                {String(partner.displayName || '?').trim().charAt(0).toUpperCase()}
-                              </span>
-                            )}
-                            <div className="flex items-center gap-2">
-                              <p className="font-semibold text-gray-900 dark:text-white">{partner.displayName}</p>
-                              <Badge variant="secondary">Promoter</Badge>
-                            </div>
-                          </div>
-                          {isSelected && (
-                            <span className="rounded-full bg-blue-600 px-2 py-1 text-xs font-medium text-white">
-                              Selected
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                        {selectedPartnerIds.length === 0
+                          ? "Search registered promoters and brands..."
+                          : `${selectedPartnerIds.length} selected`}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="Search by name..." data-testid="input-promotion-partner-search" />
+                        <CommandList>
+                          <CommandEmpty>No promoter matches that name.</CommandEmpty>
+                          <CommandGroup>
+                            {platformPartners.map((partner) => {
+                              const isSelected = selectedPartnerIds.includes(partner.id);
+                              return (
+                                <CommandItem
+                                  key={partner.id}
+                                  value={String(partner.displayName || partner.id)}
+                                  onSelect={() => togglePartnerSelection(partner.id)}
+                                  data-testid={`promotion-platform-partner-${partner.id}`}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      isSelected ? "opacity-100" : "opacity-0",
+                                    )}
+                                  />
+                                  {/* Avatar and name, the same as picking a venue
+                                      from the catalogue. Contact details belong to
+                                      the partner, and are theirs to share once a
+                                      deal is actually under way. */}
+                                  {partner.profilePhoto ? (
+                                    <img
+                                      src={partner.profilePhoto}
+                                      alt=""
+                                      className="mr-2 h-6 w-6 rounded-full object-cover"
+                                    />
+                                  ) : (
+                                    <span
+                                      className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-200"
+                                      aria-hidden="true"
+                                    >
+                                      {String(partner.displayName || '?').trim().charAt(0).toUpperCase()}
+                                    </span>
+                                  )}
+                                  <span className="flex-1 truncate">{partner.displayName}</span>
+                                  <Badge variant="secondary" className="ml-2 shrink-0">Promoter</Badge>
+                                </CommandItem>
+                              );
+                            })}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+
+                  {/* Collapsed into a trigger, the picks would otherwise be
+                      invisible until the list is reopened. */}
+                  {selectedPartnerIds.length > 0 && (
+                    <div className="flex flex-wrap gap-2" data-testid="promotion-selected-partners">
+                      {selectedPartnerIds.map((partnerId: string) => {
+                        const partner = platformPartners.find((candidate: any) => candidate.id === partnerId);
+                        return (
+                          <Badge key={partnerId} variant="secondary" className="gap-1 py-1 pl-2 pr-1">
+                            {partner?.displayName || partnerId}
+                            <button
+                              type="button"
+                              onClick={() => togglePartnerSelection(partnerId)}
+                              className="rounded-full p-0.5 hover:bg-gray-300/60 dark:hover:bg-gray-600/60"
+                              aria-label={`Remove ${partner?.displayName || 'partner'}`}
+                              data-testid={`button-remove-promotion-partner-${partnerId}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -5527,8 +5593,11 @@ function PricingStep({ form, manualDealUnlocked = false }: {
   const eventType = form.watch('type'); // Track event type for dynamic UI
   const venueType = form.watch('venueType') || "catalog";
   const selectedVenueId = form.watch('selectedVenueId') || "";
+  const configuredPlatformPct = usePlatformFee();
   const creatorPct = form.watch('creatorPct') || 85;
-  const platformPct = FIXED_PLATFORM_FEE_PCT;
+  // Configured, not assumed — an admin who changes the fee must not leave
+  // every quote on this screen disagreeing with the payout engine.
+  const platformPct = configuredPlatformPct;
   const venueCompensationModel = form.watch('venueCompensationModel') || "revenue_share";
   const venueFixedFee = form.watch('venueFixedFee') || 0;
   const venuePerHeadAmount = form.watch('venuePerHeadAmount') || 0;
@@ -5992,18 +6061,38 @@ function PricingStep({ form, manualDealUnlocked = false }: {
   });
 
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
-  const promoterBounty = isCommissionPromotion ? totalRevenue * influencerCommissionPct / 100 : 0;
   // Add-on money splits two ways: the venue's own price for the item, and the
-  // organiser's flat margin on top. The margin is the organiser's earnings, so
-  // it belongs in the net — reporting the whole participant spend as "paid to
-  // the venue" understated what the organiser actually makes.
+  // organiser's flat margin. The margin is the organiser's earnings, so it
+  // belongs in the net — reporting the whole participant spend as "paid to the
+  // venue" understated what the organiser actually makes.
   const addOnVenueRevenue = revenueSummary.addOnVenueGross;
   const addOnCreatorMargin = revenueSummary.addOnCreatorGross;
-  const estimatedCreatorNet = revenueSplit.creatorAmount
-    + venuePayout
-    + venueCommitmentFee
-    + addOnCreatorMargin
-    - promoterBounty;
+
+  // One breakdown, whose total is the sum of the rows it hands back. The rows
+  // used to be assembled in the markup and the total in an expression beside
+  // them, and the two drifted: four rows adding to $55 over a total of -$30.
+  const economics = calculateEventEconomics({
+    ticketGross: totalRevenue,
+    paidTickets: chargeableCapacity,
+    platformPct,
+    venueDealModel: activeVenueDeal,
+    venueDealValue: (() => {
+      switch (activeVenueDeal) {
+        case "revenue_share":
+        case "commitment_plus_revenue_share": return activeRevenueSharePct;
+        case "per_head": return venuePerHeadAmount;
+        case "per_room_night": return activePerRoomRate;
+        case "minimum_spend": return venueMinimumSpend;
+        default: return activeFlatVenueAmount;
+      }
+    })(),
+    roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
+    commitmentFee: venueCommitmentFee,
+    addOnVenueGross: addOnVenueRevenue,
+    addOnCreatorGross: addOnCreatorMargin,
+    promoterCommissionPct: isCommissionPromotion ? influencerCommissionPct : 0,
+  });
+  const estimatedCreatorNet = economics.net;
   const venueDealSummaryLabel = venueDealContext === "external"
     ? "No venue commercial deal"
     : activeVenueDeal
@@ -6239,11 +6328,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                               <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                 {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                               </span>
-                              <Input
+                              <MoneyInput
                                 id={`sku-price-${sku.id}`}
-                                type="number" min="0" step="0.01"
                                 value={sku.pricePerPerson || ''}
-                                onChange={(e) => updateTicketSku(sku.id, 'pricePerPerson', parseFloat(e.target.value) || 0)}
+                                onValueChange={(amount) => updateTicketSku(sku.id, 'pricePerPerson', amount ?? 0)}
                                 placeholder="0.00"
                                 disabled={!currency}
                                 data-testid={`input-ticket-price-${index}`}
@@ -6273,11 +6361,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                 <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                   {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                 </span>
-                                <Input
+                                <MoneyInput
                                   id={`sku-minprice-${sku.id}`}
-                                  type="number" min="0" step="0.01"
                                   value={sku.minPrice ?? ''}
-                                  onChange={(e) => updateTicketSku(sku.id, 'minPrice', parseFloat(e.target.value) || 0)}
+                                  onValueChange={(amount) => updateTicketSku(sku.id, 'minPrice', amount ?? 0)}
                                   placeholder="0.00"
                                   disabled={!currency}
                                   data-testid={`input-ticket-minprice-${index}`}
@@ -6292,11 +6379,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                 <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                   {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                 </span>
-                                <Input
+                                <MoneyInput
                                   id={`sku-suggested-${sku.id}`}
-                                  type="number" min="0" step="0.01"
                                   value={sku.suggestedPrice ?? ''}
-                                  onChange={(e) => updateTicketSku(sku.id, 'suggestedPrice', parseFloat(e.target.value) || 0)}
+                                  onValueChange={(amount) => updateTicketSku(sku.id, 'suggestedPrice', amount ?? 0)}
                                   placeholder="0.00"
                                   disabled={!currency}
                                   data-testid={`input-ticket-suggested-${index}`}
@@ -6361,11 +6447,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                       {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                     </span>
-                                    <Input
+                                    <MoneyInput
                                       id={`sku-addon-venue-price-${sku.id}`}
-                                      type="number" min="0" step="0.01"
                                       value={sku.addonVenuePrice ?? (sku.addonPrice ?? '')}
-                                      onChange={(e) => updateTicketSku(sku.id, 'addonVenuePrice', parseFloat(e.target.value) || 0)}
+                                      onValueChange={(amount) => updateTicketSku(sku.id, 'addonVenuePrice', amount ?? 0)}
                                       placeholder="0.00"
                                       disabled={!currency}
                                       data-testid={`input-ticket-addon-venue-price-${index}`}
@@ -6380,11 +6465,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                       {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                                     </span>
-                                    <Input
+                                    <MoneyInput
                                       id={`sku-addon-margin-${sku.id}`}
-                                      type="number" min="0" step="0.01"
                                       value={sku.addonMargin ?? ''}
-                                      onChange={(e) => updateTicketSku(sku.id, 'addonMargin', parseFloat(e.target.value) || 0)}
+                                      onValueChange={(amount) => updateTicketSku(sku.id, 'addonMargin', amount ?? 0)}
                                       placeholder="0.00"
                                       disabled={!currency}
                                       data-testid={`input-ticket-addon-margin-${index}`}
@@ -6394,8 +6478,38 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                   {/* Flat, never a percentage: the venue price is
                                       usually already a thin collab rate, and a
                                       percentage would cut into it. */}
-                                  <p className="mt-1 text-xs text-gray-500">A flat amount on top, not a %</p>
+                                  <p className="mt-1 text-xs text-gray-500">A flat amount, not a %</p>
                                 </div>
+                              </div>
+
+                              {/* Which way the margin travels — set per add-on,
+                                  never once for the whole platform. A €5 coffee
+                                  the venue sells for €5 at its own counter has
+                                  to show as €5 here, or the participant is
+                                  better off walking up to the bar and the
+                                  add-on had no reason to exist in-platform. */}
+                              <div>
+                                <Label htmlFor={`sku-addon-margin-mode-${sku.id}`}>Where your margin comes from</Label>
+                                <Select
+                                  value={normalizeAddonMarginMode(sku.addonMarginMode)}
+                                  onValueChange={(value) => updateTicketSku(sku.id, 'addonMarginMode', value)}
+                                >
+                                  <SelectTrigger
+                                    id={`sku-addon-margin-mode-${sku.id}`}
+                                    data-testid={`select-ticket-addon-margin-mode-${index}`}
+                                  >
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="additive">On top — participant pays venue price + your margin</SelectItem>
+                                    <SelectItem value="deduction">Deducted — participant pays the venue price, margin comes out of the venue's cut</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="mt-1 text-xs text-gray-500">
+                                  {normalizeAddonMarginMode(sku.addonMarginMode) === 'deduction'
+                                    ? "The participant is charged exactly what the venue charges at its counter — nothing is added on top."
+                                    : "Keep the total at or below what the venue charges at its own counter, or buying direct is cheaper than buying here."}
+                                </p>
                               </div>
 
                               <div>
@@ -6437,6 +6551,13 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                       <span>You earn</span>
                                       <span>{formatPriceByCurrency(addon.creatorAmount, currency)}</span>
                                     </div>
+                                    <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                                      {addon.marginMode === 'deduction'
+                                        ? `Your ${formatPriceByCurrency(addon.creatorAmount, currency)} comes out of the venue's `
+                                          + `${formatPriceByCurrency(addon.venuePrice, currency)}, so the participant pays the venue's own price.`
+                                        : `Added on top of the venue's ${formatPriceByCurrency(addon.venuePrice, currency)}.`}
+                                      {' '}Calculated separately from your venue commercial deal.
+                                    </p>
                                   </div>
                                 );
                               })()}
@@ -6452,11 +6573,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                               <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                                 {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                               </span>
-                              <Input
+                              <MoneyInput
                                 id={`sku-deposit-${sku.id}`}
-                                type="number" min="0" step="0.01"
                                 value={sku.depositPerPerson || ''}
-                                onChange={(e) => updateTicketSku(sku.id, 'depositPerPerson', parseFloat(e.target.value) || 0)}
+                                onValueChange={(amount) => updateTicketSku(sku.id, 'depositPerPerson', amount ?? 0)}
                                 placeholder="0.00"
                                 disabled={!currency}
                                 data-testid={`input-ticket-deposit-${index}`}
@@ -6637,14 +6757,11 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                         <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                           {dealCurrencySymbol}
                         </span>
-                        <Input
+                        <MoneyInput
                           id="venue-target-commitment-fee"
-                          type="number"
-                          min="0"
-                          step="0.01"
                           placeholder="e.g. 50"
                           value={form.watch('venueCommitmentFee') || ''}
-                          onChange={(e) => form.setValue('venueCommitmentFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                          onValueChange={(amount) => form.setValue('venueCommitmentFee', amount ?? 0, { shouldDirty: true })}
                           data-testid="input-venue-target-commitment-fee"
                           className="flex-1"
                         />
@@ -6739,13 +6856,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
               {venueCompensationModel === "fixed_fee" && (
                 <div>
                   <Label htmlFor="venue-fixed-fee">Ticket Deduction per Ticket</Label>
-                  <Input
+                  <MoneyInput
                     id="venue-fixed-fee"
-                    type="number"
-                    min="0"
-                    step="0.01"
                     value={venueFixedFee || ''}
-                    onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    onValueChange={(amount) => form.setValue('venueFixedFee', amount ?? 0, { shouldDirty: true })}
                     data-testid="input-venue-fixed-fee"
                   />
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -6758,13 +6872,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   <Label htmlFor="venue-per-room-night">Rate per Room per Night ({dealCurrencySymbol})</Label>
                   {/* The creator names the rate. Venue profiles carry no
                       pricing, so this is the only figure in the deal. */}
-                  <Input
+                  <MoneyInput
                     id="venue-per-room-night"
-                    type="number"
-                    min="0"
-                    step="0.01"
                     value={venuePerRoomPerNight || ''}
-                    onChange={(e) => form.setValue('venuePerRoomPerNight', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    onValueChange={(amount) => form.setValue('venuePerRoomPerNight', amount ?? 0, { shouldDirty: true })}
                     data-testid="input-venue-per-room-night"
                   />
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -6775,13 +6886,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
               {venueCompensationModel === "per_head" && (
                 <div>
                   <Label htmlFor="venue-per-head">Per-Head Amount</Label>
-                  <Input
+                  <MoneyInput
                     id="venue-per-head"
-                    type="number"
-                    min="0"
-                    step="0.01"
                     value={venuePerHeadAmount || ''}
-                    onChange={(e) => form.setValue('venuePerHeadAmount', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    onValueChange={(amount) => form.setValue('venuePerHeadAmount', amount ?? 0, { shouldDirty: true })}
                     data-testid="input-venue-per-head"
                   />
                 </div>
@@ -6789,13 +6897,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
               {venueCompensationModel === "minimum_spend" && (
                 <div>
                   <Label htmlFor="venue-minimum-spend">Minimum Spend</Label>
-                  <Input
+                  <MoneyInput
                     id="venue-minimum-spend"
-                    type="number"
-                    min="0"
-                    step="0.01"
                     value={venueMinimumSpend || ''}
-                    onChange={(e) => form.setValue('venueMinimumSpend', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                    onValueChange={(amount) => form.setValue('venueMinimumSpend', amount ?? 0, { shouldDirty: true })}
                     data-testid="input-venue-minimum-spend"
                   />
                 </div>
@@ -6839,14 +6944,11 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                       {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
-                    <Input
+                    <MoneyInput
                       id="venue-commitment-fee"
-                      type="number"
-                      min="0"
-                      step="0.01"
                       placeholder="e.g. 50"
                       value={form.watch('venueCommitmentFee') || ''}
-                      onChange={(e) => form.setValue('venueCommitmentFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      onValueChange={(amount) => form.setValue('venueCommitmentFee', amount ?? 0, { shouldDirty: true })}
                       data-testid="input-venue-commitment-fee"
                       className="flex-1"
                     />
@@ -6866,13 +6968,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                       {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
-                    <Input
+                    <MoneyInput
                       id="venue-sponsorship-amount"
-                      type="number"
-                      min="0"
-                      step="0.01"
                       value={venueFixedFee || ''}
-                      onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      onValueChange={(amount) => form.setValue('venueFixedFee', amount ?? 0, { shouldDirty: true })}
                       placeholder="e.g. 200.00"
                       disabled={!currency}
                       data-testid="input-venue-sponsorship-amount"
@@ -6889,13 +6988,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                     <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
                       {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
                     </span>
-                    <Input
+                    <MoneyInput
                       id="venue-rental-amount"
-                      type="number"
-                      min="0"
-                      step="0.01"
                       value={venueFixedFee || ''}
-                      onChange={(e) => form.setValue('venueFixedFee', parseFloat(e.target.value) || 0, { shouldDirty: true })}
+                      onValueChange={(amount) => form.setValue('venueFixedFee', amount ?? 0, { shouldDirty: true })}
                       placeholder="e.g. 500.00"
                       disabled={!currency}
                       data-testid="input-venue-rental-amount"
@@ -6929,67 +7025,61 @@ function PricingStep({ form, manualDealUnlocked = false }: {
             </p>
 
             {/* Estimated grand total calculation */}
+            {/* Every row below comes out of the same breakdown the total does,
+                and the total is defined as their sum. A row the calculator
+                shows can never fail to move the figure underneath it. */}
             <div className="bg-green-50 dark:bg-green-950 p-4 rounded-lg">
-              <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">Estimated Grand Total Calculator</h4>
+              <div className="flex items-baseline justify-between gap-2 mb-1">
+                <h4 className="font-medium text-green-900 dark:text-green-100">Estimated Grand Total Calculator</h4>
+              </div>
+              {/* Every figure here assumes the event sells out and everyone
+                  takes the add-on. Read as a committed number it is a promise
+                  the event has not made. */}
+              <p className="text-xs text-green-800/80 dark:text-green-200/80 mb-2" data-testid="text-revenue-potential-caveat">
+                Potential at full capacity{addOnCreatorMargin > 0 || addOnVenueRevenue > 0 ? " and full add-on uptake" : ""} — not a guarantee.
+              </p>
               <div className="text-sm space-y-1">
-                <div className="flex justify-between">
-                  <span>Gross Ticket Revenue</span>
-                  <span className="font-medium" data-testid="text-gross-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
-                </div>
+                {economics.lines.map((line) => (
+                  <div className="flex justify-between" key={line.key} data-testid={`text-economics-${line.key}`}>
+                    <span>{line.label}</span>
+                    <span
+                      className={
+                        line.kind === "gross"
+                          ? "font-medium"
+                          : line.amount > 0
+                            ? "text-green-600 font-medium"
+                            : line.amount < 0
+                              ? (line.kind === "promotion" ? "text-amber-600" : "text-red-600")
+                              : ""
+                      }
+                    >
+                      {line.kind === "gross" ? "" : line.amount > 0 ? "+" : line.amount < 0 ? "-" : ""}
+                      {formatPriceByCurrency(Math.abs(line.amount), currency)}
+                    </span>
+                  </div>
+                ))}
+
                 {revenueSummary.hasFreeTickets && (
                   <p className="text-xs text-gray-500" data-testid="text-free-tickets-note">
                     Paid tickets only — {paidTicketCapacity} of {ticketTotalCapacity} spots.
                     Free RSVPs are attendance, not revenue, so no venue deal is charged on them.
                   </p>
                 )}
-                <div className="flex justify-between">
-                  <span>Platform Fee ({platformPct}%)</span>
-                  <span className="text-red-600" data-testid="text-platform-fee">-{formatPriceByCurrency(revenueSplit.platformAmount, currency)}</span>
-                </div>
 
-                {/* Signed venue amount: costs are negative; sponsorship income is positive. */}
-                <div className="flex justify-between">
-                  <span>
-                    {activeVenueDeal === 'commitment_plus_revenue_share'
-                      ? `Venue Revenue Share (${activeRevenueSharePct}%)`
-                      : 'Venue Payout'}
-                  </span>
-                  <span
-                    className={venuePayout > 0 ? 'text-green-600 font-medium' : venuePayout < 0 ? 'text-red-600' : ''}
-                    data-testid="text-venue-payout"
-                  >
-                    {venuePayout > 0 ? '+' : venuePayout < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(venuePayout), currency)}
-                  </span>
-                </div>
-
-                {/* Its own line, travelling the other way. Folded into the payout
-                    row it made the venue look paid when the venue is paying. */}
-                {venueCommitmentFee > 0 && (
-                  <div className="flex justify-between" data-testid="text-commitment-fee">
-                    <span>Commitment Fee from Venue</span>
-                    <span className="text-green-600 font-medium">
-                      +{formatPriceByCurrency(venueCommitmentFee, currency)}
-                    </span>
-                  </div>
+                {/* The fee is charged on everything that reaches the organiser
+                    through the platform, not on ticket sales alone. Stated
+                    because an organiser reading a single fee line against a
+                    single gross line will otherwise assume the difference is
+                    an error. */}
+                {economics.platformFee > 0 && economics.platformFeeBase > totalRevenue && (
+                  <p className="text-xs text-gray-500" data-testid="text-platform-fee-base">
+                    The {platformPct}% fee applies to everything that reaches you through the
+                    platform — ticket revenue, your add-on margin
+                    {economics.venueContribution > 0 ? ", and what the venue pays you" : ""} —
+                    a base of {formatPriceByCurrency(economics.platformFeeBase, currency)}.
+                  </p>
                 )}
 
-                {/* The organiser's own margin on add-ons: their earnings, so it
-                    counts toward the net rather than reading as venue money. */}
-                {addOnCreatorMargin > 0 && (
-                  <div className="flex justify-between" data-testid="text-addon-margin">
-                    <span>Your Add-on Margin</span>
-                    <span className="text-green-600 font-medium">
-                      +{formatPriceByCurrency(addOnCreatorMargin, currency)}
-                    </span>
-                  </div>
-                )}
-
-                {isCommissionPromotion && influencerCommissionPct > 0 && (
-                  <div className="flex justify-between">
-                    <span>Participant Cashback ({influencerCommissionPct}%)</span>
-                    <span className="text-amber-600">-{formatPriceByCurrency(promoterBounty, currency)}</span>
-                  </div>
-                )}
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
                   <span>Estimated Net to You</span>
                   <span data-testid="text-your-payout">
@@ -6998,8 +7088,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                 </div>
 
                 {/* The venue's own price for the add-on. Kept out of the split —
-                    the venue is paid for it directly — and stated separately
-                    from the organiser's margin, which is counted in the net above. */}
+                    the venue is paid for it directly, and no platform fee is
+                    taken from it, because the whole point of the venue price is
+                    that the participant is not charged more here than at the
+                    venue's own counter. */}
                 {addOnVenueRevenue > 0 && (
                   <div
                     className="mt-2 border-t pt-2 flex justify-between text-xs text-gray-600 dark:text-gray-400"
@@ -7008,6 +7100,16 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                     <span>Venue keeps (add-ons, paid directly — not split)</span>
                     <span>{formatPriceByCurrency(addOnVenueRevenue, currency)}</span>
                   </div>
+                )}
+
+                {/* Two calculations, not one. Adding an add-on never changes
+                    how the ticket-level deal is worked out. */}
+                {(addOnVenueRevenue > 0 || addOnCreatorMargin > 0) && activeVenueDeal && (
+                  <p className="text-xs text-gray-500" data-testid="text-addon-independent-note">
+                    Add-ons are calculated separately from your{' '}
+                    {getVenueDealLabel(activeVenueDeal, dealCurrencySymbol)} deal — the deal
+                    applies to ticket revenue only, never to add-ons.
+                  </p>
                 )}
               </div>
             </div>
@@ -7330,13 +7432,10 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                           <Label htmlFor={`discount-value-${discount.id}`}>
                             Value {discount.type === 'percentage' ? '(%)' : `(${currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'})`}
                           </Label>
-                          <Input
+                          <MoneyInput
                             id={`discount-value-${discount.id}`}
-                            type="number"
-                            min="0"
-                            step="0.01"
                             value={discount.value}
-                            onChange={(e) => updateDiscount(discount.id, 'value', parseFloat(e.target.value) || 0)}
+                            onValueChange={(amount) => updateDiscount(discount.id, 'value', amount ?? 0)}
                             data-testid={`input-discount-value-${index}`}
                           />
                         </div>

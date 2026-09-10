@@ -9,10 +9,11 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Crown, GraduationCap, Handshake, LayoutGrid, Megaphone, Menu, MessageCircle, TrendingUp, User, Users, X } from "lucide-react";
+import { Briefcase, Building2, Crown, GraduationCap, Handshake, LayoutGrid, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, Shield, Ticket, TrendingUp, User, Users, Wrench, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
+import { isPartnerRole } from "@shared/partnerAccess";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import BrandLogo from "@/components/BrandLogo";
 
@@ -26,6 +27,21 @@ const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
 };
 
 type RoleValue = keyof typeof ROLE_META;
+
+/**
+ * Which How It Works a role should be reading.
+ *
+ * A single participant-facing page served everyone, so a venue owner clicking
+ * Tutorials was told how to pay a refundable deposit and invite friends. The
+ * partner guide answers the questions they actually have: how matching works,
+ * what each deal type means, how the split and the platform fee land, and where
+ * a negotiation happens.
+ */
+const PARTNER_ROLES = new Set(["creator", "venue_provider", "promoter", "service_provider"]);
+
+export function tutorialsHrefForRole(role: string | null | undefined): string {
+  return PARTNER_ROLES.has(String(role ?? "")) ? "/how-it-works/partners" : "/how-it-works";
+}
 
 const ROLE_DESTINATIONS: Record<string, string> = {
   creator:          "/creator",
@@ -88,6 +104,7 @@ export default function Navigation() {
   };
 
   const currentRoleMeta = ROLE_META[user?.role as RoleValue];
+  const tutorialsHref = tutorialsHrefForRole(user?.role);
 
   return (
     <nav className="bg-white shadow-lg sticky top-0 z-50">
@@ -158,7 +175,10 @@ export default function Navigation() {
 
                   {/* Account + role dashboard */}
                   <DropdownMenuItem asChild>
-                    <Link href="/profile">My Account</Link>
+                    <Link href="/profile" className="gap-2">
+                      <User className="h-4 w-4 text-muted-foreground" />
+                      My Account
+                    </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
                     <Link href="/promoter" className="gap-2">
@@ -168,7 +188,10 @@ export default function Navigation() {
                   </DropdownMenuItem>
                   {user?.role === 'creator' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/creator">Creator Dashboard</Link>
+                      <Link href="/creator" className="gap-2">
+                        <Crown className="h-4 w-4 text-muted-foreground" />
+                        Creator Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {/* Straight to the people, rather than the dashboard and then
@@ -190,29 +213,44 @@ export default function Navigation() {
                   )}
                   {user?.role === 'participant' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/user-dashboard">My Dashboard</Link>
+                      <Link href="/user-dashboard" className="gap-2">
+                        <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
+                        My Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'participant' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/my-bookings">My Bookings</Link>
+                      <Link href="/my-bookings" className="gap-2">
+                        <Ticket className="h-4 w-4 text-muted-foreground" />
+                        My Bookings
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'venue_provider' && (
                     <DropdownMenuItem asChild>
                       {/* /venue, not /venue-dashboard: the same short landing a
                           creator gets, rather than nine tabs of zeroes. */}
-                      <Link href="/venue">Venue Dashboard</Link>
+                      <Link href="/venue" className="gap-2">
+                        <Building2 className="h-4 w-4 text-muted-foreground" />
+                        Venue Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'service_provider' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/service-provider-dashboard">Service Dashboard</Link>
+                      <Link href="/service-provider-dashboard" className="gap-2">
+                        <Wrench className="h-4 w-4 text-muted-foreground" />
+                        Service Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {user?.role === 'promoter' && (
                     <DropdownMenuItem asChild>
-                      <Link href="/promoter">Promoter Dashboard</Link>
+                      <Link href="/promoter" className="gap-2">
+                        <Megaphone className="h-4 w-4 text-muted-foreground" />
+                        Promoter Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
                   {/* One account carries several roles, so the cross-role feed
@@ -224,8 +262,23 @@ export default function Navigation() {
                       Collab Opportunities
                     </Link>
                   </DropdownMenuItem>
+                  {/* Deliberately its own entry rather than a folder inside
+                      Messages: that inbox is the event's participant chat, and
+                      a counter-proposal on a 20% split does not belong beside
+                      "what time does it start?". Partner roles only. */}
+                  {isPartnerRole(user?.role) && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/deal-rooms" className="gap-2">
+                        <Briefcase className="h-4 w-4 text-muted-foreground" />
+                        Deal Rooms
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
+                  {/* A creator, venue or promoter sent to the participant
+                      guide is read the deposit-and-refund flow when what they
+                      need is how matching, deal types and revenue share work. */}
                   <DropdownMenuItem asChild>
-                    <Link href="/how-it-works" className="gap-2">
+                    <Link href={tutorialsHref} className="gap-2">
                       <GraduationCap className="h-4 w-4 text-muted-foreground" />
                       Tutorials
                     </Link>
@@ -269,10 +322,17 @@ export default function Navigation() {
 
                   {isAdminUser(user) && (
                     <DropdownMenuItem asChild>
-                      <Link href="/admin">Admin Dashboard</Link>
+                      <Link href="/admin" className="gap-2">
+                        <Shield className="h-4 w-4 text-muted-foreground" />
+                        Admin Dashboard
+                      </Link>
                     </DropdownMenuItem>
                   )}
-                  <DropdownMenuItem onClick={async () => { await supabase.auth.signOut(); navigate('/'); }}>
+                  <DropdownMenuItem
+                    className="gap-2"
+                    onClick={async () => { await supabase.auth.signOut(); navigate('/'); }}
+                  >
+                    <LogOut className="h-4 w-4 text-muted-foreground" />
                     Logout
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -373,30 +433,65 @@ export default function Navigation() {
 
                   {/* Role dashboard shortcut */}
                   {user?.role === 'creator' && (
-                    <Link href="/creator" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                    <Link href="/creator" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <Crown className="h-4 w-4" />
                       Creator Dashboard
                     </Link>
                   )}
                   {user?.role === 'participant' && (
-                    <Link href="/user-dashboard" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                    <Link href="/user-dashboard" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <LayoutDashboard className="h-4 w-4" />
                       My Dashboard
                     </Link>
                   )}
                   {user?.role === 'participant' && (
-                    <Link href="/my-bookings" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                    <Link href="/my-bookings" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <Ticket className="h-4 w-4" />
                       My Bookings
                     </Link>
                   )}
                   {user?.role === 'venue_provider' && (
-                    <Link href="/venue-dashboard" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                    <Link href="/venue" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <Building2 className="h-4 w-4" />
                       Venue Dashboard
                     </Link>
                   )}
                   {user?.role === 'promoter' && (
-                    <Link href="/promoter" className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                    <Link href="/promoter" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <Megaphone className="h-4 w-4" />
                       Promoter Dashboard
                     </Link>
                   )}
+
+                  <Link
+                    href="/collab-opportunities"
+                    className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                    onClick={() => setMobileMenuOpen(false)}
+                    data-testid="mobile-link-collab-opportunities"
+                  >
+                    <Handshake className="h-4 w-4" />
+                    Collab Opportunities
+                  </Link>
+                  {isPartnerRole(user?.role) && (
+                    <Link
+                      href="/deal-rooms"
+                      className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                      onClick={() => setMobileMenuOpen(false)}
+                      data-testid="mobile-link-deal-rooms"
+                    >
+                      <Briefcase className="h-4 w-4" />
+                      Deal Rooms
+                    </Link>
+                  )}
+                  <Link
+                    href={tutorialsHref}
+                    className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                    onClick={() => setMobileMenuOpen(false)}
+                    data-testid="mobile-link-tutorials"
+                  >
+                    <GraduationCap className="h-4 w-4" />
+                    Tutorials
+                  </Link>
 
                   {/* Mobile role switcher — inline expand (submenus don't work well on mobile) */}
                   {availableRoles.length > 1 && (
@@ -425,9 +520,10 @@ export default function Navigation() {
                   <div className="border-t border-gray-100 pt-2 mt-1">
                     <button
                       onClick={async () => { await supabase.auth.signOut(); setMobileMenuOpen(false); navigate('/'); }}
-                      className="block w-full text-left px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-700 hover:text-primary transition-colors font-medium"
                       data-testid="mobile-link-logout"
                     >
+                      <LogOut className="h-4 w-4" />
                       Logout
                     </button>
                   </div>

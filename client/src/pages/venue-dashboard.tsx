@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { apiRequest, readableError } from "@/lib/queryClient";
 import { useVenueAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
@@ -977,8 +978,10 @@ function VenueDashboardContent() {
           {/* My Open Postings — the same record Collab Opportunities shows,
               filtered to what this venue posted and still has open. */}
           <TabsContent value="my-postings" className="space-y-4">
+            <PartnerToolingGate inline>
             <h2 className="text-xl font-semibold">My Open Postings</h2>
             <MyOpenPostings />
+          </PartnerToolingGate>
           </TabsContent>
 
           {/* ── Payouts Tab ── */}
@@ -989,6 +992,7 @@ function VenueDashboardContent() {
           {/* ── Open Events Feed Tab ── */}
           {/* Creators who published with venueType="open" appear here so venue owners can reach out */}
           <TabsContent value="open-events" className="space-y-4">
+            <PartnerToolingGate inline>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <h2 className="text-xl font-semibold">Open & Confirmed Events</h2>
               {/* City filter: narrows results by the event's location field */}
@@ -1178,10 +1182,12 @@ function VenueDashboardContent() {
                 })()}
               </div>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           {/* ── Pending Offers Tab ── */}
           <TabsContent value="offers" className="space-y-4">
+            <PartnerToolingGate inline>
             <h2 className="text-xl font-semibold">Pending Offers</h2>
             {offersLoading ? (
               <div className="text-center py-8 text-gray-500">Loading offers…</div>
@@ -1293,9 +1299,11 @@ function VenueDashboardContent() {
                 );
               })
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="active-deals" className="space-y-4">
+            <PartnerToolingGate inline>
             <div>
               <h2 className="text-xl font-semibold">Active Deals</h2>
               <p className="mt-1 text-sm text-gray-500">Accepted venue agreements remain here for ongoing reference.</p>
@@ -1345,6 +1353,7 @@ function VenueDashboardContent() {
                 })}
               </div>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="venues" className="space-y-6">
@@ -1514,11 +1523,13 @@ function VenueDashboardContent() {
           {/* ── Flash Deals Tab ── */}
           {/* Dates the venue wants filled, broadcast to creators in their own words. */}
           <TabsContent value="flash-deals" className="space-y-4">
+            <PartnerToolingGate inline>
             <VenueFlashDeals
               venues={(venues as any[])
                 .filter((venue) => venue.status === 'approved')
                 .map((venue) => ({ id: venue.id, name: venue.name }))}
             />
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="bookings" className="space-y-6">

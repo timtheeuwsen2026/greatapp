@@ -5,6 +5,7 @@ import { ArrowRight, Bed, Calendar, Users } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import Navigation from "@/components/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { Button } from "@/components/ui/button";
 
 const EventBuilder = lazy(() => import("@/components/EventBuilder"));
@@ -128,6 +129,10 @@ export default function EventBuilderPage() {
   if (!draftId && !initialExperienceType) {
     return (
       <ProtectedRoute requiredRole="creator">
+        {/* A completed profile is not the same as an approved one. Without this,
+            switching an account's role to Creator was enough to read the whole
+            deal-type builder. */}
+        <PartnerToolingGate>
         <div className="min-h-screen bg-white">
           <Navigation />
           <main className="pt-24 pb-16">
@@ -202,12 +207,14 @@ export default function EventBuilderPage() {
             </div>
           </main>
         </div>
+        </PartnerToolingGate>
       </ProtectedRoute>
     );
   }
 
   return (
     <ProtectedRoute requiredRole="creator">
+      <PartnerToolingGate>
       <div className="min-h-screen bg-white">
         <Navigation />
         <Suspense fallback={<BuilderLoading />}>
@@ -222,6 +229,7 @@ export default function EventBuilderPage() {
           />
         </Suspense>
       </div>
+      </PartnerToolingGate>
     </ProtectedRoute>
   );
 }

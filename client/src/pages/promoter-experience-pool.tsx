@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Textarea } from "@/components/ui/textarea";
 
 interface ExperiencePoolItem {
@@ -209,13 +210,10 @@ function CounterOfferDialog({
               <Label htmlFor="counter-sponsorship-amount">
                 Your Sponsorship Offer ({(experience.currency || "EUR").toUpperCase()})
               </Label>
-              <Input
+              <MoneyInput
                 id="counter-sponsorship-amount"
-                type="number"
-                min="0"
-                step="0.01"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onValueChange={(next) => setAmount(next == null ? "" : String(next))}
                 placeholder="e.g. 150.00"
                 data-testid="input-counter-sponsorship-amount"
               />

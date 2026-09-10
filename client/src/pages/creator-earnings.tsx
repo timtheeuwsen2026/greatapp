@@ -1,3 +1,6 @@
+import { Link } from "wouter";
+import { ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import Navigation from "@/components/navigation";
 import EmbeddedPricingCalculator from "@/components/embedded-pricing-calculator";
 
@@ -14,7 +17,9 @@ export default function CreatorEarnings() {
               Creator Earnings Model
             </h1>
             <p className="text-xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto">
-              Transparent pricing based on your role and support needs. See exactly how much you'll earn from your experiences with our flexible revenue sharing models.
+              One platform fee, a venue deal you agree per event, and add-ons that earn
+              on their own terms. Put your own numbers in below and see exactly what
+              reaches you.
             </p>
           </div>
 
@@ -25,10 +30,22 @@ export default function CreatorEarnings() {
                 Calculate Your Earning Potential
               </h2>
               <p className="text-lg text-gray-600 dark:text-gray-300">
-                Enter your experience price to see the breakdown of fees and your net earnings
+                Pick your deal type and your numbers — the breakdown below runs the same
+                arithmetic the Event Builder does.
               </p>
             </div>
             <EmbeddedPricingCalculator />
+          </div>
+
+          {/* Anyone reading this during onboarding has more questions than a
+              calculator answers. */}
+          <div className="text-center">
+            <Link href="/how-it-works/partners">
+              <Button variant="outline" size="lg" data-testid="link-partner-guide-from-earnings">
+                How deal types, matching and payouts work
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </Link>
           </div>
         </div>
       </div>

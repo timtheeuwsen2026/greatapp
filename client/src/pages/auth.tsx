@@ -87,9 +87,12 @@ export default function AuthPage() {
       return;
     }
 
+    // A venue goes to /venue, not straight to the nine-tab dashboard: the same
+    // short landing a creator gets, and the one place that knows to carry an
+    // account with no listing yet into "What kind of space are you listing?"
     const destinations: Record<string, string> = {
       creator: "/creator",
-      venue_provider: "/venue-dashboard",
+      venue_provider: "/venue",
       service_provider: "/service-provider-dashboard",
       promoter: "/promoter",
       participant: "/experiences",

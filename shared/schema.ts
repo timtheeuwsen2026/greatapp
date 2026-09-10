@@ -376,6 +376,10 @@ export const experienceDrafts = pgTable("experience_drafts", {
         addonPrice?: number;
         addonVenuePrice?: number;
         addonMargin?: number;
+        // Whether the margin sits on top of the venue's price or comes out of
+        // the venue's cut. Chosen per add-on; absent means "on top", which is
+        // what every add-on saved before the choice existed meant.
+        addonMarginMode?: "additive" | "deduction";
         addonInventory?: number;
         depositPerPerson: number;
         ticketCapacity: number;
@@ -672,6 +676,10 @@ export const experiences = pgTable("experiences", {
         addonPrice?: number;
         addonVenuePrice?: number;
         addonMargin?: number;
+        // Whether the margin sits on top of the venue's price or comes out of
+        // the venue's cut. Chosen per add-on; absent means "on top", which is
+        // what every add-on saved before the choice existed meant.
+        addonMarginMode?: "additive" | "deduction";
         addonInventory?: number;
         depositPerPerson: number;
         ticketCapacity: number;
@@ -3918,3 +3926,143 @@ export const scheduledPayouts = pgTable("scheduled_payouts", {
 
 export type ScheduledPayout = typeof scheduledPayouts.$inferSelect;
 export type InsertScheduledPayout = typeof scheduledPayouts.$inferInsert;
+
+// ─── Deal Rooms — B2B negotiation, kept apart from participant chat ──────────
+/**
+ * Where two matched partners actually agree terms.
+ *
+ * Once a creator and a venue found each other — through Collab Opportunities,
+ * an Offer to Host, a flash deal — there was nowhere in the platform to
+ * negotiate. So they negotiated on WhatsApp, and everything that followed was
+ * invisible: no record of what was agreed, no counter-proposal the app could
+ * act on, and no way to hold either side to a revenue share nobody could see.
+ *
+ * This is deliberately NOT a general DM system, and deliberately not the
+ * event's participant chat. Every room is tied to one specific offer or
+ * listing, has exactly two sides, and carries structured proposals — a deal
+ * model and its numbers — alongside the conversation. Participant chat is
+ * event chatter between many people; this is two businesses agreeing money.
+ * Sharing one inbox for both would put "what time does it start?" next to a
+ * counter-proposal on a 20% split.
+ */
+export const dealRoomSubjectEnum = pgEnum("deal_room_subject", [
+  "venue_offer",     // a venue's bid to host an open event
+  "collab_idea",     // someone answered a posted idea
+  "open_event",      // a creator approached a space directly
+  "flash_deal",      // a creator answered a venue's free date
+  "promotion_deal",  // a creator and a promoter/brand
+]);
+
+export const dealRoomStatusEnum = pgEnum("deal_room_status", [
+  "open",     // still talking
+  "agreed",   // a proposal was accepted; terms are locked into the event
+  "closed",   // withdrawn or declined for good
+]);
+
+export const dealRooms = pgTable(
+  "deal_rooms",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    subjectType: dealRoomSubjectEnum("subject_type").notNull(),
+    /** The offer, idea, event or deal this negotiation is about. */
+    subjectId: varchar("subject_id").notNull(),
+    /** Set where the negotiation already has an event and/or a space attached. */
+    experienceId: varchar("experience_id").references(() => experiences.id, { onDelete: "set null" }),
+    venueId: varchar("venue_id").references(() => venues.id, { onDelete: "set null" }),
+    /** Exactly two sides. Ordered so a room is found from either direction. */
+    initiatorId: varchar("initiator_id").references(() => users.id).notNull(),
+    counterpartId: varchar("counterpart_id").references(() => users.id).notNull(),
+    initiatorRole: varchar("initiator_role", { length: 30 }),
+    counterpartRole: varchar("counterpart_role", { length: 30 }),
+    /** Shown at the top of the room so neither side has to re-explain it. */
+    title: varchar("title").notNull(),
+    status: dealRoomStatusEnum("status").default("open"),
+    /** The terms currently on the table, replaced each time a proposal lands. */
+    currentTerms: jsonb("current_terms")
+      .$type<{
+        model?: string;
+        value?: number;
+        secondaryValue?: number;
+        currency?: string;
+        note?: string;
+        proposedBy?: string;
+        acceptedAt?: string;
+      }>()
+      .default({}),
+    lastMessageAt: timestamp("last_message_at").defaultNow(),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    // One room per subject per pair. A second click reopens the conversation
+    // rather than starting a parallel one neither side can see.
+    unique("deal_rooms_subject_pair_unique").on(
+      table.subjectType,
+      table.subjectId,
+      table.initiatorId,
+      table.counterpartId,
+    ),
+    index("deal_rooms_initiator_idx").on(table.initiatorId),
+    index("deal_rooms_counterpart_idx").on(table.counterpartId),
+  ],
+);
+
+export const dealRoomMessageKindEnum = pgEnum("deal_room_message_kind", [
+  "message",   // plain text
+  "proposal",  // structured terms, acceptable with one click
+  "system",    // "terms accepted", "offer withdrawn"
+]);
+
+export const dealRoomProposalStatusEnum = pgEnum("deal_room_proposal_status", [
+  "open",
+  "accepted",
+  "declined",
+  "superseded", // a newer proposal replaced it
+]);
+
+export const dealRoomMessages = pgTable(
+  "deal_room_messages",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    roomId: varchar("room_id")
+      .references(() => dealRooms.id, { onDelete: "cascade" })
+      .notNull(),
+    senderId: varchar("sender_id").references(() => users.id, { onDelete: "cascade" }),
+    kind: dealRoomMessageKindEnum("kind").default("message"),
+    body: text("body"),
+    /**
+     * A counter-proposal, in the same vocabulary the builders speak. Held as
+     * data rather than prose so the other side can accept it with a click and
+     * the accepted terms can be written straight into the event.
+     */
+    proposal: jsonb("proposal")
+      .$type<{
+        model?: string;
+        value?: number;
+        secondaryValue?: number;
+        currency?: string;
+      }>()
+      .default({}),
+    proposalStatus: dealRoomProposalStatusEnum("proposal_status"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [index("deal_room_messages_room_idx").on(table.roomId, table.createdAt)],
+);
+
+export const dealRoomReads = pgTable(
+  "deal_room_reads",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    roomId: varchar("room_id")
+      .references(() => dealRooms.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    lastReadAt: timestamp("last_read_at").defaultNow().notNull(),
+  },
+  (table) => [unique("deal_room_reads_room_user_unique").on(table.roomId, table.userId)],
+);
+
+export type DealRoom = typeof dealRooms.$inferSelect;
+export type InsertDealRoom = typeof dealRooms.$inferInsert;
+export type DealRoomMessage = typeof dealRoomMessages.$inferSelect;
+export type InsertDealRoomMessage = typeof dealRoomMessages.$inferInsert;

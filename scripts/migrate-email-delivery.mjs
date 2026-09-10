@@ -19,6 +19,8 @@ const migrationUrls = [
   new URL("../migrations/20260910_collab_ideas.sql", import.meta.url),
   new URL("../migrations/20260911_backfill_preview_tokens.sql", import.meta.url),
   new URL("../migrations/20260912_retire_access_only_default.sql", import.meta.url),
+  new URL("../migrations/20260913_deal_rooms.sql", import.meta.url),
+  new URL("../migrations/20260913_grandfather_existing_creators.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

@@ -47,6 +47,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Breadcrumb from "@/components/Breadcrumb";
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import DashboardGuard from "@/components/DashboardGuard";
+import PartnerToolingGate from "@/components/PartnerToolingGate";
 
 // Currency formatting helper
 // DATA CONTRACT: Currency must come from experience.currency - default EUR for migration
@@ -1246,7 +1247,9 @@ function CreatorDashboardContent() {
           {/* My Open Postings — the same record Collab Opportunities shows,
               filtered to what this creator posted and still has open. */}
           <TabsContent value="my-postings" className="space-y-6">
+            <PartnerToolingGate inline>
             <MyOpenPostings />
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="setup" className="space-y-6">
@@ -1899,6 +1902,7 @@ function CreatorDashboardContent() {
           </TabsContent>
 
           <TabsContent value="venue-offers" className="space-y-4">
+            <PartnerToolingGate inline>
             {sentVenueInvites.length > 0 && (
               <div className="space-y-3" data-testid="sent-venue-invites">
                 <div>
@@ -2085,10 +2089,12 @@ function CreatorDashboardContent() {
                 {acceptedVenueDeals.length} accepted {acceptedVenueDeals.length === 1 ? "deal has" : "deals have"} moved to the <strong>Active Deals</strong> tab.
               </p>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           {/* ── Active Deals Tab — venue agreements the creator has accepted ── */}
           <TabsContent value="active-deals" className="space-y-4">
+            <PartnerToolingGate inline>
             <div>
               <h2 className="text-xl font-semibold">Active Deals</h2>
               <p className="mt-1 text-sm text-gray-500">
@@ -2160,10 +2166,12 @@ function CreatorDashboardContent() {
                 })}
               </div>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           {/* ── Promotion Deals Tab — Digital Handshake for promoters/brands (Part 3) ── */}
           <TabsContent value="promotion-deals" className="space-y-4">
+            <PartnerToolingGate inline>
             <h2 className="text-xl font-semibold">Promotion Deals</h2>
             <p className="text-sm text-gray-500">
               Direct offers you've sent (Options A &amp; B) and marketplace counter offers from the public pool (Option C).
@@ -2334,9 +2342,11 @@ function CreatorDashboardContent() {
                 )}
               </>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="fulfillment" className="space-y-4">
+            <PartnerToolingGate inline>
             <div>
               <h2 className="text-xl font-semibold">Perk Fulfillment</h2>
               <p className="mt-1 text-sm text-gray-500">
@@ -2425,13 +2435,16 @@ function CreatorDashboardContent() {
                 </CardContent>
               </Card>
             )}
+          </PartnerToolingGate>
           </TabsContent>
 
           {/* ── Venue Flash Deals ── */}
           {/* Venues advertising dates they want filled. Claiming opens a
               pre-filled builder; it reserves nothing. */}
           <TabsContent value="flash-deals" className="space-y-4">
+            <PartnerToolingGate inline>
             <CreatorFlashDealFeed />
+          </PartnerToolingGate>
           </TabsContent>
 
           <TabsContent value="earnings" className="space-y-6">

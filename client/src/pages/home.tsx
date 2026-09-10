@@ -1065,6 +1065,19 @@ export default function Home() {
                       Browse Experiences
                     </button>
                   </li>
+                  <li>
+                    {/* The partner guide, not the participant one: someone
+                        reading this column is deciding whether to run an event,
+                        not whether to book one. */}
+                    <button
+                      onClick={() => setLocation('/how-it-works/partners')}
+                      className="text-gray-400 hover:text-white transition-colors"
+                      aria-label="How partnering works for creators, venues and promoters"
+                      data-testid="link-footer-partner-guide"
+                    >
+                      How Partnering Works
+                    </button>
+                  </li>
                 </ul>
               </div>
 
@@ -1097,6 +1110,16 @@ export default function Home() {
                       aria-label="Offer your services to creators"
                     >
                       Offer Services
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => setLocation('/how-it-works/partners')}
+                      className="text-gray-400 hover:text-white transition-colors"
+                      aria-label="How partnering works for creators, venues and promoters"
+                      data-testid="link-footer-partner-guide-venues"
+                    >
+                      Deal Types &amp; Revenue Share
                     </button>
                   </li>
                 </ul>

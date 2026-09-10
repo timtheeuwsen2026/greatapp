@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -201,16 +202,13 @@ export function RolesEditor({ roles, onChange, className, showRate = true }: Rol
                   {/* Rate */}
                   {showRate && (
                     <TableCell>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
+                      <MoneyInput
                         value={role.rate ?? ""}
-                        onChange={(e) =>
+                        onValueChange={(amount) =>
                           updateRole(
                             index,
                             "rate",
-                            e.target.value ? parseFloat(e.target.value) : undefined
+                            amount ?? undefined
                           )
                         }
                         placeholder="0.00"

@@ -79,13 +79,17 @@ function renderDashboard(openEvents: any[]) {
     const url = String(typeof input === 'string' ? input : input.url);
     const body = url.includes('/api/user/venues')
       ? [approvedVenue]
-      : url.includes('/api/venue/open-events')
-        ? openEvents
-        : url.includes('/api/venue/ledger')
-          ? { totalSales: 0, myShare: 0, bookingsCount: 0 }
-          : url.includes('/api/venue/analytics')
-            ? {}
-            : [];
+      // An approved venue: the Partners tab is gated on approval, not on the
+      // role, so the fixture has to say which of the two this account is.
+      : url.includes('/api/partner-access')
+        ? { state: "approved", canUseTooling: true, onboardingHref: null, title: "", message: "" }
+        : url.includes('/api/venue/open-events')
+          ? openEvents
+          : url.includes('/api/venue/ledger')
+            ? { totalSales: 0, myShare: 0, bookingsCount: 0 }
+            : url.includes('/api/venue/analytics')
+              ? {}
+              : [];
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

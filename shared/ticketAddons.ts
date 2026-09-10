@@ -29,20 +29,51 @@ export type TicketAddonSkuLike = {
   addonEnabled?: boolean | null;
   /** What the venue charges for the item — often already a thin collab rate. */
   addonVenuePrice?: number | string | null;
-  /** The organiser's cut, as a flat amount on top. Never a percentage. */
+  /** The organiser's cut, as a flat amount. Never a percentage. */
   addonMargin?: number | string | null;
+  /**
+   * Which way the organiser's margin travels — chosen per add-on, never
+   * platform-wide.
+   *
+   * `additive`: the participant pays the venue's price plus the margin. The
+   * venue still receives its counter price in full.
+   *
+   * `deduction`: the participant pays the venue's price and nothing more, and
+   * the margin comes out of the venue's cut.
+   *
+   * The default is `additive`, which is what every add-on saved before this
+   * existed meant.
+   */
+  addonMarginMode?: string | null;
   /** Optional cap, independent of how many people are attending. */
   addonInventory?: number | string | null;
 };
 
+/** The two directions an organiser's margin can travel. */
+export const ADDON_MARGIN_MODES = ["additive", "deduction"] as const;
+export type AddonMarginMode = (typeof ADDON_MARGIN_MODES)[number];
+
+export function normalizeAddonMarginMode(value: unknown): AddonMarginMode {
+  return String(value ?? "").trim().toLowerCase() === "deduction" ? "deduction" : "additive";
+}
+
 export type TicketAddon = {
   name: string;
-  /** What the participant pays: the venue's price plus the organiser's margin. */
+  /**
+   * What the participant pays. Under an additive margin that is the venue's
+   * price plus the margin; under a deduction it is the venue's price alone,
+   * which is the whole point of the deduction — the platform never shows a
+   * price higher than the one on the venue's own menu.
+   */
   unitPrice: number;
   /** Of that, what the venue keeps. */
   venueAmount: number;
   /** Of that, what the organiser earns. */
   creatorAmount: number;
+  /** The venue's own counter price, before either margin direction is applied. */
+  venuePrice: number;
+  /** Which way the organiser's margin travelled. */
+  marginMode: AddonMarginMode;
 };
 
 /** Shown when a creator priced an add-on but never named it. */
@@ -79,27 +110,56 @@ export function isAddonEnabled(sku: TicketAddonSkuLike | null | undefined): bool
  * price is usually already a discounted collaboration rate — a €5 coffee and
  * medialuna that would be €6.50 at the counter — and a percentage cuts into a
  * margin the venue deliberately made thin for the collaboration.
+ *
+ * The venue price is not primarily there to make the organiser money. Its job
+ * is price transparency: what the platform shows a participant must not be
+ * higher than what the same item costs at the venue's own counter, or the
+ * participant is better off walking up and buying it directly, and there was
+ * no point offering it in-platform at all. That is what the deduction mode is
+ * for — the participant pays the counter price exactly, and the organiser's
+ * margin comes out of the venue's cut instead of being added on top.
  */
 export function getTicketAddon(sku: TicketAddonSkuLike | null | undefined): TicketAddon | null {
   if (!isAddonEnabled(sku)) return null;
 
-  const venueAmount = toAmount(sku!.addonVenuePrice);
-  const creatorAmount = toAmount(sku!.addonMargin);
+  const venuePrice = toAmount(sku!.addonVenuePrice);
+  const margin = toAmount(sku!.addonMargin);
+  const marginMode = normalizeAddonMarginMode(sku!.addonMarginMode);
 
   // A ticket saved before the split existed carries only the total. All of it
   // is the venue's until the organiser states a margin of their own.
-  const unitPrice = venueAmount + creatorAmount > 0
-    ? round2(venueAmount + creatorAmount)
-    : toAmount(sku!.addonPrice);
+  if (venuePrice <= 0) {
+    const legacyPrice = toAmount(sku!.addonPrice);
+    if (legacyPrice <= 0) return null;
+    return {
+      name: addonName(sku),
+      unitPrice: legacyPrice,
+      venueAmount: legacyPrice,
+      creatorAmount: 0,
+      venuePrice: legacyPrice,
+      marginMode: "additive",
+    };
+  }
+
+  // A deduction can never take more than the venue is being paid. Clamping
+  // rather than rejecting keeps a half-typed margin from showing the venue a
+  // negative cut mid-keystroke.
+  const creatorAmount = marginMode === "deduction" ? Math.min(margin, venuePrice) : margin;
+  const unitPrice = marginMode === "deduction" ? venuePrice : round2(venuePrice + creatorAmount);
   if (unitPrice <= 0) return null;
 
-  const name = String(sku!.addonName || "").trim() || DEFAULT_ADDON_NAME;
   return {
-    name,
+    name: addonName(sku),
     unitPrice,
-    venueAmount: venueAmount > 0 ? venueAmount : unitPrice,
-    creatorAmount: venueAmount > 0 ? creatorAmount : 0,
+    venueAmount: marginMode === "deduction" ? round2(venuePrice - creatorAmount) : venuePrice,
+    creatorAmount,
+    venuePrice,
+    marginMode,
   };
+}
+
+function addonName(sku: TicketAddonSkuLike | null | undefined): string {
+  return String(sku?.addonName || "").trim() || DEFAULT_ADDON_NAME;
 }
 
 function round2(value: number): number {

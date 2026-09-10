@@ -1,439 +1,394 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MoneyInput } from "@/components/ui/money-input";
+import { Switch } from "@/components/ui/switch";
 import {
-  Calculator,
-  DollarSign,
-  CheckCircle,
-  Briefcase,
-  Heart,
-  Building,
-  Users,
-  AlertCircle
-} from "lucide-react";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Calculator, Building, Coffee, Info } from "lucide-react";
+import { formatPriceByCurrency, CURRENCY_CONFIG } from "@shared/pricingService";
+import { getVenueDealOptions, venueDealNeedsValue } from "@shared/venueDealModels";
+import { calculateEventEconomics } from "@shared/eventEconomics";
+import { getTicketAddon, normalizeAddonMarginMode, type AddonMarginMode } from "@shared/ticketAddons";
+import { usePlatformFee } from "@/hooks/usePlatformFee";
 
-interface RoleBasedRevenueBreakdown {
-  grossAmount: number;
-  platformFeeAmount: number;
-  platformFeePercentage: number;
-  stripeFeeAmount: number;
-  netAmount: number;
-  currency: string;
-  creatorRole: string;
-  supportLevel: string;
-  roleDescription: string;
-  supportDescription: string;
-  feeDescription: string;
-}
-
-interface VenueSplitBreakdown {
-  grossAmount: number;
-  stripeFeeAmount: number;
-  netAmountAfterStripe: number;
-  venueShareAmount: number;
-  venuePercentage: number;
-  creatorShareAmount: number;
-  creatorPercentage: number;
-  platformShareAmount: number;
-  platformPercentage: number;
-  currency: string;
-  breakdown: {
-    venue: { amount: number; percentage: number; description: string };
-    creator: { amount: number; percentage: number; description: string };
-    platform: { amount: number; percentage: number; description: string };
-    stripe: { amount: number; description: string };
-  };
-  summary: {
-    grossRevenue: number;
-    stripeFees: number;
-    netRevenueAfterStripe: number;
-    venueShare: number;
-    creatorShare: number;
-    platformShare: number;
-  };
-}
-
-type CalculationMode = 'role-based' | 'venue-splits';
-
-// Type guards
-function isRoleBasedBreakdown(breakdown: any): breakdown is RoleBasedRevenueBreakdown {
-  return breakdown && 'netAmount' in breakdown && 'creatorRole' in breakdown;
-}
-
-function isVenueSplitBreakdown(breakdown: any): breakdown is VenueSplitBreakdown {
-  return breakdown && 'breakdown' in breakdown && 'venueShareAmount' in breakdown;
-}
-
+/**
+ * The Creator Earnings Model, worked out with the engine that actually pays.
+ *
+ * What stood here was a static legacy model: DIY / Enhanced / Full Service tiers
+ * at 15 / 27 / 34%, an "Influencer — fully managed, 75%" option, a hard-coded
+ * dollar sign, and a "Retreat Venue Models" list that had not matched the
+ * builder's vocabulary for some time. None of it was the commercial model any
+ * more, and a creator clicking "Learn more" during onboarding was reading it as
+ * though it were.
+ *
+ * So this is not a second model kept in step by hand. The deal list comes from
+ * the same definitions the builders read, the arithmetic is the same
+ * `calculateEventEconomics` the Event Builder's Grand Total Calculator uses, and
+ * the platform fee is read from settings. If one of those changes, this page
+ * changes with it — which is the only way a page like this stays true.
+ */
 export default function EmbeddedPricingCalculator() {
-  const [price, setPrice] = useState<string>("150");
-  const [breakdown, setBreakdown] = useState<RoleBasedRevenueBreakdown | VenueSplitBreakdown | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [creatorRole, setCreatorRole] = useState<string>("facilitator");
-  const [supportLevel, setSupportLevel] = useState<string>("basic");
-  const [calculationMode, setCalculationMode] = useState<CalculationMode>('role-based');
-  
-  // Venue splits state
-  const [venuePercentage, setVenuePercentage] = useState<string>("30");
-  const [creatorPercentage, setCreatorPercentage] = useState<string>("50");
-  const [platformPercentage, setPlatformPercentage] = useState<string>("20");
-  const [percentageError, setPercentageError] = useState<string>("");
+  const platformPct = usePlatformFee();
 
-  const calculateRevenue = async () => {
-    const amount = parseFloat(price);
-    if (amount <= 0) {
-      setBreakdown(null);
-      return;
-    }
+  const [currency, setCurrency] = useState<string>("eur");
+  const [isDaytime, setIsDaytime] = useState(true);
+  const [ticketPrice, setTicketPrice] = useState<number | null>(15);
+  const [capacity, setCapacity] = useState<number | null>(30);
+  const [dealModel, setDealModel] = useState<string>("revenue_share");
+  const [dealValue, setDealValue] = useState<number | null>(20);
+  const [commitmentFee, setCommitmentFee] = useState<number | null>(50);
 
-    setIsLoading(true);
-    try {
-      let requestBody: any;
-      
-      if (calculationMode === 'venue-splits') {
-        // Validate percentages for venue splits
-        const vPerc = parseFloat(venuePercentage);
-        const cPerc = parseFloat(creatorPercentage);
-        const pPerc = parseFloat(platformPercentage);
-        
-        if (Math.abs(vPerc + cPerc + pPerc - 100) > 0.1) {
-          setPercentageError('Percentages must add up to 100%');
-          setIsLoading(false);
-          return;
-        } else {
-          setPercentageError('');
-        }
-        
-        requestBody = {
-          amount,
-          venuePercentage: vPerc,
-          creatorPercentage: cPerc,
-          platformPercentage: pPerc
-        };
-      } else {
-        // Role-based calculation
-        requestBody = {
-          amount,
-          creatorRole,
-          supportLevel
-        };
-      }
+  const [addOnEnabled, setAddOnEnabled] = useState(false);
+  const [addOnVenuePrice, setAddOnVenuePrice] = useState<number | null>(3);
+  const [addOnMargin, setAddOnMargin] = useState<number | null>(1);
+  const [addOnMarginMode, setAddOnMarginMode] = useState<AddonMarginMode>("additive");
 
-      const response = await fetch('/api/calculate-revenue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+  const currencySymbol =
+    CURRENCY_CONFIG[currency as keyof typeof CURRENCY_CONFIG]?.symbol ?? "€";
 
-      if (response.ok) {
-        const data = await response.json();
-        setBreakdown(data);
-      } else {
-        setBreakdown(null);
-      }
-    } catch (error) {
-      console.error('Revenue calculation error:', error);
-      setBreakdown(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const dealOptions = useMemo(
+    () => getVenueDealOptions({ isDaytime, surface: "event", currencySymbol }),
+    [isDaytime, currencySymbol],
+  );
 
-  useEffect(() => {
-    const amount = parseFloat(price);
-    if (!isNaN(amount) && amount > 0) {
-      const debounceTimer = setTimeout(() => {
-        calculateRevenue();
-      }, 300);
-      
-      return () => clearTimeout(debounceTimer);
-    } else {
-      setBreakdown(null);
-      setPercentageError('');
-    }
-  }, [price, creatorRole, supportLevel, calculationMode, venuePercentage, creatorPercentage, platformPercentage]);
+  // A deal that only exists in the other flow must not stay selected when the
+  // event shape changes — the two lists deliberately do not cross-populate.
+  const activeDeal =
+    dealOptions.find((option) => option.value === dealModel) ?? dealOptions[0];
 
-  const supportOptions = {
-    facilitator: [
-      { value: 'basic', label: 'DIY', description: 'Platform only', fee: '15%' },
-      { value: 'enhanced', label: 'Enhanced', description: 'Venue + marketing help', fee: '27%' },
-      { value: 'full', label: 'Full Service', description: 'Complete support', fee: '34%' }
-    ],
-    influencer: [
-      { value: 'managed', label: 'Fully Managed', description: 'Great provides facilitator', fee: '75%' }
-    ]
-  };
+  const tickets = Math.max(0, Math.floor(capacity ?? 0));
+  const price = Math.max(0, ticketPrice ?? 0);
+  const ticketGross = Math.round(price * tickets * 100) / 100;
 
-  const currentOptions = supportOptions[creatorRole as keyof typeof supportOptions] || [];
+  const addon = addOnEnabled
+    ? getTicketAddon({
+        addonEnabled: true,
+        addonVenuePrice: addOnVenuePrice ?? 0,
+        addonMargin: addOnMargin ?? 0,
+        addonMarginMode: addOnMarginMode,
+      })
+    : null;
 
-  // Auto-adjust percentages to 100% when one changes
-  const handlePercentageChange = (type: 'venue' | 'creator' | 'platform', value: string) => {
-    const numValue = parseFloat(value) || 0;
-    
-    if (type === 'venue') {
-      setVenuePercentage(value);
-      const remaining = 100 - numValue;
-      const creatorCurrent = parseFloat(creatorPercentage) || 0;
-      const platformCurrent = parseFloat(platformPercentage) || 0;
-      const total = creatorCurrent + platformCurrent;
-      
-      if (total > 0) {
-        setCreatorPercentage(((creatorCurrent / total) * remaining).toFixed(1));
-        setPlatformPercentage(((platformCurrent / total) * remaining).toFixed(1));
-      }
-    } else if (type === 'creator') {
-      setCreatorPercentage(value);
-      const remaining = 100 - numValue;
-      const venueCurrent = parseFloat(venuePercentage) || 0;
-      const platformCurrent = parseFloat(platformPercentage) || 0;
-      const total = venueCurrent + platformCurrent;
-      
-      if (total > 0) {
-        setVenuePercentage(((venueCurrent / total) * remaining).toFixed(1));
-        setPlatformPercentage(((platformCurrent / total) * remaining).toFixed(1));
-      }
-    } else {
-      setPlatformPercentage(value);
-      const remaining = 100 - numValue;
-      const venueCurrent = parseFloat(venuePercentage) || 0;
-      const creatorCurrent = parseFloat(creatorPercentage) || 0;
-      const total = venueCurrent + creatorCurrent;
-      
-      if (total > 0) {
-        setVenuePercentage(((venueCurrent / total) * remaining).toFixed(1));
-        setCreatorPercentage(((creatorCurrent / total) * remaining).toFixed(1));
-      }
-    }
-  };
+  const economics = calculateEventEconomics({
+    ticketGross,
+    paidTickets: tickets,
+    platformPct,
+    venueDealModel: activeDeal?.value ?? null,
+    venueDealValue: dealValue ?? 0,
+    // A rate per room per night needs rooms and nights, which this simplified
+    // estimator does not ask for; one room for one night keeps the figure
+    // honest rather than silently zero.
+    roomNights: 1,
+    commitmentFee: commitmentFee ?? 0,
+    addOnVenueGross: addon ? Math.round(addon.venueAmount * tickets * 100) / 100 : 0,
+    addOnCreatorGross: addon ? Math.round(addon.creatorAmount * tickets * 100) / 100 : 0,
+  });
+
+  const money = (amount: number) =>
+    formatPriceByCurrency(amount, currency as keyof typeof CURRENCY_CONFIG);
+  const needsValue = activeDeal ? venueDealNeedsValue(activeDeal.value) : false;
 
   return (
     <Card className="w-full max-w-4xl mx-auto">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-center">
+        <CardTitle className="flex items-center justify-center gap-2 text-center">
           <Calculator className="w-5 h-5" />
-          Creator Pricing Calculator
+          What you'd actually take home
         </CardTitle>
         <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-          Estimate earnings across creator roles and venue commercial terms
+          The same arithmetic the Event Builder runs — including the {platformPct}% platform fee,
+          your venue deal, and add-ons as their own separate calculation.
         </p>
       </CardHeader>
       <CardContent>
-        <Tabs value={calculationMode} onValueChange={(value) => {
-          setCalculationMode(value as CalculationMode);
-          setPercentageError('');
-        }} className="mb-6">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="role-based" className="flex items-center gap-2" data-testid="tab-role-based">
-              <Users className="w-4 h-4" />
-              Role-Based
-            </TabsTrigger>
-            <TabsTrigger value="venue-splits" className="flex items-center gap-2" data-testid="tab-venue-splits">
-              <Building className="w-4 h-4" />
-              Venue Terms
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="role-based" className="mt-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Price Input */}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="price-role">Experience Price</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-                    <Input
-                      id="price-role"
-                      type="number"
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      placeholder="150"
-                      className="pl-9"
-                      min="0"
-                      step="0.01"
-                      data-testid="input-price-role"
-                    />
-                  </div>
-                </div>
-
-                {/* Role Selection */}
-                <div className="space-y-3">
-                  <Label>Creator Role</Label>
-                  <RadioGroup value={creatorRole} onValueChange={setCreatorRole}>
-                    <div className="space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="facilitator" id="facilitator-embed" data-testid="radio-facilitator" />
-                        <Label htmlFor="facilitator-embed" className="text-sm flex items-center gap-1 cursor-pointer">
-                          <Briefcase className="w-3 h-3" />
-                          Facilitator
-                        </Label>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="influencer" id="influencer-embed" data-testid="radio-influencer" />
-                        <Label htmlFor="influencer-embed" className="text-sm flex items-center gap-1 cursor-pointer">
-                          <Heart className="w-3 h-3" />
-                          Influencer
-                        </Label>
-                      </div>
-                    </div>
-                  </RadioGroup>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* ── Inputs ─────────────────────────────────────────────────── */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="earnings-ticket-price">Ticket price</Label>
+                <div className="flex gap-2 mt-1">
+                  <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
+                    {currencySymbol}
+                  </span>
+                  <MoneyInput
+                    id="earnings-ticket-price"
+                    value={ticketPrice}
+                    onValueChange={setTicketPrice}
+                    placeholder="0.00"
+                    className="flex-1"
+                    data-testid="input-earnings-ticket-price"
+                  />
                 </div>
               </div>
+              <div>
+                <Label htmlFor="earnings-capacity">Paid tickets</Label>
+                <MoneyInput
+                  id="earnings-capacity"
+                  integer
+                  value={capacity}
+                  onValueChange={setCapacity}
+                  placeholder="30"
+                  className="mt-1"
+                  data-testid="input-earnings-capacity"
+                />
+              </div>
+            </div>
 
-              {/* Support Level */}
-              <div className="space-y-4">
-                <Label>Support Level</Label>
-                <RadioGroup value={supportLevel} onValueChange={setSupportLevel}>
-                  <div className="space-y-2">
-                    {currentOptions.map((option) => (
-                      <div key={option.value} className="flex items-center justify-between p-2 border rounded">
-                        <div className="flex items-center space-x-2">
-                          <RadioGroupItem value={option.value} id={`${option.value}-embed`} data-testid={`radio-support-${option.value}`} />
-                          <div>
-                            <Label htmlFor={`${option.value}-embed`} className="text-sm font-medium cursor-pointer">
-                              {option.label}
-                            </Label>
-                            <p className="text-xs text-gray-600 dark:text-gray-400">
-                              {option.description}
-                            </p>
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="text-xs">
-                          {option.fee}
-                        </Badge>
-                      </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="earnings-currency">Currency</Label>
+                <Select value={currency} onValueChange={setCurrency}>
+                  <SelectTrigger id="earnings-currency" className="mt-1" data-testid="select-earnings-currency">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["eur", "gbp", "usd", "cad", "aud"].map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {CURRENCY_CONFIG[code as keyof typeof CURRENCY_CONFIG].symbol} {code.toUpperCase()}
+                      </SelectItem>
                     ))}
-                  </div>
-                </RadioGroup>
+                  </SelectContent>
+                </Select>
               </div>
-
-              {/* Role-Based Results */}
-              <div className="space-y-4">
-                <Label>Your Earnings</Label>
-                {isLoading && (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
-                  </div>
-                )}
-
-                {breakdown && isRoleBasedBreakdown(breakdown) && !isLoading && (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Customer Pays</span>
-                        <span className="text-lg font-bold text-blue-600" data-testid="text-customer-pays">
-                          ${(breakdown.grossAmount / 100).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <div className="text-xs text-red-600 space-y-1">
-                        <div className="flex justify-between">
-                          <span>Platform Fee</span>
-                          <span>-{breakdown.platformFeePercentage}%</span>
-                        </div>
-                        {breakdown.stripeFeeAmount > 0 && (
-                          <div className="flex justify-between">
-                            <span>Stripe Fee</span>
-                            <span>-${(breakdown.stripeFeeAmount / 100).toFixed(2)}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="p-3 bg-green-50 dark:bg-green-950 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-semibold flex items-center gap-1 text-green-900 dark:text-green-100">
-                          <CheckCircle className="w-4 h-4 text-green-600" />
-                          You Earn
-                        </span>
-                        <span className="text-lg font-bold text-green-600" data-testid="text-role-earnings">
-                          ${(breakdown.netAmount / 100).toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center mt-1">
-                        <span className="text-xs text-green-700 dark:text-green-300">
-                          {((breakdown.netAmount / breakdown.grossAmount) * 100).toFixed(1)}% of total
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div>
+                <Label htmlFor="earnings-shape">Event shape</Label>
+                <Select
+                  value={isDaytime ? "day" : "multi_day"}
+                  onValueChange={(value) => {
+                    setIsDaytime(value === "day");
+                    // The lists are flow-specific; reset rather than carry a
+                    // deal the other flow does not offer.
+                    setDealModel("revenue_share");
+                  }}
+                >
+                  <SelectTrigger id="earnings-shape" className="mt-1" data-testid="select-earnings-shape">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">Day event</SelectItem>
+                    <SelectItem value="multi_day">Multi-day trip</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
-          </TabsContent>
 
-          <TabsContent value="venue-splits" className="mt-6">
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Venue commercial terms are set per-event via the Digital Handshake in the Event Builder. Choose the model that fits your venue type:
+            <div>
+              <Label htmlFor="earnings-deal" className="flex items-center gap-2">
+                <Building className="w-4 h-4" />
+                Venue commercial deal
+              </Label>
+              <Select value={activeDeal?.value} onValueChange={setDealModel}>
+                <SelectTrigger id="earnings-deal" className="mt-1" data-testid="select-earnings-deal">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {dealOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {activeDeal && (
+                <p className="mt-1 text-xs text-gray-500">{activeDeal.description}</p>
+              )}
+            </div>
+
+            {needsValue && activeDeal && (
+              <div>
+                <Label htmlFor="earnings-deal-value">{activeDeal.valueLabel}</Label>
+                <MoneyInput
+                  id="earnings-deal-value"
+                  value={dealValue}
+                  onValueChange={setDealValue}
+                  placeholder="0"
+                  className="mt-1"
+                  data-testid="input-earnings-deal-value"
+                />
+              </div>
+            )}
+
+            {activeDeal?.value === "commitment_plus_revenue_share" && (
+              <div>
+                <Label htmlFor="earnings-commitment-fee">
+                  {activeDeal.secondaryValueLabel || "Commitment fee the venue pays you"}
+                </Label>
+                <MoneyInput
+                  id="earnings-commitment-fee"
+                  value={commitmentFee}
+                  onValueChange={setCommitmentFee}
+                  placeholder="50.00"
+                  className="mt-1"
+                  data-testid="input-earnings-commitment-fee"
+                />
+              </div>
+            )}
+
+            {/* ── Add-on: its own calculation, whatever the deal above ──── */}
+            <div className="rounded-lg border p-3">
+              <label className="flex cursor-pointer items-start gap-3">
+                <Switch
+                  checked={addOnEnabled}
+                  onCheckedChange={setAddOnEnabled}
+                  data-testid="switch-earnings-addon"
+                />
+                <span className="flex-1">
+                  <span className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
+                    <Coffee className="w-4 h-4" />
+                    Offer an add-on
+                  </span>
+                  <span className="block text-xs text-gray-500">
+                    A coffee, a meal, a hire — calculated separately from the venue deal.
+                  </span>
+                </span>
+              </label>
+
+              {addOnEnabled && (
+                <div className="mt-3 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor="earnings-addon-venue-price">Venue price</Label>
+                      <MoneyInput
+                        id="earnings-addon-venue-price"
+                        value={addOnVenuePrice}
+                        onValueChange={setAddOnVenuePrice}
+                        placeholder="0.00"
+                        className="mt-1"
+                        data-testid="input-earnings-addon-venue-price"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="earnings-addon-margin">Your margin</Label>
+                      <MoneyInput
+                        id="earnings-addon-margin"
+                        value={addOnMargin}
+                        onValueChange={setAddOnMargin}
+                        placeholder="0.00"
+                        className="mt-1"
+                        data-testid="input-earnings-addon-margin"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="earnings-addon-mode">Where your margin comes from</Label>
+                    <Select
+                      value={addOnMarginMode}
+                      onValueChange={(value) => setAddOnMarginMode(normalizeAddonMarginMode(value))}
+                    >
+                      <SelectTrigger id="earnings-addon-mode" className="mt-1" data-testid="select-earnings-addon-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="additive">On top of the venue's price</SelectItem>
+                        <SelectItem value="deduction">Out of the venue's cut</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {addon && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Participant pays {money(addon.unitPrice)} — venue keeps{" "}
+                        {money(addon.venueAmount)}, you keep {money(addon.creatorAmount)}.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Result ─────────────────────────────────────────────────── */}
+          <div>
+            <div className="rounded-lg bg-green-50 p-4 dark:bg-green-950">
+              <h4 className="font-medium text-green-900 dark:text-green-100">Estimated net to you</h4>
+              <p className="mb-3 text-xs text-green-800/80 dark:text-green-200/80">
+                Potential at full capacity{addon ? " and full add-on uptake" : ""} — not a guarantee.
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
-                  <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2 flex items-center gap-2">
-                    <Building className="w-4 h-4" />
-                    Day Venue Models
-                  </h4>
-                  <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-                    <li>• <strong>Revenue Split</strong> — percentage of digital ticket revenue</li>
-                    <li>• <strong>Ticket Deduction / Per-Head Fee</strong> — fixed amount from each digital ticket</li>
-                    <li>• <strong>Upfront Rental</strong> — creator pays the venue through the platform</li>
-                    <li>• <strong>Venue Sponsorship</strong> — venue pays the creator through the platform</li>
-                  </ul>
-                </div>
-                <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border border-purple-200 dark:border-purple-800">
-                  <h4 className="font-semibold text-purple-900 dark:text-purple-100 mb-2 flex items-center gap-2">
-                    <Building className="w-4 h-4" />
-                    Retreat Venue Models
-                  </h4>
-                  <ul className="text-sm text-purple-800 dark:text-purple-200 space-y-1">
-                    <li>• <strong>Revenue Share</strong> — percentage of gross ticket revenue</li>
-                    <li>• <strong>Per-Head Package</strong> — fixed cost per attendee</li>
-                    <li>• <strong>Flat Rental / Day Rate</strong> — fixed hire fee</li>
-                  </ul>
-                </div>
-              </div>
-              <div className="p-3 bg-amber-50 dark:bg-amber-950 rounded-lg text-sm text-amber-800 dark:text-amber-200">
-                <strong>How it works:</strong> When you list an event, you propose deal terms to the venue. The venue accepts or declines. Once accepted, those terms are locked into the payment flow automatically.
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>
 
-        <div className="mt-6 p-4 bg-amber-50 dark:bg-amber-950 rounded-lg">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-amber-800 dark:text-amber-200">
-            <div>
-              <strong>Role-Based Pricing:</strong> Fixed 15% platform fee applies to all creators. Earnings shown above are after the platform fee and any Stripe processing costs.
+              <div className="space-y-1 text-sm">
+                {economics.lines.map((line) => (
+                  <div className="flex justify-between" key={line.key} data-testid={`earnings-line-${line.key}`}>
+                    <span>{line.label}</span>
+                    <span
+                      className={
+                        line.kind === "gross"
+                          ? "font-medium"
+                          : line.amount > 0
+                            ? "font-medium text-green-600"
+                            : line.amount < 0
+                              ? "text-red-600"
+                              : ""
+                      }
+                    >
+                      {line.kind === "gross" ? "" : line.amount > 0 ? "+" : line.amount < 0 ? "-" : ""}
+                      {money(Math.abs(line.amount))}
+                    </span>
+                  </div>
+                ))}
+
+                <div className="flex justify-between border-t pt-2 font-semibold text-green-700 dark:text-green-300">
+                  <span>Estimated net to you</span>
+                  <span data-testid="text-earnings-net">
+                    {economics.net < 0 ? "-" : ""}{money(Math.abs(economics.net))}
+                  </span>
+                </div>
+
+                {economics.addOnVenueRevenue > 0 && (
+                  <div className="mt-2 flex justify-between border-t pt-2 text-xs text-gray-600 dark:text-gray-400">
+                    <span>Venue keeps (add-ons, paid directly — not split)</span>
+                    <span>{money(economics.addOnVenueRevenue)}</span>
+                  </div>
+                )}
+              </div>
             </div>
-            <div>
-              <strong>Venue Terms:</strong> Legacy revenue share estimator for marketplace partnerships. Use the event builder commercial model step for final venue offers and handshake terms.
+
+            {economics.offPlatform && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                This deal is settled at the venue's own register. The platform never
+                sees that money, so there is no figure to show for it.
+              </div>
+            )}
+
+            <div className="mt-4 space-y-3 text-xs text-gray-600 dark:text-gray-400">
+              <div className="flex gap-2">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                <p>
+                  The {platformPct}% platform fee applies to everything that reaches you
+                  through the platform — ticket revenue, your add-on margin, and a
+                  commitment fee or sponsorship a venue pays you. Not to the venue's own
+                  price for an add-on, and not to a rental you pay a venue.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                <p>
+                  Add-on revenue is never split by the venue deal above. A per-ticket
+                  deduction applies to the ticket price only; the add-on runs on its own
+                  venue-price and margin mechanic and the two simply sum at the end.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                <p>
+                  Free RSVPs are attendance, not revenue — no venue deal is charged on
+                  them. Payouts land 7 days after the event.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge variant="outline">Deal terms agreed per event</Badge>
+              <Badge variant="outline">Locked in on acceptance</Badge>
+              <Badge variant="outline">Automatic split at payout</Badge>
             </div>
           </div>
         </div>
-
-        {breakdown && (
-          <div className="mt-6 text-center">
-            <Button 
-              className="btn-gradient text-white px-8 py-3"
-              onClick={() => window.location.href = '/conversational-creator-setup-v2'}
-              data-testid="button-start-creating"
-            >
-              Start Creating Experiences
-            </Button>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
-              {isRoleBasedBreakdown(breakdown) 
-                ? `Ready to earn $${(breakdown.netAmount / 100).toFixed(2)} per booking? Let's get started!`
-                : isVenueSplitBreakdown(breakdown)
-                ? `Ready to earn $${(breakdown.creatorShareAmount / 100).toFixed(2)} per booking? Let's get started!`
-                : "Ready to start creating experiences? Let's get started!"
-              }
-            </p>
-          </div>
-        )}
       </CardContent>
     </Card>
   );

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import AdminCreatorApprovals from "@/components/AdminCreatorApprovals";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import Navigation from "@/components/navigation";
@@ -763,6 +764,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="experiences">Experiences</TabsTrigger>
             <TabsTrigger value="deal-ledger">Deal Ledger</TabsTrigger>
             <TabsTrigger value="users">Users / Participants</TabsTrigger>
+            <TabsTrigger value="creator-approvals">Creator Approvals</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
             <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
             <TabsTrigger value="venue-calendars">Venue Calendars</TabsTrigger>
@@ -1697,6 +1699,13 @@ export default function AdminDashboard() {
               </div>
             )}
             <PageControls pagination={applicationResponse?.pagination} page={applicationPage} onPage={setApplicationPage} />
+          </TabsContent>
+
+          {/* Venues already had a review queue. Creators had none, which is
+              why choosing the Creator role was enough to reach the deal
+              tooling. */}
+          <TabsContent value="creator-approvals" className="space-y-6">
+            <AdminCreatorApprovals />
           </TabsContent>
 
           <TabsContent value="venues" className="space-y-6">

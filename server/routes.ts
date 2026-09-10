@@ -13,7 +13,7 @@ import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { db } from "./db";
-import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks } from "@shared/schema";
+import { bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks, creatorProfiles } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
 import { paymentService } from "./payments";
@@ -22,6 +22,9 @@ import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabas
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { getLastEmailAttemptAt } from "./emailDeliveryLedger";
 import { registerOGRoutes } from "./og";
+import { resolvePartnerAccess } from "@shared/partnerAccess";
+import { matchesStandingPreferences } from "@shared/collabSuggestions";
+import { dealRooms, dealRoomMessages, dealRoomReads } from "@shared/schema";
 import { 
   insertCommunityApplicationSchema, 
   insertParticipantProfileSchema, 
@@ -10048,6 +10051,433 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // a shared feed is good for -- a promoter spotting a "seeking venue" post and
   // knowing a venue owner -- needs it to sit outside the silo.
 
+  // --- Deal Rooms: where two matched partners agree terms -------------------
+  //
+  // Not a DM system and not the event's participant chat. Every room is tied to
+  // one specific offer or listing, has exactly two sides, and carries structured
+  // counter-proposals the app can act on. Before this, a match led straight off
+  // the platform: terms were agreed on WhatsApp, and the revenue share nobody
+  // could see was a revenue share nobody could enforce.
+
+  /** Either direction, so a room between two people is found once. */
+  function dealRoomPairFilter(userA: string, userB: string) {
+    return or(
+      and(eq(dealRooms.initiatorId, userA), eq(dealRooms.counterpartId, userB)),
+      and(eq(dealRooms.initiatorId, userB), eq(dealRooms.counterpartId, userA)),
+    );
+  }
+
+  /**
+   * Open the room for this subject and pair, or hand back the one that exists.
+   *
+   * Reached through the offer and interest flows rather than a "new message"
+   * button: a negotiation always starts from something concrete, and a room with
+   * no subject attached is the freeform DM system this deliberately is not.
+   */
+  async function ensureDealRoom(input: {
+    subjectType: string;
+    subjectId: string;
+    initiatorId: string;
+    counterpartId: string;
+    initiatorRole?: string | null;
+    counterpartRole?: string | null;
+    title: string;
+    experienceId?: string | null;
+    venueId?: string | null;
+    currentTerms?: Record<string, any>;
+    openingMessage?: string | null;
+  }) {
+    if (input.initiatorId === input.counterpartId) {
+      throw new Error("A deal room needs two different parties");
+    }
+
+    const [existing] = await db
+      .select()
+      .from(dealRooms)
+      .where(and(
+        eq(dealRooms.subjectType, input.subjectType as any),
+        eq(dealRooms.subjectId, input.subjectId),
+        dealRoomPairFilter(input.initiatorId, input.counterpartId),
+      ))
+      .limit(1);
+
+    if (existing) return { room: existing, created: false };
+
+    const [room] = await db
+      .insert(dealRooms)
+      .values({
+        subjectType: input.subjectType as any,
+        subjectId: input.subjectId,
+        experienceId: input.experienceId ?? null,
+        venueId: input.venueId ?? null,
+        initiatorId: input.initiatorId,
+        counterpartId: input.counterpartId,
+        initiatorRole: input.initiatorRole ?? null,
+        counterpartRole: input.counterpartRole ?? null,
+        title: input.title,
+        currentTerms: (input.currentTerms ?? {}) as any,
+      })
+      .returning();
+
+    if (input.openingMessage) {
+      await db.insert(dealRoomMessages).values({
+        roomId: room.id,
+        senderId: input.initiatorId,
+        kind: "message",
+        body: input.openingMessage,
+      });
+    }
+
+    return { room, created: true };
+  }
+
+  /** A room is only ever readable by its two sides. */
+  async function loadDealRoomFor(roomId: string, userId: string) {
+    const [room] = await db.select().from(dealRooms).where(eq(dealRooms.id, roomId)).limit(1);
+    if (!room) return { room: null, allowed: false };
+    const allowed = room.initiatorId === userId || room.counterpartId === userId;
+    return { room, allowed };
+  }
+
+  app.get("/api/deal-rooms", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const rooms = await db
+        .select()
+        .from(dealRooms)
+        .where(or(eq(dealRooms.initiatorId, userId), eq(dealRooms.counterpartId, userId)))
+        .orderBy(desc(dealRooms.lastMessageAt));
+
+      const reads = rooms.length
+        ? await db
+            .select()
+            .from(dealRoomReads)
+            .where(and(
+              eq(dealRoomReads.userId, userId),
+              inArray(dealRoomReads.roomId, rooms.map((room) => room.id)),
+            ))
+        : [];
+      const readAt = new Map(reads.map((read) => [read.roomId, read.lastReadAt]));
+
+      const counterpartIds = Array.from(new Set(
+        rooms.map((room) => (room.initiatorId === userId ? room.counterpartId : room.initiatorId)),
+      ));
+      const people = counterpartIds.length
+        ? await db.select().from(users).where(inArray(users.id, counterpartIds))
+        : [];
+      const person = new Map(people.map((entry) => [entry.id, entry]));
+
+      res.json(rooms.map((room) => {
+        const otherId = room.initiatorId === userId ? room.counterpartId : room.initiatorId;
+        const other = person.get(otherId);
+        const seenAt = readAt.get(room.id);
+        return {
+          ...room,
+          counterpart: other
+            ? {
+                id: other.id,
+                name: [other.firstName, other.lastName].filter(Boolean).join(" ") || other.email,
+                profileImageUrl: other.profileImageUrl,
+                role: room.initiatorId === userId ? room.counterpartRole : room.initiatorRole,
+              }
+            : null,
+          // "Unread" is a timestamp comparison rather than a per-message flag:
+          // the room list only needs to know whether anything arrived since.
+          hasUnread: !!room.lastMessageAt && (!seenAt || room.lastMessageAt > seenAt),
+        };
+      }));
+    } catch (error) {
+      console.error("Error listing deal rooms:", error);
+      res.status(500).json({ message: "Failed to load deal rooms" });
+    }
+  });
+
+  app.post("/api/deal-rooms", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const body = req.body || {};
+      const subjectType = String(body.subjectType || "");
+      const subjectId = String(body.subjectId || "");
+      const counterpartId = String(body.counterpartId || "");
+      if (!subjectType || !subjectId || !counterpartId) {
+        return res.status(400).json({ message: "A deal room needs a subject and a counterpart" });
+      }
+      if (counterpartId === userId) {
+        return res.status(400).json({ message: "You cannot open a deal room with yourself" });
+      }
+
+      const [me, them] = await Promise.all([
+        storage.getUser(userId),
+        storage.getUser(counterpartId),
+      ]);
+      if (!them) return res.status(404).json({ message: "That partner no longer exists" });
+
+      const { room, created } = await ensureDealRoom({
+        subjectType,
+        subjectId,
+        initiatorId: userId,
+        counterpartId,
+        initiatorRole: me?.role ?? null,
+        counterpartRole: them.role ?? null,
+        title: String(body.title || "Deal discussion").slice(0, 200),
+        experienceId: body.experienceId ? String(body.experienceId) : null,
+        venueId: body.venueId ? String(body.venueId) : null,
+        currentTerms: body.currentTerms || {},
+        openingMessage: body.message ? String(body.message) : null,
+      });
+
+      res.status(created ? 201 : 200).json(room);
+    } catch (error: any) {
+      console.error("Error opening deal room:", error);
+      res.status(500).json({ message: error?.message || "Failed to open deal room" });
+    }
+  });
+
+  app.get("/api/deal-rooms/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { room, allowed } = await loadDealRoomFor(req.params.id, userId);
+      if (!room) return res.status(404).json({ message: "Deal room not found" });
+      if (!allowed) return res.status(403).json({ message: "This deal room is not yours" });
+
+      const messages = await db
+        .select()
+        .from(dealRoomMessages)
+        .where(eq(dealRoomMessages.roomId, room.id))
+        .orderBy(asc(dealRoomMessages.createdAt));
+
+      const otherId = room.initiatorId === userId ? room.counterpartId : room.initiatorId;
+      const other = await storage.getUser(otherId);
+
+      // Opening the room is what marks it read; nothing else advances it.
+      await db
+        .insert(dealRoomReads)
+        .values({ roomId: room.id, userId, lastReadAt: new Date() })
+        .onConflictDoUpdate({
+          target: [dealRoomReads.roomId, dealRoomReads.userId],
+          set: { lastReadAt: new Date() },
+        });
+
+      res.json({
+        room,
+        viewerId: userId,
+        counterpart: other
+          ? {
+              id: other.id,
+              name: [other.firstName, other.lastName].filter(Boolean).join(" ") || other.email,
+              profileImageUrl: other.profileImageUrl,
+              role: room.initiatorId === userId ? room.counterpartRole : room.initiatorRole,
+            }
+          : null,
+        messages,
+      });
+    } catch (error) {
+      console.error("Error loading deal room:", error);
+      res.status(500).json({ message: "Failed to load deal room" });
+    }
+  });
+
+  /**
+   * Say something, or put terms on the table.
+   *
+   * A proposal is stored as data, not prose, so the other side accepts it with
+   * one click and the accepted numbers can be written into the event. Posting a
+   * new proposal supersedes any earlier one still open: two live counter-offers
+   * in one thread is how both sides end up thinking they agreed different deals.
+   */
+  app.post("/api/deal-rooms/:id/messages", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { room, allowed } = await loadDealRoomFor(req.params.id, userId);
+      if (!room) return res.status(404).json({ message: "Deal room not found" });
+      if (!allowed) return res.status(403).json({ message: "This deal room is not yours" });
+      if (room.status === "closed") {
+        return res.status(409).json({ message: "This deal room is closed" });
+      }
+
+      const body = req.body || {};
+      const text = String(body.body || "").trim();
+      const proposal = body.proposal && typeof body.proposal === "object" ? body.proposal : null;
+
+      if (!text && !proposal) {
+        return res.status(400).json({ message: "Write something, or propose terms" });
+      }
+
+      if (proposal) {
+        const model = normalizeVenueDealModel(proposal.model);
+        if (!model) return res.status(400).json({ message: "Choose a deal type" });
+        proposal.model = model;
+        proposal.value = Number(proposal.value) || 0;
+        if (proposal.secondaryValue != null) {
+          proposal.secondaryValue = Number(proposal.secondaryValue) || 0;
+        }
+
+        await db
+          .update(dealRoomMessages)
+          .set({ proposalStatus: "superseded" })
+          .where(and(
+            eq(dealRoomMessages.roomId, room.id),
+            eq(dealRoomMessages.proposalStatus, "open"),
+          ));
+      }
+
+      const [message] = await db
+        .insert(dealRoomMessages)
+        .values({
+          roomId: room.id,
+          senderId: userId,
+          kind: proposal ? "proposal" : "message",
+          body: text || null,
+          proposal: (proposal ?? {}) as any,
+          proposalStatus: proposal ? "open" : null,
+        })
+        .returning();
+
+      await db
+        .update(dealRooms)
+        .set({
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+          ...(proposal
+            ? { currentTerms: { ...(proposal as any), proposedBy: userId } as any }
+            : {}),
+        })
+        .where(eq(dealRooms.id, room.id));
+
+      // Emailed on a best-effort basis: a counter-proposal nobody sees is a
+      // negotiation that quietly moves back to WhatsApp. It must never fail the
+      // send, though — the message is already in the room either way.
+      const otherId = room.initiatorId === userId ? room.counterpartId : room.initiatorId;
+      void (async () => {
+        try {
+          const [sender, recipient] = await Promise.all([
+            storage.getUser(userId),
+            storage.getUser(otherId),
+          ]);
+          if (!recipient?.email) return;
+          await notificationService.sendDealRoomEmail({
+            to: recipient.email,
+            recipientName: recipient.firstName,
+            counterpartName: [sender?.firstName, sender?.lastName].filter(Boolean).join(" ")
+              || sender?.email
+              || "Your partner",
+            roomTitle: room.title,
+            roomUrl: `${getPublicAppBaseUrl(req)}/deal-rooms/${room.id}`,
+            kind: proposal ? "proposal" : "message",
+          });
+        } catch (notifyError) {
+          console.error("Deal room message saved, but the other side was not emailed:", notifyError);
+        }
+      })();
+
+      res.status(201).json(message);
+    } catch (error) {
+      console.error("Error posting deal room message:", error);
+      res.status(500).json({ message: "Failed to send that" });
+    }
+  });
+
+  /** Accept or decline the terms currently on the table. */
+  app.post("/api/deal-rooms/:id/proposals/:messageId/:decision", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const decision = req.params.decision === "accept" ? "accepted" : "declined";
+      const { room, allowed } = await loadDealRoomFor(req.params.id, userId);
+      if (!room) return res.status(404).json({ message: "Deal room not found" });
+      if (!allowed) return res.status(403).json({ message: "This deal room is not yours" });
+
+      const [proposal] = await db
+        .select()
+        .from(dealRoomMessages)
+        .where(and(
+          eq(dealRoomMessages.id, req.params.messageId),
+          eq(dealRoomMessages.roomId, room.id),
+        ))
+        .limit(1);
+
+      if (!proposal || proposal.kind !== "proposal") {
+        return res.status(404).json({ message: "No such proposal" });
+      }
+      if (proposal.proposalStatus !== "open") {
+        return res.status(409).json({ message: "Those terms are no longer on the table" });
+      }
+      // Accepting your own proposal is not an agreement.
+      if (proposal.senderId === userId) {
+        return res.status(403).json({ message: "The other side has to answer this one" });
+      }
+
+      await db
+        .update(dealRoomMessages)
+        .set({ proposalStatus: decision as any })
+        .where(eq(dealRoomMessages.id, proposal.id));
+
+      await db.insert(dealRoomMessages).values({
+        roomId: room.id,
+        senderId: userId,
+        kind: "system",
+        body: decision === "accepted"
+          ? "Terms accepted. These are now the agreed terms for this deal."
+          : "Terms declined. Propose something else to keep the conversation going.",
+      });
+
+      await db
+        .update(dealRooms)
+        .set({
+          status: decision === "accepted" ? "agreed" : room.status,
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+          ...(decision === "accepted"
+            ? {
+                currentTerms: {
+                  ...((proposal.proposal as any) || {}),
+                  proposedBy: proposal.senderId,
+                  acceptedAt: new Date().toISOString(),
+                } as any,
+              }
+            : {}),
+        })
+        .where(eq(dealRooms.id, room.id));
+
+      const otherId = room.initiatorId === userId ? room.counterpartId : room.initiatorId;
+      void (async () => {
+        try {
+          const [decider, recipient] = await Promise.all([
+            storage.getUser(userId),
+            storage.getUser(otherId),
+          ]);
+          if (!recipient?.email) return;
+          await notificationService.sendDealRoomEmail({
+            to: recipient.email,
+            recipientName: recipient.firstName,
+            counterpartName: [decider?.firstName, decider?.lastName].filter(Boolean).join(" ")
+              || decider?.email
+              || "Your partner",
+            roomTitle: room.title,
+            roomUrl: `${getPublicAppBaseUrl(req)}/deal-rooms/${room.id}`,
+            kind: decision === "accepted" ? "accepted" : "declined",
+          });
+        } catch (notifyError) {
+          console.error("Decision recorded, but the other side was not emailed:", notifyError);
+        }
+      })();
+
+      res.json({ status: decision });
+    } catch (error) {
+      console.error("Error answering deal room proposal:", error);
+      res.status(500).json({ message: "Failed to record that" });
+    }
+  });
+
   /** Everything currently open, in the two groups the feed renders. */
   async function buildCollabOpportunities() {
     // No per-source catch. A source that fails must not masquerade as a source
@@ -10067,12 +10497,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     // "Ready to act on": a real date, a real counterparty, a concrete button.
     const ready = [
+      // imageUrl, groupSize and dealLabel are carried as their own fields rather
+      // than folded into `detail`: the card renders them as a photo, a head
+      // count and a tag, and a pre-joined string cannot be laid out.
       ...openEvents.map((event: any) => ({
         kind: "open_event",
         id: event.id,
         tag: "seeking venue",
         title: event.title,
         location: event.location || event.city || null,
+        imageUrl: event.coverImageUrl || null,
+        groupSize: Number(event.maxParticipants) || null,
+        dealLabel: event.venueTargetDeal ? getVenueDealLabel(event.venueTargetDeal) : null,
         detail: [
           event.maxParticipants ? `${event.maxParticipants} people` : null,
           event.venueTargetDeal
@@ -10088,6 +10524,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tag: "venue free date",
         title: venue.name,
         location: venue.city || null,
+        imageUrl: venue.coverImageUrl || null,
+        groupSize: Number(venue.capacity) || Number(venue.standingCapacity) || null,
+        dealLabel: null,
         detail: formatCollabDateRange(deal.startDate, deal.endDate),
         href: "/creator-dashboard?tab=partners&sub=flash-deals",
         actionLabel: "See Deal",
@@ -10098,6 +10537,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tag: "promote & earn",
         title: event.title,
         location: event.location || event.city || null,
+        imageUrl: event.coverImageUrl || null,
+        groupSize: Number(event.maxParticipants) || null,
+        dealLabel: event.promotionDealType
+          ? String(event.promotionDealType).replace(/_/g, " ")
+          : null,
         detail: event.promotionDealType
           ? String(event.promotionDealType).replace(/_/g, " ")
           : "",
@@ -10114,6 +10558,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       tag: "collab idea",
       title: idea.title,
       location: [idea.city, idea.region].filter(Boolean).join(", ") || null,
+      imageUrl: null,
+      groupSize: Number(idea.groupSizeMax) || Number(idea.groupSizeMin) || null,
+      dealLabel: idea.dealPreference || null,
       detail: [
         formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
         formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
@@ -10153,6 +10600,186 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // that renders nothing is worse than no badge at all.
       console.error("Error summarising collab opportunities:", error);
       res.status(500).json({ message: "Failed to summarise opportunities" });
+    }
+  });
+
+  /**
+   * Standing preferences, read off the profile this account already filled in.
+   *
+   * The dedicated preferences form does not exist yet. A venue has already told
+   * us its city, its space types and how many people it holds; a creator has
+   * already told us where they are based and what they run. Using that is a
+   * more honest interim than an empty tab, and it is the same shape the real
+   * preferences will take.
+   */
+  async function standingPreferencesFor(userId: string, role: string) {
+    if (role === "venue_provider") {
+      const owned = await storage.getVenuesByCreator(userId).catch(() => []);
+      const approved = (owned || []).filter((venue: any) => venue?.status === "approved");
+      const usable = approved.length ? approved : (owned || []);
+      if (!usable.length) return null;
+      return {
+        role,
+        city: usable[0]?.city ?? null,
+        region: usable[0]?.region ?? null,
+        categories: usable.flatMap((venue: any) => [
+          ...(venue?.categories || []),
+          venue?.venueType,
+        ]).filter(Boolean),
+        capacity: Math.max(
+          0,
+          ...usable.map((venue: any) => Number(venue?.capacity) || 0),
+          ...usable.map((venue: any) => Number(venue?.standingCapacity) || 0),
+        ),
+      };
+    }
+
+    if (role === "creator") {
+      const profile = await storage.getCreatorProfile(userId).catch(() => null);
+      if (!profile) return null;
+      return {
+        role,
+        city: profile.location ?? null,
+        region: null,
+        categories: profile.expertiseTags || [],
+        capacity: 0,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * "Suggested for You" — matches nobody posted.
+   *
+   * Kept behind its own endpoint and its own tab. A posted idea is an explicit,
+   * time-bound request with someone waiting on an answer; an organic match is a
+   * "this might fit". Merged into one feed the second drowns the first.
+   */
+  app.get("/api/collab/suggestions", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const user = await storage.getUser(userId);
+      const role = user?.role ?? "participant";
+      const preferences = await standingPreferencesFor(userId, role);
+
+      if (!preferences) {
+        return res.json({
+          suggestions: [],
+          // Said plainly rather than rendered as "no matches": an empty tab
+          // that is really a missing profile reads as a broken feature.
+          needsProfile: role === "creator" || role === "venue_provider",
+          role,
+        });
+      }
+
+      const suggestions: any[] = [];
+
+      if (role === "venue_provider") {
+        // Events that have not asked this venue anything, but plausibly fit it.
+        const openEvents = await storage.getOpenVenueEvents().catch(() => []);
+        for (const event of openEvents as any[]) {
+          const match = matchesStandingPreferences(preferences, {
+            kind: "open_event",
+            id: event.id,
+            title: event.title,
+            city: event.city,
+            location: event.location,
+            categories: [event.category, ...(event.greatPillars || [])].filter(Boolean),
+            groupSize: Number(event.maxParticipants) || null,
+          });
+          if (!match.matched) continue;
+          suggestions.push({
+            kind: "open_event",
+            id: event.id,
+            tag: "seeking venue",
+            title: event.title,
+            location: event.location || event.city || null,
+            imageUrl: event.coverImageUrl || null,
+            groupSize: Number(event.maxParticipants) || null,
+            dealLabel: event.venueTargetDeal ? getVenueDealLabel(event.venueTargetDeal) : null,
+            reasons: match.reasons,
+            href: "/venue-dashboard?tab=open-events",
+            actionLabel: "Offer to Host",
+          });
+        }
+      }
+
+      if (role === "creator") {
+        // Spaces this creator has never approached, in their area and their line
+        // of work.
+        const spaces = await storage.getApprovedVenuesForMatching().catch(() => []);
+        for (const venue of spaces as any[]) {
+          const match = matchesStandingPreferences(preferences, {
+            kind: "venue",
+            id: venue.id,
+            title: venue.name,
+            city: venue.city,
+            region: venue.region,
+            categories: [...(venue.categories || []), venue.venueType].filter(Boolean),
+            groupSize: null,
+          });
+          if (!match.matched) continue;
+          suggestions.push({
+            kind: "venue",
+            id: venue.id,
+            tag: "space that fits",
+            title: venue.name,
+            location: venue.city || venue.region || null,
+            imageUrl: venue.coverImageUrl || null,
+            groupSize: Number(venue.capacity) || Number(venue.standingCapacity) || null,
+            dealLabel: null,
+            reasons: match.reasons,
+            href: venue.slug ? `/v/${venue.slug}` : `/venues`,
+            actionLabel: "See Space",
+          });
+        }
+      }
+
+      // Ideas posted to nobody in particular that happen to suit this account.
+      // A poster who named a partner type this account is not stays out.
+      const ideas = await storage.getOpenCollabIdeas().catch(() => []);
+      const wantedFromMe = role === "venue_provider" ? "venue"
+        : role === "creator" ? "organizer"
+        : role === "promoter" ? "promoter"
+        : role === "service_provider" ? "service_provider"
+        : null;
+      for (const idea of ideas as any[]) {
+        if (idea.posterId === userId) continue;
+        if (wantedFromMe && String(idea.seekingPartnerType || "") !== wantedFromMe) continue;
+        const match = matchesStandingPreferences(preferences, {
+          kind: "collab_idea",
+          id: idea.id,
+          title: idea.title,
+          city: idea.city,
+          region: idea.region,
+          categories: [idea.venueCategory].filter(Boolean),
+          groupSize: Number(idea.groupSizeMax) || Number(idea.groupSizeMin) || null,
+        });
+        if (!match.matched) continue;
+        suggestions.push({
+          kind: "collab_idea",
+          id: idea.id,
+          tag: "collab idea",
+          title: idea.title,
+          location: [idea.city, idea.region].filter(Boolean).join(", ") || null,
+          imageUrl: null,
+          groupSize: Number(idea.groupSizeMax) || Number(idea.groupSizeMin) || null,
+          dealLabel: idea.dealPreference || null,
+          reasons: match.reasons,
+          posterId: idea.posterId,
+          actionLabel: "I am interested",
+        });
+      }
+
+      res.json({ suggestions, needsProfile: false, role });
+    } catch (error) {
+      // Never an empty list on failure: a quiet zero here reads as "nothing
+      // suits you", which is the one message this tab must not send by accident.
+      console.error("Error building collab suggestions:", error);
+      res.status(500).json({ message: "Failed to build suggestions" });
     }
   });
 
@@ -10316,7 +10943,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Interest recorded, but the poster was not emailed:", notifyError);
       }
 
-      res.status(201).json({ response, message: "The organiser has been told you are interested" });
+      // The interest and the room open together. Recording interest without
+      // somewhere to talk is what sent every one of these conversations to
+      // WhatsApp: the poster got an email and no channel to answer in.
+      let dealRoomId: string | null = null;
+      try {
+        const { room } = await ensureDealRoom({
+          subjectType: "collab_idea",
+          subjectId: idea.id,
+          initiatorId: responderId,
+          counterpartId: idea.posterId,
+          initiatorRole: responder?.role ?? null,
+          counterpartRole: idea.posterRole ?? null,
+          title: idea.title,
+          venueId: req.body?.venueId || null,
+          currentTerms: idea.dealPreference ? { note: String(idea.dealPreference) } : {},
+          openingMessage: req.body?.message
+            ? String(req.body.message)
+            : "I'm interested in this — happy to talk it through.",
+        });
+        dealRoomId = room.id;
+      } catch (roomError) {
+        // The interest itself is recorded either way; a room that failed to
+        // open must not read to the responder as interest that never sent.
+        console.error("Interest recorded, but the deal room did not open:", roomError);
+      }
+
+      res.status(201).json({
+        response,
+        dealRoomId,
+        message: dealRoomId
+          ? "The organiser has been told. Your deal room is open."
+          : "The organiser has been told you are interested",
+      });
     } catch (error) {
       console.error("Error recording collab interest:", error);
       res.status(500).json({ message: "Failed to register your interest" });
@@ -11058,6 +11717,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Creator profile routes
+  /**
+   * Whether this account may see the partner tooling.
+   *
+   * Role selection alone used to be the whole check, so a participant could
+   * switch to Creator and immediately read the deal-type builder, the revenue
+   * calculator and the Partners tab without having onboarded at all. The rules
+   * live in shared/partnerAccess so the browser explains exactly what the
+   * server enforced.
+   */
+  app.get("/api/partner-access", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const user = await storage.getUser(userId);
+      const role = user?.role ?? "participant";
+
+      // Only fetch what the role's rule actually reads.
+      const [creatorProfile, venues] = await Promise.all([
+        role === "creator" ? storage.getCreatorProfile(userId).catch(() => null) : null,
+        role === "venue_provider" ? storage.getVenuesByCreator(userId).catch(() => []) : [],
+      ]);
+
+      res.json(resolvePartnerAccess({
+        role,
+        isAdmin: await checkIsAdmin(req),
+        creatorProfile: creatorProfile
+          ? { completed: creatorProfile.completed, approved: creatorProfile.approved }
+          : null,
+        venues: (venues || []).map((venue: any) => ({ status: venue?.status })),
+      }));
+    } catch (error) {
+      console.error("Error resolving partner access:", error);
+      res.status(500).json({ message: "Failed to resolve partner access" });
+    }
+  });
+
+  /**
+   * Creator profiles waiting on a decision. The venue equivalent already
+   * existed at /api/admin/venues/pending; creators had no review step at all,
+   * which is why every new creator account went straight to the tooling.
+   */
+  app.get("/api/admin/creator-profiles/pending", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const pending = await db
+        .select()
+        .from(creatorProfiles)
+        .where(and(eq(creatorProfiles.completed, true), eq(creatorProfiles.approved, false)))
+        .orderBy(desc(creatorProfiles.createdAt));
+      res.json(pending);
+    } catch (error) {
+      console.error("Error listing pending creator profiles:", error);
+      res.status(500).json({ message: "Failed to list pending creator profiles" });
+    }
+  });
+
+  app.patch("/api/admin/creator-profiles/:id/approval", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const approved = req.body?.approved === true;
+      const [updated] = await db
+        .update(creatorProfiles)
+        .set({ approved, updatedAt: new Date() })
+        .where(eq(creatorProfiles.id, req.params.id))
+        .returning();
+      if (!updated) return res.status(404).json({ message: "Creator profile not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating creator profile approval:", error);
+      res.status(500).json({ message: "Failed to update creator approval" });
+    }
+  });
+
   app.get("/api/creator-profile", isAuthenticated, async (req: any, res) => {
     try {
       const userId = resolveCurrentUserId(req);
@@ -15949,7 +16686,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       })().catch((err) => console.error('Venue bid email failed:', err?.message || err));
 
-      res.status(201).json(offer);
+      // The bid and the room open together, with the venue's own terms already
+      // on the table. A creator who wants 18% rather than 20% now has somewhere
+      // to say so — and a counter-proposal the app can act on, rather than a
+      // decline and a conversation that happens somewhere it cannot see.
+      let dealRoomId: string | null = null;
+      try {
+        const { room } = await ensureDealRoom({
+          subjectType: "venue_offer",
+          subjectId: offer.id,
+          initiatorId: userId,
+          counterpartId: (experience as any).creatorId,
+          initiatorRole: "venue_provider",
+          counterpartRole: "creator",
+          title: `${(ownedVenue as any)?.name || 'Venue'} → ${(experience as any).title}`,
+          experienceId,
+          venueId,
+          currentTerms: {
+            model,
+            value: Number((normalizedTerms as any)?.revenueSharePct
+              ?? (normalizedTerms as any)?.fixedFee
+              ?? (normalizedTerms as any)?.perHeadAmount
+              ?? (normalizedTerms as any)?.perRoomPerNight
+              ?? (normalizedTerms as any)?.minimumSpend
+              ?? 0) || 0,
+            secondaryValue: Number((normalizedTerms as any)?.commitmentFee ?? 0) || undefined,
+            currency: (experience as any).currency || 'eur',
+            proposedBy: userId,
+          },
+          openingMessage: message ? String(message) : "We'd like to host this. Terms attached.",
+        });
+        dealRoomId = room.id;
+      } catch (roomError) {
+        console.error('Offer submitted, but the deal room did not open:', roomError);
+      }
+
+      res.status(201).json({ ...offer, dealRoomId });
     } catch (err: any) {
       console.error('Error creating venue offer:', err);
       res.status(500).json({ message: 'Failed to submit offer' });

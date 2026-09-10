@@ -600,6 +600,54 @@ class NotificationService {
     }
   }
 
+  /**
+   * Something happened in a deal room the other side is not looking at.
+   *
+   * Deal rooms are where terms get agreed, and a counter-proposal nobody sees
+   * is a negotiation that quietly moves back to WhatsApp. Deliberately terse:
+   * the terms themselves belong in the room, not in an inbox, where a stale
+   * copy would end up being the number someone remembers.
+   */
+  async sendDealRoomEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    counterpartName: string;
+    roomTitle: string;
+    roomUrl: string;
+    kind: "message" | "proposal" | "accepted" | "declined";
+  }): Promise<void> {
+    const subject =
+      opts.kind === "proposal" ? `${opts.counterpartName} proposed terms for ${opts.roomTitle}`
+      : opts.kind === "accepted" ? `${opts.counterpartName} accepted your terms`
+      : opts.kind === "declined" ? `${opts.counterpartName} declined your terms`
+      : `${opts.counterpartName} replied about ${opts.roomTitle}`;
+
+    const bodyText =
+      opts.kind === "proposal"
+        ? `${opts.counterpartName} has put terms on the table for "${opts.roomTitle}". `
+          + `Open the deal room to accept them, or counter with your own.`
+      : opts.kind === "accepted"
+        ? `${opts.counterpartName} accepted your terms for "${opts.roomTitle}". `
+          + `They are now the agreed terms for this deal.`
+      : opts.kind === "declined"
+        ? `${opts.counterpartName} declined your terms for "${opts.roomTitle}". `
+          + `Nothing is off — propose something else to keep it moving.`
+        : `${opts.counterpartName} replied in the deal room for "${opts.roomTitle}".`;
+
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Open the deal room', href: opts.roomUrl },
+      preheader: subject,
+      growthFooterContext: 'creator_venue',
+    });
+
+    const result = await sendEmail(opts.to, subject, email.text, email.html, { category: 'community' });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send deal room email');
+    }
+  }
+
   async sendCreatorCommunityHubNudgeEmail(opts: {
     to: string;
     creatorName?: string | null;

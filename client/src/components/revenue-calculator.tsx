@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { DollarSign, Calculator, TrendingUp, TrendingDown } from "lucide-react";
 
@@ -73,15 +74,12 @@ export default function RevenueCalculator() {
             <Label htmlFor="experience-price">Experience Price</Label>
             <div className="relative">
               <DollarSign className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-              <Input
+              <MoneyInput
                 id="experience-price"
-                type="number"
                 value={price}
-                onChange={(e) => setPrice(e.target.value)}
+                onValueChange={(amount) => setPrice(amount == null ? "" : String(amount))}
                 placeholder="100"
                 className="pl-9"
-                min="0"
-                step="0.01"
               />
             </div>
           </div>

@@ -38,6 +38,8 @@ import RevenueCalculatorDemo from "@/pages/revenue-calculator-demo";
 import ModularPricingDemo from "@/pages/modular-pricing-demo";
 import RoleBasedPricingDemo from "@/pages/role-based-pricing-demo";
 import HowItWorks from "@/pages/how-it-works";
+import HowItWorksPartners from "@/pages/how-it-works-partners";
+import DealRoomsPage from "@/pages/deal-rooms";
 import Profile from "@/pages/profile";
 import Bookings from "@/pages/bookings";
 import TravelerBookings from "@/pages/TravelerBookings";
@@ -152,7 +154,7 @@ function Router() {
       {/* Standardized Setup Page Routes */}
       <Route path="/creator-profile-setup" component={SimpleCreatorProfileSetup} />
       <Route path="/participant-profile-setup" component={ParticipantProfileSetup} />
-      <Route path="/venue-profile-setup" component={VenueProfileSetupRoute} />
+      <Route path="/venue-profile-setup" component={VenueListingTypeGate} />
       <Route path="/service-provider-setup" component={ServiceProviderSetup} />
       
       {/* Legacy Routes - Redirect to standardized routes */}
@@ -161,7 +163,7 @@ function Router() {
       <Route path="/conversational-creator-setup-v2" component={SimpleCreatorProfileSetup} />
       <Route path="/participant/setup" component={ParticipantProfileSetup} />
       <Route path="/conversational-profile" component={RedirectToCreatorProfileSetup} />
-      <Route path="/venue/setup" component={VenueProfileSetupRoute} />
+      <Route path="/venue/setup" component={VenueListingTypeGate} />
       <Route path="/service-provider/setup" component={ServiceProviderSetup} />
       
       <Route path="/checkout/:id" component={Checkout} />
@@ -174,9 +176,13 @@ function Router() {
           avatar menu used to drop a venue owner straight into nine tabs. */}
       <Route path="/venue" component={VenueHome} />
       <Route path="/collab-opportunities" component={CollabOpportunities} />
+      {/* B2B negotiation, deliberately not under /messages: that inbox is
+          the event's participant chat and this is two businesses agreeing money. */}
+      <Route path="/deal-rooms/:id" component={DealRoomsPage} />
+      <Route path="/deal-rooms" component={DealRoomsPage} />
       <Route path="/creator/earnings" component={CreatorEarnings} />
       <Route path="/creator/profile-setup" component={SimpleCreatorProfileSetup} />
-      <Route path="/venue/profile-setup" component={VenueProfileSetupRoute} />
+      <Route path="/venue/profile-setup" component={VenueListingTypeGate} />
       <Route path="/service/profile-setup" component={ServiceProviderSetup} />
       <Route path="/venues" component={Venues} />
       <Route path="/v/:slug" component={PublicVenuePage} />
@@ -209,6 +215,8 @@ function Router() {
       <Route path="/revenue-calculator-demo" component={RevenueCalculatorDemo} />
       <Route path="/modular-pricing-demo" component={ModularPricingDemo} />
       <Route path="/role-based-pricing-demo" component={RoleBasedPricingDemo} />
+      {/* Ordered before the participant page: wouter matches in order. */}
+      <Route path="/how-it-works/partners" component={HowItWorksPartners} />
       <Route path="/how-it-works" component={HowItWorks} />
       <Route path="/profile" component={Profile} />
       <Route path="/bookings" component={Bookings} />

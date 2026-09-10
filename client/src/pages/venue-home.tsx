@@ -27,7 +27,7 @@ import {
  * This gives the two sides the same shape.
  */
 export default function VenueHome() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const { isAuthenticated, hasRequiredRole, isLoading: authLoading } = useVenueAuth();
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
 
@@ -46,13 +46,30 @@ export default function VenueHome() {
 
   // Listing status drives the third card, the same way profile completion does
   // on the creator side.
-  const { data: venues = [] } = useQuery<any[]>({
+  const { data: venues = [], isSuccess: venuesLoaded } = useQuery<any[]>({
     queryKey: ['/api/user/venues'],
     enabled: isAuthenticated,
   });
 
   const hasVenue = venues.length > 0;
   const hasApprovedVenue = venues.some((venue: any) => venue.status === 'approved');
+
+  // A creator who finishes their profile is carried straight into the event
+  // builder. A venue was not: it landed here with nothing listed and no sign
+  // that "What kind of space are you listing?" was the next step, so the flow
+  // simply stopped. Only for an account with no listing at all — a venue that
+  // has one is here to manage it, and must not be bounced into a new listing.
+  const [autoContinued, setAutoContinued] = useState(false);
+  useEffect(() => {
+    if (autoContinued) return;
+    if (!isAuthenticated || authLoading || !hasRequiredRole) return;
+    if (!venuesLoaded || hasVenue) return;
+    // A venue arriving from its own just-completed listing must not be sent
+    // straight back into a second one.
+    if (new URLSearchParams(window.location.search).get('profileCompleted') === 'true') return;
+    setAutoContinued(true);
+    setLocation('/venues/new');
+  }, [autoContinued, isAuthenticated, authLoading, hasRequiredRole, venuesLoaded, hasVenue, setLocation]);
 
   if (authLoading) {
     return (

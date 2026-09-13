@@ -39,8 +39,16 @@ type RoleValue = keyof typeof ROLE_META;
  */
 const PARTNER_ROLES = new Set(["creator", "venue_provider", "promoter", "service_provider"]);
 
+/**
+ * Where the Tutorials menu item goes.
+ *
+ * A partner is sent to the internal tutorial — the full model, deal mechanics
+ * and all — rather than the public page, which is now the reduced brochure
+ * version written for someone who has not signed up yet. The gate on that
+ * page is what actually enforces this; sending them there is the courtesy.
+ */
 export function tutorialsHrefForRole(role: string | null | undefined): string {
-  return PARTNER_ROLES.has(String(role ?? "")) ? "/how-it-works/partners" : "/how-it-works";
+  return PARTNER_ROLES.has(String(role ?? "")) ? "/tutorials/partners" : "/how-it-works";
 }
 
 const ROLE_DESTINATIONS: Record<string, string> = {
@@ -50,6 +58,34 @@ const ROLE_DESTINATIONS: Record<string, string> = {
   participant:      "/experiences",
   service_provider: "/service-provider-dashboard",
 };
+
+/**
+ * Where a role actually starts, which is not always its dashboard.
+ *
+ * A creator switching in is taken through profile setup and on into the
+ * builder. A venue was dropped straight on `/venue-dashboard` — nine tabs
+ * about spaces, for an account with no space. The first step for a venue with
+ * nothing listed is "What kind of space are you listing?", and then the venue
+ * builder, with no dashboard stop in between.
+ */
+async function resolveRoleDestination(role: string): Promise<string> {
+  const fallback = ROLE_DESTINATIONS[role] ?? "/";
+  if (role !== "venue_provider") return fallback;
+
+  try {
+    const token = getAccessToken();
+    const res = await fetch("/api/venues/my", {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!res.ok) return fallback;
+    const venues = await res.json();
+    return Array.isArray(venues) && venues.length > 0 ? fallback : "/venues/new";
+  } catch {
+    // A failed lookup must not strand someone on a listing form they may not
+    // need. The dashboard is the safe answer.
+    return fallback;
+  }
+}
 
 export default function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -95,7 +131,7 @@ export default function Navigation() {
       });
       if (res.ok) {
         await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-        navigate(ROLE_DESTINATIONS[newRole] ?? "/");
+        navigate(await resolveRoleDestination(newRole));
       }
     } finally {
       setSwitchingRole(null);
@@ -414,10 +450,11 @@ export default function Navigation() {
 
                   <Link
                     href="/profile"
-                    className="block px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                    className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
                     onClick={() => setMobileMenuOpen(false)}
                     data-testid="mobile-link-profile"
                   >
+                    <User className="h-4 w-4" />
                     My Account
                   </Link>
                   <Link href="/messages" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary" onClick={() => setMobileMenuOpen(false)}><MessageCircle className="h-4 w-4"/>Messages{!!inbox?.unreadCount&&<span className="rounded-full bg-red-600 px-2 text-xs text-white">{inbox.unreadCount}</span>}</Link>
@@ -430,6 +467,30 @@ export default function Navigation() {
                     <TrendingUp className="h-4 w-4" />
                     Rewards & Referrals
                   </Link>
+
+                  {/* Community — present in the account dropdown but missing
+                      here, which is the inconsistency the menu pass was about. */}
+                  {user?.role === 'creator' ? (
+                    <Link
+                      href="/creator-dashboard?tab=community"
+                      className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                      onClick={() => setMobileMenuOpen(false)}
+                      data-testid="mobile-link-my-community"
+                    >
+                      <Users className="h-4 w-4" />
+                      My Community
+                    </Link>
+                  ) : (
+                    <Link
+                      href="/community-hub?tab=groups"
+                      className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                      onClick={() => setMobileMenuOpen(false)}
+                      data-testid="mobile-link-community"
+                    >
+                      <Users className="h-4 w-4" />
+                      Community
+                    </Link>
+                  )}
 
                   {/* Role dashboard shortcut */}
                   {user?.role === 'creator' && (
@@ -454,6 +515,12 @@ export default function Navigation() {
                     <Link href="/venue" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
                       <Building2 className="h-4 w-4" />
                       Venue Dashboard
+                    </Link>
+                  )}
+                  {user?.role === 'service_provider' && (
+                    <Link href="/service-provider-dashboard" className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium" onClick={() => setMobileMenuOpen(false)}>
+                      <Wrench className="h-4 w-4" />
+                      Service Dashboard
                     </Link>
                   )}
                   {user?.role === 'promoter' && (

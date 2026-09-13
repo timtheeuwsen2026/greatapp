@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowRight, ChevronRight, Shield } from "lucide-react";
 import Navigation from "@/components/navigation";
 
+import VideoEmbedSlot from "@/components/VideoEmbedSlot";
 /**
  * How It Works, for the person buying a ticket.
  *
@@ -51,6 +52,17 @@ export default function HowItWorks() {
               </Button>
             </Link>
           </div>
+        </div>
+      </section>
+
+      {/* Intro video slot. Empty until one is recorded. */}
+      <section className="px-4 sm:px-6 lg:px-8 pt-4">
+        <div className="max-w-3xl mx-auto">
+          <VideoEmbedSlot
+            slot="participantTutorialVideoUrl"
+            title="See how it works"
+            description="Two minutes on deposits, the group minimum, and what happens if it does not fill."
+          />
         </div>
       </section>
 

@@ -40,7 +40,7 @@ export default function CreatorEarnings() {
           {/* Anyone reading this during onboarding has more questions than a
               calculator answers. */}
           <div className="text-center">
-            <Link href="/how-it-works/partners">
+            <Link href="/tutorials/partners">
               <Button variant="outline" size="lg" data-testid="link-partner-guide-from-earnings">
                 How deal types, matching and payouts work
                 <ArrowRight className="ml-2 h-4 w-4" />

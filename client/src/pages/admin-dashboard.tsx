@@ -49,6 +49,7 @@ import { isUnauthorizedError, isAdminUser } from "@/lib/authUtils";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
+import AdminTutorialVideos from "@/components/AdminTutorialVideos";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
@@ -768,6 +769,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="venues">Venues</TabsTrigger>
             <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
             <TabsTrigger value="venue-calendars">Venue Calendars</TabsTrigger>
+            <TabsTrigger value="content">Content</TabsTrigger>
           </TabsList>
 
           <TabsContent value="experiences" className="space-y-6">
@@ -2012,6 +2014,14 @@ export default function AdminDashboard() {
               <h2 className="text-xl font-semibold">Venue Availability Calendars</h2>
             </div>
             <AdminVenueCalendar />
+          </TabsContent>
+
+          {/* Copy and media that would otherwise need a deploy to change. */}
+          <TabsContent value="content" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-semibold">Site Content</h2>
+            </div>
+            <AdminTutorialVideos />
           </TabsContent>
         </Tabs>
       </div>

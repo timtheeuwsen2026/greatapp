@@ -432,6 +432,12 @@ export default function Checkout() {
 
   const [paymentMode, setPaymentMode] = useState<'deposit' | 'full'>(initialPaymentMode || 'deposit');
 
+  // A shared discount link. The token travels from the event page and is worth
+  // nothing on its own — the server looks up the link and works out what comes
+  // off, and it is that answer the buyer is shown and charged.
+  const discountToken = urlParams.get('discount') || null;
+  const [discountTotal, setDiscountTotal] = useState(0);
+
   const { data: experience, isLoading: experienceLoading } = useQuery<Experience>({
     queryKey: ["/api/experiences", experienceId],
     enabled: !!experienceId && isAuthenticated,
@@ -469,10 +475,14 @@ export default function Checkout() {
         referralCode: attribution.referralCode,
         shareToken: attribution.shareToken,
       };
+      if (discountToken) body.discountToken = discountToken;
       if (userPrice !== undefined) body.userPrice = userPrice;
 
       const res = await apiRequest("POST", "/api/create-payment-intent", body);
       const data = await res.json();
+      // What the server actually allowed, not what the link claimed. A link the
+      // server refused simply takes nothing off, and nothing is shown.
+      setDiscountTotal(Number(data.discountTotal) || 0);
       if (data.freeRsvp) {
         setFreeRsvpInfo({
           fullPrice: 0,
@@ -1143,6 +1153,22 @@ export default function Checkout() {
                       </span>
                       <span className="font-medium">
                         {formatCurrency(paymentInfo.addonTotal || 0, experience.currency)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* The saving on its own line. A price that is simply lower
+                      than the one on the event page reads as a mistake; this
+                      says why it is lower, and it only ever shows a figure the
+                      server actually applied. */}
+                  {discountTotal > 0 && (
+                    <div
+                      className="flex justify-between items-center text-emerald-700 dark:text-emerald-300"
+                      data-testid="summary-discount-line"
+                    >
+                      <span className="text-sm font-medium">Discount link applied</span>
+                      <span className="font-medium">
+                        −{formatCurrency(discountTotal, experience.currency)}
                       </span>
                     </div>
                   )}

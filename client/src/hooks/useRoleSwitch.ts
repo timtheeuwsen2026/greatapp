@@ -28,10 +28,25 @@ async function checkCreatorProfile(): Promise<boolean> {
   }
 }
 
+/**
+ * Has this account actually listed a space?
+ *
+ * The old check asked for `/api/venue-profile`, an endpoint that does not
+ * exist — so whether it answered "yes" depended on what the server does with
+ * an unknown /api path, and a brand-new venue account was routed to the
+ * dashboard as though it already had a listing. A creator was walked into the
+ * builder; a venue was dropped on nine tabs of zeroes.
+ *
+ * `/api/venues/my` is the real endpoint and its answer is the real question:
+ * an empty array means there is nothing to manage yet, so the next step is
+ * listing a space, not a dashboard about spaces.
+ */
 async function checkVenueProfile(): Promise<boolean> {
   try {
-    await apiRequest("GET", "/api/venue-profile");
-    return true;
+    const response = await apiRequest("GET", "/api/venues/my");
+    if (!response.ok) return false;
+    const venues = await response.json();
+    return Array.isArray(venues) && venues.length > 0;
   } catch (error) {
     return false;
   }
@@ -107,7 +122,10 @@ export function useRoleSwitch() {
             if (hasVenueProfile) {
               destinationRoute = "/venue-dashboard";
             } else {
-              destinationRoute = "/conversational-profile?type=venue_provider";
+              // Straight into "What kind of space are you listing?" and on into
+              // the builder — no dashboard stop in between, which is what the
+              // creator flow does and what the venue flow was missing.
+              destinationRoute = "/venues/new";
               needsProfileSetup = true;
             }
             break;

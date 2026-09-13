@@ -160,6 +160,27 @@ export const creatorProfiles = pgTable("creator_profiles", {
   termsAccepted: boolean("terms_accepted").default(false), // T&Cs acceptance checkbox
   termsAcceptedAt: timestamp("terms_accepted_at"),
 
+  // Section D: Matching. What the Suggested-for-You feed reads.
+  //
+  // The onboarding popup used to stop at name, handle, photo and bio — enough
+  // to render a profile, nothing to match one on. A creator with no city and
+  // no category cannot be shown a venue, and a creator who never said what
+  // they typically need cannot be shown anything organic at all.
+  //
+  // There is deliberately no subtype field. A Creator is an organiser; the
+  // Influencer/Brand distinction belongs to Promoter.
+  city: varchar("city"),
+  /** An id from PARTNER_CATEGORIES in @shared/partnerTaxonomy. */
+  category: varchar("category"),
+  /** Their own words, when category is "other". */
+  categoryOther: varchar("category_other"),
+  /** Ids from PARTNER_NEEDS — the standing "what are you typically after". */
+  lookingFor: text("looking_for").array().default(sql`'{}'::text[]`),
+  lookingForOther: varchar("looking_for_other"),
+  /** Would take perks or credits as part of a deal rather than only cash. */
+  openToPerks: boolean("open_to_perks").default(false),
+  openToPromoters: boolean("open_to_promoters").default(false),
+
   // Admin fields
   approved: boolean("approved").default(false),
   completed: boolean("completed").default(false), // Profile completion flag
@@ -179,6 +200,17 @@ export const promoterProfiles = pgTable("promoter_profiles", {
   profilePhoto: varchar("profile_photo"),
   displayName: varchar("display_name").notNull(),
   bio: text("bio").notNull(),
+  /**
+   * Influencer, Brand, or their own word for it. The classification a Creator
+   * does not carry — a promoter's type changes what they are offered, an
+   * organiser's does not.
+   */
+  promoterType: varchar("promoter_type"),
+  promoterTypeOther: varchar("promoter_type_other"),
+  city: varchar("city"),
+  /** An id from PARTNER_CATEGORIES in @shared/partnerTaxonomy. */
+  category: varchar("category"),
+  categoryOther: varchar("category_other"),
   completed: boolean("completed").default(false),
   stripeAccountId: varchar("stripe_account_id"),
   stripeVerificationStatus: varchar("stripe_verification_status").default("pending"),
@@ -388,6 +420,12 @@ export const experienceDrafts = pgTable("experience_drafts", {
       }>
     >()
     .default([]),
+  // Expected turnout, carried on the draft so it survives a save mid-build.
+  // Load-bearing under Venue Sponsorship and Upfront Rental, pitch context
+  // everywhere else — see the column of the same name on `experiences`.
+  expectedAudienceSize: integer("expected_audience_size"),
+  addonRequests: jsonb("addon_requests").default([]),
+
   // Legacy price per person field (deprecated - use ticketSkus)
   pricePerPerson: decimal("price_per_person", {
     precision: 10,
@@ -785,6 +823,42 @@ export const experiences = pgTable("experiences", {
   commissionValue: decimal("commission_value", { precision: 10, scale: 2 }), // null = use platform default
   commissionBasis: commissionBasisEnum("commission_basis"), // null = use platform default
 
+  /**
+   * How many people the organiser expects to turn up.
+   *
+   * Pitch context under every deal type, and load-bearing under exactly two.
+   * Revenue Split, Ticket Deduction and Commitment Fee + Rev Split all
+   * self-correct against actual sales — an optimistic estimate costs the venue
+   * nothing there. Venue Sponsorship and Upfront Rental do not: the venue
+   * commits a flat amount against this number and nothing else, so it is the
+   * whole basis of the offer.
+   */
+  expectedAudienceSize: integer("expected_audience_size"),
+
+  /**
+   * Add-on demand, for a venue that has no catalog yet.
+   *
+   * Path B of venue add-on pricing. The creator says what they expect people
+   * to want ("~50 might want coffee") and deliberately does not set a price;
+   * the venue fills in its real price — and any group rate — on its invite
+   * page, through the same counter mechanism it uses for the ticket deal.
+   */
+  addonRequests: jsonb("addon_requests")
+    .$type<
+      Array<{
+        id: string;
+        name: string;
+        /** Heads the creator expects to want this. Not a commitment. */
+        expectedDemand?: number;
+        note?: string;
+        /** Filled in by the venue, never by the creator. */
+        venuePrice?: number;
+        groupDiscountNote?: string;
+        filledByVenueAt?: string;
+      }>
+    >()
+    .default([]),
+
   // Per-SKU Discounts
   discounts: jsonb("discounts")
     .$type<
@@ -1030,9 +1104,63 @@ export const bookings = pgTable("bookings", {
   addonQuantity: integer("addon_quantity").notNull().default(0),
   addonTotal: decimal("addon_total", { precision: 10, scale: 2 }).default("0.00"),
 
+  // Which discount link this booking arrived through, and what it took off.
+  // An organiser who sent one link to their running club and another to a
+  // sponsor needs to see which one people actually used.
+  discountLinkId: varchar("discount_link_id"),
+  discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }).default("0.00"),
+
   bookingDate: timestamp("booking_date").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+/**
+ * A discount as a link, not a code to type.
+ *
+ * Settled in favour of a link on real user feedback: the first person who
+ * needed one needed something to send to friends and relatives, not a string
+ * to dictate over the phone. Same shape as the participant "Invite the Squad"
+ * referral link, and the same reason — a link is forwardable, and forwarding
+ * is what actually spreads it.
+ *
+ * The token is the discount. There is nothing to remember, nothing to mistype,
+ * and a link that has been withdrawn stops working rather than quietly still
+ * applying. One row per discount per event: regenerating replaces the token, so
+ * an organiser never accumulates four live links they cannot tell apart.
+ */
+export const discountLinks = pgTable(
+  "discount_links",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    experienceId: varchar("experience_id")
+      .notNull()
+      .references(() => experiences.id, { onDelete: "cascade" }),
+    /** Which entry in `experiences.discounts` this link applies. */
+    discountId: varchar("discount_id").notNull(),
+    /** Unguessable. This is the whole credential. */
+    token: varchar("token").notNull().unique(),
+    /** The organiser's own note: "sent to the run club". */
+    label: varchar("label"),
+    /** Null means no cap. Counted on redemption, never on a click. */
+    maxRedemptions: integer("max_redemptions"),
+    redemptionCount: integer("redemption_count").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    // Deliberately not a typed `.references(() => users.id)`. The users table is
+    // already self-referential enough that TypeScript gives up inferring it, and
+    // adding another reference chain from here pushed that failure downstream
+    // into every storage method that touches a user. The database still has the
+    // foreign key — see the migration — which is where it actually matters.
+    createdBy: varchar("created_by"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  // No index config here on purpose. Declaring them through Drizzle's second
+  // argument made TypeScript give up inferring this table, and the failure
+  // propagated into every storage method that touches a user. The indexes
+  // themselves are not optional and are not missing: the boot migration
+  // creates both `discount_links_experience_idx` and the unique
+  // `discount_links_discount_unique` that the upsert below depends on.
+);
 
 // Reservations table for soft-hold system
 export const reservations = pgTable("reservations", {
@@ -1496,6 +1624,63 @@ export const venues = pgTable("venues", {
         bedConfiguration?: string;
         quantity: number;
         description?: string;
+      }>
+    >()
+    .default([]),
+
+  // Self-reported open time — what the venue actually wants filled.
+  //
+  // Independent of Calendar Sync, which is the other half of the same picture:
+  // a sync says when the space is *booked*, this says when it is quiet and
+  // would welcome an event. A space can be free all week and still only want
+  // Tuesday evenings; no calendar can tell you that.
+  //
+  // Day spaces answer in dayparts ("mon:morning"), trip locations in date
+  // ranges, because that is how each of them actually thinks about it.
+  quietSlots: text("quiet_slots").array().default(sql`'{}'::text[]`),
+  openPeriods: jsonb("open_periods")
+    .$type<Array<{ startDate: string; endDate: string; note?: string }>>()
+    .default([]),
+  blackoutPeriods: jsonb("blackout_periods")
+    .$type<Array<{ startDate: string; endDate: string; note?: string }>>()
+    .default([]),
+
+  // Standing preferences. Read by the Suggested-for-You matcher, and shown on
+  // an invite so a creator knows before pitching whether they are a fit.
+  preferredGroupMin: integer("preferred_group_min"),
+  preferredGroupMax: integer("preferred_group_max"),
+  /** Ids from PARTNER_CATEGORIES — the kinds of organiser this space wants. */
+  preferredCreatorCategories: text("preferred_creator_categories")
+    .array()
+    .default(sql`'{}'::text[]`),
+  preferredVibes: text("preferred_vibes").array().default(sql`'{}'::text[]`),
+  /** Multi-day only. Ids from TRIP_LENGTH_PREFERENCES. */
+  preferredTripLengths: text("preferred_trip_lengths").array().default(sql`'{}'::text[]`),
+  openToPerks: boolean("open_to_perks").default(false),
+  openToPromoters: boolean("open_to_promoters").default(false),
+
+  // The venue's own add-on prices.
+  //
+  // Add-on pricing used to be invented by the creator, who has no idea what a
+  // coffee costs at this counter — and the whole point of an add-on is that
+  // the participant never pays more here than they would at the bar. A venue
+  // states its prices once; every creator working with it picks from this list
+  // instead of guessing.
+  //
+  // `venuePrice` is the venue's own counter price. What a participant is shown
+  // is that price plus (or minus) the organiser's margin, decided per event.
+  addonCatalog: jsonb("addon_catalog")
+    .$type<
+      Array<{
+        id: string;
+        name: string;
+        description?: string;
+        venuePrice: number;
+        /** "per person", "per group", "per night" — free text, shown as-is. */
+        unit?: string;
+        /** Optional standing offer, e.g. "10% off for groups over 20". */
+        groupDiscountNote?: string;
+        active: boolean;
       }>
     >()
     .default([]),
@@ -3161,6 +3346,19 @@ export const insertCreatorProfileSchema = createInsertSchema(creatorProfiles)
         youtube: z.string().optional(),
       })
       .default({}),
+    // Matching fields. Optional in the schema and required by the form, so an
+    // existing profile saved from another surface is not rejected for lacking
+    // fields that did not exist when it was written.
+    city: z.string().optional().nullable(),
+    category: z.string().optional().nullable(),
+    categoryOther: z.string().optional().nullable(),
+    // `.optional()` without a `.default()`: a default makes the *output* type
+    // required, which breaks every existing caller that builds a creator
+    // profile payload without this field.
+    lookingFor: z.array(z.string()).optional(),
+    lookingForOther: z.string().optional().nullable(),
+    openToPerks: z.boolean().optional(),
+    openToPromoters: z.boolean().optional(),
   });
 
 export type CreatorProfile = typeof creatorProfiles.$inferSelect;
@@ -3178,6 +3376,11 @@ export const insertPromoterProfileSchema = createInsertSchema(promoterProfiles)
     bio: z.string().min(10, "Bio must be at least 10 characters"),
     profilePhoto: z.string().optional(),
     completed: z.boolean().optional(),
+    promoterType: z.string().optional().nullable(),
+    promoterTypeOther: z.string().optional().nullable(),
+    city: z.string().optional().nullable(),
+    category: z.string().optional().nullable(),
+    categoryOther: z.string().optional().nullable(),
   });
 
 export type PromoterProfile = typeof promoterProfiles.$inferSelect;
@@ -3197,6 +3400,13 @@ export const platformSettings = pgTable("platform_settings", {
   stripeFeeFixed: integer("stripe_fee_fixed").default(30), // Stripe's 30 cents in cents
   minimumPayoutAmount: integer("minimum_payout_amount").default(2000), // $20 minimum payout in cents
   payoutSchedule: varchar("payout_schedule").default("weekly"), // weekly, monthly
+
+  // Tutorial videos, held here rather than in the markup so populating them is
+  // a paste in the admin dashboard rather than a deploy.
+  partnerPublicVideoUrl: varchar("partner_public_video_url"),
+  partnerTutorialVideoUrl: varchar("partner_tutorial_video_url"),
+  participantTutorialVideoUrl: varchar("participant_tutorial_video_url"),
+
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

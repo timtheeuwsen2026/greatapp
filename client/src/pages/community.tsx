@@ -12,7 +12,7 @@ import { useLocation } from "wouter";
 import timothyPhoto from "@assets/c7c9463b-b8d2-494b-abd9-de23ce88f553_1754564401842.jpg";
 import Navigation from "@/components/navigation";
 
-interface TribeMember {
+interface CommunityMember {
   id: string;
   displayName: string;
   avatarUrl: string | null;
@@ -35,8 +35,8 @@ interface ActivityFeedItem {
 interface ActivityData {
   feed: ActivityFeedItem[];
   stats: {
-    totalTravelers: number;
-    confirmedTrips: number;
+    totalParticipants: number;
+    confirmedEvents: number;
     totalCountries: number;
   };
 }
@@ -109,19 +109,19 @@ export default function Community() {
     refetchInterval: 30_000,
   });
 
-  const { data: tribeMembers = [], isLoading: tribeMembersLoading } = useQuery<TribeMember[]>({
+  const { data: communityMembers = [], isLoading: communityMembersLoading } = useQuery<CommunityMember[]>({
     queryKey: ["/api/community/members"],
   });
 
   const feed = activityData?.feed ?? [];
-  const stats = activityData?.stats ?? { totalTravelers: 0, confirmedTrips: 0, totalCountries: 0 };
+  const stats = activityData?.stats ?? { totalParticipants: 0, confirmedEvents: 0, totalCountries: 0 };
 
-  // Filter tribe members by selected interest tag
-  const filteredTribeMembers = activeTagFilter
-    ? tribeMembers.filter((m) =>
+  // Filter members by selected interest tag
+  const filteredCommunityMembers = activeTagFilter
+    ? communityMembers.filter((m) =>
         m.tags.some((t) => t.toLowerCase() === activeTagFilter.replace("#", "").toLowerCase())
       )
-    : tribeMembers;
+    : communityMembers;
 
   const filteredProfiles = profiles.filter((profile) => {
     const matchesSearch =
@@ -158,7 +158,7 @@ export default function Community() {
             Meet the <span className="lowercase">great</span> Community
           </h1>
           <p className="text-xl md:text-2xl mb-2 text-blue-100">
-            Dreamers. Explorers. Creators. — That's us!
+            Dreamers. Doers. Creators. — That's us!
           </p>
         </div>
       </div>
@@ -169,7 +169,7 @@ export default function Community() {
           <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto text-center">
             <div>
               <p className="text-2xl md:text-3xl font-bold text-blue-600 dark:text-blue-400">
-                {activityLoading ? "—" : `${stats.totalTravelers}+`}
+                {activityLoading ? "—" : `${stats.totalParticipants}+`}
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1">
                 <Users className="h-3 w-3" /> Total Members
@@ -177,10 +177,10 @@ export default function Community() {
             </div>
             <div>
               <p className="text-2xl md:text-3xl font-bold text-green-600 dark:text-green-400">
-                {activityLoading ? "—" : `${stats.confirmedTrips}`}
+                {activityLoading ? "—" : `${stats.confirmedEvents}`}
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1">
-                <CheckCircle className="h-3 w-3" /> Trips Confirmed
+                <CheckCircle className="h-3 w-3" /> Events Confirmed
               </p>
             </div>
             <div>
@@ -275,12 +275,12 @@ export default function Community() {
           )}
         </div>
 
-        {/* ── MEMBER INTERESTS GRID — Your Tribe is Already Here ── */}
-        <div className="mb-14" data-testid="tribe-section">
+        {/* ── MEMBER INTERESTS GRID — Your People Are Already Here ── */}
+        <div className="mb-14" data-testid="community-section">
           {/* Section header */}
           <div className="mb-6">
-            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1" data-testid="tribe-section-title">
-              👥 Your Tribe is Already Here
+            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1" data-testid="community-section-title">
+              👥 Your People Are Already Here
             </h2>
             <p className="text-gray-500 dark:text-gray-400">
               These members are looking for their next experience. Find your people and make it happen together.
@@ -288,7 +288,7 @@ export default function Community() {
           </div>
 
           {/* Interest tag filter pills */}
-          <div className="flex flex-wrap gap-2 mb-6" data-testid="tribe-tag-filters">
+          <div className="flex flex-wrap gap-2 mb-6" data-testid="community-tag-filters">
             {INTEREST_FILTER_TAGS.map((tag) => (
               <button
                 key={tag}
@@ -298,7 +298,7 @@ export default function Community() {
                     ? "bg-primary text-white border-primary shadow-md"
                     : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-primary hover:text-primary"
                 }`}
-                data-testid={`tribe-tag-filter-${tag.replace("#", "")}`}
+                data-testid={`community-tag-filter-${tag.replace("#", "")}`}
               >
                 {tag}
               </button>
@@ -314,7 +314,7 @@ export default function Community() {
           </div>
 
           {/* Member grid */}
-          {tribeMembersLoading ? (
+          {communityMembersLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[...Array(8)].map((_, i) => (
                 <div key={i} className="bg-white dark:bg-gray-800 rounded-2xl p-5 animate-pulse">
@@ -332,18 +332,18 @@ export default function Community() {
                 </div>
               ))}
             </div>
-          ) : filteredTribeMembers.length === 0 ? (
+          ) : filteredCommunityMembers.length === 0 ? (
             <div className="bg-white dark:bg-gray-800 rounded-2xl p-10 text-center text-gray-400">
               <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p>No members match that interest yet — try a different tag!</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="tribe-member-grid">
-              {filteredTribeMembers.map((member) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="community-member-grid">
+              {filteredCommunityMembers.map((member) => (
                 <div
                   key={member.id}
                   className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all border border-transparent hover:border-primary/20 cursor-pointer"
-                  data-testid="tribe-member-card"
+                  data-testid="community-member-card"
                   onClick={() => setLocation(`/community/profile/${member.id}`)}
                 >
                   <div className="flex items-center gap-3 mb-3">
@@ -390,21 +390,21 @@ export default function Community() {
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
                     </span>
-                    <span className="text-xs text-gray-400 dark:text-gray-500">Looking for a trip</span>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">Looking for something to join</span>
                   </div>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Join the Tribe CTA */}
-          <div className="mt-8 text-center" data-testid="tribe-cta">
-            <a href="/" data-testid="button-find-trip-join-tribe">
+          {/* Join the community CTA */}
+          <div className="mt-8 text-center" data-testid="community-cta">
+            <a href="/" data-testid="button-find-experience-join-community">
               <Button
                 size="lg"
                 className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto"
               >
-                Find Your Trip and Join the Tribe
+                Find an Experience and Join In
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
             </a>
@@ -583,7 +583,7 @@ export default function Community() {
           <div className="text-center mb-8">
             <h2 className="text-3xl font-bold mb-4">What Makes Us Special</h2>
             <p className="text-blue-100 text-lg">
-              Our community isn't just about traveling together — it's about growing together
+              Our community isn't just about turning up together — it's about growing together
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -598,7 +598,7 @@ export default function Community() {
               <Sparkles className="w-8 h-8 text-yellow-300 mx-auto mb-3" />
               <h3 className="font-semibold text-lg mb-2">Transformative Experiences</h3>
               <p className="text-blue-100 text-sm">
-                Every journey is designed to challenge, inspire, and help you discover new aspects of yourself
+                Every experience is designed to challenge, inspire, and help you discover new aspects of yourself
               </p>
             </div>
             <div className="text-center">
@@ -616,7 +616,7 @@ export default function Community() {
             Ready to Join Our Community?
           </h2>
           <p className="text-gray-600 dark:text-gray-300 mb-6">
-            Start your journey with transformative experiences and amazing people
+            Start with a transformative experience and the people who make it
           </p>
           <Button
             size="lg"

@@ -801,3 +801,101 @@ export function formatVenueDealSummary(
       return definition.label.replace("{cur}", code);
   }
 }
+
+/**
+ * What this deal will actually pay, spelled out with the event's own numbers.
+ *
+ * Three of these — Venue Sponsorship, Price Per Participant Package and Per
+ * Room / Per Night — had been inferred from their names and the UI around
+ * them rather than stated anywhere a person could check. That is exactly the
+ * gap where two sides agree a deal meaning different things by it: "per
+ * participant" could as easily mean per booking as per head, and "per room per
+ * night" is ambiguous about whether an unfilled room still counts.
+ *
+ * So the formula is written out, with the numbers substituted, on the screen
+ * where the deal is chosen. It reads from the same branches the calculator and
+ * the payout engine run, so confirming it here confirms what is actually built.
+ */
+export type VenueDealMechanicsInput = {
+  model: unknown;
+  /** The deal's headline number. */
+  value: number;
+  /** Paid tickets only — free RSVPs are attendance, never a chargeable head. */
+  paidTickets?: number;
+  /** Gross from paid entry. */
+  ticketGross?: number;
+  /** Multi-day only. */
+  rooms?: number;
+  nights?: number;
+  currencySymbol?: string;
+};
+
+export function explainVenueDealMechanics(input: VenueDealMechanicsInput): string | null {
+  const model = normalizeVenueDealModel(input.model);
+  if (!model) return null;
+
+  const symbol = input.currencySymbol || "€";
+  const money = (amount: number) =>
+    `${symbol}${(Number.isFinite(amount) ? amount : 0).toLocaleString("en-GB", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+  const value = Number.isFinite(input.value) ? Math.max(0, input.value) : 0;
+  const tickets = Math.max(0, Number(input.paidTickets) || 0);
+  const gross = Math.max(0, Number(input.ticketGross) || 0);
+  const rooms = Math.max(0, Number(input.rooms) || 0);
+  const nights = Math.max(1, Number(input.nights) || 1);
+
+  switch (model) {
+    case "revenue_share":
+      return `The venue takes ${value}% of paid ticket revenue. At ${money(gross)} in ticket sales `
+        + `that is ${money(round2(gross * (value / 100)))} to them. Free RSVPs are not ticket `
+        + `revenue, so they are not part of this.`;
+
+    case "fixed_fee":
+      return `${money(value)} goes to the venue for every paid ticket sold. At ${tickets} paid `
+        + `ticket${tickets === 1 ? "" : "s"} that is ${money(round2(value * tickets))}. Nothing is `
+        + `charged for a free RSVP, and nothing is owed if nothing sells.`;
+
+    case "per_head":
+      // The ambiguity this resolves: per head, not per booking. One person who
+      // buys four tickets is four heads.
+      return `${money(value)} per participant, counted per paid ticket rather than per booking — `
+        + `one person buying four tickets is four. At ${tickets} paid ticket${tickets === 1 ? "" : "s"} `
+        + `that is ${money(round2(value * tickets))}. Free RSVPs are not charged for.`;
+
+    case "per_room_night":
+      // The ambiguity this resolves: rooms held, not rooms filled.
+      return `${money(value)} per room per night, charged on the rooms you hold rather than the `
+        + `ones that fill. ${rooms} room${rooms === 1 ? "" : "s"} × ${nights} night`
+        + `${nights === 1 ? "" : "s"} is ${money(round2(value * rooms * nights))}, whatever the `
+        + `turnout — which is why a Minimum Viable Group is worth setting alongside it.`;
+
+    case "upfront_rental":
+      return `You pay the venue ${money(value)} for the space, before any tickets are sold and `
+        + `whatever the turnout. It is a cost rather than a share, so the platform fee does not `
+        + `apply to it — and neither does anything else if nobody comes.`;
+
+    case "venue_sponsored":
+      // The ambiguity this resolves: which way the money travels.
+      return `The venue pays you ${money(value)} to host the event — money travelling to you, not `
+        + `from you. It is income, so the platform fee applies to it like any other inflow. They `
+        + `take no share of ticket sales on top: sponsoring and taking a cut are mutually `
+        + `exclusive by design.`;
+
+    case "commitment_plus_revenue_share":
+      return `Two figures moving in opposite directions: the venue pays you a one-off commitment `
+        + `fee upfront, and separately takes ${value}% of paid ticket revenue afterwards. At `
+        + `${money(gross)} in sales their share is ${money(round2(gross * (value / 100)))}.`;
+
+    case "minimum_spend":
+      return `A spend guarantee settled at the venue's own register. The platform never sees this `
+        + `money, so no figure here can be verified or collected by us.`;
+
+    case "access_only":
+    case "manual_counter_revenue":
+      return `Settled directly between the two of you, off-platform. The platform records the `
+        + `agreement but cannot see, verify or collect any of it.`;
+  }
+}

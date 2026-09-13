@@ -24,6 +24,14 @@ import type { Role } from '@/components/RolesEditor';
 import Navigation from '@/components/navigation';
 import LegalConsentLabel from '@/components/LegalConsentLabel';
 
+import { MultiChoiceField, PreferenceToggle } from "@/components/TaxonomyFields";
+import { QuietSlotGrid, PeriodListEditor } from "@/components/VenueOpenTime";
+import VenueAddonCatalogEditor from "@/components/VenueAddonCatalogEditor";
+import {
+  PARTNER_CATEGORIES,
+  TRIP_LENGTH_PREFERENCES,
+  VIBE_PREFERENCES,
+} from "@shared/partnerTaxonomy";
 const VenueAvailability = lazy(() => import('@/components/VenueAvailability'));
 const VenueServicesEditor = lazy(() =>
   import('@/components/VenueServicesEditor').then((module) => ({
@@ -247,6 +255,44 @@ const venueProfileSchema = z.object({
   // Mandatory consent to the platform's own legal terms, given afresh on every
   // submission — deliberately never rehydrated from a saved venue.
   platformTermsAccepted: z.boolean().default(false),
+
+  // ── Self-reported open time ───────────────────────────────────────────────
+  // What the venue *wants* filled, which a calendar cannot say. A sync reports
+  // what is booked; this reports what is quiet and would welcome an event.
+  // Day spaces answer in dayparts, trip locations in date ranges.
+  quietSlots: z.array(z.string()).default([]),
+  openPeriods: z
+    .array(z.object({ startDate: z.string(), endDate: z.string(), note: z.string().optional() }))
+    .default([]),
+  blackoutPeriods: z
+    .array(z.object({ startDate: z.string(), endDate: z.string(), note: z.string().optional() }))
+    .default([]),
+
+  // ── Standing preferences ──────────────────────────────────────────────────
+  preferredGroupMin: z.coerce.number().int().min(0).optional().nullable(),
+  preferredGroupMax: z.coerce.number().int().min(0).optional().nullable(),
+  preferredCreatorCategories: z.array(z.string()).default([]),
+  preferredVibes: z.array(z.string()).default([]),
+  preferredTripLengths: z.array(z.string()).default([]),
+  openToPerks: z.boolean().default(false),
+  openToPromoters: z.boolean().default(false),
+
+  // ── The venue's own add-on prices ─────────────────────────────────────────
+  // Path A of add-on pricing: a venue that states its prices once is never
+  // asked to accept a number a creator invented for its coffee.
+  addonCatalog: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        description: z.string().optional(),
+        venuePrice: z.coerce.number().min(0),
+        unit: z.string().optional(),
+        groupDiscountNote: z.string().optional(),
+        active: z.boolean().default(true),
+      }),
+    )
+    .default([]),
 });
 
 type VenueProfileForm = z.infer<typeof venueProfileSchema>;
@@ -358,7 +404,7 @@ export default function VenueProfileSetup() {
   // your calendars" ended up nowhere near the calendar step.
   const requestedStep = Number(urlParams.get('step'));
   const [step, setStep] = useState(
-    Number.isFinite(requestedStep) && requestedStep >= 1 && requestedStep <= 9 ? requestedStep : 1,
+    Number.isFinite(requestedStep) && requestedStep >= 1 && requestedStep <= 10 ? requestedStep : 1,
   );
   const [servicesAndAmenitiesData, setServicesAndAmenitiesData] = useState<GroupedOptionsData | null>(null);
 
@@ -419,6 +465,17 @@ export default function VenueProfileSetup() {
       damagePolicy: '',
       termsConfirmed: false,
       platformTermsAccepted: false,
+      quietSlots: [],
+      openPeriods: [],
+      blackoutPeriods: [],
+      preferredGroupMin: null,
+      preferredGroupMax: null,
+      preferredCreatorCategories: [],
+      preferredVibes: [],
+      preferredTripLengths: [],
+      openToPerks: false,
+      openToPromoters: false,
+      addonCatalog: [],
     },
   });
 
@@ -426,7 +483,7 @@ export default function VenueProfileSetup() {
   const isDaytime = form.watch('venueType') === 'daytime';
   const DAYTIME_SKIP_STEPS = [6, 7, 8];
   const visibleStepIds = useMemo(
-    () => Array.from({ length: 9 }, (_, index) => index + 1).filter((id) => !isDaytime || !DAYTIME_SKIP_STEPS.includes(id)),
+    () => Array.from({ length: 10 }, (_, index) => index + 1).filter((id) => !isDaytime || !DAYTIME_SKIP_STEPS.includes(id)),
     [isDaytime]
   );
   const currentVisibleStep = Math.max(visibleStepIds.indexOf(step), 0) + 1;
@@ -516,6 +573,21 @@ export default function VenueProfileSetup() {
         houseRules: existingVenue.houseRules || '',
         damagePolicy: existingVenue.damagePolicy || '',
         termsConfirmed: existingVenue.termsConfirmed ?? false,
+        quietSlots: Array.isArray(existingVenue.quietSlots) ? existingVenue.quietSlots : [],
+        openPeriods: Array.isArray(existingVenue.openPeriods) ? existingVenue.openPeriods : [],
+        blackoutPeriods: Array.isArray(existingVenue.blackoutPeriods) ? existingVenue.blackoutPeriods : [],
+        preferredGroupMin: existingVenue.preferredGroupMin ?? null,
+        preferredGroupMax: existingVenue.preferredGroupMax ?? null,
+        preferredCreatorCategories: Array.isArray(existingVenue.preferredCreatorCategories)
+          ? existingVenue.preferredCreatorCategories
+          : [],
+        preferredVibes: Array.isArray(existingVenue.preferredVibes) ? existingVenue.preferredVibes : [],
+        preferredTripLengths: Array.isArray(existingVenue.preferredTripLengths)
+          ? existingVenue.preferredTripLengths
+          : [],
+        openToPerks: existingVenue.openToPerks ?? false,
+        openToPromoters: existingVenue.openToPromoters ?? false,
+        addonCatalog: Array.isArray(existingVenue.addonCatalog) ? existingVenue.addonCatalog : [],
         // Consent to the platform terms is re-given on every submission, so it
         // stays false when an existing listing is loaded for editing.
         platformTermsAccepted: false,
@@ -641,13 +713,15 @@ export default function VenueProfileSetup() {
   };
 
   const handleNext = async () => {
-    if (step < 9) {
+    // 10 is Terms & Review, where Submit lives — Next has to carry them through
+    // the new preference step (9) to reach it.
+    if (step < 10) {
       // Skip Rooms & Itinerary steps for daytime spaces
       let nextStep = step + 1;
-      while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 9) {
+      while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 10) {
         nextStep++;
       }
-      setStep(nextStep <= 9 ? nextStep : 9);
+      setStep(nextStep <= 10 ? nextStep : 10);
     } else {
       form.handleSubmit(onSubmit)();
     }
@@ -848,7 +922,8 @@ export default function VenueProfileSetup() {
     6: 'Roles & Staffing',
     7: 'Rooms',
     8: 'Default Itinerary',
-    9: 'Terms & Review'
+    9: 'Who you want to host',
+    10: 'Terms & Review'
   };
 
   const stepDescriptions: Record<number, string> = {
@@ -864,7 +939,10 @@ export default function VenueProfileSetup() {
     6: 'Define roles and staffing available at your venue.',
     7: 'List your room types and how many spots each one sleeps.',
     8: 'Create a default itinerary template for events at your venue.',
-    9: 'Review and accept the terms before submitting your venue.'
+    9: isDaytime
+      ? 'The kind of event you actually want in the space, and how you like to deal. This is what gets you matched.'
+      : 'The kind of group and trip you actually want, and how you like to deal. This is what gets you matched.',
+    10: 'Review and accept the terms before submitting your venue.'
   };
 
   return (
@@ -1788,7 +1866,210 @@ export default function VenueProfileSetup() {
                   </div>
                 )}
 
+                {/* Step 9 — the preference step.
+                    Everything above describes what the space *is*. None of it
+                    says what the owner actually wants in it, which is the only
+                    thing a match can be made on: a 40-person hall that only
+                    wants groups of ten, and only quiet ones, matches almost
+                    nothing its capacity suggests it should. */}
                 {step === 9 && (
+                  <div className="space-y-8">
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="text-md font-medium">Group size you prefer</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Not your capacity — what you actually enjoy hosting. Leave either
+                          box empty if you have no limit on that side.
+                        </p>
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <FormField
+                          control={form.control}
+                          name="preferredGroupMin"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Smallest group</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  placeholder="e.g. 8"
+                                  value={field.value ?? ''}
+                                  onChange={(event) =>
+                                    field.onChange(event.target.value === '' ? null : Number(event.target.value))
+                                  }
+                                  data-testid="input-preferred-group-min"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="preferredGroupMax"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Largest group</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  placeholder="e.g. 24"
+                                  value={field.value ?? ''}
+                                  onChange={(event) =>
+                                    field.onChange(event.target.value === '' ? null : Number(event.target.value))
+                                  }
+                                  data-testid="input-preferred-group-max"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                    </div>
+
+                    <FormField
+                      control={form.control}
+                      name="preferredCreatorCategories"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <MultiChoiceField
+                              label="Organisers you are open to"
+                              description="The same categories organisers describe themselves with. Pick none and you are open to everyone."
+                              options={PARTNER_CATEGORIES}
+                              values={field.value || []}
+                              onChange={field.onChange}
+                              testId="field-venue-creator-categories"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="preferredVibes"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <MultiChoiceField
+                              label="The feel you suit best"
+                              description="What the space is genuinely good for — which is not always what it could technically hold."
+                              options={VIBE_PREFERENCES}
+                              values={field.value || []}
+                              onChange={field.onChange}
+                              testId="field-venue-vibes"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    {!isDaytime && (
+                      <FormField
+                        control={form.control}
+                        name="preferredTripLengths"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <MultiChoiceField
+                                label="Trip lengths you prefer"
+                                description="A villa that only wants full weeks should not be pitched a single overnight."
+                                options={TRIP_LENGTH_PREFERENCES}
+                                values={field.value || []}
+                                onChange={field.onChange}
+                                testId="field-venue-trip-lengths"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+
+                    <div className="space-y-3">
+                      <FormField
+                        control={form.control}
+                        name="openToPerks"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <PreferenceToggle
+                                label="Open to perks or credits as part of a deal"
+                                description="Some organisers would rather trade exposure, product or credit than pay a fee. Say yes and those offers reach you too."
+                                checked={!!field.value}
+                                onChange={field.onChange}
+                                testId="toggle-venue-open-to-perks"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="openToPromoters"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <PreferenceToggle
+                                label="Open to working with promoters"
+                                description="Influencers and brands who bring an audience to events held in your space."
+                                checked={!!field.value}
+                                onChange={field.onChange}
+                                testId="toggle-venue-open-to-promoters"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    {/* The add-on catalog.
+                        Path A of venue add-on pricing: the organiser stops
+                        inventing a price for your coffee and picks from this
+                        instead. Optional — a venue that skips it is asked for
+                        prices on the invite page of the first event that wants
+                        one, which is Path B. */}
+                    <div className="space-y-4 pt-4 border-t">
+                      <div>
+                        <h4 className="text-md font-medium">Your add-on prices (optional)</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Extras an organiser can offer alongside a ticket — a coffee, a lunch,
+                          equipment hire. Give <em>your</em> price for each. The organiser adds
+                          their own margin on top, or takes it out of your price; either way you
+                          are paid the number you put here, and nobody quotes a price for your
+                          counter that you did not set.
+                        </p>
+                      </div>
+
+                      <FormField
+                        control={form.control}
+                        name="addonCatalog"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <VenueAddonCatalogEditor
+                                value={field.value || []}
+                                onChange={field.onChange}
+                                currencySymbol="EUR"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {step === 10 && (
                   <div className="space-y-6">
                     <div className="space-y-2">
                       <h3 className="text-lg font-semibold">Terms & Conditions</h3>
@@ -2221,6 +2502,92 @@ export default function VenueProfileSetup() {
                             Click "Save as Draft" below to continue.
                           </AlertDescription>
                         </Alert>
+                      )}
+                    </div>
+
+                    {/* Self-reported open time.
+                        Sits above Calendar Sync because it is the answer the
+                        calendar cannot give, and because it works on a brand-new
+                        venue — the sync widgets need a saved draft first, so
+                        this was the only part of the step a first-time lister
+                        could actually fill in. */}
+                    <div className="space-y-4 pt-4 border-t">
+                      <div>
+                        <h4 className="text-md font-medium">
+                          {isDaytime ? 'Your quiet slots' : 'When you most want bookings'}
+                        </h4>
+                        <p className="text-sm text-muted-foreground">
+                          {isDaytime
+                            ? 'When is the space usually empty? This is what you tell us, not what your calendar says — a space can be free all week and still only want Tuesday evenings.'
+                            : 'The periods you would most like filled. This is your own statement of intent, separate from whatever your booking calendars show.'}
+                        </p>
+                      </div>
+
+                      {isDaytime ? (
+                        <FormField
+                          control={form.control}
+                          name="quietSlots"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormControl>
+                                <QuietSlotGrid
+                                  value={field.value || []}
+                                  onChange={field.onChange}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      ) : (
+                        <>
+                          <FormField
+                            control={form.control}
+                            name="openPeriods"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormControl>
+                                  <PeriodListEditor
+                                    value={field.value || []}
+                                    onChange={field.onChange}
+                                    addLabel="Add an open period"
+                                    emptyLabel="No open periods yet. Add the weeks you would most like to fill."
+                                    notePlaceholder="Optional — e.g. flexible on rate"
+                                    testId="venue-open-periods"
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <div className="pt-2">
+                            <h4 className="text-md font-medium">Blackout dates</h4>
+                            <p className="mb-3 text-sm text-muted-foreground">
+                              Periods you are definitely not available. Organisers will not be
+                              shown your space for dates inside these.
+                            </p>
+                            <FormField
+                              control={form.control}
+                              name="blackoutPeriods"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormControl>
+                                    <PeriodListEditor
+                                      value={field.value || []}
+                                      onChange={field.onChange}
+                                      addLabel="Add a blackout period"
+                                      emptyLabel="No blackout dates. Leave this empty if nothing is ruled out."
+                                      notePlaceholder="Optional — e.g. closed for refurbishment"
+                                      testId="venue-blackout-periods"
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        </>
                       )}
                     </div>
 

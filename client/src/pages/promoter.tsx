@@ -5,6 +5,7 @@ import { Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import CollabOpportunitiesCard from "@/components/CollabOpportunitiesCard";
+import PromoterOnboardingPrompt from "@/components/PromoterOnboardingPrompt";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -1290,6 +1291,9 @@ export default function PromoterDashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/5 to-white dark:from-gray-900 dark:to-gray-950">
       <Navigation />
+      {/* The onboarding step a promoter never had. Renders nothing once the
+          profile is done, and nothing at all for a non-promoter account. */}
+      <PromoterOnboardingPrompt />
       <div className="max-w-6xl mx-auto py-12 px-4">
         {/* Header */}
         <div className="mb-8">

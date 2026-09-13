@@ -193,12 +193,12 @@ export default function CommunityProfile() {
             participant's profile is unchanged. */}
         <OrganiserTurnout creatorId={userId} className="mb-8" />
 
-        {/* Trips section */}
+        {/* The events this member has joined. */}
         {profile.trips.length > 0 && (
           <div>
             <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <Globe className="h-5 w-5 text-primary" />
-              Adventures
+              Experiences
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {profile.trips.map((trip) => (
@@ -257,7 +257,7 @@ export default function CommunityProfile() {
         {profile.trips.length === 0 && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl p-10 text-center text-gray-400 shadow-sm">
             <Globe className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">No adventures booked yet — the journey is just beginning.</p>
+            <p className="text-sm">Nothing booked yet — this is where their experiences will show up.</p>
           </div>
         )}
 

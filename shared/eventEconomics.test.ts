@@ -206,3 +206,36 @@ describe("add-on margin direction", () => {
     });
   });
 });
+
+describe("Free RSVP under a ticket deduction", () => {
+  // Tim's live test: 40 Free RSVP tickets, Ticket Deduction €3/ticket, showing
+  // a Venue Payout of −€3. Nothing is sold, so there is nothing to deduct.
+  it("owes the venue nothing when no ticket is paid for", () => {
+    const economics = calculateEventEconomics({
+      ticketGross: 0,
+      paidTickets: 0,
+      platformPct: 15,
+      venueDealModel: "fixed_fee",
+      venueDealValue: 3,
+    });
+
+    expect(economics.venueTicketCost).toBe(0);
+    expect(economics.lines.find((line) => line.key === "venue_payout")).toBeUndefined();
+    expect(economics.net).toBe(0);
+  });
+
+  it("still charges the deduction once the same event sells paid tickets", () => {
+    const economics = calculateEventEconomics({
+      ticketGross: 400,
+      paidTickets: 40,
+      platformPct: 15,
+      venueDealModel: "fixed_fee",
+      venueDealValue: 3,
+    });
+
+    expect(economics.venueTicketCost).toBe(120);
+    expect(
+      economics.lines.find((line) => line.key === "venue_payout")?.amount,
+    ).toBe(-120);
+  });
+});

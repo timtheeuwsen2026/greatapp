@@ -492,9 +492,19 @@ export default function PromoterExperiencePool() {
   const { isLoading: authLoading, isAuthenticated } = useAuth();
   const { toast } = useToast();
   
+  // The pool stays shut until the promoter profile exists. Not decoration:
+  // every event in here has a deal attached, and a promoter the platform knows
+  // nothing about cannot be matched to one or paid for it.
+  const { data: promoterProfile, isLoading: profileLoading } = useQuery<any>({
+    queryKey: ['/api/promoter-profile'],
+    enabled: isAuthenticated,
+    retry: false,
+  });
+  const profileCompleted = (promoterProfile as any)?.completed === true;
+
   const { data: experiences, isLoading: experiencesLoading } = useQuery<ExperiencePoolItem[]>({
     queryKey: ['/api/promoter/experience-pool'],
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && profileCompleted,
   });
 
   const [activeLink, setActiveLink] = useState<{ experienceId: string; link: string } | null>(null);
@@ -606,7 +616,7 @@ export default function PromoterExperiencePool() {
       });
   }, [toast]);
 
-  if (authLoading) {
+  if (authLoading || (isAuthenticated && profileLoading)) {
     return (
       <div className="container mx-auto p-6">
         <Skeleton className="h-8 w-64 mb-6" />
@@ -633,12 +643,25 @@ export default function PromoterExperiencePool() {
     );
   }
 
-  if (false) {
+  if (!profileCompleted) {
     return (
       <div className="container mx-auto p-6">
         <Card className="max-w-md mx-auto">
           <CardContent className="p-8 text-center">
-            <AlertTriangle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-pink-100 dark:bg-pink-900">
+              <Megaphone className="h-6 w-6 text-pink-600 dark:text-pink-400" />
+            </div>
+            <h2 className="mb-2 text-xl font-semibold" data-testid="text-promoter-pool-gate-title">
+              Finish your promoter profile first
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Organisers decide who promotes their event by looking at your profile, and
+              the events you are shown here are picked from what you tell us you promote.
+              It takes a couple of minutes.
+            </p>
+            <Button className="mt-6" asChild data-testid="button-promoter-pool-gate-continue">
+              <Link href="/promoter/profile-setup">Complete my profile</Link>
+            </Button>
           </CardContent>
         </Card>
       </div>

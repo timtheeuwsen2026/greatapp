@@ -32,7 +32,7 @@
  *     and a rental the organiser *pays*, which is a cost rather than income.
  */
 
-import { calculateTicketDeduction } from "./ticketDeduction";
+import { calculateTicketDeductionForCount } from "./ticketDeduction";
 import {
   normalizeVenueDealModel,
   isOffPlatformVenueDeal,
@@ -134,9 +134,14 @@ export function venueTicketCostFor(input: {
       return round2(gross * (value / 100));
     // "A flat amount per ticket sold, multiplied by tickets sold" — a
     // deduction rather than a single fee, which is why it scales with heads.
+    //
+    // Counted, never floored at one. A Free RSVP event sells no paid tickets,
+    // so a €3 deduction has nothing to deduct against and the venue is owed
+    // €0 — not €3, which is what the booking-shaped helper returned when it
+    // read zero tickets as "at least one".
     case "fixed_fee":
     case "per_head":
-      return calculateTicketDeduction(value, tickets);
+      return calculateTicketDeductionForCount(value, tickets);
     case "per_room_night":
       return round2(value * roomNights);
     case "upfront_rental":

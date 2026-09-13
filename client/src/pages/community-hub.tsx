@@ -363,7 +363,7 @@ export default function CommunityHub() {
 
     toast({
       title: "Complete your profile first",
-      description: "Complete your profile to unlock the Community Hub and join the Tribe Chat.",
+      description: "Complete your profile to unlock the Community Hub and join the group chats.",
       variant: "destructive",
     });
     redirectToParticipantProfile();
@@ -417,7 +417,7 @@ export default function CommunityHub() {
               <MessageCircle className="h-12 w-12 text-primary mx-auto mb-4" />
               <h2 className="text-2xl font-semibold mb-3">Participant Onboarding</h2>
               <p className="text-gray-600 mb-6">
-                Complete your profile to unlock the Community Hub and join the Tribe Chat.
+                Complete your profile to unlock the Community Hub and join the group chats.
               </p>
               <Button
                 onClick={() => {

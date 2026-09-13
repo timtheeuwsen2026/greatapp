@@ -21,6 +21,7 @@ const migrationUrls = [
   new URL("../migrations/20260912_retire_access_only_default.sql", import.meta.url),
   new URL("../migrations/20260913_deal_rooms.sql", import.meta.url),
   new URL("../migrations/20260913_grandfather_existing_creators.sql", import.meta.url),
+  new URL("../migrations/20260913_partner_onboarding_and_addon_catalog.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

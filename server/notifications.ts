@@ -1929,6 +1929,36 @@ The Great. Team
     });
   }
 
+  /**
+   * The venue has priced the extras the organiser asked about.
+   *
+   * Path B of add-on pricing ends here: the organiser stated expected demand
+   * and no price, the venue filled in its real counter price, and the organiser
+   * now needs to set their own margin on top of a number they finally have.
+   * Worth an email rather than a dashboard badge — it unblocks a step they are
+   * otherwise sitting waiting on.
+   */
+  async sendVenueAddonPricesEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    venueName?: string | null;
+    experienceTitle: string;
+    experienceSlugOrId: string;
+    lines: string[];
+  }): Promise<void> {
+    await this.sendDealEngineEmail({
+      to: opts.to,
+      subject: `${opts.venueName || 'The venue'} has priced your add-ons — ${opts.experienceTitle}`,
+      bodyText:
+        `${opts.venueName || 'The venue'} has filled in their own prices for the extras you asked about on `
+        + `${opts.experienceTitle}. Set your margin on each and they are ready to sell.`,
+      dealSummary: opts.lines.join(' · '),
+      experienceTitle: opts.experienceTitle,
+      cta: { label: 'Set your add-on margins', href: creatorDashboardUrl() },
+      growthFooterContext: 'creator_venue',
+    });
+  }
+
   // Creator resolved a venue's Offer to Host bid.
   async sendVenueBidResolvedEmail(opts: {
     to: string;

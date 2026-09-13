@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, Component, ReactNode
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +74,7 @@ import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
+import DiscountLinkManager from "@/components/DiscountLinkManager";
 import LegalConsentLabel from "@/components/LegalConsentLabel";
 import Navigation from "@/components/navigation";
 import { 
@@ -87,7 +88,12 @@ import {
   safeMultiply,
   safeAdd
 } from '@shared/pricingService';
-import { calculateTicketDeduction } from "@shared/ticketDeduction";
+import { calculateTicketDeductionForCount } from "@shared/ticketDeduction";
+import {
+  checkExperienceDealTerms,
+  isFixedCostVenueDeal,
+  validateExperienceDealTerms,
+} from "@shared/dealTermGuards";
 import { getTicketAddon, isAddonEnabled, normalizeAddonMarginMode } from "@shared/ticketAddons";
 import { calculateEventEconomics } from "@shared/eventEconomics";
 import { usePlatformFee } from "@/hooks/usePlatformFee";
@@ -107,6 +113,7 @@ import {
   getVenueDealLabel,
   checkVenuePayoutCap,
   getVenueDealOptions,
+  explainVenueDealMechanics,
   VENUE_DEAL_MODELS,
   UNTRACKED_DEAL_LOCKED_MESSAGE,
   validateExperienceVenueDeal,
@@ -298,6 +305,10 @@ const eventBuilderSchema = z.object({
     addonName: z.string().optional(),
     addonPrice: z.number().min(0).optional(),
     addonVenuePrice: z.number().min(0).optional(),
+    /** Which entry in the venue's published catalog this add-on came from. */
+    addonCatalogItemId: z.string().optional(),
+    /** Path B: heads the organiser expects to want this, when no price exists yet. */
+    addonExpectedDemand: z.number().min(0).optional(),
     addonMargin: z.number().min(0).optional(),
     addonMarginMode: z.enum(["additive", "deduction"]).optional(),
     addonInventory: z.number().min(0).optional(),
@@ -372,6 +383,15 @@ const eventBuilderSchema = z.object({
   
   // MVG (Minimum Viable Group) Settings
   requireMinimumParticipants: z.boolean().default(true),
+  /**
+   * How many the organiser expects to turn up.
+   *
+   * Pitch context under every deal type, and the entire basis of the offer
+   * under two: Venue Sponsorship and Upfront Rental commit the venue to a flat
+   * amount with nothing to self-correct against. Every other deal scales with
+   * actual sales, so an optimistic guess costs the venue nothing there.
+   */
+  expectedAudienceSize: z.coerce.number().int().min(0).optional().nullable(),
   minimumParticipants: z.number().min(2, "Minimum participants must be at least 2").max(50, "Maximum 50 participants").default(6),
   mvgDeadlineDays: z.number().int().min(0).max(30).default(7),
   mvgDeadline: z.date().optional(),
@@ -649,6 +669,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       
       // MVG fields
       requireMinimumParticipants: true,
+      expectedAudienceSize: null,
       minimumParticipants: 6,
       mvgDeadlineDays: 7,
       mvgDeadline: undefined,
@@ -1613,6 +1634,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       manualDealUnlocked,
     }));
 
+    // The Deal Type Matrix's hard exclusions. Same function the server runs at
+    // publish, so the checklist cannot promise something the publish refuses.
+    errors.push(...validateExperienceDealTerms(data));
+
     for (const conflict of findDealConflicts([data.promotionDealType, data.participantReferralDealType])) {
       errors.push(conflict.reason);
     }
@@ -2468,7 +2493,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       case 9:
         return <ItineraryStep form={form} />;
       case 10:
-        return <PricingStep form={form} manualDealUnlocked={manualDealUnlocked} />;
+        return <PricingStep form={form} manualDealUnlocked={manualDealUnlocked} experienceId={editingExperienceId} />;
       case 11:
         return <TermsStep form={form} />;
       default:
@@ -4427,49 +4452,72 @@ function ItineraryStep({ form }: { form: any }) {
                     </div>
                   ) : (
                     <div className="space-y-2">
+                      {/* Twelve equal columns could not hold this row. A
+                          `type="time"` input has a wide intrinsic minimum — wider
+                          once it holds a value — and a grid item's default
+                          `min-width: auto` lets it overflow its own track and
+                          sit on top of its neighbours, so filling in the start
+                          time swallowed everything to the right of it.
+
+                          Two named tracks for the times, the rest flexible, and
+                          `min-w-0` on every cell so nothing can push past its
+                          share. Stacked below `sm`, where five controls on one
+                          line never fitted anyway. */}
                       {day.timeSlots?.map((slot: any, slotIndex: number) => (
-                        <div key={slot.id} className="grid grid-cols-12 gap-2 items-center p-3 border rounded">
-                          <div className="col-span-2">
+                        <div
+                          key={slot.id}
+                          className="grid grid-cols-2 gap-3 rounded border p-3 sm:grid-cols-[8rem_8rem_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <Label className="text-xs font-normal text-muted-foreground">Starts</Label>
                             <Input
                               type="time"
+                              className="w-full"
                               value={slot.startTime}
                               onChange={(e) => updateTimeSlot(dayIndex, slot.id, 'startTime', e.target.value)}
                               data-testid={`input-start-time-${dayIndex}-${slotIndex}`}
                             />
                           </div>
-                          <div className="col-span-2">
+                          <div className="min-w-0 space-y-1">
+                            <Label className="text-xs font-normal text-muted-foreground">Ends</Label>
                             <Input
                               type="time"
+                              className="w-full"
                               value={slot.endTime}
                               onChange={(e) => updateTimeSlot(dayIndex, slot.id, 'endTime', e.target.value)}
                               data-testid={`input-end-time-${dayIndex}-${slotIndex}`}
                             />
                           </div>
-                          <div className="col-span-4">
+                          <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
+                            <Label className="text-xs font-normal text-muted-foreground">Activity</Label>
                             <Input
                               placeholder="Activity name"
+                              className="w-full"
                               value={slot.activity}
                               onChange={(e) => updateTimeSlot(dayIndex, slot.id, 'activity', e.target.value)}
                               data-testid={`input-activity-${dayIndex}-${slotIndex}`}
                             />
                           </div>
-                          <div className="col-span-3">
+                          <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
+                            <Label className="text-xs font-normal text-muted-foreground">Notes</Label>
                             <Input
                               placeholder="Notes (optional)"
+                              className="w-full"
                               value={slot.notes}
                               onChange={(e) => updateTimeSlot(dayIndex, slot.id, 'notes', e.target.value)}
                               data-testid={`input-notes-${dayIndex}-${slotIndex}`}
                             />
                           </div>
-                          <div className="col-span-1">
+                          <div className="col-span-2 flex justify-end sm:col-span-1">
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
                               onClick={() => removeTimeSlot(dayIndex, slot.id)}
+                              aria-label="Remove time slot"
                               data-testid={`button-remove-timeslot-${dayIndex}-${slotIndex}`}
                             >
-                              ×
+                              <X className="h-4 w-4" />
                             </Button>
                           </div>
                         </div>
@@ -5575,7 +5623,7 @@ function PromotionStep({ form }: { form: any }) {
   );
 }
 
-function PricingStep({ form, manualDealUnlocked = false }: {
+function PricingStep({ form, manualDealUnlocked = false, experienceId }: {
   form: any;
   /**
    * Set by an admin on this event alone, and read from the saved record rather
@@ -5583,6 +5631,13 @@ function PricingStep({ form, manualDealUnlocked = false }: {
    * offered here.
    */
   manualDealUnlocked?: boolean;
+  /**
+   * The published event, when this is an edit rather than a first build.
+   *
+   * A discount link has to point at something that exists, so the link manager
+   * says so rather than offering a button that cannot work yet.
+   */
+  experienceId?: string;
 }) {
   // Watch form values for reactivity
   const currency = form.watch('currency');
@@ -5606,6 +5661,29 @@ function PricingStep({ form, manualDealUnlocked = false }: {
   const venueRevenueSharePct = form.watch('venueRevenueSharePct') || 0;
   const venueTargetDeal = form.watch('venueTargetDeal') || "";
   const venueTargetDealValue = Number(form.watch('venueTargetDealValue') || 0);
+
+  // ── Add-on pricing, path A ────────────────────────────────────────────────
+  // The venue's own prices, where it has published any. An organiser typing a
+  // "venue price" for a venue's coffee is guessing on behalf of a business
+  // they do not run, and the whole mechanic depends on that number being the
+  // real counter price. Where a catalog exists, picking from it is the path;
+  // typing a number by hand stays available for a venue that has none.
+  const { data: venueAddonCatalog = [] } = useQuery<any[]>({
+    queryKey: ['/api/venues', selectedVenueId, 'addon-catalog'],
+    queryFn: async () => {
+      const response = await apiRequest('GET', `/api/venues/${selectedVenueId}/addon-catalog`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+    enabled: venueType === 'catalog' && !!selectedVenueId,
+    staleTime: 5 * 60_000,
+  });
+  const hasVenueAddonCatalog = venueAddonCatalog.length > 0;
+  // Path B applies whenever there is no published price to pick from: an open
+  // or freshly-invited venue, or a catalog venue that never filled one in.
+  const askVenueForAddonPrice = !hasVenueAddonCatalog
+    && (venueType === 'open' || venueType === 'manual' || venueType === 'catalog');
   const requireMinimumParticipants = form.watch('requireMinimumParticipants');
   const minimumParticipants = form.watch('minimumParticipants') || 6;
   const softHoldEnabled = form.watch('softHoldEnabled');
@@ -6007,7 +6085,9 @@ function PricingStep({ form, manualDealUnlocked = false }: {
     safeMultiply(activePerRoomRate, totalRoomCount),
     Math.max(1, eventNightCount),
   );
-  const venueTicketDeductionEstimate = calculateTicketDeduction(
+  // Counted honestly: a Free RSVP event has no paid tickets, so a per-ticket
+  // deduction is €0 rather than one ticket's worth of it.
+  const venueTicketDeductionEstimate = calculateTicketDeductionForCount(
     activeFlatVenueAmount,
     chargeableCapacity,
   );
@@ -6058,6 +6138,55 @@ function PricingStep({ form, manualDealUnlocked = false }: {
     platformPct,
     roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
     currencyDisplay: { symbol: dealCurrencySymbol, before: dealCurrencySymbol !== '€' },
+  });
+
+  // The selected deal's mechanics, worked out with this event's own numbers.
+  //
+  // Three of these — Venue Sponsorship, Price Per Participant Package and Per
+  // Room / Per Night — had only ever been inferred from their names. That is
+  // where two sides shake hands meaning different things: "per participant"
+  // could be per booking, and "per room per night" could be rooms filled. The
+  // formula is stated rather than implied, and it is generated from the same
+  // branches the calculator and the payout engine run.
+  const dealMechanics = explainVenueDealMechanics({
+    model: activeVenueDeal,
+    value: (() => {
+      switch (activeVenueDeal) {
+        case 'revenue_share':
+        case 'commitment_plus_revenue_share': return activeRevenueSharePct;
+        case 'per_head': return venuePerHeadAmount;
+        case 'per_room_night': return activePerRoomRate;
+        default: return activeFlatVenueAmount;
+      }
+    })(),
+    paidTickets: chargeableCapacity,
+    ticketGross: totalRevenue,
+    rooms: totalRoomCount,
+    nights: Math.max(1, eventNightCount),
+    currencySymbol: dealCurrencySymbol,
+  });
+
+  // The two deals that commit a venue to a flat amount with nothing to correct
+  // against. Everywhere else expected turnout is a pitch detail; here it is the
+  // whole basis of the offer.
+  const turnoutIsLoadBearing = activeVenueDeal === 'venue_sponsored'
+    || activeVenueDeal === 'upfront_rental';
+
+  // The Deal Type Matrix, live. Two of these block a publish (a deduction
+  // bigger than the ticket it comes out of, an add-on margin bigger than the
+  // venue's price); the third is the Minimum Viable Group recommendation on a
+  // deal whose cost does not fall when fewer people come.
+  const dealTermIssues = checkExperienceDealTerms({
+    venueType,
+    venueTargetDeal,
+    venueTargetDealValue,
+    venueCompensationModel,
+    venueFixedFee,
+    venuePerHeadAmount,
+    venuePerRoomPerNight,
+    ticketSkus,
+    currency,
+    requireMinimumParticipants,
   });
 
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
@@ -6429,6 +6558,58 @@ function PricingStep({ form, manualDealUnlocked = false }: {
 
                           {isAddonEnabled(sku) && (
                             <div className="mt-3 space-y-3">
+                              {/* Path A: the venue published its own prices, so
+                                  pick one rather than inventing a number for
+                                  someone else's counter. */}
+                              {hasVenueAddonCatalog && (
+                                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950">
+                                  <Label htmlFor={`sku-addon-catalog-${sku.id}`}>
+                                    Pick from the venue's own list
+                                  </Label>
+                                  <p className="mb-2 text-xs text-emerald-800 dark:text-emerald-200">
+                                    These are the venue's real prices, set by them. Choosing one fills
+                                    in the name and the venue price — your margin is still yours to set.
+                                  </p>
+                                  <Select
+                                    value={sku.addonCatalogItemId || ''}
+                                    onValueChange={(value) => {
+                                      const item = venueAddonCatalog.find((entry: any) => entry.id === value);
+                                      if (!item) return;
+                                      updateTicketSku(sku.id, 'addonCatalogItemId', item.id);
+                                      updateTicketSku(sku.id, 'addonName', item.name);
+                                      updateTicketSku(sku.id, 'addonVenuePrice', Number(item.venuePrice) || 0);
+                                    }}
+                                  >
+                                    <SelectTrigger
+                                      id={`sku-addon-catalog-${sku.id}`}
+                                      data-testid={`select-ticket-addon-catalog-${index}`}
+                                    >
+                                      <SelectValue placeholder="Choose an item…" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {venueAddonCatalog
+                                        .filter((item: any) => item?.active !== false)
+                                        .map((item: any) => (
+                                          <SelectItem key={item.id} value={item.id}>
+                                            {item.name} — {formatPriceByCurrency(Number(item.venuePrice) || 0, currency)}
+                                            {item.unit ? ` ${item.unit}` : ''}
+                                          </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {(() => {
+                                    const chosen = venueAddonCatalog.find(
+                                      (entry: any) => entry.id === sku.addonCatalogItemId,
+                                    );
+                                    return chosen?.groupDiscountNote ? (
+                                      <p className="mt-2 text-xs font-medium text-emerald-900 dark:text-emerald-100">
+                                        Venue's group rate: {chosen.groupDiscountNote}
+                                      </p>
+                                    ) : null;
+                                  })()}
+                                </div>
+                              )}
+
                               <div>
                                 <Label htmlFor={`sku-addon-name-${sku.id}`}>Add-on Name</Label>
                                 <Input
@@ -6439,6 +6620,45 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                                   data-testid={`input-ticket-addon-name-${index}`}
                                 />
                               </div>
+
+                              {/* Path B: no catalog to pick from, so the venue
+                                  has not stated a price yet. Say what you expect
+                                  people to want and leave the price to them —
+                                  they fill it in on their invite page, and can
+                                  counter it the same way they counter the ticket
+                                  deal. A number you invent for their counter is
+                                  a number they have to argue you out of. */}
+                              {askVenueForAddonPrice && (
+                                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-900 dark:bg-blue-950">
+                                  <Label htmlFor={`sku-addon-demand-${sku.id}`}>
+                                    Expected demand
+                                  </Label>
+                                  <p className="mb-2 text-xs text-blue-900 dark:text-blue-100">
+                                    Roughly how many people you think will want this. The venue is
+                                    asked for their real price — and any group rate — when they open
+                                    your invite, so you do not have to guess it for them.
+                                  </p>
+                                  <Input
+                                    id={`sku-addon-demand-${sku.id}`}
+                                    type="number"
+                                    min={0}
+                                    className="max-w-40"
+                                    placeholder="e.g. 50"
+                                    value={sku.addonExpectedDemand || ''}
+                                    onChange={(e) =>
+                                      updateTicketSku(
+                                        sku.id,
+                                        'addonExpectedDemand',
+                                        // Zero rather than undefined: `updateTicketSku` writes
+                                        // whatever it is handed, and an undefined would persist
+                                        // the key as literally undefined rather than clearing it.
+                                        e.target.value === '' ? 0 : Number(e.target.value),
+                                      )
+                                    }
+                                    data-testid={`input-ticket-addon-demand-${index}`}
+                                  />
+                                </div>
+                              )}
 
                               <div className="grid grid-cols-2 gap-3">
                                 <div>
@@ -6648,6 +6868,56 @@ function PricingStep({ form, manualDealUnlocked = false }: {
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
+            {/* Expected turnout.
+                Useful everywhere as a pitch detail, load-bearing in exactly two
+                places. Revenue Split, Ticket Deduction and Commitment Fee + Rev
+                Split all settle against tickets actually sold, so an optimistic
+                number there costs the venue nothing. Venue Sponsorship and
+                Upfront Rental have no such correction — the venue commits a flat
+                amount against this promise and nothing else — so the field grows
+                a border and a warning when either is selected. */}
+            <div
+              className={
+                turnoutIsLoadBearing
+                  ? 'rounded-lg border-2 border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950'
+                  : 'rounded-lg border p-4'
+              }
+            >
+              <Label htmlFor="expected-audience-size">
+                Expected turnout {turnoutIsLoadBearing && <span aria-hidden>*</span>}
+              </Label>
+              <p className="mb-2 text-xs text-gray-600 dark:text-gray-300">
+                {turnoutIsLoadBearing
+                  ? `${getVenueDealLabel(activeVenueDeal, dealCurrencySymbol)} pays the venue a flat amount whatever happens on the day. This number is the only thing they have to judge that against, so it has to be one you would defend.`
+                  : 'How many people you genuinely expect. Shown to a venue as context for your pitch — the deal you have chosen settles against tickets actually sold, so this does not change what anyone is paid.'}
+              </p>
+              <Input
+                id="expected-audience-size"
+                type="number"
+                min={0}
+                className="max-w-40"
+                placeholder="e.g. 40"
+                value={form.watch('expectedAudienceSize') ?? ''}
+                onChange={(event) =>
+                  form.setValue(
+                    'expectedAudienceSize',
+                    event.target.value === '' ? null : Number(event.target.value),
+                    { shouldDirty: true },
+                  )
+                }
+                data-testid="input-expected-audience-size"
+              />
+              {turnoutIsLoadBearing && !form.watch('expectedAudienceSize') && (
+                <p
+                  className="mt-2 text-xs font-medium text-amber-900 dark:text-amber-100"
+                  data-testid="warning-expected-turnout-required"
+                >
+                  Add a number before you send this. A flat commitment with no expected
+                  turnout beside it is a figure the venue cannot say yes or no to.
+                </p>
+              )}
+            </div>
+
             {/* Split grid: Platform (fixed) | Space | Creator */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
@@ -6750,6 +7020,14 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                       )}
                     </div>
                   )}
+                  {dealMechanics && (
+                    <p
+                      className="mt-3 rounded-md bg-gray-50 p-3 text-xs leading-relaxed text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                      data-testid="text-deal-mechanics-target"
+                    >
+                      {dealMechanics}
+                    </p>
+                  )}
                   {selectedTargetDeal?.secondaryTermsKey === 'commitmentFee' && (
                     <div className="mt-3">
                       <Label htmlFor="venue-target-commitment-fee">{selectedTargetDeal.secondaryValueLabel}</Label>
@@ -6816,6 +7094,14 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                   {!manualDealUnlocked && (
                     <p className="text-xs text-gray-500 mt-1" data-testid="text-manual-deal-locked-venue">
                       {UNTRACKED_DEAL_LOCKED_MESSAGE}
+                    </p>
+                  )}
+                  {dealMechanics && (
+                    <p
+                      className="mt-3 rounded-md bg-gray-50 p-3 text-xs leading-relaxed text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                      data-testid="text-deal-mechanics-venue"
+                    >
+                      {dealMechanics}
                     </p>
                   )}
                   {/* A split or a per-ticket fee can only ever be taken from
@@ -7131,6 +7417,35 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                 Lower the venue's terms or raise your ticket price before sending this.
               </div>
             )}
+
+            {/* The matrix's own exclusions, shown where the numbers were typed
+                rather than saved up for the publication checklist. */}
+            {dealTermIssues.map((issue) => (
+              <div
+                key={issue.key}
+                className={
+                  issue.severity === 'block'
+                    ? 'rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100'
+                    : 'rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100'
+                }
+                data-testid={`deal-term-issue-${issue.key}`}
+              >
+                <strong className="block mb-1">
+                  {issue.severity === 'block' ? 'These terms cannot work' : 'Worth protecting yourself'}
+                </strong>
+                {issue.message}
+                {issue.key === 'fixed_cost_deal_without_mvg' && (
+                  <button
+                    type="button"
+                    className="mt-2 block font-medium underline underline-offset-2"
+                    onClick={() => form.setValue('requireMinimumParticipants', true, { shouldDirty: true })}
+                    data-testid="button-enable-mvg-from-deal-warning"
+                  >
+                    Turn on Minimum Viable Group
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>
@@ -7508,6 +7823,20 @@ function PricingStep({ form, manualDealUnlocked = false }: {
                         </p>
                       </div>
                     )}
+
+                    {/* How anyone actually gets this discount.
+                        Setting one up used to produce nothing you could give to
+                        a person — no code, no link. A link rather than a code,
+                        because the first real user who wanted one wanted
+                        something to forward to friends. */}
+                    <div className="mt-4">
+                      <Label className="mb-2 block text-sm">Shareable link</Label>
+                      <DiscountLinkManager
+                        experienceId={experienceId}
+                        discountId={discount.id}
+                        discountTitle={discount.title}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>

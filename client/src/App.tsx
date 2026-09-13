@@ -39,6 +39,26 @@ import ModularPricingDemo from "@/pages/modular-pricing-demo";
 import RoleBasedPricingDemo from "@/pages/role-based-pricing-demo";
 import HowItWorks from "@/pages/how-it-works";
 import HowItWorksPartners from "@/pages/how-it-works-partners";
+import PartnerTutorial from "@/pages/partner-tutorial";
+import PartnerToolingGate from "@/components/PartnerToolingGate";
+import Navigation from "@/components/navigation";
+
+/**
+ * A page that is only for verified partners, with the nav kept.
+ *
+ * The gated pages below render their own `<Navigation />` inside themselves, so
+ * wrapping them in the gate alone left a refused visitor on a bare card with no
+ * way back to the rest of the site. This puts the nav outside the gate, where
+ * it belongs — a refusal is a fork in the road, not a dead end.
+ */
+function PartnerOnly({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-white dark:bg-gray-950">
+      <Navigation />
+      <PartnerToolingGate>{children}</PartnerToolingGate>
+    </div>
+  );
+}
 import DealRoomsPage from "@/pages/deal-rooms";
 import Profile from "@/pages/profile";
 import Bookings from "@/pages/bookings";
@@ -180,7 +200,11 @@ function Router() {
           the event's participant chat and this is two businesses agreeing money. */}
       <Route path="/deal-rooms/:id" component={DealRoomsPage} />
       <Route path="/deal-rooms" component={DealRoomsPage} />
-      <Route path="/creator/earnings" component={CreatorEarnings} />
+      {/* The Creator Earnings Model runs the live engine — every deal type, the
+          configured fee, a full worked breakdown. Same reason as above. */}
+      <Route path="/creator/earnings">
+        <PartnerOnly><CreatorEarnings /></PartnerOnly>
+      </Route>
       <Route path="/creator/profile-setup" component={SimpleCreatorProfileSetup} />
       <Route path="/venue/profile-setup" component={VenueListingTypeGate} />
       <Route path="/service/profile-setup" component={ServiceProviderSetup} />
@@ -212,10 +236,25 @@ function Router() {
         </RouteErrorBoundary>
       </Route>
       <Route path="/creator-onboarding" component={RedirectToCreator} />
-      <Route path="/revenue-calculator-demo" component={RevenueCalculatorDemo} />
-      <Route path="/modular-pricing-demo" component={ModularPricingDemo} />
-      <Route path="/role-based-pricing-demo" component={RoleBasedPricingDemo} />
+      {/* Pricing surfaces, behind the partner gate.
+          Each of these renders the commercial model — deal types, the exact
+          platform fee, a working revenue breakdown — and each was reachable by
+          URL with no account at all, which is the same exposure the public
+          partner page had. The gate is server-decided (GET /api/partner-access),
+          so this is not security by obscurity. */}
+      <Route path="/revenue-calculator-demo">
+        <PartnerOnly><RevenueCalculatorDemo /></PartnerOnly>
+      </Route>
+      <Route path="/modular-pricing-demo">
+        <PartnerOnly><ModularPricingDemo /></PartnerOnly>
+      </Route>
+      <Route path="/role-based-pricing-demo">
+        <PartnerOnly><RoleBasedPricingDemo /></PartnerOnly>
+      </Route>
       {/* Ordered before the participant page: wouter matches in order. */}
+      {/* The full commercial model, behind the partner gate. The public
+          page below is the reduced version and stays open. */}
+      <Route path="/tutorials/partners" component={PartnerTutorial} />
       <Route path="/how-it-works/partners" component={HowItWorksPartners} />
       <Route path="/how-it-works" component={HowItWorks} />
       <Route path="/profile" component={Profile} />

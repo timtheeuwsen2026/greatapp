@@ -1,3 +1,4 @@
+import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
@@ -399,6 +400,36 @@ export default function ExperienceDetails() {
     }
   };
 
+  // A shared discount link lands here, not on checkout — a recipient opens the
+  // event, reads it, and decides. The token rides along to checkout, where the
+  // server is the one that decides what it is worth.
+  //
+  // Declared above the loading and error returns below, not beside the markup
+  // that uses it: a hook after a conditional return runs on some renders and
+  // not others, which is exactly the "rendered more hooks than during the
+  // previous render" crash.
+  const discountToken = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('discount')
+    : null;
+  const withDiscount = (href: string) =>
+    discountToken
+      ? `${href}${href.includes('?') ? '&' : '?'}discount=${encodeURIComponent(discountToken)}`
+      : href;
+
+  // Say whether the link worked, and say it on this page rather than at
+  // checkout. Someone who followed a friend's link and sees the ordinary price
+  // with no explanation assumes the link was fake; someone told it has expired
+  // can go back and ask for a new one.
+  const { data: discountInfo } = useQuery<{ ok: boolean; reason: string | null; summary?: string }>({
+    queryKey: ["/api/discount-links", discountToken],
+    queryFn: async () => {
+      const response = await fetch(`/api/discount-links/${encodeURIComponent(discountToken!)}`);
+      return response.json();
+    },
+    enabled: !!discountToken,
+    retry: false,
+  });
+
   if (error) {
     return (
       <div className="min-h-screen bg-white">
@@ -530,6 +561,10 @@ export default function ExperienceDetails() {
   );
   const spotsLeft = Math.max(0, (experience.maxParticipants || 0) - liveParticipantCount);
   const averageRating = experience.stats?.averageRating || 0;
+  // The page stays: a past event is the organiser's track record and the thing
+  // an attendee comes back to find. Only the transaction closes — and the
+  // server refuses it too, so this is presentation, not the guard.
+  const eventHasPassed = hasExperiencePassed(experience);
 
   return (
     <div className="min-h-screen bg-white">
@@ -1205,7 +1240,7 @@ export default function ExperienceDetails() {
                       const roomDeposit = matchingSku?.depositPerPerson || room.depositPerPerson || 0;
                       const roomSoldCount = matchingSku?.soldCount || room.soldCount || 0;
                       const roomAvailable = ((room.quantity || 1) * (room.capacity || 1)) - roomSoldCount;
-                      const isSoldOut = roomAvailable <= 0;
+                      const isSoldOut = roomAvailable <= 0 || eventHasPassed;
                       const skuId = matchingSku?.id || room.id;
                       const isSelected = selectedTicketId === skuId;
                       
@@ -1387,8 +1422,32 @@ export default function ExperienceDetails() {
                   )}
 
                   {/* Primary CTA - Only show when NO ticket options (single price experience) */}
-                  {isAuthenticated && spotsLeft > 0 && !userActiveReservation && ticketSkus.length === 0 && (
-                    <Link href={`/checkout/${experience.id}`}>
+                  {eventHasPassed && (
+                    <div
+                      className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600"
+                      data-testid="notice-event-has-passed"
+                    >
+                      {EVENT_HAS_PASSED_MESSAGE}
+                    </div>
+                  )}
+
+                  {discountInfo && (
+                    <div
+                      className={
+                        discountInfo.ok
+                          ? "mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"
+                          : "mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600"
+                      }
+                      data-testid="notice-discount-link"
+                    >
+                      {discountInfo.ok
+                        ? `Your discount link is applied — ${discountInfo.summary || "a discount"} at checkout.`
+                        : discountInfo.reason}
+                    </div>
+                  )}
+
+                  {!eventHasPassed && isAuthenticated && spotsLeft > 0 && !userActiveReservation && ticketSkus.length === 0 && (
+                    <Link href={withDiscount(`/checkout/${experience.id}`)}>
                       <Button 
                         className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-primary/90 hover:text-white hover:shadow-xl"
                         size="lg" 
@@ -1482,7 +1541,8 @@ export default function ExperienceDetails() {
                           // Use sourceRoomId as unique ticket identifier (ticketSkus stored in JSON don't have separate id field)
                           const ticketId = ticket.id || ticket.sourceRoomId || `ticket-${index}`;
                           const isSelected = selectedTicketId === ticketId;
-                          const isSoldOut = spotsAvailable <= 0;
+                          // A finished event closes every tier, whatever is left.
+                          const isSoldOut = spotsAvailable <= 0 || eventHasPassed;
                           const selectedQuantity = Math.min(
                             Math.max(1, ticketQuantities[ticketId] || 1),
                             Math.max(1, spotsAvailable),
@@ -1638,10 +1698,10 @@ export default function ExperienceDetails() {
                               <div className="mt-4">
                                 {isSoldOut ? (
                                   <Button className="w-full h-12 bg-gray-200 text-gray-500 rounded-lg font-medium" size="lg" disabled data-testid={`button-soldout-ticket-${index}`}>
-                                    Sold Out
+                                    {eventHasPassed ? "Event has ended" : "Sold Out"}
                                   </Button>
                                 ) : isAuthenticated ? (
-                                  <Link href={checkoutHref}>
+                                  <Link href={withDiscount(checkoutHref)}>
                                     <Button 
                                       className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" 
                                       size="lg"
@@ -1663,7 +1723,7 @@ export default function ExperienceDetails() {
                                     </Button>
                                   </Link>
                                 ) : (
-                                  <a href={`/login?returnTo=${encodeURIComponent(checkoutHref)}`}>
+                                  <a href={`/login?returnTo=${encodeURIComponent(withDiscount(checkoutHref))}`}>
                                     <Button className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-lg shadow-md hover:shadow-lg transition-all font-semibold text-base" size="lg" data-testid={`button-login-ticket-${index}`}>
                                       Sign In to Book
                                     </Button>
@@ -1826,7 +1886,14 @@ export default function ExperienceDetails() {
                 )}
 
                 <div className="space-y-3">
-                  {isAuthenticated ? (
+                  {eventHasPassed ? (
+                    <div
+                      className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-600"
+                      data-testid="notice-event-has-passed-sidebar"
+                    >
+                      {EVENT_HAS_PASSED_MESSAGE}
+                    </div>
+                  ) : isAuthenticated ? (
                     <>
                       {spotsLeft > 0 ? (
                         <>
@@ -1834,7 +1901,7 @@ export default function ExperienceDetails() {
                             <>
                               {/* Only show CTA for single-price experiences (no ticket SKUs) */}
                               {ticketSkus.length === 0 && (
-                                <Link href={`/checkout/${experience.id}`}>
+                                <Link href={withDiscount(`/checkout/${experience.id}`)}>
                                   <Button 
                                     className="w-full btn-gradient shadow-lg hover:shadow-xl transition-all duration-200 text-lg py-6" 
                                     size="lg" 
@@ -1892,7 +1959,7 @@ export default function ExperienceDetails() {
                   ) : (
                     <div className="text-center">
                       <p className="text-sm text-gray-600 mb-3">Sign in to book this experience</p>
-                      <a href={`/login?returnTo=${encodeURIComponent(`/checkout/${experience.id}`)}`}>
+                      <a href={`/login?returnTo=${encodeURIComponent(withDiscount(`/checkout/${experience.id}`))}`}>
                         <Button className="w-full btn-gradient" size="lg">
                           Sign In to Book
                         </Button>

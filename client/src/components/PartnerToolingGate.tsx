@@ -33,7 +33,15 @@ export default function PartnerToolingGate({
   children: ReactNode;
   inline?: boolean;
 }) {
-  const { data: access, isLoading, isError } = usePartnerAccess();
+  const { data: access, isLoading, isError, error } = usePartnerAccess();
+
+  // A signed-out visitor is not a failed check. Until this gate went in front of
+  // pages anyone can reach by URL — the partner tutorial, the pricing
+  // calculators — every caller was already behind auth, so a 401 could only
+  // mean a dropped session. Now it usually means "has not signed in yet", and
+  // telling that person "we couldn't reach the check" sends them to support
+  // instead of to the signup button.
+  const isSignedOut = /(^|\s)401(:|$)/.test(String((error as Error | null)?.message ?? ""));
 
   if (isLoading) {
     return (
@@ -41,6 +49,19 @@ export default function PartnerToolingGate({
         <Loader2 className="h-4 w-4 animate-spin" />
         Checking access…
       </div>
+    );
+  }
+
+  if (isSignedOut) {
+    return (
+      <Notice
+        inline={inline}
+        icon={<Lock className="h-6 w-6 text-gray-500" />}
+        title="Sign in to see this"
+        message="This one is for creators, venues and promoters. Sign in, or create a free partner account, and it opens."
+        href="/login"
+        hrefLabel="Sign in"
+      />
     );
   }
 
@@ -80,12 +101,14 @@ function Notice({
   title,
   message,
   href,
+  hrefLabel = "Continue",
 }: {
   inline: boolean;
   icon: ReactNode;
   title: string;
   message: string;
   href?: string | null;
+  hrefLabel?: string;
 }) {
   const body = (
     <Card className="mx-auto w-full max-w-lg">
@@ -100,7 +123,7 @@ function Notice({
         {href && (
           <Link href={href}>
             <Button className="mt-6" data-testid="button-partner-gate-continue">
-              Continue
+              {hrefLabel}
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </Link>

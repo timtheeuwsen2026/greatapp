@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Building2, Calendar, MapPin, Users, CheckCircle, XCircle, Loader2,
   Handshake, ArrowRight,
@@ -68,6 +69,21 @@ type VenueInvite = {
     requireMinimumParticipants: boolean | null;
     minimumParticipants: number | null;
     capacity: number | null;
+    /** The organiser's own expectation. Load-bearing on the flat-fee deals. */
+    expectedAudienceSize?: number | null;
+    /**
+     * Extras the organiser expects people to want, with no price attached —
+     * because the price is yours to state, not theirs to guess.
+     */
+    addonRequests?: Array<{
+      id: string;
+      name: string;
+      expectedDemand?: number;
+      note?: string;
+      venuePrice?: number;
+      groupDiscountNote?: string;
+      filledByVenueAt?: string;
+    }>;
     ticketTypes: InviteTicketLine[];
   } | null;
   creatorId: string | null;
@@ -104,6 +120,9 @@ export default function VenueInvitePage() {
   const [counterValue, setCounterValue] = useState<string>("");
   const [counterFee, setCounterFee] = useState<string>("");
   const [counterMessage, setCounterMessage] = useState<string>("");
+  // Path B of add-on pricing: the organiser asked what these cost and left the
+  // number blank on purpose. Keyed by request id.
+  const [addonPrices, setAddonPrices] = useState<Record<string, { venuePrice: string; groupDiscountNote: string }>>({});
 
   const { data: invite, isLoading, error } = useQuery<VenueInvite>({
     queryKey: ["/api/venue-invites", token],
@@ -157,6 +176,28 @@ export default function VenueInvitePage() {
         description: readableError(err),
         variant: "destructive",
       });
+    },
+  });
+
+  const addonPriceMutation = useMutation({
+    mutationFn: async () => {
+      const prices = Object.entries(addonPrices).map(([id, entry]) => ({
+        id,
+        venuePrice: entry.venuePrice === "" ? null : Number(entry.venuePrice),
+        groupDiscountNote: entry.groupDiscountNote,
+      }));
+      const res = await apiRequest("POST", `/api/venue-invites/${token}/addon-prices`, { prices });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/venue-invites", token] });
+      toast({
+        title: "Prices sent",
+        description: "The organiser can set their margin now. Nothing is agreed by this — it is the deal you accept or counter that binds you.",
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not send your prices", description: readableError(err), variant: "destructive" });
     },
   });
 
@@ -378,6 +419,109 @@ export default function VenueInvitePage() {
               </p>
             </CardContent>
           </Card>
+
+          {/* Path B: the organiser asked about extras and deliberately did not
+              price them. They do not run your business and cannot know what a
+              coffee costs at your counter — and the whole mechanic depends on a
+              participant never paying more here than they would at the bar, so
+              a guessed price breaks it whichever way the guess went.
+
+              Available before accepting on purpose: what the extras are worth
+              is part of deciding whether the deal is worth taking. */}
+          {(invite.experience?.addonRequests?.length ?? 0) > 0 && (
+            <Card data-testid="invite-addon-prices-card">
+              <CardHeader>
+                <CardTitle className="text-lg">What do these cost?</CardTitle>
+                <p className="text-sm text-gray-600">
+                  The organiser expects guests to want these. Give your own price — what you
+                  are paid per unit — and any group rate you would offer. They add their
+                  margin separately; you receive the number you put here.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {invite.experience!.addonRequests!.map((request) => {
+                  const entry = addonPrices[request.id] ?? {
+                    venuePrice: request.venuePrice != null ? String(request.venuePrice) : "",
+                    groupDiscountNote: request.groupDiscountNote ?? "",
+                  };
+                  const set = (patch: Partial<typeof entry>) =>
+                    setAddonPrices((current) => ({ ...current, [request.id]: { ...entry, ...patch } }));
+
+                  return (
+                    <div key={request.id} className="space-y-3 rounded-lg border p-3">
+                      <div>
+                        <p className="font-medium text-gray-900">{request.name}</p>
+                        {request.expectedDemand ? (
+                          <p className="text-xs text-gray-500">
+                            They expect around {request.expectedDemand} people to want this.
+                          </p>
+                        ) : null}
+                        {request.note ? (
+                          <p className="mt-1 text-xs text-gray-600">{request.note}</p>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="min-w-0 space-y-1">
+                          <label
+                            className="block text-xs font-medium text-gray-700"
+                            htmlFor={`addon-price-${request.id}`}
+                          >
+                            Your price ({String(invite.deal.currency || 'eur').toUpperCase()})
+                          </label>
+                          <Input
+                            id={`addon-price-${request.id}`}
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            placeholder="0.00"
+                            value={entry.venuePrice}
+                            onChange={(event) => set({ venuePrice: event.target.value })}
+                            data-testid={`input-addon-price-${request.id}`}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <label
+                            className="block text-xs font-medium text-gray-700"
+                            htmlFor={`addon-group-${request.id}`}
+                          >
+                            Group rate or combo (optional)
+                          </label>
+                          <Input
+                            id={`addon-group-${request.id}`}
+                            placeholder="10% off for groups over 20"
+                            value={entry.groupDiscountNote}
+                            onChange={(event) => set({ groupDiscountNote: event.target.value })}
+                            data-testid={`input-addon-group-${request.id}`}
+                          />
+                        </div>
+                      </div>
+
+                      {request.filledByVenueAt && (
+                        <p className="text-xs text-emerald-700">
+                          Sent to the organiser. Editing and sending again replaces it.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={addonPriceMutation.isPending || !isAuthenticated}
+                  onClick={() => addonPriceMutation.mutate()}
+                  data-testid="button-send-addon-prices"
+                >
+                  {addonPriceMutation.isPending ? "Sending…" : "Send my prices"}
+                </Button>
+                <p className="text-xs text-gray-500">
+                  Sending prices agrees to nothing. The ticket deal is still yours to accept,
+                  counter or decline.
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
           <Card data-testid="invite-venue-card">
             <CardHeader>

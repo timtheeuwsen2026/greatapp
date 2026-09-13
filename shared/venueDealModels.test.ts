@@ -3,6 +3,7 @@ import {
   calculateVenueEarnings,
   canSelectVenueDeal,
   checkVenuePayoutCap,
+  explainVenueDealMechanics,
   dealCurrencySymbol,
   getVenueDealOptions,
   isUntrackedVenueDeal,
@@ -529,5 +530,64 @@ describe("deal labels carry the event's own currency", () => {
 
   it("falls back to the code itself for a currency with no symbol", () => {
     expect(dealCurrencySymbol("sek")).toBe("SEK ");
+  });
+});
+
+describe("explainVenueDealMechanics", () => {
+  const base = {
+    value: 10,
+    paidTickets: 40,
+    ticketGross: 400,
+    rooms: 5,
+    nights: 3,
+    currencySymbol: "€",
+  };
+
+  it("says which way Venue Sponsorship money travels", () => {
+    const text = explainVenueDealMechanics({ ...base, model: "venue_sponsored", value: 500 })!;
+    expect(text).toContain("pays you €500.00");
+    expect(text).toMatch(/not from you/i);
+    expect(text).toMatch(/no share of ticket sales/i);
+  });
+
+  it("says a per-participant package counts heads, not bookings", () => {
+    const text = explainVenueDealMechanics({ ...base, model: "per_head", value: 25 })!;
+    expect(text).toMatch(/per paid ticket rather than per booking/i);
+    expect(text).toContain("€1,000.00");
+  });
+
+  it("says per room per night charges rooms held, not rooms filled", () => {
+    const text = explainVenueDealMechanics({ ...base, model: "per_room_night", value: 40 })!;
+    expect(text).toMatch(/rooms you hold rather than the ones that fill/i);
+    // 40 × 5 rooms × 3 nights
+    expect(text).toContain("€600.00");
+    expect(text).toMatch(/Minimum Viable Group/i);
+  });
+
+  it("works the revenue split out against gross", () => {
+    const text = explainVenueDealMechanics({ ...base, model: "revenue_share", value: 20 })!;
+    expect(text).toContain("€80.00");
+  });
+
+  it("charges a ticket deduction on paid tickets only", () => {
+    const text = explainVenueDealMechanics({ ...base, model: "fixed_fee", value: 3 })!;
+    expect(text).toContain("€120.00");
+    expect(text).toMatch(/nothing is charged for a free rsvp/i);
+  });
+
+  it("is honest that off-platform deals cannot be verified", () => {
+    expect(explainVenueDealMechanics({ ...base, model: "manual_counter_revenue" })).toMatch(
+      /cannot see, verify or collect/i,
+    );
+  });
+
+  it("returns nothing for an unknown model", () => {
+    expect(explainVenueDealMechanics({ ...base, model: "nonsense" })).toBeNull();
+  });
+
+  it("reads a legacy model through its alias", () => {
+    expect(explainVenueDealMechanics({ ...base, model: "ticket_deduction", value: 3 })).toContain(
+      "€120.00",
+    );
   });
 });

@@ -170,6 +170,20 @@ export default function CreatorHome() {
             </Link>
           </Card>
 
+        </div>
+
+        {/* Second row, two up — the same shape Venue Home uses, so the two
+            dashboards read the same way.
+
+            Earnings used to sit as a fourth card in the three-column grid
+            above, which left it alone on its own row with Collab Opportunities
+            in a *separate* grid below it. The two ended up on different lines
+            at different heights. One grid of two puts them side by side and
+            level, which is what was asked for.
+
+            Creators post most of the ideas, so the feed cannot be invisible
+            from the screen they land on. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
           {/* Real earnings live in the Creator Dashboard — the old "Demo" and
               "Learn about earnings" marketing cards were removed as dummy content. */}
           <Card className="hover:shadow-lg transition-shadow cursor-pointer">
@@ -192,11 +206,7 @@ export default function CreatorHome() {
               </CardContent>
             </Link>
           </Card>
-        </div>
 
-        {/* Creators post most of the ideas, so the feed cannot be invisible
-            from the screen they land on. */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
           <CollabOpportunitiesCard />
         </div>
       </div>

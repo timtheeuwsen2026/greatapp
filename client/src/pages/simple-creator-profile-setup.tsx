@@ -12,6 +12,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  MultiChoiceField,
+  PreferenceToggle,
+  SingleChoiceField,
+} from "@/components/TaxonomyFields";
+import {
+  OTHER_ID,
+  PARTNER_CATEGORIES,
+  PARTNER_NEEDS,
+} from "@shared/partnerTaxonomy";
 
 type CreatorProfileForm = {
   displayName: string;
@@ -21,6 +31,16 @@ type CreatorProfileForm = {
   brandKitVerticalUrl: string;
   socialLink: string;
   termsAccepted: boolean;
+  // What the matcher reads. Without these a creator can be shown nothing
+  // organic at all — there is nothing to match a city-less, category-less
+  // profile against.
+  city: string;
+  category: string;
+  categoryOther: string;
+  lookingFor: string[];
+  lookingForOther: string;
+  openToPerks: boolean;
+  openToPromoters: boolean;
 };
 
 const initialForm: CreatorProfileForm = {
@@ -31,6 +51,13 @@ const initialForm: CreatorProfileForm = {
   brandKitVerticalUrl: "",
   socialLink: "",
   termsAccepted: false,
+  city: "",
+  category: "",
+  categoryOther: "",
+  lookingFor: [],
+  lookingForOther: "",
+  openToPerks: false,
+  openToPromoters: false,
 };
 
 function fallbackEmail(user: any) {
@@ -67,6 +94,16 @@ export default function SimpleCreatorProfileSetup() {
         profile.socialLinks?.youtube ||
         "",
       termsAccepted: !!profile.termsAccepted,
+      // `location` is the legacy column this used to write "Not specified" to.
+      // Read it back as a city so an existing profile is not blanked, but
+      // never show the placeholder it used to store.
+      city: profile.city || (profile.location === "Not specified" ? "" : profile.location || ""),
+      category: profile.category || "",
+      categoryOther: profile.categoryOther || "",
+      lookingFor: Array.isArray(profile.lookingFor) ? profile.lookingFor : [],
+      lookingForOther: profile.lookingForOther || "",
+      openToPerks: !!profile.openToPerks,
+      openToPromoters: !!profile.openToPromoters,
     });
   }, [existingProfile]);
 
@@ -80,7 +117,9 @@ export default function SimpleCreatorProfileSetup() {
         displayName: form.displayName.trim(),
         tagline: "",
         bio: form.bio.trim(),
-        location: "Not specified",
+        // `location` is required by the profile schema and is now a real
+        // answer rather than the "Not specified" placeholder it used to be.
+        location: form.city.trim(),
         experienceLevel: "Experienced",
         expertiseTags: [],
         gallery: [],
@@ -89,6 +128,15 @@ export default function SimpleCreatorProfileSetup() {
         brandKitVerticalUrl: form.brandKitVerticalUrl || null,
         payoutEmail: fallbackEmail(user),
         termsAccepted: form.termsAccepted,
+        city: form.city.trim(),
+        category: form.category,
+        categoryOther: form.category === OTHER_ID ? form.categoryOther.trim() : null,
+        lookingFor: form.lookingFor,
+        lookingForOther: form.lookingFor.includes(OTHER_ID)
+          ? form.lookingForOther.trim()
+          : null,
+        openToPerks: form.openToPerks,
+        openToPromoters: form.openToPromoters,
         completed: true,
         socialLinks: {
           website: form.socialLink.trim(),
@@ -117,11 +165,19 @@ export default function SimpleCreatorProfileSetup() {
     },
   });
 
+  // City, category and at least one need are required rather than optional:
+  // a profile missing any of the three matches nothing, and a feed that never
+  // shows anything reads as a broken feature rather than an incomplete profile.
   const canSubmit =
     form.displayName.trim() &&
     form.bio.trim().length >= 10 &&
     form.profilePhoto &&
     form.socialLink.trim() &&
+    form.city.trim() &&
+    form.category &&
+    (form.category !== OTHER_ID || form.categoryOther.trim()) &&
+    form.lookingFor.length > 0 &&
+    (!form.lookingFor.includes(OTHER_ID) || form.lookingForOther.trim()) &&
     form.termsAccepted;
 
   if (isLoading) {
@@ -279,6 +335,83 @@ export default function SimpleCreatorProfileSetup() {
                 placeholder="https://instagram.com/yourhandle"
               />
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Everything below exists so the platform can put the right partner in
+            front of you. A profile with a name and a photo and nothing else is
+            a page — it is not something the Suggested-for-You feed can match. */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>What you host, and what you look for</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              This is what we match on. Venues, sponsors and promoters are suggested to
+              you from these answers, and you to them.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+              <Label htmlFor="city">City *</Label>
+              <Input
+                id="city"
+                value={form.city}
+                onChange={(event) => updateField("city", event.target.value)}
+                placeholder="Barcelona"
+                data-testid="input-creator-city"
+              />
+              <p className="text-xs text-muted-foreground">
+                Where you usually host. You can still work anywhere — this is the
+                starting point for matches, not a restriction.
+              </p>
+            </div>
+
+            <SingleChoiceField
+              label="What do you host?"
+              description="The same categories people browse by, so your events and your profile line up."
+              options={PARTNER_CATEGORIES}
+              value={form.category}
+              otherValue={form.categoryOther}
+              onChange={(value) => updateField("category", value)}
+              onOtherChange={(value) => updateField("categoryOther", value)}
+              otherPlaceholder="What do you host?"
+              required
+              testId="field-creator-category"
+            />
+
+            <MultiChoiceField
+              label="What are you typically looking for?"
+              description="Pick everything that applies. These become your standing preferences — you are not committing to anything."
+              options={PARTNER_NEEDS}
+              values={form.lookingFor}
+              otherValue={form.lookingForOther}
+              onChange={(values) => updateField("lookingFor", values)}
+              onOtherChange={(value) => updateField("lookingForOther", value)}
+              otherPlaceholder="What else do you usually need?"
+              required
+              testId="field-creator-looking-for"
+            />
+
+            <div className="space-y-3">
+              <PreferenceToggle
+                label="Open to perks or credits as part of a deal"
+                description="Some partners would rather give you space, food or product than cash. Say yes and those offers reach you too."
+                checked={form.openToPerks}
+                onChange={(checked) => updateField("openToPerks", checked)}
+                testId="toggle-creator-open-to-perks"
+              />
+              <PreferenceToggle
+                label="Open to working with promoters"
+                description="Influencers and brands who bring an audience, in exchange for a commission, a fee or a sponsorship."
+                checked={form.openToPromoters}
+                onChange={(checked) => updateField("openToPromoters", checked)}
+                testId="toggle-creator-open-to-promoters"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mt-6">
+          <CardContent className="space-y-5 pt-6">
 
             <div className="flex items-start gap-3 rounded-md border p-4">
               <Checkbox

@@ -11,17 +11,38 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { SingleChoiceField } from "@/components/TaxonomyFields";
+import {
+  OTHER_ID,
+  PARTNER_CATEGORIES,
+  PROMOTER_TYPES,
+} from "@shared/partnerTaxonomy";
 
 type PromoterProfileForm = {
   displayName: string;
   profilePhoto: string;
   bio: string;
+  /**
+   * Influencer, Brand, or their own word. The one classification a Creator
+   * deliberately does not carry: what a promoter *is* changes what they should
+   * be offered, where an organiser is an organiser either way.
+   */
+  promoterType: string;
+  promoterTypeOther: string;
+  city: string;
+  category: string;
+  categoryOther: string;
 };
 
 const initialForm: PromoterProfileForm = {
   displayName: "",
   profilePhoto: "",
   bio: "",
+  promoterType: "",
+  promoterTypeOther: "",
+  city: "",
+  category: "",
+  categoryOther: "",
 };
 
 function userDisplayName(user: any) {
@@ -46,6 +67,11 @@ export default function PromoterProfileSetup() {
         displayName: profile.displayName || "",
         profilePhoto: profile.profilePhoto || "",
         bio: profile.bio || "",
+        promoterType: profile.promoterType || "",
+        promoterTypeOther: profile.promoterTypeOther || "",
+        city: profile.city || "",
+        category: profile.category || "",
+        categoryOther: profile.categoryOther || "",
       });
       return;
     }
@@ -66,6 +92,13 @@ export default function PromoterProfileSetup() {
         displayName: form.displayName.trim(),
         profilePhoto: form.profilePhoto,
         bio: form.bio.trim(),
+        promoterType: form.promoterType,
+        promoterTypeOther: form.promoterType === OTHER_ID
+          ? form.promoterTypeOther.trim()
+          : null,
+        city: form.city.trim(),
+        category: form.category,
+        categoryOther: form.category === OTHER_ID ? form.categoryOther.trim() : null,
         completed: true,
       });
 
@@ -74,10 +107,10 @@ export default function PromoterProfileSetup() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/promoter-profile"] });
       toast({
-        title: "Promoter profile saved",
-        description: "Your referral links can now show your recommendation details.",
+        title: "Promoter profile complete",
+        description: "The Experience Pool is open — these are the events you can promote.",
       });
-      setLocation("/promoter");
+      setLocation("/promoter/experience-pool");
     },
     onError: (error: Error) => {
       toast({
@@ -103,7 +136,18 @@ export default function PromoterProfileSetup() {
     }),
   });
 
-  const canSubmit = form.displayName.trim() && form.profilePhoto && form.bio.trim().length >= 10;
+  // Type, city and category are required, not optional. The Experience Pool
+  // is gated on `completed`, and a profile that completed without them would
+  // open the pool to someone the matcher knows nothing about.
+  const canSubmit =
+    form.displayName.trim()
+    && form.profilePhoto
+    && form.bio.trim().length >= 10
+    && form.promoterType
+    && (form.promoterType !== OTHER_ID || form.promoterTypeOther.trim())
+    && form.city.trim()
+    && form.category
+    && (form.category !== OTHER_ID || form.categoryOther.trim());
 
   if (isLoading) {
     return (
@@ -167,6 +211,46 @@ export default function PromoterProfileSetup() {
                 className="min-h-32"
               />
             </div>
+
+            <SingleChoiceField
+              label="What kind of promoter are you?"
+              description="This decides what you get offered. An influencer and a brand are pitched very differently."
+              options={PROMOTER_TYPES}
+              value={form.promoterType}
+              otherValue={form.promoterTypeOther}
+              onChange={(value) => updateField("promoterType", value)}
+              onOtherChange={(value) => updateField("promoterTypeOther", value)}
+              otherPlaceholder="How would you describe yourself?"
+              required
+              testId="field-promoter-type"
+            />
+
+            <div className="space-y-2">
+              <Label htmlFor="city">City *</Label>
+              <Input
+                id="city"
+                value={form.city}
+                onChange={(event) => updateField("city", event.target.value)}
+                placeholder="Amsterdam"
+                data-testid="input-promoter-city"
+              />
+              <p className="text-xs text-muted-foreground">
+                Where your audience mostly is. Events near it reach you first.
+              </p>
+            </div>
+
+            <SingleChoiceField
+              label="What do you promote?"
+              description="The same categories events are listed under, so the Experience Pool can show you the right ones."
+              options={PARTNER_CATEGORIES}
+              value={form.category}
+              otherValue={form.categoryOther}
+              onChange={(value) => updateField("category", value)}
+              onOtherChange={(value) => updateField("categoryOther", value)}
+              otherPlaceholder="What do you promote?"
+              required
+              testId="field-promoter-category"
+            />
 
             <div className="flex justify-end">
               <Button

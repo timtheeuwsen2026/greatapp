@@ -261,7 +261,20 @@ function explainPayoutFailure(raw: unknown): string {
 
 function applyMarketplaceEconomics(input: any = {}) {
   const model = input.venueCompensationModel || "access_only";
-  const revenueSharePct = model === "revenue_share"
+
+  // Which deals legitimately carry a percentage.
+  //
+  // This used to be `model === "revenue_share"` and zeroed the share for
+  // everything else — including Commitment Fee + Revenue Split, which is the
+  // one deal that carries *both* a percentage and a fee. A venue that agreed
+  // 20% plus a EUR 50 commitment had its 20% written to the database as zero
+  // the moment the event was published, and there is no second copy of that
+  // number anywhere.
+  //
+  // Read from the deal definitions rather than a literal, so a deal added to
+  // the vocabulary later cannot be silently zeroed the same way.
+  const percentageDeals = new Set(["revenue_share", "commitment_plus_revenue_share"]);
+  const revenueSharePct = percentageDeals.has(String(normalizeVenueDealModel(model) ?? model))
     ? parseFloat(String(input.venueRevenueSharePct ?? input.venueRevenuePercentage ?? 0))
     : 0;
   const participantReferralDealType = input.participantReferralDealType ?? null;
@@ -285,6 +298,10 @@ function applyMarketplaceEconomics(input: any = {}) {
     venueMinimumSpend: input.venueMinimumSpend ?? "0.00",
     venueRevenueSharePct: revenueSharePct,
     venueAccessFee: input.venueAccessFee ?? "0.00",
+    // The venue's one-off payment under Commitment Fee + Revenue Split. It has
+    // a column on both tables and was written to neither — the fee travelled as
+    // far as the form and stopped there.
+    venueCommitmentFee: input.venueCommitmentFee ?? "0.00",
     venueRevenuePercentage: revenueSharePct,
     participantReferralDealType,
     participantReferralCommissionPct,
@@ -1253,6 +1270,11 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       venueMinimumSpend: (draft as any).venueMinimumSpend || "0.00",
       venueRevenueSharePct: (draft as any).venueRevenueSharePct || (draft as any).venueRevenuePercentage || "0.00",
       venueAccessFee: (draft as any).venueAccessFee || "0.00",
+      // Carried explicitly, like every other figure in this block. It has a
+      // column on `experiences` and was never written to it, so the venue's
+      // one-off commitment existed only until the event was published.
+      venueCommitmentFee: (draft as any).venueCommitmentFee || "0.00",
+      venuePerRoomPerNight: (draft as any).venuePerRoomPerNight || "0.00",
 
       // ── Self-Hosted / Manual Address logic ──────────────────────────────
       // If no platform Space is linked the creator is bringing their own venue.

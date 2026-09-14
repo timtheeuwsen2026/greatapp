@@ -431,6 +431,38 @@ const ALL_STEPS = [
 // Helper to get filtered steps based on event type.
 // Event (one-day) / Virtual: skip Services & Amenities and Rooms to keep the pilot flow lean.
 // Trip (multi-day): all steps, including Services, Amenities, Rooms, and MVG threshold.
+/**
+ * Which step a publish error belongs to.
+ *
+ * A validation error reads "Venue commercial deal: Enter a percentage greater
+ * than zero" while the creator is standing on step 1 with the title selected.
+ * They have no way to know the field exists, let alone where it lives, so the
+ * save looks like it failed for no reason — which is how "it doesn't save my
+ * event" gets reported.
+ *
+ * Matched on the server's own error text. Crude, but the alternative is a
+ * field-path contract between the validator and the form that neither side
+ * currently has, and a wrong guess here only costs a missing signpost.
+ */
+const ERROR_STEP_HINTS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /venue commercial deal|target deal|venue deal|per ticket|percentage greater than zero|commitment fee|deduction|add-on margin/i, label: 'Pricing' },
+  { pattern: /venue|space|address|property link/i, label: 'Venue' },
+  { pattern: /ticket|price|currency|deposit|discount|minimum viable|minimum participants/i, label: 'Pricing' },
+  { pattern: /date|time slot|itinerary/i, label: 'Dates' },
+  { pattern: /room|sleeping/i, label: 'Rooms' },
+  { pattern: /terms|cancellation/i, label: 'Terms' },
+  { pattern: /title|description|category|cover image|gallery|photo/i, label: 'Basics' },
+];
+
+function findStepForError(message: unknown): { label: string } | null {
+  const text = String(message ?? "");
+  if (!text.trim()) return null;
+  for (const hint of ERROR_STEP_HINTS) {
+    if (hint.pattern.test(text)) return { label: hint.label };
+  }
+  return null;
+}
+
 function getStepsForEventType(eventType: string | undefined): typeof ALL_STEPS {
   if (eventType === 'one-day' || eventType === 'virtual') {
     return ALL_STEPS.filter(step => step.id !== 5 && step.id !== 7);
@@ -2135,11 +2167,16 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
           errorMessage = errorData.message;
         }
         
+        // Name the step that owns the field. An error about a field on a
+        // step the creator cannot see reads as the save failing for no
+        // reason — which is how "it doesn't save my event" gets reported.
+        const errorStep = findStepForError(errorMessage);
+        if (errorStep) errorMessage = `${errorMessage} — it's on the ${errorStep.label} step.`;
         setPublishError(errorMessage);
         
         toast({
-          title: "Submission failed",
-          description: errorMessage,
+        title: "Submission failed",
+        description: errorMessage,
           variant: "destructive",
         });
       }
@@ -2171,6 +2208,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         }
       }
       
+      // Name the step that owns the field. An error about a field on a
+      // step the creator cannot see reads as the save failing for no
+      // reason — which is how "it doesn't save my event" gets reported.
+      const errorStep = findStepForError(errorMessage);
+      if (errorStep) errorMessage = `${errorMessage} — it's on the ${errorStep.label} step.`;
       setPublishError(errorMessage);
       
       toast({

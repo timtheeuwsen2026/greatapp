@@ -113,13 +113,18 @@ export default function DiscountLinkManager({
     }
   };
 
-  // A discount on an event that has never been saved has nothing to attach a
-  // link to. Say that, rather than offering a button that 404s.
+  // A draft has no link, and cannot have one.
+  //
+  // The link points at the event's public page, and `discount_links` is keyed
+  // to a real experience — a draft has no row there and nothing for a friend to
+  // open. This used to promise the link on draft save, which is a promise the
+  // shape of the thing cannot keep: creators saved, reloaded, and found the same
+  // sentence waiting for them. Say what actually produces the link instead.
   if (!experienceId) {
     return (
       <p className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-        Save this event as a draft and the shareable link for {discountTitle || "this discount"} appears
-        here.
+        Submit this event and the shareable link for {discountTitle || "this discount"} appears
+        here. There is nothing for a link to open until the event has a page of its own.
       </p>
     );
   }

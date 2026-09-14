@@ -507,6 +507,9 @@ export interface IStorage {
     presetGrossCents: number;
     additionalGrossCents: number;
   }[]>;
+  getScheduledPayoutsForCreator(creatorId: string): Promise<any[]>;
+  getScheduledPayoutById(id: string): Promise<ScheduledPayout | undefined>;
+  getAllScheduledPayouts(): Promise<any[]>;
 }
 
 function getReferralVisitorKey(click: {
@@ -5461,6 +5464,75 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return created;
+  }
+
+  /**
+   * Every payout attached to this creator's events, newest first.
+   *
+   * Joined to the experience so the caller can name the event rather than show
+   * an id — a list of uuids and statuses answers nobody's question.
+   */
+  async getScheduledPayoutsForCreator(creatorId: string): Promise<any[]> {
+    // Two narrow queries rather than one join.
+    //
+    // A `select({ a: tableA, b: tableB })` across these two tables is enough to
+    // make TypeScript give up inferring `users`, and the failure lands in every
+    // unrelated storage method that touches it. Same trap as the index config
+    // on `discount_links`. This reads the same rows and stays inferable.
+    const owned = await db
+      .select({ id: experiences.id, title: experiences.title, currency: experiences.currency })
+      .from(experiences)
+      .where(eq(experiences.creatorId, creatorId));
+    if (owned.length === 0) return [];
+
+    const byId = new Map(owned.map((row) => [row.id, row]));
+    const payouts = await db
+      .select()
+      .from(scheduledPayouts)
+      .where(inArray(scheduledPayouts.experienceId, owned.map((row) => row.id)))
+      .orderBy(desc(scheduledPayouts.scheduledFor));
+
+    return payouts.map((payout) => {
+      const experience = byId.get(payout.experienceId);
+      return {
+        ...payout,
+        experienceTitle: experience?.title ?? "Your event",
+        currency: experience?.currency ?? "eur",
+      };
+    });
+  }
+
+  /** Every payout, for the admin retry view. Same two-query shape as above. */
+  async getAllScheduledPayouts(): Promise<any[]> {
+    const payouts = await db
+      .select()
+      .from(scheduledPayouts)
+      .orderBy(desc(scheduledPayouts.scheduledFor));
+    if (payouts.length === 0) return [];
+
+    const events = await db
+      .select({ id: experiences.id, title: experiences.title, currency: experiences.currency })
+      .from(experiences)
+      .where(inArray(experiences.id, payouts.map((row) => row.experienceId)));
+    const byId = new Map(events.map((row) => [row.id, row]));
+
+    return payouts.map((payout) => {
+      const experience = byId.get(payout.experienceId);
+      return {
+        ...payout,
+        experienceTitle: experience?.title ?? "(event deleted)",
+        currency: experience?.currency ?? "eur",
+      };
+    });
+  }
+
+  async getScheduledPayoutById(id: string): Promise<ScheduledPayout | undefined> {
+    const [payout] = await db
+      .select()
+      .from(scheduledPayouts)
+      .where(eq(scheduledPayouts.id, id))
+      .limit(1);
+    return payout;
   }
 
   async getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined> {

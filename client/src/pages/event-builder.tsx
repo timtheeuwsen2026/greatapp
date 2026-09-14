@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Bed, Calendar, Users } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,7 +30,15 @@ export default function EventBuilderPage() {
   const [openingType, setOpeningType] = useState<"one-day" | "multi-day" | null>(null);
   
   // Support both path parameter (/event-builder/:id) and query parameter (?edit=id)
-  const urlParams = new URLSearchParams(window.location.search);
+  //
+  // Read through wouter's `useSearch` rather than off `window.location`.
+  // Wouter's location snapshot is `location.pathname` alone, so a navigation
+  // that changes only the query string re-renders nothing — and a component
+  // reading `window.location.search` during render never sees the new value.
+  // Going from ?edit=A to ?edit=B left the builder sitting on A: same path,
+  // no re-render, stale id. `useSearch` snapshots the search string itself.
+  const search = useSearch();
+  const urlParams = new URLSearchParams(search);
   const editExperienceId = urlParams.get('edit');
   const selectedType = urlParams.get('type');
   // A creator arriving from a Flash Deal card. These only seed the form —

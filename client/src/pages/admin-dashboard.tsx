@@ -50,6 +50,7 @@ import { formatMvgParticipantCount } from "@/lib/participantCounts";
 import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
 import AdminTutorialVideos from "@/components/AdminTutorialVideos";
+import AdminFailedPayouts from "@/components/AdminFailedPayouts";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
@@ -911,7 +912,7 @@ export default function AdminDashboard() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => setLocation(`/event-builder?edit=${experience.id}`)}
+                            onClick={() => setLocation(`/event-builder/${experience.id}`)}
                             data-testid={`button-edit-experience-${experience.id}`}
                           >
                             <Edit className="w-4 h-4 mr-1" />
@@ -1291,6 +1292,10 @@ export default function AdminDashboard() {
           </TabsContent>
 
           <TabsContent value="deal-ledger" className="space-y-6">
+            {/* Failures first. A payout that did not go through is the only
+                thing on this screen that somebody is waiting on. */}
+            <AdminFailedPayouts />
+
             <div>
               <h2 className="text-xl font-semibold">Deal Ledger</h2>
               <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">

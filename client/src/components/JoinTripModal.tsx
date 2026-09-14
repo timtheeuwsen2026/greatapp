@@ -190,7 +190,7 @@ export function JoinTripModal({ open, onClose, trip, onConfirm }: JoinTripModalP
           <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
             <p className="text-xs text-gray-600 dark:text-gray-400">
               <CreditCard className="h-3 w-3 inline mr-1" />
-              Secure payment via Stripe • Sandbox mode for testing
+              Secure payment via Stripe
             </p>
           </div>
         </div>

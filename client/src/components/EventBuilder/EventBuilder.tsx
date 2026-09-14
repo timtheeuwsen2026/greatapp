@@ -559,8 +559,19 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
   const { toast } = useToast();
   const { user } = useAuth();
   
-  // Track event type to dynamically show/hide Rooms step
-  const [activeSteps, setActiveSteps] = useState(getStepsForEventType(initialExperienceType));
+  // Which steps this event type shows. Derived, not stored.
+  //
+  // This used to be `useState` written by an effect that depended on
+  // `currentStep`, so every step change re-set it — and for a one-day event
+  // `getStepsForEventType` returns a fresh `.filter()` array each call, so the
+  // reference always differed and the write always re-rendered. Changing step
+  // therefore rendered the whole builder twice, on top of the render that
+  // `mode: "onChange"` already causes on every keystroke. That churn is what
+  // made the stepper feel like it needed two clicks: the first one landed in
+  // the middle of a re-render.
+  //
+  // It is a pure function of the event type, so it is a `useMemo`. The steps
+  // now change when the type changes and at no other time.
   
 
   const form = useForm<EventBuilderData>({
@@ -986,19 +997,26 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     }
   }, [draftId, currentDraftId]);
 
-  // Watch event type and update active steps dynamically
-  // One-day and virtual events skip the Rooms step
   const eventType = form.watch('type');
+  const activeSteps = useMemo(
+    () => getStepsForEventType(eventType ?? initialExperienceType),
+    [eventType, initialExperienceType],
+  );
+
+  // One-day and virtual events skip the Rooms step, so switching type can strand
+  // the creator on a step that no longer exists, and can leave trip-only data
+  // behind on an event that is no longer a trip. Both follow from the type
+  // changing — and from nothing else, which is why `currentStep` is no longer a
+  // dependency here. It was, and that is what made every step change run this.
   const prevEventTypeForClear = useRef<string>('multi-day'); // Initialize to default
   useEffect(() => {
-    const newSteps = getStepsForEventType(eventType);
-    setActiveSteps(newSteps);
-    
     // If the current step is hidden for this type, move to the next available step.
-    if (!newSteps.some(step => step.id === currentStep)) {
-      const nextVisibleStep = newSteps.find(step => step.id > currentStep) || newSteps[newSteps.length - 1];
-      setCurrentStep(nextVisibleStep.id);
-    }
+    setCurrentStep((step) => {
+      if (activeSteps.some((entry) => entry.id === step)) return step;
+      const nextVisibleStep = activeSteps.find((entry) => entry.id > step)
+        || activeSteps[activeSteps.length - 1];
+      return nextVisibleStep ? nextVisibleStep.id : step;
+    });
     
     // Clear trip-only fields when switching TO one-day or virtual FROM multi-day
     const wasMultiDay = prevEventTypeForClear.current === 'multi-day';
@@ -1017,7 +1035,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       form.setValue('serviceConnectRequests', {}, { shouldDirty: true });
     }
     prevEventTypeForClear.current = eventType || 'multi-day';
-  }, [eventType, currentStep, form]);
+  }, [eventType, activeSteps, form]);
 
   // Helper function to normalize loaded data (works for both drafts and experiences)
   const normalizeLoadedData = (data: any) => {

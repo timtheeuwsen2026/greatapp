@@ -49,6 +49,7 @@ import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import DashboardGuard from "@/components/DashboardGuard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
 
+import { formatPriceByCurrency } from "@shared/pricingService";
 // Currency formatting helper
 // DATA CONTRACT: Currency must come from experience.currency - default EUR for migration
 const formatCurrency = (amount: number | string | undefined | null, currency?: string | null) => {
@@ -399,6 +400,26 @@ function CreatorDashboardContent() {
     enabled: isAuthenticated,
     retry: false
   });
+
+  // Payouts for this creator's events, including the failed ones — the state
+  // the summary counters above could not express.
+  type CreatorPayout = {
+    id: string;
+    experienceId: string;
+    experienceTitle: string;
+    status: string;
+    scheduledFor: string | null;
+    processedAt: string | null;
+    grossCents: number;
+    currency: string;
+    failureReason: string | null;
+  };
+  const { data: creatorPayouts = [] } = useQuery<CreatorPayout[]>({
+    queryKey: ['/api/creator/payouts'],
+    enabled: isAuthenticated,
+    retry: false,
+  });
+  const failedPayouts = creatorPayouts.filter((payout) => payout.status === 'failed');
 
   // Which of the matching answers this profile is missing. Any one of the three
   // is enough to make the organic feed useless, so any one is enough to ask.
@@ -1503,7 +1524,7 @@ function CreatorDashboardContent() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => setLocation(`/event-builder?edit=${experience.id}`)}
+                                onClick={() => setLocation(`/event-builder/${experience.id}`)}
                                 className="flex-1 text-xs"
                                 data-testid={`button-edit-pending-${experience.id}`}
                               >
@@ -1701,7 +1722,7 @@ function CreatorDashboardContent() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => setLocation(`/event-builder?edit=${experience.id}`)}
+                            onClick={() => setLocation(`/event-builder/${experience.id}`)}
                             className="flex-1"
                           >
                             <Edit className="w-3 h-3 mr-1" />
@@ -2581,6 +2602,18 @@ function CreatorDashboardContent() {
                         {typedEarnings.summary?.pendingPayouts || 0}
                       </span>
                     </div>
+                    {/* The state this panel could not previously represent.
+                        A payout that failed counted as neither completed nor
+                        pending, so it showed up nowhere at all and an organiser
+                        waiting on money had no way to learn it was not coming. */}
+                    {failedPayouts.length > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-red-700 dark:text-red-300">Needs attention</span>
+                        <span className="font-semibold text-red-600" data-testid="text-failed-payouts">
+                          {failedPayouts.length}
+                        </span>
+                      </div>
+                    )}
                     <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
                       <p className="text-sm text-gray-600 dark:text-gray-400">
                         Payouts are released to your connected Stripe account 7 days after each event ends.
@@ -2590,6 +2623,70 @@ function CreatorDashboardContent() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Payouts, per event, including the ones that did not happen. */}
+            {creatorPayouts.length > 0 && (
+              <Card data-testid="card-payout-history">
+                <CardHeader>
+                  <CardTitle>Payouts by event</CardTitle>
+                  <CardDescription>
+                    Released seven days after each event ends. Anything that did not go
+                    through is listed here with the reason.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {creatorPayouts.map((payout) => (
+                    <div
+                      key={payout.id}
+                      className={
+                        payout.status === 'failed'
+                          ? 'rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950'
+                          : 'rounded-lg border p-3'
+                      }
+                      data-testid={`payout-row-${payout.id}`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="min-w-0 font-medium text-gray-900 dark:text-white">
+                          {payout.experienceTitle}
+                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm text-muted-foreground">
+                            {formatPriceByCurrency((payout.grossCents || 0) / 100, (payout.currency || 'eur') as any)}
+                          </span>
+                          <Badge
+                            className={
+                              payout.status === 'completed'
+                                ? 'bg-green-100 text-green-800'
+                                : payout.status === 'failed'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-yellow-100 text-yellow-800'
+                            }
+                          >
+                            {payout.status === 'completed'
+                              ? 'Paid'
+                              : payout.status === 'failed'
+                                ? 'Needs attention'
+                                : payout.status === 'processing'
+                                  ? 'Sending'
+                                  : 'Scheduled'}
+                          </Badge>
+                        </div>
+                      </div>
+                      {payout.status !== 'completed' && payout.scheduledFor && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Due {new Date(payout.scheduledFor).toLocaleDateString()}
+                        </p>
+                      )}
+                      {payout.failureReason && (
+                        <p className="mt-2 text-sm text-red-900 dark:text-red-100" data-testid={`payout-reason-${payout.id}`}>
+                          {payout.failureReason}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Individual Earnings Table */}
             <Card>

@@ -223,6 +223,42 @@ async function getSoldAddonQuantity(
   }, 0);
 }
 
+/**
+ * A payout failure, in words the organiser can do something with.
+ *
+ * Stripe's messages are addressed to whoever runs the platform account — they
+ * talk about balances and dashboard settings an organiser has no access to.
+ * Showing them raw would be worse than showing nothing: it reads as the
+ * organiser's own account being broken.
+ *
+ * Every branch here says who has to act. Most of the time it is us.
+ */
+function explainPayoutFailure(raw: unknown): string {
+  const message = String(raw ?? "").trim();
+  if (!message) return "The payout did not complete. We are looking into it.";
+
+  // The platform's balance was empty when the transfer ran — almost always
+  // because automatic payouts are sweeping the account before transfers fire.
+  if (/insufficient funds/i.test(message)) {
+    return "This payout could not be sent because of a problem on our side, not yours. "
+      + "We have been notified and will release it — your balance is not lost.";
+  }
+
+  // A recipient has not finished Stripe onboarding. The scheduler halts the
+  // whole payout rather than quietly keeping their share.
+  if (/no connected stripe account/i.test(message)) {
+    return "Someone due a share of this event has not finished connecting their payout "
+      + "account yet, so we have held the whole payout rather than split it incorrectly.";
+  }
+
+  if (/capabilities|charges_enabled|payouts_enabled|verification/i.test(message)) {
+    return "Your connected Stripe account is not able to receive transfers yet. "
+      + "Opening Stripe from the Payouts card usually shows what is outstanding.";
+  }
+
+  return "The payout did not complete. We have been notified and will release it.";
+}
+
 function applyMarketplaceEconomics(input: any = {}) {
   const model = input.venueCompensationModel || "access_only";
   const revenueSharePct = model === "revenue_share"
@@ -17925,6 +17961,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Creator Ledger — total sales + My Share based on accepted creatorPct
   // Header ledger strip. Same numbers as /api/creator/earnings — one source.
+  /**
+   * The creator's own payouts, and — when one did not happen — why.
+   *
+   * The Earnings tab counted Completed and Pending and had no way to say
+   * Failed. Six payouts on this platform have failed, every one of them with
+   * the reason written to `scheduled_payouts.error_message`, and not one of
+   * those reasons has ever been shown to anybody. A creator asked where his
+   * money was and nobody could answer, for weeks, while the answer sat in a
+   * column. A silent failure is the expensive kind.
+   *
+   * The stored message is Stripe's, written for whoever is holding the
+   * platform account. `explainPayoutFailure` turns it into something the
+   * organiser can act on — usually "this is ours to fix, not yours".
+   */
+  app.get('/api/creator/payouts', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const rows = await storage.getScheduledPayoutsForCreator(userId);
+
+      res.json(rows.map((row: any) => ({
+        id: row.id,
+        experienceId: row.experienceId,
+        experienceTitle: row.experienceTitle,
+        status: row.status,
+        scheduledFor: row.scheduledFor,
+        processedAt: row.processedAt,
+        grossCents: (row.totalGrossAmountCents || 0) + (row.additionalGrossAmountCents || 0),
+        currency: row.currency || "eur",
+        // Never the raw Stripe string: it talks about the platform's balance
+        // and its dashboard, neither of which is the organiser's to look at.
+        failureReason: row.status === "failed"
+          ? explainPayoutFailure(row.errorMessage)
+          : null,
+      })));
+    } catch (error) {
+      console.error("Error loading creator payouts:", error);
+      res.status(500).json({ message: "Failed to load your payouts" });
+    }
+  });
+
+  /**
+   * Put a failed payout back in the queue.
+   *
+   * The scheduler's own docs say "failed ones can be retried by an admin
+   * resetting status to 'pending'" — and there has never been a way to do
+   * that, so every failure was terminal and needed someone with database
+   * access. The hourly run picks it up again from here.
+   *
+   * Deliberately does not move any money itself: it re-queues, and the
+   * existing scheduler does the transfer under the same rules as always.
+   * Retrying before the underlying cause is fixed just fails again, which is
+   * why the reason is returned to the admin alongside.
+   */
+  /** Every scheduled payout, for the admin view that offers the retry below. */
+  app.get('/api/admin/scheduled-payouts', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const rows = await storage.getAllScheduledPayouts();
+      res.json(rows.map((row: any) => ({
+        id: row.id,
+        experienceId: row.experienceId,
+        experienceTitle: row.experienceTitle,
+        status: row.status,
+        scheduledFor: row.scheduledFor,
+        processedAt: row.processedAt,
+        grossCents: (row.totalGrossAmountCents || 0) + (row.additionalGrossAmountCents || 0),
+        currency: row.currency || "eur",
+        // Raw, deliberately: an admin acting on this needs Stripe's own words,
+        // which usually name the setting to change.
+        errorMessage: row.errorMessage || null,
+      })));
+    } catch (error) {
+      console.error("Error listing scheduled payouts:", error);
+      res.status(500).json({ message: "Failed to load payouts" });
+    }
+  });
+
+  app.post('/api/admin/scheduled-payouts/:id/retry', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+
+      const payout = await storage.getScheduledPayoutById(req.params.id);
+      if (!payout) return res.status(404).json({ message: "Payout not found" });
+      if (payout.status !== "failed") {
+        return res.status(409).json({
+          message: `Only a failed payout can be retried — this one is ${payout.status}.`,
+        });
+      }
+
+      const updated = await storage.updateScheduledPayout(payout.id, {
+        status: "pending",
+        errorMessage: null,
+        processedAt: null,
+      } as any);
+
+      console.log(`[Payout Scheduler] Admin re-queued payout ${payout.id} for ${payout.experienceId}`);
+      res.json({
+        payout: updated,
+        message: "Re-queued. The hourly payout run will pick it up.",
+      });
+    } catch (error) {
+      console.error("Error retrying payout:", error);
+      res.status(500).json({ message: "Failed to retry the payout" });
+    }
+  });
+
   app.get('/api/creator/ledger', isAuthenticated, async (req: any, res) => {
     try {
       const { summary } = await getCreatorEarningsBreakdown(req.user.claims.sub);

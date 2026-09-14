@@ -1311,7 +1311,24 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       const formData = form.getValues();
       
       // Collect all required form fields (title, description, location, media, rooms, pricing, terms)
+      //
+      // `...formData` first, then the explicit mappings on top.
+      //
+      // This used to be an allowlist and nothing else, which meant any form
+      // field somebody forgot to list here was silently discarded by the Save
+      // Draft button — while autosave and step navigation, which spread the
+      // whole form, kept it. A creator who set up a discount and pressed the
+      // button they were told to press lost it; one who wandered to the next
+      // step did not. `discounts`, `expectedAudienceSize` and `addonRequests`
+      // were all being dropped this way.
+      //
+      // The explicit entries below still win, because several of them are real
+      // mappings (form name → draft column) rather than pass-throughs. What the
+      // spread changes is the default for everything nobody thought to add:
+      // kept, rather than thrown away without a word.
       const rawDraftPayload = {
+        ...formData,
+
         // Basic info fields
         title: formData.title || '',
         shortDescription: formData.shortDescription || '',
@@ -1859,7 +1876,15 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       const formData = form.getValues();
       
       // Prepare event data for publishing (collect all form fields like saveDraft)
+      // Same shape, and the same reason, as the draft payload above: spread the
+      // whole form first so nothing is lost merely because it was not listed,
+      // then let the deliberate mappings override. Publishing used to drop
+      // `discounts` and `expectedAudienceSize` on the floor — the second is
+      // what a venue reads on its invite to judge a flat-fee commitment, so it
+      // was the one field the offer turned on and the one that never arrived.
       const rawPublishPayload = {
+        ...formData,
+
         // Pass the current draft ID if we have one
         id: currentDraftId || undefined,
         
@@ -6754,6 +6779,40 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId }: {
                               {(() => {
                                 const addon = getTicketAddon({ ...sku, addonEnabled: true });
                                 if (!addon) return null;
+
+                                // `getTicketAddon` clamps a deductive margin to
+                                // the venue's price so a half-typed number never
+                                // shows the venue a negative cut. That clamp is
+                                // right for the arithmetic and wrong to render
+                                // as a result: a €6 margin on a €4 coffee was
+                                // displayed as "You earn €4.00" beside a warning
+                                // saying those terms cannot work. Two components
+                                // describing one input differently, and the
+                                // friendlier one is the one that gets believed.
+                                //
+                                // So when the entered margin is over the limit,
+                                // this says so instead of quietly showing the
+                                // clamped figure.
+                                const enteredMargin = Number(sku.addonMargin) || 0;
+                                const marginOverLimit = addon.marginMode === 'deduction'
+                                  && enteredMargin > addon.venuePrice + 0.005;
+
+                                if (marginOverLimit) {
+                                  return (
+                                    <div
+                                      className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100"
+                                      data-testid={`ticket-addon-breakdown-${index}`}
+                                    >
+                                      <strong className="block">No split to show yet</strong>
+                                      <p className="mt-1 text-xs">
+                                        A {formatPriceByCurrency(enteredMargin, currency)} margin cannot come
+                                        out of the venue's {formatPriceByCurrency(addon.venuePrice, currency)}.
+                                        Fix the numbers above and the breakdown appears here.
+                                      </p>
+                                    </div>
+                                  );
+                                }
+
                                 return (
                                   <div
                                     className="rounded-md bg-green-50 p-3 text-sm dark:bg-green-950"

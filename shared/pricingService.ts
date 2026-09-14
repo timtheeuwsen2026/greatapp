@@ -309,10 +309,20 @@ export function formatPriceByCurrency(
     return formatPriceByCurrency(amount, 'usd');
   }
 
-  // Round to appropriate decimal places
+  // Round to appropriate decimal places.
+  //
+  // The sign is taken off here and put back at the very end. Formatting a
+  // negative number whole produced "$-260.00" — symbol, then minus — because
+  // the symbol is glued to a string that already starts with "-". Every
+  // negative figure on the pricing screens read that way while the calculator
+  // rows beside them, which format their own sign, read "-$60.00". Two
+  // spellings of a minus on one screen is enough to make someone check whether
+  // they mean the same thing.
+  const negative = amount < 0;
+  const magnitude = Math.abs(amount);
   const rounded = config.decimals === 0 
-    ? Math.round(amount)
-    : Math.round(amount * Math.pow(10, config.decimals)) / Math.pow(10, config.decimals);
+    ? Math.round(magnitude)
+    : Math.round(magnitude * Math.pow(10, config.decimals)) / Math.pow(10, config.decimals);
 
   // Format with decimals
   const formatted = config.decimals === 0 
@@ -324,12 +334,15 @@ export function formatPriceByCurrency(
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const numberStr = parts.join('.');
 
-  // Apply currency symbol position
-  if (config.position === 'before') {
-    return `${config.symbol}${numberStr}`;
-  } else {
-    return `${numberStr} ${config.symbol}`;
-  }
+  // Apply currency symbol position, then the sign outside all of it — "-$60.00"
+  // and "-60.00 €", never "$-60.00".
+  const withSymbol = config.position === 'before'
+    ? `${config.symbol}${numberStr}`
+    : `${numberStr} ${config.symbol}`;
+
+  // -0 is zero. Rounding a tiny negative to two places produces one, and
+  // "-$0.00" reads as a debt rather than as nothing.
+  return negative && rounded !== 0 ? `-${withSymbol}` : withSymbol;
 }
 
 /**

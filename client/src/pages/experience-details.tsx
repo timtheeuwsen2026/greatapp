@@ -1241,6 +1241,10 @@ export default function ExperienceDetails() {
                       const roomSoldCount = matchingSku?.soldCount || room.soldCount || 0;
                       const roomAvailable = ((room.quantity || 1) * (room.capacity || 1)) - roomSoldCount;
                       const isSoldOut = roomAvailable <= 0 || eventHasPassed;
+                      // Kept as one flag here: the room block has no
+                      // spots-remaining line to contradict, only a disabled
+                      // control, so there is nothing to tell apart.
+
                       const skuId = matchingSku?.id || room.id;
                       const isSelected = selectedTicketId === skuId;
                       
@@ -1541,8 +1545,14 @@ export default function ExperienceDetails() {
                           // Use sourceRoomId as unique ticket identifier (ticketSkus stored in JSON don't have separate id field)
                           const ticketId = ticket.id || ticket.sourceRoomId || `ticket-${index}`;
                           const isSelected = selectedTicketId === ticketId;
-                          // A finished event closes every tier, whatever is left.
-                          const isSoldOut = spotsAvailable <= 0 || eventHasPassed;
+                          // Two different reasons a tier cannot be bought, kept
+                          // apart. Folding them into one flag made a finished
+                          // event with 36 spots free announce "Sold out" and
+                          // "36 spots remaining" in the same panel — which reads
+                          // as the page contradicting itself rather than as an
+                          // event that is simply over.
+                          const isSoldOut = spotsAvailable <= 0;
+                          const isClosed = isSoldOut || eventHasPassed;
                           const selectedQuantity = Math.min(
                             Math.max(1, ticketQuantities[ticketId] || 1),
                             Math.max(1, spotsAvailable),
@@ -1577,23 +1587,27 @@ export default function ExperienceDetails() {
                               </div>
                               <div className="text-xs text-gray-500 mb-3">per person</div>
                               <div className="flex items-center justify-between mb-3">
-                                {(isSoldOut || !isMvgForming) && (
+                                {(isClosed || !isMvgForming) && (
                                   <Badge
-                                    variant={isSoldOut ? "destructive" : spotsAvailable <= 3 ? "destructive" : "secondary"}
+                                    variant={isSoldOut ? "destructive" : eventHasPassed ? "secondary" : spotsAvailable <= 3 ? "destructive" : "secondary"}
                                     className="text-xs"
                                     data-testid={`ticket-availability-${index}`}
                                   >
-                                    {isSoldOut ? 'Sold out' : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
+                                    {eventHasPassed
+                                      ? 'Event ended'
+                                      : isSoldOut
+                                        ? 'Sold out'
+                                        : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
                                   </Badge>
                                 )}
-                                {ticketDeposit > 0 && !isSoldOut && (
+                                {ticketDeposit > 0 && !isClosed && (
                                   <div className="flex items-center text-xs text-green-600 font-medium">
                                     <Shield className="h-3 w-3 mr-1" />
                                     {formatCurrency(ticketDeposit, experience.currency)} deposit
                                   </div>
                                 )}
                               </div>
-                              {!isSoldOut && (
+                              {!isClosed && (
                                 <div className="mb-3 flex items-center justify-between gap-3">
                                   <label
                                     htmlFor={`ticket-quantity-${index}`}
@@ -1696,7 +1710,7 @@ export default function ExperienceDetails() {
 
                               {/* Explicit Book This Ticket CTA - Professional styling */}
                               <div className="mt-4">
-                                {isSoldOut ? (
+                                {isClosed ? (
                                   <Button className="w-full h-12 bg-gray-200 text-gray-500 rounded-lg font-medium" size="lg" disabled data-testid={`button-soldout-ticket-${index}`}>
                                     {eventHasPassed ? "Event has ended" : "Sold Out"}
                                   </Button>
@@ -1797,7 +1811,10 @@ export default function ExperienceDetails() {
                     </div>
                   )}
                   
-                  {!isMvgForming && (
+                  {/* Spots left is a reason to hurry. On an event that has
+                      already happened it is just a number, and one that
+                      contradicts the notice above it. */}
+                  {!isMvgForming && !eventHasPassed && (
                     <p className="text-sm text-gray-600 mt-3">
                       {spotsLeft > 0 ? `${spotsLeft} spots remaining` : "Fully booked"}
                     </p>

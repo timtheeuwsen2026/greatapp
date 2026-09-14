@@ -873,9 +873,14 @@ export function explainVenueDealMechanics(input: VenueDealMechanicsInput): strin
         + `turnout — which is why a Minimum Viable Group is worth setting alongside it.`;
 
     case "upfront_rental":
+      // The MVG sentence is the same one Per Room / Per Night carries, and for
+      // the same reason: these are the two deals whose cost does not fall when
+      // fewer people come. Naming the risk without naming the mechanism that
+      // answers it left the organiser to work out the answer themselves.
       return `You pay the venue ${money(value)} for the space, before any tickets are sold and `
         + `whatever the turnout. It is a cost rather than a share, so the platform fee does not `
-        + `apply to it — and neither does anything else if nobody comes.`;
+        + `apply to it — and neither does anything else if nobody comes, which is why a Minimum `
+        + `Viable Group is worth setting alongside it.`;
 
     case "venue_sponsored":
       // The ambiguity this resolves: which way the money travels.

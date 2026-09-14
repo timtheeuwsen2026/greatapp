@@ -564,6 +564,15 @@ describe("explainVenueDealMechanics", () => {
     expect(text).toMatch(/Minimum Viable Group/i);
   });
 
+  it("recommends MVG on upfront rental, the same as per room per night", () => {
+    // Both are fixed-cost deals; only one of them used to say so.
+    for (const model of ["upfront_rental", "per_room_night"]) {
+      expect(explainVenueDealMechanics({ ...base, model, value: 500 })).toMatch(
+        /Minimum Viable Group/i,
+      );
+    }
+  });
+
   it("works the revenue split out against gross", () => {
     const text = explainVenueDealMechanics({ ...base, model: "revenue_share", value: 20 })!;
     expect(text).toContain("€80.00");

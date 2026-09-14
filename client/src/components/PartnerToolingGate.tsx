@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Clock, Loader2, Lock } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 import type { PartnerAccess } from "@shared/partnerAccess";
 
 /**
@@ -19,10 +20,29 @@ import type { PartnerAccess } from "@shared/partnerAccess";
  * verification and onboarding architecture.
  */
 export function usePartnerAccess() {
-  return useQuery<PartnerAccess>({
+  // Wait for the session before asking.
+  //
+  // The access token lives in a module variable that `AuthContext` fills in
+  // once Supabase hands back a session — so on a fresh page load it is null for
+  // the first moments. This query used to fire straight away, arrive without an
+  // Authorization header, and get a 401. With the app's query defaults of
+  // `retry: false` and `staleTime: Infinity`, that 401 was final: it never
+  // retried and never refetched, so a signed-in creator who opened
+  // /collab-opportunities or /tutorials/partners by URL was locked out of their
+  // own product until they navigated in from somewhere else.
+  //
+  // `enabled` on the auth state is the fix. `isLoading` is true only while the
+  // session is being restored, and the token is set before the user is, so by
+  // the time this runs the header is there.
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+
+  const query = useQuery<PartnerAccess>({
     queryKey: ["/api/partner-access"],
+    enabled: !authLoading && isAuthenticated,
     staleTime: 60_000,
   });
+
+  return { ...query, authLoading, isAuthenticated };
 }
 
 export default function PartnerToolingGate({
@@ -33,7 +53,14 @@ export default function PartnerToolingGate({
   children: ReactNode;
   inline?: boolean;
 }) {
-  const { data: access, isLoading, isError, error } = usePartnerAccess();
+  const {
+    data: access,
+    isLoading,
+    isError,
+    error,
+    authLoading,
+    isAuthenticated,
+  } = usePartnerAccess();
 
   // A signed-out visitor is not a failed check. Until this gate went in front of
   // pages anyone can reach by URL — the partner tutorial, the pricing
@@ -41,9 +68,19 @@ export default function PartnerToolingGate({
   // mean a dropped session. Now it usually means "has not signed in yet", and
   // telling that person "we couldn't reach the check" sends them to support
   // instead of to the signup button.
-  const isSignedOut = /(^|\s)401(:|$)/.test(String((error as Error | null)?.message ?? ""));
+  //
+  // Read off the auth state rather than off a 401, which is what made this
+  // misfire: a 401 can also be a request that simply ran before the token
+  // landed. A 401 *after* auth has settled is a genuinely expired session, and
+  // "sign in" is the right answer to that too.
+  const sessionExpired = isAuthenticated
+    && /(^|\s)401(:|$)/.test(String((error as Error | null)?.message ?? ""));
+  const isSignedOut = (!authLoading && !isAuthenticated) || sessionExpired;
 
-  if (isLoading) {
+  // Nothing has been decided until the session is known. Showing the refusal
+  // first and correcting it a moment later is how someone ends up emailing
+  // support about a page that works.
+  if (authLoading || (isAuthenticated && isLoading)) {
     return (
       <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
         <Loader2 className="h-4 w-4 animate-spin" />

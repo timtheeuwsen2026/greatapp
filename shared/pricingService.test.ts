@@ -393,6 +393,32 @@ describe('formatPriceByCurrency', () => {
     expect(formatPriceByCurrency(100, 'xyz' as SupportedCurrency)).toBe('$100.00');
   });
 
+  // A venue payout, a shortfall, a deduction: the pricing screens are full of
+  // negative figures, and they used to render "$-260.00" beside calculator rows
+  // reading "-$60.00". The sign belongs outside the symbol, whichever side the
+  // symbol sits on.
+  test('puts the minus outside the symbol, not after it', () => {
+    expect(formatPriceByCurrency(-260, 'usd')).toBe('-$260.00');
+    expect(formatPriceByCurrency(-60, 'usd')).toBe('-$60.00');
+    expect(formatPriceByCurrency(-1234.56, 'gbp')).toBe('-£1,234.56');
+  });
+
+  test('keeps the trailing symbol trailing on a negative', () => {
+    expect(formatPriceByCurrency(-1234.56, 'eur')).toBe('-1,234.56 €');
+    expect(formatPriceByCurrency(-99, 'sek')).toBe('-99.00 kr');
+  });
+
+  test('separates thousands on a negative too', () => {
+    expect(formatPriceByCurrency(-1234567.89, 'usd')).toBe('-$1,234,567.89');
+    expect(formatPriceByCurrency(-1000000, 'jpy')).toBe('-¥1,000,000');
+  });
+
+  test('never renders a negative zero', () => {
+    expect(formatPriceByCurrency(-0, 'usd')).toBe('$0.00');
+    expect(formatPriceByCurrency(-0.001, 'usd')).toBe('$0.00');
+    expect(formatPriceByCurrency(-0.4, 'jpy')).toBe('¥0');
+  });
+
   test('should use USD as default currency', () => {
     expect(formatPriceByCurrency(100)).toBe('$100.00');
   });

@@ -22,14 +22,24 @@ vi.mock('@/components/ProtectedRoute', () => ({ default: ({ children }: any) => 
 vi.mock('@/components/Breadcrumb', () => ({ default: () => <div /> }));
 vi.mock('@/hooks/useBreadcrumbs', () => ({ useBreadcrumbs: () => [] }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const MOCK_USER = { id: 'user-1', role: 'venue_provider' };
+
 vi.mock('@/hooks/useRoleAuth', () => ({
   useVenueAuth: () => ({
-    user: { id: 'user-1', role: 'venue_provider' },
+    user: MOCK_USER,
     isAuthenticated: true,
     hasRequiredRole: true,
     isLoading: false,
   }),
 }));
+// The partner tooling gate reads the session directly, so a component tree with
+// no AuthProvider would sit on "Checking access…" forever and hide the tab this
+// file is about. Mocked here rather than wrapped in a provider: the real one
+// talks to Supabase.
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: MOCK_USER, isAuthenticated: true, isLoading: false }),
+}));
+
 
 const approvedVenue = { id: 'venue-1', name: 'Bandido Cafe', status: 'approved', city: 'Barcelona' };
 

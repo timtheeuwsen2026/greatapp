@@ -400,6 +400,17 @@ function CreatorDashboardContent() {
     retry: false
   });
 
+  // Which of the matching answers this profile is missing. Any one of the three
+  // is enough to make the organic feed useless, so any one is enough to ask.
+  const needsMatchingDetails = !!creatorProfile
+    && !profileLoading
+    && (
+      !String((creatorProfile as any).city || "").trim()
+      || !String((creatorProfile as any).category || "").trim()
+      || !Array.isArray((creatorProfile as any).lookingFor)
+      || (creatorProfile as any).lookingFor.length === 0
+    );
+
   // Get onboarding checklist data
   // Attendance rewards: "come to 10 of my runs and the t-shirt is yours".
   type AttendanceMilestone = {
@@ -1180,6 +1191,39 @@ function CreatorDashboardContent() {
             </CardContent>
           </Card>
         </div>
+
+        {/* The matching details an existing profile has never been asked for.
+
+            Onboarding now asks every new creator for a city, a category and
+            what they typically need — that is what Suggested for You matches
+            on. Every creator who signed up before it was added has all three
+            blank, so their organic feed is empty for a reason no page explains
+            and no amount of waiting fixes. This is the only route back into the
+            form once a profile counts as complete. */}
+        {needsMatchingDetails && (
+          <div
+            className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950"
+            data-testid="prompt-creator-matching-details"
+          >
+            <div className="min-w-0">
+              <p className="font-medium text-amber-900 dark:text-amber-100">
+                Add your matching details
+              </p>
+              <p className="text-sm text-amber-800 dark:text-amber-200">
+                Your city, what you host and what you are typically looking for. Without
+                them, Suggested for You has nothing to match you against and stays empty.
+                Two minutes.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setLocation('/creator/profile-setup')}
+              data-testid="button-add-matching-details"
+            >
+              Add them now
+            </Button>
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="h-auto flex-wrap justify-start">
@@ -2448,6 +2492,31 @@ function CreatorDashboardContent() {
           </TabsContent>
 
           <TabsContent value="earnings" className="space-y-6">
+            {/* The Earnings Model, from the tab where someone is already
+                thinking about money.
+
+                It was only ever linked from the "complete your profile"
+                screen — which a creator with a finished profile never sees
+                again, so the page existed and nothing on the dashboard led to
+                it. This is where the question "how is this actually worked
+                out?" gets asked. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-gray-50 p-4 dark:bg-gray-900">
+              <div className="min-w-0">
+                <p className="font-medium text-gray-900 dark:text-white">How your earnings are worked out</p>
+                <p className="text-sm text-muted-foreground">
+                  Every deal type, the platform fee, and a calculator you can put your own
+                  numbers into — running the same arithmetic as the builder.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setLocation('/creator/earnings')}
+                data-testid="button-earnings-model"
+              >
+                Open the Earnings Model
+              </Button>
+            </div>
+
             {/* Stripe Connect — where the creator sets up / manages payouts */}
             <PayoutsConnectCard />
 

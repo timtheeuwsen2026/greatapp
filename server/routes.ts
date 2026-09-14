@@ -3849,91 +3849,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/creator-profile', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = resolveCurrentUserId(req);
-      if (!userId) {
-        return res.status(401).json({ message: "User not authenticated" });
-      }
-      console.log("Creating creator profile for user:", userId);
-      console.log("Profile data received:", req.body);
-      
-      // Handle both location and baseLocation field names
-      const location = req.body.location || req.body.baseLocation;
-      
-      // Validate required fields
-      if (!req.body.displayName || !req.body.bio || !location || !req.body.experienceLevel || !req.body.payoutEmail) {
-        return res.status(400).json({ 
-          message: "Missing required fields", 
-          required: ["displayName", "bio", "location/baseLocation", "experienceLevel", "payoutEmail"] 
-        });
-      }
-
-      // Transform the data to match database schema
-      const profileData = {
-        displayName: req.body.displayName,
-        bio: req.body.bio,
-        location: location,
-        experienceLevel: req.body.experienceLevel,
-        payoutEmail: req.body.payoutEmail,
-        termsAccepted: req.body.termsAccepted || false,
-        tagline: req.body.tagline || null,
-        profilePhoto: req.body.profilePhoto || null,
-        expertiseTags: req.body.expertiseTags || req.body.expertise || [],
-        gallery: req.body.gallery || req.body.portfolioImages || [],
-        socialLinks: req.body.socialLinks || req.body.socialMediaLinks || {},
-        stripeVerificationStatus: "pending",
-        approved: false,
-        completed: true // Mark profile as completed when successfully created
-      };
-      
-      const profile = await storage.createOrUpdateCreatorProfile(userId, profileData);
-      
-      console.log("Creator profile created successfully:", profile.id);
-      res.status(201).json(profile);
-    } catch (error) {
-      console.error("Error creating creator profile:", error);
-      res.status(500).json({ 
-        message: "Failed to create creator profile", 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      });
-    }
-  });
-
-  app.put('/api/creator-profile', async (req: any, res) => {
-    try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
-      console.log("Updating creator profile for user:", userId);
-      console.log("Profile updates received:", req.body);
-      
-      // Transform the data to match database schema
-      const profileData = {
-        displayName: req.body.displayName,
-        bio: req.body.bio,
-        location: req.body.location,
-        experienceLevel: req.body.experienceLevel,
-        payoutEmail: req.body.payoutEmail,
-        termsAccepted: req.body.termsAccepted,
-        tagline: req.body.tagline || null,
-        profilePhoto: req.body.profilePhoto || null,
-        expertiseTags: req.body.expertiseTags || [],
-        gallery: req.body.gallery || [],
-        socialLinks: req.body.socialLinks || {},
-        completed: true // Mark profile as completed when successfully updated
-      };
-      
-      const profile = await storage.createOrUpdateCreatorProfile(userId, profileData);
-      
-      console.log("Creator profile updated successfully:", profile.id);
-      res.json(profile);
-    } catch (error) {
-      console.error("Error updating creator profile:", error);
-      res.status(500).json({ 
-        message: "Failed to update creator profile", 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      });
-    }
-  });
+  // Creator profile writes live at the second `POST /api/creator-profile`
+  // further down this file, which validates through `insertCreatorProfileSchema`.
+  //
+  // Two handlers used to sit here and shadow it — Express takes the first
+  // match — and between them they caused the approval loop:
+  //
+  //   * The POST hardcoded `approved: false` on every save. A creator who
+  //     edited anything, even a typo, was silently un-approved, met "Your
+  //     profile is with our team", and needed an admin again. Approving them
+  //     lasted exactly until their next save.
+  //   * It also built its payload from an explicit list, so every field added
+  //     since it was written — city, category, what they are looking for, the
+  //     brand kit — was dropped. That is the "my information is not saved"
+  //     half of the same report.
+  //   * It reset `stripeVerificationStatus` to "pending" on every save, which
+  //     would undo a completed Stripe onboarding.
+  //   * The PUT had no `isAuthenticated` at all and wrote to a hardcoded user
+  //     id outside production. No client ever called it.
+  //
+  // The surviving handler omits `approved` from what a caller may send, so
+  // approval is something only an admin grants and nothing a creator does can
+  // take away.
 
   // Experience routes - List public experiences (approved and published by default)
   app.get("/api/experiences", async (req, res) => {
@@ -14905,9 +14842,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update creator onboarding progress
-  app.post("/api/creator/onboard", async (req: any, res) => {
+  app.post("/api/creator/onboard", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = process.env.NODE_ENV === 'development' ? "45788955" : req.user.claims.sub;
+      // Was `NODE_ENV === 'development' ? "45788955" : req.user.claims.sub` with
+      // no auth middleware, so outside production anyone could write to one
+      // hardcoded account without signing in.
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
       const { step, data } = req.body;
 
       if (!step) {
@@ -14915,12 +14857,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       let result;
-      
+
       switch (step) {
         case 'profile':
           // Update or create creator profile
           if (data) {
-            result = await storage.createOrUpdateCreatorProfile(userId, data);
+            // Through the schema, not straight from the body. `approved` is
+            // omitted there, so this cannot be used to self-approve — which it
+            // could, by posting { step: 'profile', data: { approved: true } }.
+            const validation = insertCreatorProfileSchema.partial().safeParse(data);
+            if (!validation.success) {
+              return res.status(400).json({
+                message: "Invalid profile data",
+                errors: validation.error.issues,
+              });
+            }
+            result = await storage.createOrUpdateCreatorProfile(userId, validation.data as any);
           }
           break;
           

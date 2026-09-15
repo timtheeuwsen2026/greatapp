@@ -1270,6 +1270,22 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       venueMinimumSpend: (draft as any).venueMinimumSpend || "0.00",
       venueRevenueSharePct: (draft as any).venueRevenueSharePct || (draft as any).venueRevenuePercentage || "0.00",
       venueAccessFee: (draft as any).venueAccessFee || "0.00",
+
+      // Builder-owned columns this mapping used to omit, and therefore delete.
+      //
+      // `discounts` is the one that was reported: a creator set up "Early Bird
+      // — 2.00 EUR off", published, pressed Create shareable link and was told
+      // the discount is not set up on this event. It wasn't — the form had it,
+      // the draft had it, and this mapping dropped it on the way to the
+      // experience row, so the link endpoint looked and found nothing.
+      //
+      // The other three were losing data just as quietly: a Daytime Space's
+      // standing and seated capacity, and whether the participant perk is
+      // venue-backed (which decides if it needs the venue's sign-off).
+      discounts: Array.isArray((draft as any).discounts) ? (draft as any).discounts : [],
+      standingCapacity: (draft as any).standingCapacity ?? null,
+      seatedCapacity: (draft as any).seatedCapacity ?? null,
+      participantReferralVenueBacked: (draft as any).participantReferralVenueBacked === true,
       // Carried explicitly, like every other figure in this block. It has a
       // column on `experiences` and was never written to it, so the venue's
       // one-off commitment existed only until the event was published.
@@ -15521,7 +15537,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const discounts = (experience.discounts as any[]) || [];
       const discount = discounts.find((entry: any) => entry.id === discountId);
       if (!discount) {
-        return res.status(400).json({ message: "That discount is not set up on this event" });
+        // Almost always "typed but not saved yet": the discount is sitting in
+        // the builder's form state and the event row has not caught up. Saying
+        // so beats naming a state the creator cannot see — "that discount is
+        // not set up on this event" is technically true and useless when they
+        // are looking straight at it on screen.
+        return res.status(400).json({
+          message: "Save the event first — this discount hasn't been stored on it yet. "
+            + "Save your changes, then create the link.",
+        });
       }
 
       const label = String(req.body?.label || "").trim() || null;

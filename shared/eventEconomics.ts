@@ -76,6 +76,18 @@ export type EventEconomicsInput = {
   addOnCreatorGross?: number;
   /** Participant cashback, as a percentage of ticket revenue. */
   promoterCommissionPct?: number;
+  /**
+   * Partners whose deal is paid out of ticket revenue — Commission per Ticket
+   * or Revenue Split — one entry each.
+   *
+   * The venue used to be the only party that could take a percentage, which
+   * broke the case the Partners model exists for: a free outdoor location with
+   * no paid venue at all, where a partner community is what actually makes the
+   * event happen and deserves the cut. There may be zero of these, one, or
+   * several; barter and sponsorship partners are absent by construction,
+   * because they settle outside tickets entirely.
+   */
+  partnerShares?: Array<{ key: string; label: string; pct: number }>;
 };
 
 export type EventEconomics = {
@@ -88,6 +100,8 @@ export type EventEconomics = {
   platformFeeBase: number;
   /** What the venue is owed for the tickets, under the selected deal. */
   venueTicketCost: number;
+  /** What every ticket-revenue partner is owed, added together. */
+  partnerTicketCost: number;
   /** What the venue is paying the organiser: sponsorship or commitment fee. */
   venueContribution: number;
   /** The venue's own add-on money — paid to it directly, never split. */
@@ -188,6 +202,21 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
   const promoterCommissionPct = Math.max(0, finite(input.promoterCommissionPct));
   const promoterBounty = round2(ticketGross * (promoterCommissionPct / 100));
 
+  // Partner cuts of ticket revenue, one row each. Only partners whose deal
+  // actually pulls from tickets reach this — the caller filters on
+  // `revenueShareEligible`, so a barter partner can never appear here and can
+  // never reduce the organiser's ticket net.
+  const partnerRows = (Array.isArray(input.partnerShares) ? input.partnerShares : [])
+    .map((share) => ({
+      key: String(share?.key || "partner"),
+      label: String(share?.label || "Partner"),
+      pct: Math.max(0, finite(share?.pct)),
+    }))
+    .filter((share) => share.pct > 0)
+    .map((share) => ({ ...share, amount: round2(ticketGross * (share.pct / 100)) }))
+    .filter((share) => share.amount > 0);
+  const partnerTicketCost = round2(partnerRows.reduce((total, share) => total + share.amount, 0));
+
   // ── The platform's cut, on everything that reached the organiser ─────────
   // Ticket revenue, the organiser's add-on margin and the venue's own
   // contribution all arrive through the platform, so all three are charged.
@@ -255,6 +284,15 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     });
   }
 
+  for (const share of partnerRows) {
+    lines.push({
+      key: `partner_share_${share.key}`,
+      label: `${share.label} (${share.pct}%)`,
+      amount: -share.amount,
+      kind: "promotion",
+    });
+  }
+
   if (promoterBounty > 0) {
     lines.push({
       key: "promoter_bounty",
@@ -273,6 +311,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     platformFee,
     platformFeeBase,
     venueTicketCost: offPlatform ? 0 : venueTicketCost,
+    partnerTicketCost,
     venueContribution,
     addOnVenueRevenue,
     offPlatform,

@@ -12,6 +12,7 @@ import {
   pgEnum,
   date,
   unique,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -51,8 +52,14 @@ export const users = pgTable("users", {
   role: userRoleEnum("role").default("participant"),
   // Promoter referral system
   promoterCode: varchar("promoter_code").unique(), // Unique code for promoter referral links
+  // `(): AnyPgColumn` is load-bearing, not decoration. A self-reference with an
+  // un-annotated callback makes `users` circular in its own initialiser, so
+  // TypeScript gives up and types the whole table `any`. That degradation then
+  // leaks: `db.select().from(users)` starts returning an index signature, and
+  // methods nowhere near this file stop type-checking — which is what made the
+  // schema feel like it broke at random whenever a column was added elsewhere.
   referredByPromoterId: varchar("referred_by_promoter_id").references(
-    () => users.id,
+    (): AnyPgColumn => users.id,
   ), // Who referred this user
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -211,6 +218,17 @@ export const promoterProfiles = pgTable("promoter_profiles", {
   /** An id from PARTNER_CATEGORIES in @shared/partnerTaxonomy. */
   category: varchar("category"),
   categoryOther: varchar("category_other"),
+  // ── Affiliate standing preferences ──────────────────────────────────────
+  // The same shape as a venue's "Who you want to host": what this account is
+  // typically after, stated once rather than re-answered per event. Two-way
+  // matching is a later build; these are the fields it will read.
+  /** Ids from PARTNER_CATEGORIES — what they typically promote. */
+  promotesCategories: jsonb("promotes_categories").$type<string[]>().default([]),
+  /** "8,000 followers", "2,000-person mailing list" — free text on purpose: a
+   *  number field would compare a mailing list against a follower count. */
+  typicalReach: varchar("typical_reach"),
+  openToCommissionDeals: boolean("open_to_commission_deals").default(true),
+
   completed: boolean("completed").default(false),
   stripeAccountId: varchar("stripe_account_id"),
   stripeVerificationStatus: varchar("stripe_verification_status").default("pending"),
@@ -517,6 +535,28 @@ export const experienceDrafts = pgTable("experience_drafts", {
     .default([]),
   promoterEnabled: boolean("promoter_enabled").default(true),
 
+  // ── Partners step ───────────────────────────────────────────────────────
+  // The repeatable partner list. One event routinely carries several separate
+  // two-party deals at once — a community on milestone barter, a brand on
+  // product-for-exposure, an affiliate on commission — and the single
+  // `promotionDealType` above can only hold one of them. Sanitised through
+  // `sanitisePartnerEntries` in @shared/eventPartners on the way in and out, so
+  // a hand-written payload cannot invent a deal type the waterfall would honour.
+  //
+  // Opens empty and stays empty for an event with one venue deal or none: an
+  // absent list renders no cards at all.
+  //
+  // Typed `any[]` rather than `EventPartnerEntry[]` on purpose. A precise
+  // `$type<>` on a jsonb column in a table this wide makes TypeScript abandon
+  // inference for the whole table, and the failure cascades: `users` collapses
+  // to `any` and a dozen unrelated storage methods stop type-checking. The
+  // shape is enforced at the boundary instead — `sanitisePartnerEntries` runs
+  // on every read and write — which is where it has to hold anyway, since rows
+  // saved months ago predate any type declared here.
+  eventPartners: jsonb("event_partners")
+    .$type<any[]>()
+    .default([]),
+
   // Per-SKU Discounts
   discounts: jsonb("discounts")
     .$type<
@@ -817,6 +857,13 @@ export const experiences = pgTable("experiences", {
 
   // Promoter Pool Fields
   promoterEnabled: boolean("promoter_enabled").default(true), // Allow promoters to promote this experience (defaults to true so approved events appear in pool)
+
+  // The published copy of the Partners step list. Mirrors the draft column of
+  // the same name, including its deliberately loose `any[]` type;
+  // `experience_partners` rows are derived from it on publish.
+  eventPartners: jsonb("event_partners")
+    .$type<any[]>()
+    .default([]),
 
   // Commission Override Fields (per-experience, overrides platform defaults)
   commissionMode: commissionModeEnum("commission_mode"), // null = use platform default
@@ -2120,6 +2167,27 @@ export const collabIdeas = pgTable("collab_ideas", {
   /** "Revenue split, open to discuss" — an opening position, not terms. */
   dealPreference: varchar("deal_preference"),
 
+  // ── Multi-select, added Sep 2026 ────────────────────────────────────────
+  // One idea routinely needs several kinds of partner at once: a beach spot
+  // *and* a sponsor for power *and* a run club for bodies. A single-select
+  // dropdown forced the poster to pick one and describe the rest in prose,
+  // where the matcher could not see them.
+  //
+  // `seekingPartnerType` above is kept and still written — it is the first
+  // selected type — so every existing match query and notification keeps
+  // working untouched.
+  /** Every type selected: venue | sponsor | community | service_provider | other. */
+  seekingPartnerTypes: jsonb("seeking_partner_types").$type<string[]>().default([]),
+  /** Per-type answers, keyed by type id: area, kind of space, what's needed. */
+  typeDetails: jsonb("type_details").$type<Record<string, Record<string, string>>>().default({}),
+  /** Multi-select deal preferences, ids from COLLAB_DEAL_PREFERENCES. */
+  dealPreferences: jsonb("deal_preferences").$type<string[]>().default([]),
+  /** The poster's own photo. No stock fallback — a yoga photo on a coffee rave
+   *  implies a category the poster never chose. */
+  photoUrl: varchar("photo_url"),
+  /** "Bring your own community?" — a trackable link for the poster's own audience. */
+  ownCommunityToken: varchar("own_community_token", { length: 64 }),
+
   // open → matched (a deal was struck, record moves to Active Deals)
   //      → closed (withdrawn by the poster) | expired
   status: varchar("status", { length: 20 }).default("open"),
@@ -2154,9 +2222,164 @@ export const collabIdeaResponses = pgTable(
   }),
 );
 
+// A specific partner invited straight from a Collab Idea.
+//
+// "Looking for" broadcasts to the board and waits to be found. That is the
+// wrong shape when the poster already knows exactly who they want — and most
+// of the time the only handle they have is an Instagram name, not an email. So
+// the link is always generated and the email is optional: the link-only path
+// works in full, and an email, when given, adds a transactional invite on top.
+export const collabIdeaInvites = pgTable("collab_idea_invites", {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    ideaId: varchar("idea_id").references(() => collabIdeas.id, { onDelete: "cascade" }).notNull(),
+    /** Which "Looking for" type this invite is filling. */
+    partnerType: varchar("partner_type", { length: 30 }).notNull(),
+    /** Unguessable; backs /collab-invite/:token. */
+    token: varchar("token", { length: 64 }).notNull().unique(),
+    /** Optional — most contacts are known by handle, not address. */
+    email: varchar("email"),
+    /** Set once the invited party turns out to have (or create) an account. */
+    invitedUserId: varchar("invited_user_id").references(() => users.id),
+    // link_generated → email_sent → opened → accepted | declined
+    status: varchar("status", { length: 20 }).default("link_generated"),
+    openedAt: timestamp("opened_at"),
+    acceptedAt: timestamp("accepted_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+});
+
 export type CollabIdea = typeof collabIdeas.$inferSelect;
 export type InsertCollabIdea = typeof collabIdeas.$inferInsert;
 export type CollabIdeaResponse = typeof collabIdeaResponses.$inferSelect;
+export type CollabIdeaInvite = typeof collabIdeaInvites.$inferSelect;
+export type InsertCollabIdeaInvite = typeof collabIdeaInvites.$inferInsert;
+// ── The Partners model ────────────────────────────────────────────────────
+//
+// One row per partner on one event. The Partners step holds the same list as
+// JSON while the event is still a draft (`experience_drafts.event_partners`);
+// publishing writes it here, where the *partner's* side can read it.
+//
+// That direction is the whole point of the table. A deal recorded only inside
+// the organiser's draft is something a community can be told about but never
+// act on — no invite to accept, no link to share, no count of who they brought.
+// Partner Home reads these rows.
+//
+// Deliberately not folded into `promotion_deals`: that table models a single
+// negotiated B2B offer with counter-proposals and Stripe state, keyed to one
+// promoter. This is the organiser's roster, four types wide, and one account may
+// hold two separate entries on one event — a brand doing Brand Barter as
+// Sponsor *and* Commission per Ticket as Affiliate — which a
+// one-deal-per-pair table cannot express.
+export const experiencePartners = pgTable("experience_partners", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id, { onDelete: "cascade" })
+    .notNull(),
+  /** The organiser who added them — who the partner is dealing with. */
+  organizerId: varchar("organizer_id").references(() => users.id).notNull(),
+  /** The id the builder's JSON entry carried, so an edit updates rather than duplicates. */
+  entryId: varchar("entry_id", { length: 64 }),
+
+  /** community | sponsor_brand | service_provider | affiliate — @shared/eventPartners. */
+  partnerType: varchar("partner_type", { length: 30 }).notNull(),
+  /** Shown as typed, whether or not they have an account here. */
+  partnerName: varchar("partner_name").notNull(),
+  /** Set when the partner is an existing account. Null for an invite by link. */
+  partnerUserId: varchar("partner_user_id").references(() => users.id),
+  partnerEmail: varchar("partner_email"),
+  /** platform | invite_link */
+  source: varchar("source", { length: 20 }).default("platform"),
+
+  /** commission_per_ticket | milestone_barter | brand_barter | financial_sponsorship | content_license */
+  dealType: varchar("deal_type", { length: 30 }).notNull(),
+  terms: jsonb("terms").$type<Record<string, any>>().default({}),
+
+  // draft → invited → confirmed | declined
+  status: varchar("status", { length: 20 }).default("invited"),
+  /** Backs great.app/invite/:token for a partner not yet on Great. */
+  inviteToken: varchar("invite_token", { length: 64 }).unique(),
+  /** The ?ref= code that attributes arrivals on the event page to this partner. */
+  refCode: varchar("ref_code", { length: 64 }),
+
+  respondedAt: timestamp("responded_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type ExperiencePartner = typeof experiencePartners.$inferSelect;
+export type InsertExperiencePartner = typeof experiencePartners.$inferInsert;
+
+// Event content, with its licence attached at upload.
+//
+// Not a separate media module: content is another kind of partner
+// contribution, so the compensation for it is a Content License deal in the
+// Partners step, and this table only records what may be done with the file.
+// What a given account sees in an event's library is filtered by `scope` — see
+// `canViewContent` in @shared/contentLicensing, which is the only place that
+// decision is made.
+export const experienceContent = pgTable("experience_content", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  experienceId: varchar("experience_id")
+    .references(() => experiences.id, { onDelete: "cascade" })
+    .notNull(),
+  uploadedBy: varchar("uploaded_by").references(() => users.id).notNull(),
+  /** organizer | venue | partner | participant */
+  createdByRole: varchar("created_by_role", { length: 20 }).notNull(),
+  mediaUrl: varchar("media_url").notNull(),
+  /** image | video */
+  mediaType: varchar("media_type", { length: 20 }).default("image"),
+  caption: varchar("caption"),
+
+  /** event_only | uploader_promotion | all_partners | great_marketing */
+  scope: varchar("scope", { length: 30 }).default("event_only"),
+  /** null = indefinite. Counted from the event date, as the terms are stated. */
+  expiresDaysAfterEvent: integer("expires_days_after_event"),
+  /**
+   * Participant uploads only, and default false by requirement rather than by
+   * preference: a participant's photo is theirs, and commercial reuse by the
+   * organiser or a partner needs that participant's explicit yes.
+   */
+  commercialOptIn: boolean("commercial_opt_in").default(false),
+  attribution: varchar("attribution"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type ExperienceContent = typeof experienceContent.$inferSelect;
+export type InsertExperienceContent = typeof experienceContent.$inferInsert;
+
+// A brand's standing sponsorship preferences.
+//
+// Venue has "Who you want to host" and Creator has "What you host, and what you
+// look for". A sponsor had neither, so it could only exist inside somebody
+// else's event once personally invited — never independently discoverable.
+//
+// The questions are the inverse of the affiliate's, and that is why this is its
+// own table rather than more columns on `promoter_profiles`. An affiliate is the
+// party *with* an audience ("what do you promote, what is your reach"); a
+// sponsor is the party *seeking* one ("which audience, where do you want
+// placement").
+export const sponsorProfiles = pgTable("sponsor_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id).unique(),
+  displayName: varchar("display_name"),
+  logoUrl: varchar("logo_url"),
+  /** Ids from PARTNER_CATEGORIES — what they want to sponsor. */
+  sponsorCategories: jsonb("sponsor_categories").$type<string[]>().default([]),
+  /** "runners, ages 25-40, Barcelona" — free text, shown and never matched on. */
+  targetAudience: varchar("target_audience"),
+  /** product | budget | both */
+  offering: varchar("offering", { length: 20 }).default("product"),
+  offerDescription: text("offer_description"),
+  /** Off means "do not surface me" — this is a listing, not a mailbox. */
+  openToContact: boolean("open_to_contact").default(true),
+  completed: boolean("completed").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type SponsorProfile = typeof sponsorProfiles.$inferSelect;
+export type InsertSponsorProfile = typeof sponsorProfiles.$inferInsert;
+
 
 // Venue Offers table — Reverse Handshake bids.
 // When a creator publishes an open event (venueStatus="venue_pending"), venue owners
@@ -3381,6 +3604,15 @@ export const insertPromoterProfileSchema = createInsertSchema(promoterProfiles)
     city: z.string().optional().nullable(),
     category: z.string().optional().nullable(),
     categoryOther: z.string().optional().nullable(),
+    // Affiliate standing preferences. Spelled out rather than inherited from
+    // the jsonb column: drizzle-zod infers an unknown-element array for a
+    // `$type<string[]>()` jsonb on a schema this size, and that then fails to
+    // satisfy Drizzle's own insert signature at the call site.
+    // `.optional()` alone, never `.optional().default([])` — the default makes
+    // the OUTPUT type required and breaks every existing caller.
+    promotesCategories: z.array(z.string()).optional(),
+    typicalReach: z.string().max(200).optional().nullable(),
+    openToCommissionDeals: z.boolean().optional(),
   });
 
 export type PromoterProfile = typeof promoterProfiles.$inferSelect;
@@ -3765,6 +3997,14 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
       })
     ).default([]).optional(),
     promoterEnabled: z.boolean().optional(),
+    // The Partners step list. Validated loosely on purpose: the authoritative
+    // check is `sanitisePartnerEntries` in @shared/eventPartners, which the
+    // route runs, and which drops an unrecognised deal type rather than
+    // coercing it. A strict zod shape here would 400 the entire draft save over
+    // one malformed row — and a draft save that fails silently loses the whole
+    // step, which is exactly how "it doesn't save my work" gets reported.
+    eventPartners: z.array(z.record(z.any())).optional(),
+
 
     // Venue - Foreign key validation
     selectedVenueId: z.string().optional(),

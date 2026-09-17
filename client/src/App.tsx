@@ -65,7 +65,10 @@ import Bookings from "@/pages/bookings";
 import TravelerBookings from "@/pages/TravelerBookings";
 import EventCheckIn from "@/pages/event-check-in";
 import VenueHome from "@/pages/venue-home";
+import PartnerHome from "@/pages/partner-home";
 import CollabOpportunities from "@/pages/collab-opportunities";
+import CollabInvitePage from "@/pages/collab-invite";
+import EventPartnerInvitePage from "@/pages/event-partner-invite";
 import BookingSuccess from "@/pages/booking-success";
 import RecruitSquad from "@/pages/recruit-squad";
 import EventInvite from "@/pages/event-invite";
@@ -82,6 +85,7 @@ import About from "@/pages/about";
 import AdminAPIConsole from "@/pages/admin-api-console";
 import PromoterDashboard from "@/pages/promoter";
 import PromoterProfileSetup from "@/pages/promoter-profile-setup";
+import SponsorProfileSetup from "@/pages/sponsor-profile-setup";
 import PromoterExperiencePool from "@/pages/promoter-experience-pool";
 import AdminPromotersPage from "@/pages/admin-promoters";
 import AdminPromoterDetailPage from "@/pages/admin-promoter-detail";
@@ -91,6 +95,7 @@ import { PersistentChatDrawer } from "@/components/PersistentChatDrawer";
 import EmailPreferencesPage from "@/pages/email-preferences";
 import UnsubscribePage from "@/pages/unsubscribe";
 import VenueListingTypeGate, { VenueProfileSetupRoute } from "@/components/VenueListingTypeGate";
+import VenueOnboardingGate from "@/components/VenueOnboardingGate";
 import VenueInvitePage from "@/pages/venue-invite";
 import PartnerInvitePage from "@/pages/partner-invite";
 import Terms from "@/pages/terms";
@@ -155,6 +160,12 @@ function Router() {
       <Route path="/venue-invite/:token" component={VenueInvitePage} />
       {/* Private claim link emailed by the B2B promoter invite */}
       <Route path="/partner-invite/:token" component={PartnerInvitePage} />
+      {/* A Partners-step invite. Its own path because /partner-invite/:token
+          resolves against promotion_deals, which is a different record with a
+          counter-proposal and Stripe flow of its own. */}
+      <Route path="/invite/:token" component={EventPartnerInvitePage} />
+      {/* A direct invite sent from a Collab Idea, usually pasted into a DM. */}
+      <Route path="/collab-invite/:token" component={CollabInvitePage} />
 
       <Route path="/experiences" component={Experiences} />
       <Route path="/experience/:id" component={ExperienceDetails} />
@@ -163,10 +174,19 @@ function Router() {
       <Route path="/creator-dashboard" component={CreatorDashboard} />
       <Route path="/community-hub" component={CommunityHub} />
       <Route path="/messages" component={Messages} />
-      <Route path="/venue-dashboard" component={VenueDashboard} />
+      {/* Venues get the same hard gate creators already had. The dashboard is
+          the right destination — it was just reachable before the profile that
+          gives it anything to show. */}
+      <Route path="/venue-dashboard">
+        <VenueOnboardingGate><VenueDashboard /></VenueOnboardingGate>
+      </Route>
       <Route path="/service-provider-dashboard" component={ServiceProviderDashboard} />
       <Route path="/promoter" component={PromoterDashboard} />
       <Route path="/promoter/profile-setup" component={PromoterProfileSetup} />
+      {/* Sponsor/Brand standing preferences — the inverse questions to the
+          affiliate's, which is why it is its own profile. Not role-gated: a
+          brand sponsoring events is not a separate account type. */}
+      <Route path="/sponsor/profile-setup" component={SponsorProfileSetup} />
       <Route path="/my-referrals" component={() => { window.location.replace('/my-impact'); return null; }} />
       <Route path="/my-impact" component={PromoterDashboard} />
       <Route path="/promoter/experience-pool" component={PromoterExperiencePool} />
@@ -194,7 +214,13 @@ function Router() {
       <Route path="/creator" component={CreatorHome} />
       {/* Venue Home: the same two-step entry creators already had. The
           avatar menu used to drop a venue owner straight into nine tabs. */}
-      <Route path="/venue" component={VenueHome} />
+      <Route path="/venue">
+        <VenueOnboardingGate><VenueHome /></VenueOnboardingGate>
+      </Route>
+      {/* Partner Home: third sibling to the two above. Reached by any account
+          holding at least one partner deal — a relationship rather than a role,
+          so there is no gate here beyond being signed in. */}
+      <Route path="/partner" component={PartnerHome} />
       <Route path="/collab-opportunities" component={CollabOpportunities} />
       {/* B2B negotiation, deliberately not under /messages: that inbox is
           the event's participant chat and this is two businesses agreeing money. */}

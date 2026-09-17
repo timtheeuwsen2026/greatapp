@@ -5,6 +5,7 @@ import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import CollabOpportunitiesCard from "@/components/CollabOpportunitiesCard";
+import CreateExperienceFork from "@/components/CreateExperienceFork";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import type { CreatorProfile } from "@shared/schema";
@@ -21,6 +22,7 @@ export default function CreatorHome() {
   const [location, setLocation] = useLocation();
   const { isAuthenticated, isLoading: authLoading, user } = useAuth();
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+  const [createForkOpen, setCreateForkOpen] = useState(false);
 
   // Check for profileCompleted query parameter
   useEffect(() => {
@@ -122,24 +124,30 @@ export default function CreatorHome() {
           </Card>
 
           {/* Create Experience */}
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer">
-            <Link href="/event-builder">
-              <CardHeader className="text-center">
-                <div className="mx-auto mb-4 p-3 bg-primary/10 rounded-full w-fit">
-                  <Plus className="h-8 w-8 text-primary" />
-                </div>
-                <CardTitle className="text-xl">Create Experience</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Button 
-                  className="w-full btn-gradient" 
-                  size="lg"
-                  data-testid="button-create-experience"
-                >
-                  Start Building
-                </Button>
-              </CardContent>
-            </Link>
+          {/* Opens the fork, not the builder. Every route into creation goes
+              through it — a shortcut that jumps straight to step 1 of eleven
+              is how an organiser with a rough idea gets asked for a cover
+              photo and gives up. */}
+          <Card
+            className="hover:shadow-lg transition-shadow cursor-pointer"
+            onClick={() => setCreateForkOpen(true)}
+          >
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 p-3 bg-primary/10 rounded-full w-fit">
+                <Plus className="h-8 w-8 text-primary" />
+              </div>
+              <CardTitle className="text-xl">Create Experience</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button
+                className="w-full btn-gradient"
+                size="lg"
+                onClick={(event) => { event.stopPropagation(); setCreateForkOpen(true); }}
+                data-testid="button-create-experience"
+              >
+                Get Started
+              </Button>
+            </CardContent>
           </Card>
 
           {/* Complete Creator Profile / Profile Complete */}
@@ -210,6 +218,8 @@ export default function CreatorHome() {
           <CollabOpportunitiesCard />
         </div>
       </div>
+
+      <CreateExperienceFork open={createForkOpen} onOpenChange={setCreateForkOpen} />
     </div>
   );
 }

@@ -125,7 +125,7 @@ export default function AdminPromotersPage() {
           <div className="flex items-center gap-3">
             <Users className="h-8 w-8 text-primary" />
             <div>
-              <h1 className="text-3xl font-bold">Promoter Management</h1>
+              <h1 className="text-3xl font-bold">Affiliate Management</h1>
               <p className="text-muted-foreground">Active affiliate users, referral links, balances, and payout-ready earnings</p>
             </div>
           </div>
@@ -134,7 +134,7 @@ export default function AdminPromotersPage() {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Total Promoters</CardTitle>
+              <CardTitle className="text-sm text-muted-foreground">Total Affiliates</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{promoters.length}</div>
@@ -194,7 +194,7 @@ export default function AdminPromotersPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Active Promoters &amp; Affiliates</CardTitle>
+            <CardTitle>Active Affiliates</CardTitle>
           </CardHeader>
           <CardContent>
             {promoters.length === 0 ? (

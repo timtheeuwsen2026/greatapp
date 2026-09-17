@@ -16,6 +16,10 @@ import {
   venueOffers,
   collabIdeas,
   collabIdeaResponses,
+  collabIdeaInvites,
+  experiencePartners,
+  experienceContent,
+  sponsorProfiles,
   experienceServices,
   experienceAmenities,
   amenities,
@@ -107,6 +111,11 @@ import {
   type CollabIdea,
   type InsertCollabIdea,
   type CollabIdeaResponse,
+  type CollabIdeaInvite,
+  type ExperiencePartner,
+  type ExperienceContent,
+  type InsertExperienceContent,
+  type SponsorProfile,
   type InsertScheduledPayout,
 } from "@shared/schema";
 import { db } from "./db";
@@ -178,6 +187,34 @@ export type MilestoneReferralProgress = {
   rewardDescription: string;
   fulfillmentId: string | null;
   unlocked: boolean;
+};
+
+/**
+ * What a promoter/affiliate profile save accepts.
+ *
+ * Spelled out rather than derived with `Omit<InsertPromoterProfile, 'userId'>`:
+ * the schema is large enough that TypeScript gives up resolving a jsonb
+ * `string[]` column through a mapped type and degrades it to an unknown-element
+ * array, which then fails to satisfy Drizzle's own insert signature. Naming the
+ * fields keeps the check real where it matters — the ids in
+ * `promotesCategories` are validated against PARTNER_CATEGORIES at the route.
+ */
+export type PromoterProfileInput = {
+  displayName: string;
+  bio: string;
+  profilePhoto?: string;
+  promoterType?: string | null;
+  promoterTypeOther?: string | null;
+  city?: string | null;
+  category?: string | null;
+  categoryOther?: string | null;
+  /** Affiliate standing preferences — what they typically promote, and reach. */
+  promotesCategories?: string[];
+  typicalReach?: string | null;
+  openToCommissionDeals?: boolean;
+  completed?: boolean;
+  stripeAccountId?: string | null;
+  stripeVerificationStatus?: string | null;
 };
 
 export interface IStorage {
@@ -418,7 +455,7 @@ export interface IStorage {
   setCreatorStripeVerificationStatus(userId: string, verificationStatus: string): Promise<void>;
   getPromoterProfile(userId: string): Promise<PromoterProfile | undefined>;
   getPromoterProfileByUserId(userId: string): Promise<PromoterProfile | undefined>;
-  createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile>;
+  createOrUpdatePromoterProfile(userId: string, profileData: PromoterProfileInput): Promise<PromoterProfile>;
   updatePromoterProfileStripe(userId: string, stripeAccountId: string, verificationStatus?: string): Promise<void>;
 
   // Participant interaction operations
@@ -2241,9 +2278,16 @@ export class DatabaseStorage implements IStorage {
             .limit(1);
           
           const ownerData = owner[0];
+          // `users` has no `name` column — this read undefined on every venue and
+          // the admin table showed no owner at all. Only visible now that the
+          // table's own type resolves instead of collapsing to `any`.
+          const ownerName = [ownerData?.firstName, ownerData?.lastName]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
           return {
             ...venue,
-            ownerName: ownerData?.name || null,
+            ownerName: ownerName || null,
             ownerEmail: ownerData?.email || null,
           };
         } catch (error) {
@@ -2781,7 +2825,7 @@ export class DatabaseStorage implements IStorage {
     return this.getPromoterProfile(userId);
   }
 
-  async createOrUpdatePromoterProfile(userId: string, profileData: Omit<InsertPromoterProfile, 'userId'>): Promise<PromoterProfile> {
+  async createOrUpdatePromoterProfile(userId: string, profileData: PromoterProfileInput): Promise<PromoterProfile> {
     const existing = await this.getPromoterProfile(userId);
     const dataWithUserId = {
       ...profileData,
@@ -4667,7 +4711,9 @@ export class DatabaseStorage implements IStorage {
 
   async getPromotionDealsForCreator(
     creatorId: string,
-  ): Promise<Array<{ deal: PromotionDeal; experience: Experience; partner: User | undefined }>> {
+    // A left join yields null, not undefined, for an external invite with no
+    // account behind it yet.
+  ): Promise<Array<{ deal: PromotionDeal; experience: Experience; partner: User | null }>> {
     const rows = await db
       .select({ deal: promotionDeals, experience: experiences, partner: users })
       .from(promotionDeals)
@@ -5597,6 +5643,10 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(collabIdeas.status, "open"),
           or(isNull(collabIdeas.expiresAt), sql`${collabIdeas.expiresAt} > NOW()`),
+          // A period that has already finished is past, whatever the expiry
+          // floor says. Without this an August weekend was still "open" in
+          // October, sitting above ideas somebody was waiting on.
+          or(isNull(collabIdeas.estimatedEnd), sql`${collabIdeas.estimatedEnd} >= NOW()`),
         ),
       )
       .orderBy(desc(collabIdeas.createdAt))
@@ -5604,6 +5654,32 @@ export class DatabaseStorage implements IStorage {
   }
 
   /** Partners → My Open Postings. The same rows, filtered to one poster. */
+  /**
+   * Ideas whose moment has gone: withdrawn, matched, past their expiry, or
+   * whose proposed period has already finished.
+   *
+   * That last case is the one the feed was getting wrong. `resolveCollabExpiry`
+   * keeps a posting open for at least sixty days so a retreat planned months
+   * out does not lapse before anyone is thinking about those dates — which also
+   * means an idea for a weekend in August is still technically "open" in
+   * October. It was sitting at the top of the live list, indistinguishable from
+   * something somebody was actually waiting on an answer about.
+   */
+  async getPastCollabIdeas(limit = 50): Promise<CollabIdea[]> {
+    return db
+      .select()
+      .from(collabIdeas)
+      .where(
+        or(
+          sql`${collabIdeas.status} <> 'open'`,
+          sql`${collabIdeas.expiresAt} IS NOT NULL AND ${collabIdeas.expiresAt} <= NOW()`,
+          sql`${collabIdeas.estimatedEnd} IS NOT NULL AND ${collabIdeas.estimatedEnd} < NOW()`,
+        ),
+      )
+      .orderBy(desc(collabIdeas.createdAt))
+      .limit(limit);
+  }
+
   async getCollabIdeasByPoster(posterId: string): Promise<CollabIdea[]> {
     return db
       .select()
@@ -5672,6 +5748,415 @@ export class DatabaseStorage implements IStorage {
   async getApprovedVenuesForMatching(): Promise<any[]> {
     return db.select().from(venues).where(eq(venues.status, "approved"));
   }
+  /**
+   * Accounts an organiser can pick as a partner, as avatar + name only.
+   *
+   * Contact details are deliberately absent. An organiser choosing who to
+   * invite needs to recognise a person, not to hold their address — the same
+   * rule the promoter picker already follows, applied to all four types.
+   *
+   * The four partner types are not four account types. A run club is a creator
+   * account acting as a Community; the same brand can be a Sponsor on one event
+   * and an Affiliate on another. So the directory is a union of the accounts
+   * that have actually onboarded, and `kind` describes how they turned up here
+   * rather than what they are.
+   */
+  async getPartnerDirectory(): Promise<Array<{
+    id: string;
+    displayName: string;
+    profilePhoto: string | null;
+    kind: string;
+  }>> {
+    const [creatorRows, promoterRows] = await Promise.all([
+      db
+        .select({
+          userId: creatorProfiles.userId,
+          displayName: creatorProfiles.displayName,
+          profilePhoto: creatorProfiles.profilePhoto,
+        })
+        .from(creatorProfiles)
+        .where(eq(creatorProfiles.completed, true))
+        .limit(500),
+      db
+        .select({
+          userId: promoterProfiles.userId,
+          displayName: promoterProfiles.displayName,
+          profilePhoto: promoterProfiles.profilePhoto,
+        })
+        .from(promoterProfiles)
+        .where(eq(promoterProfiles.completed, true))
+        .limit(500),
+    ]);
+
+    const seen = new Set<string>();
+    const rows: Array<{ id: string; displayName: string; profilePhoto: string | null; kind: string }> = [];
+
+    for (const row of [...creatorRows, ...promoterRows]) {
+      const id = row.userId as string;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      rows.push({
+        id,
+        displayName: (row.displayName as string) || "Partner",
+        profilePhoto: (row.profilePhoto as string) || null,
+        kind: creatorRows.some((candidate) => candidate.userId === id) ? "community" : "affiliate",
+      });
+    }
+
+    return rows;
+  }
+
+  // ── Collab Idea direct invites ──────────────────────────────────────────
+  // Posting to the board waits to be discovered. These are the invites sent to
+  // a partner the poster already has in mind — usually reachable only by an
+  // Instagram handle, which is why the link is the primary path and the email
+  // is optional on top of it.
+
+  async createCollabIdeaInvite(input: {
+    ideaId: string;
+    partnerType: string;
+    token: string;
+    email?: string | null;
+  }): Promise<CollabIdeaInvite> {
+    const [created] = await db
+      .insert(collabIdeaInvites)
+      .values({
+        ideaId: input.ideaId,
+        partnerType: input.partnerType,
+        token: input.token,
+        email: input.email || null,
+        status: input.email ? "email_sent" : "link_generated",
+      })
+      .returning();
+    return created;
+  }
+
+  async getCollabIdeaInvites(ideaId: string): Promise<CollabIdeaInvite[]> {
+    return db
+      .select()
+      .from(collabIdeaInvites)
+      .where(eq(collabIdeaInvites.ideaId, ideaId))
+      .orderBy(desc(collabIdeaInvites.createdAt));
+  }
+
+  async getCollabIdeaInviteByToken(token: string): Promise<CollabIdeaInvite | undefined> {
+    const [invite] = await db
+      .select()
+      .from(collabIdeaInvites)
+      .where(eq(collabIdeaInvites.token, token));
+    return invite;
+  }
+
+  /**
+   * Advance an invite's status. "opened" never overwrites a later state — an
+   * accepted invite whose link is clicked again has not become un-accepted.
+   */
+  async updateCollabIdeaInvite(
+    id: string,
+    updates: { status?: string; invitedUserId?: string | null; opened?: boolean; accepted?: boolean },
+  ): Promise<CollabIdeaInvite | undefined> {
+    const patch: Record<string, any> = {};
+    if (updates.status) patch.status = updates.status;
+    if (updates.invitedUserId !== undefined) patch.invitedUserId = updates.invitedUserId;
+    if (updates.opened) patch.openedAt = new Date();
+    if (updates.accepted) {
+      patch.acceptedAt = new Date();
+      patch.status = "accepted";
+    }
+    if (!Object.keys(patch).length) return this.getCollabIdeaInviteById(id);
+
+    const [updated] = await db
+      .update(collabIdeaInvites)
+      .set(patch)
+      .where(eq(collabIdeaInvites.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getCollabIdeaInviteById(id: string): Promise<CollabIdeaInvite | undefined> {
+    const [invite] = await db
+      .select()
+      .from(collabIdeaInvites)
+      .where(eq(collabIdeaInvites.id, id));
+    return invite;
+  }
+
+  /** Withdrawing an idea takes its invites with it. */
+  async deleteCollabIdea(id: string): Promise<void> {
+    await db.delete(collabIdeaInvites).where(eq(collabIdeaInvites.ideaId, id));
+    await db.delete(collabIdeaResponses).where(eq(collabIdeaResponses.ideaId, id));
+    await db.delete(collabIdeas).where(eq(collabIdeas.id, id));
+  }
+
+  // ── The Partners model ──────────────────────────────────────────────────
+  // The builder holds its partner list as JSON on the draft. Publishing writes
+  // these rows, which is what lets the *partner* act: accept the invite, copy
+  // their own link, see how many people they brought.
+
+  async getExperiencePartners(experienceId: string): Promise<ExperiencePartner[]> {
+    return db
+      .select()
+      .from(experiencePartners)
+      .where(eq(experiencePartners.experienceId, experienceId))
+      .orderBy(experiencePartners.createdAt);
+  }
+
+  async getExperiencePartner(id: string): Promise<ExperiencePartner | undefined> {
+    const [row] = await db
+      .select()
+      .from(experiencePartners)
+      .where(eq(experiencePartners.id, id));
+    return row;
+  }
+
+  async getExperiencePartnerByToken(token: string): Promise<ExperiencePartner | undefined> {
+    const [row] = await db
+      .select()
+      .from(experiencePartners)
+      .where(eq(experiencePartners.inviteToken, token));
+    return row;
+  }
+
+  /** Every event this account is a partner on. Partner Home's whole feed. */
+  async getPartnerEntriesForUser(userId: string): Promise<ExperiencePartner[]> {
+    return db
+      .select()
+      .from(experiencePartners)
+      .where(eq(experiencePartners.partnerUserId, userId))
+      .orderBy(desc(experiencePartners.createdAt));
+  }
+
+  /**
+   * Replace an event's partner roster with the builder's list.
+   *
+   * Matched on `entryId` so re-publishing an event updates the deals already
+   * there rather than stacking a second copy of each — and so an invite the
+   * partner has already accepted is not reset to "invited" by an unrelated edit
+   * elsewhere in the builder. A row whose entry has been deleted in the builder
+   * goes with it, unless the partner already confirmed: a confirmed deal is an
+   * agreement between two parties, and removing it silently on one side is the
+   * bug that lost venue terms on publish once already.
+   */
+  async syncExperiencePartners(
+    experienceId: string,
+    organizerId: string,
+    entries: Array<Record<string, any>>,
+  ): Promise<ExperiencePartner[]> {
+    const existing = await this.getExperiencePartners(experienceId);
+    const byEntryId = new Map(existing.map((row) => [row.entryId || row.id, row]));
+    const keptIds = new Set<string>();
+
+    for (const entry of entries) {
+      const entryId = String(entry.id || "");
+      const current = entryId ? byEntryId.get(entryId) : undefined;
+
+      const values = {
+        experienceId,
+        organizerId,
+        entryId: entryId || null,
+        partnerType: String(entry.partnerType),
+        partnerName: String(entry.name || "Partner"),
+        partnerUserId: entry.partnerUserId || null,
+        partnerEmail: entry.email || null,
+        source: entry.source === "invite_link" ? "invite_link" : "platform",
+        dealType: String(entry.dealType),
+        terms: entry.terms || {},
+        inviteToken: entry.inviteToken || null,
+        refCode: entry.refCode || null,
+        updatedAt: new Date(),
+      };
+
+      if (current) {
+        // A partner who already said yes keeps their status; the organiser
+        // editing the terms does not un-accept them, and does not silently
+        // change what they agreed to either — status stays, terms move, and the
+        // partner sees the new terms on their own card.
+        const [updated] = await db
+          .update(experiencePartners)
+          .set(values)
+          .where(eq(experiencePartners.id, current.id))
+          .returning();
+        keptIds.add(current.id);
+        if (updated) byEntryId.set(entryId, updated);
+      } else {
+        const [created] = await db
+          .insert(experiencePartners)
+          .values({ ...values, status: entry.status === "confirmed" ? "confirmed" : "invited" })
+          .returning();
+        if (created) keptIds.add(created.id);
+      }
+    }
+
+    const removable = existing.filter((row) => !keptIds.has(row.id) && row.status !== "confirmed");
+    for (const row of removable) {
+      await db.delete(experiencePartners).where(eq(experiencePartners.id, row.id));
+    }
+
+    return this.getExperiencePartners(experienceId);
+  }
+
+  async updateExperiencePartnerStatus(
+    id: string,
+    status: string,
+    patch: { partnerUserId?: string | null } = {},
+  ): Promise<ExperiencePartner | undefined> {
+    const [updated] = await db
+      .update(experiencePartners)
+      .set({
+        status,
+        ...(patch.partnerUserId !== undefined ? { partnerUserId: patch.partnerUserId } : {}),
+        respondedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(experiencePartners.id, id))
+      .returning();
+    return updated;
+  }
+
+  /**
+   * How many people each partner brought, by their own ?ref= code.
+   *
+   * Counted from confirmed bookings rather than clicks: a partner's headline
+   * number on Partner Home is "39 joined", and a click that never booked is not
+   * somebody who joined. Milestone barter is settled on this figure too, so an
+   * inflated count would hand out free access nobody earned.
+   */
+  async countPartnerReferralJoins(experienceId: string, refCodes: string[]): Promise<Map<string, number>> {
+    if (!refCodes.length) return new Map();
+    const rows = await db
+      .select({ code: referralClicks.promoterCode, total: count() })
+      .from(referralClicks)
+      .where(
+        and(
+          eq(referralClicks.experienceId, experienceId),
+          eq(referralClicks.converted, true),
+          inArray(referralClicks.promoterCode, refCodes),
+        ),
+      )
+      .groupBy(referralClicks.promoterCode);
+    return new Map(rows.map((row: any) => [row.code, Number(row.total) || 0]));
+  }
+
+  /** Total joins attributed to one partner across every event they are on. */
+  async countPartnerJoinsByCode(refCodes: string[]): Promise<number> {
+    if (!refCodes.length) return 0;
+    const [row] = await db
+      .select({ total: count() })
+      .from(referralClicks)
+      .where(
+        and(
+          eq(referralClicks.converted, true),
+          inArray(referralClicks.promoterCode, refCodes),
+        ),
+      );
+    return Number(row?.total) || 0;
+  }
+
+  /**
+   * Who arrived through a given partner's link and booked.
+   *
+   * Returns user ids only. "Message your audience" routes through the platform
+   * precisely so a partner never receives a list of email addresses — and the
+   * cheapest way to guarantee that is for this method never to select one.
+   */
+  async getPartnerAudienceUserIds(refCodes: string[]): Promise<string[]> {
+    if (!refCodes.length) return [];
+    const rows = await db
+      .select({ userId: referralClicks.visitorUserId })
+      .from(referralClicks)
+      .where(
+        and(
+          eq(referralClicks.converted, true),
+          inArray(referralClicks.promoterCode, refCodes),
+        ),
+      );
+    return Array.from(new Set(rows.map((row: any) => row.userId).filter(Boolean))) as string[];
+  }
+
+  // ── Event content and its licence ───────────────────────────────────────
+
+  async addExperienceContent(input: InsertExperienceContent): Promise<ExperienceContent> {
+    const [created] = await db.insert(experienceContent).values(input).returning();
+    return created;
+  }
+
+  async getExperienceContent(experienceId: string): Promise<ExperienceContent[]> {
+    return db
+      .select()
+      .from(experienceContent)
+      .where(eq(experienceContent.experienceId, experienceId))
+      .orderBy(desc(experienceContent.createdAt));
+  }
+
+  async getExperienceContentItem(id: string): Promise<ExperienceContent | undefined> {
+    const [row] = await db.select().from(experienceContent).where(eq(experienceContent.id, id));
+    return row;
+  }
+
+  /** The participant's own commercial-reuse switch. Nobody else may flip it. */
+  async setContentCommercialOptIn(id: string, optIn: boolean): Promise<ExperienceContent | undefined> {
+    const [updated] = await db
+      .update(experienceContent)
+      .set({ commercialOptIn: optIn })
+      .where(eq(experienceContent.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteExperienceContent(id: string): Promise<void> {
+    await db.delete(experienceContent).where(eq(experienceContent.id, id));
+  }
+
+  // ── Sponsor / Brand standing preferences ────────────────────────────────
+
+  async getSponsorProfile(userId: string): Promise<SponsorProfile | undefined> {
+    const [profile] = await db
+      .select()
+      .from(sponsorProfiles)
+      .where(eq(sponsorProfiles.userId, userId));
+    return profile;
+  }
+
+  async createOrUpdateSponsorProfile(
+    userId: string,
+    data: {
+      displayName?: string | null;
+      logoUrl?: string | null;
+      sponsorCategories?: string[];
+      targetAudience?: string | null;
+      offering?: string | null;
+      offerDescription?: string | null;
+      openToContact?: boolean;
+      completed?: boolean;
+    },
+  ): Promise<SponsorProfile> {
+    const existing = await this.getSponsorProfile(userId);
+    const values: Record<string, any> = {
+      userId,
+      displayName: data.displayName ?? null,
+      logoUrl: data.logoUrl ?? null,
+      sponsorCategories: data.sponsorCategories ?? [],
+      targetAudience: data.targetAudience ?? null,
+      offering: data.offering ?? "product",
+      offerDescription: data.offerDescription ?? null,
+      openToContact: data.openToContact ?? true,
+      completed: data.completed ?? true,
+      updatedAt: new Date(),
+    };
+
+    if (existing) {
+      const [updated] = await db
+        .update(sponsorProfiles)
+        .set(values)
+        .where(eq(sponsorProfiles.userId, userId))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(sponsorProfiles).values(values as any).returning();
+    return created;
+  }
+
 }
 
 export const storage = new DatabaseStorage();

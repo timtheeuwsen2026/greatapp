@@ -31,7 +31,7 @@ const ROLE_OPTIONS = [
   },
   {
     value: "promoter",
-    label: "Promoter",
+    label: "Affiliate",
     description: "I want to promote experiences and earn commission",
   },
 ] as const;

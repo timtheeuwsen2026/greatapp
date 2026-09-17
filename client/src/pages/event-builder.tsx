@@ -47,6 +47,27 @@ export default function EventBuilderPage() {
   const prefillStartDate = urlParams.get('startDate');
   const prefillEndDate = urlParams.get('endDate');
   const prefillFlashDealId = urlParams.get('flashDeal');
+  // A Collab Idea handed over from its detail view. Read from session storage
+  // rather than the query string: the whole prefill is an object, a query
+  // string holding it would be both fragile and shareable, and this is neither.
+  // Cleared once read, so a reload does not silently re-seed a form the creator
+  // has since emptied on purpose.
+  const fromCollabIdea = !!urlParams.get('fromCollabIdea');
+  const [collabPrefill] = useState(() => {
+    if (!fromCollabIdea) return undefined;
+    try {
+      const raw = sessionStorage.getItem('collabIdeaPrefill');
+      // Peeked, not consumed. Single-day vs multi-day is asked at this point
+      // when the idea does not already imply it, and answering it navigates —
+      // so clearing the prefill on this read would drop it on the way through
+      // the type chooser. The builder clears it once it has actually used it.
+      return raw ? JSON.parse(raw) : undefined;
+    } catch {
+      // Private mode or blocked storage: the builder opens empty, which is the
+      // behaviour before this handoff existed.
+      return undefined;
+    }
+  });
   const initialPrefill = (prefillVenueId || prefillStartDate)
     ? {
         venueId: prefillVenueId || undefined,
@@ -60,7 +81,8 @@ export default function EventBuilderPage() {
     ? 'multi-day'
     : (selectedType === 'one-day' || selectedType === 'single-day')
       ? 'one-day'
-      : undefined;
+      // An idea that already says multi-day does not need to be asked again.
+      : (collabPrefill?.eventType === 'multi-day' ? 'multi-day' : undefined);
   // Admins moderate other people's listings, so the creator-profile gate below
   // is not theirs to pass — they have no creator profile and never will.
   const isAdmin = (user as any)?.role === 'admin';
@@ -81,7 +103,9 @@ export default function EventBuilderPage() {
   const openBuilder = (type: "one-day" | "multi-day") => {
     if (openingType) return;
     setOpeningType(type);
-    setLocation(`/event-builder?type=${type}`);
+    // The flag travels with the answer, so an idea's prefill survives the
+    // single-day / multi-day question.
+    setLocation(`/event-builder?type=${type}${fromCollabIdea ? '&fromCollabIdea=1' : ''}`);
   };
 
   // Show loading state during authentication and profile checks
@@ -230,6 +254,7 @@ export default function EventBuilderPage() {
             draftId={draftId}
             initialExperienceType={initialExperienceType}
             initialPrefill={initialPrefill}
+            collabPrefill={collabPrefill}
             onComplete={(experienceId) => {
               // Submitted experiences wait for admin review before public listing.
               setLocation("/creator-dashboard?tab=pending");

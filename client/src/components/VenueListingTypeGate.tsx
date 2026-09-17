@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Bed, Calendar } from "lucide-react";
 import Navigation from "@/components/navigation";
 
@@ -39,6 +40,14 @@ export default function VenueListingTypeGate() {
   const editVenueId = params.get("edit");
   const selectedVenueType = params.get("venueType") || params.get("type");
   const [openingType, setOpeningType] = useState<"daytime" | "multi_day" | null>(null);
+
+  // Whether there is anything to go back to. An account with no submitted
+  // listing has no dashboard worth the name — every figure on it reads zero —
+  // and "Back to Dashboard" was the incidental route out of the flow that lost
+  // people halfway through. It is only offered once a listing exists.
+  const { data: ownVenues } = useQuery<any[]>({ queryKey: ["/api/user/venues"] });
+  const hasSubmittedListing = (Array.isArray(ownVenues) ? ownVenues : [])
+    .some((venue: any) => venue?.status && venue.status !== "draft");
 
   useEffect(() => {
     if (!editVenueId && !selectedVenueType) {
@@ -124,13 +133,22 @@ export default function VenueListingTypeGate() {
           </div>
 
           <div className="mt-8">
-            <button
-              type="button"
-              onClick={() => setLocation("/venue-dashboard")}
-              className="rounded-md border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:border-primary hover:text-primary"
-            >
-              Back to Dashboard
-            </button>
+            {hasSubmittedListing ? (
+              <button
+                type="button"
+                onClick={() => setLocation("/venue")}
+                className="rounded-md border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:border-primary hover:text-primary"
+                data-testid="button-back-to-venue-home"
+              >
+                Back to Venue Home
+              </button>
+            ) : (
+              <p className="text-sm text-gray-600" data-testid="text-venue-profile-required">
+                Organisers find spaces through this profile, so it comes before
+                anything else. Pick a type above to start — you can save it as a
+                draft and come back.
+              </p>
+            )}
           </div>
         </div>
       </main>

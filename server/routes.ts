@@ -97,6 +97,29 @@ import {
   venueMatchesCollabIdea,
 } from "@shared/collabMatching";
 import {
+  PARTNER_TYPES,
+  generatePartnerToken,
+  isPartnerType,
+  partnerDealLabel,
+  partnerTermSummary,
+  partnerTypeLabel,
+  refCodeFromName,
+  sanitisePartnerEntries,
+} from "@shared/eventPartners";
+import {
+  canUseCommercially,
+  canViewContent,
+  isContentScope,
+  sanitiseLicense,
+} from "@shared/contentLicensing";
+import {
+  describeDealPreferences,
+  sanitiseDealPreferences,
+  sanitiseSeekingTypes,
+  sanitiseTypeDetails,
+  suggestedDealTypeFor,
+} from "@shared/collabIdeaOptions";
+import {
   calculateAverageTurnout,
   isAttendanceStatus,
   summariseEventAttendance,
@@ -821,6 +844,223 @@ async function syncBuilderParticipantRoles(experience: any) {
     ? storage.getParticipantRolesByExperience(experience.id)
     : existingRoles;
 }
+/**
+ * One reader for a Collab Idea payload, used by both create and edit.
+ *
+ * Two readers drifted once already elsewhere in this file, and a create path
+ * that accepts a field the edit path silently drops is indistinguishable, from
+ * the poster's side, from an edit that did not save.
+ *
+ * `seekingPartnerType` (singular) is still written, set to the first selected
+ * type, because the venue match-and-notify query and every existing card reads
+ * it. The multi-select is additive.
+ */
+function parseCollabIdeaBody(body: any): { error?: string; values: Record<string, any> } {
+  const title = String(body?.title || "").trim();
+  if (!title) return { error: "Give your idea a title", values: {} };
+
+  const seekingTypes = sanitiseSeekingTypes(
+    body?.seekingPartnerTypes ?? body?.seekingPartnerType,
+  );
+  if (!seekingTypes.length) {
+    return { error: "Say what kind of partner you are looking for", values: {} };
+  }
+
+  const toDate = (value: unknown) => {
+    if (!value) return null;
+    const parsed = new Date(String(value));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const dealPreferences = sanitiseDealPreferences(body?.dealPreferences);
+  const typeDetails = sanitiseTypeDetails(body?.typeDetails, seekingTypes);
+
+  // The venue matcher filters on city and category. Where the poster answered
+  // those inside the Venue block's own fields, read them from there rather than
+  // asking for the same thing twice.
+  const city = String(body?.city || typeDetails.venue?.area || "").trim() || null;
+  const venueCategory = String(
+    body?.venueCategory || typeDetails.venue?.kindOfSpace || "",
+  ).trim() || null;
+  const audience = String(body?.audience || typeDetails.community?.audience || "").trim() || null;
+
+  return {
+    values: {
+      title,
+      description: body?.description ? String(body.description).slice(0, 4000) : null,
+      seekingPartnerType: seekingTypes[0],
+      seekingPartnerTypes: seekingTypes,
+      typeDetails,
+      dealPreferences,
+      // Kept in step with the multi-select so a card or an email that still
+      // reads the old column shows the same answer.
+      dealPreference: dealPreferences.length ? describeDealPreferences({ dealPreferences }) : null,
+      audience,
+      city,
+      region: body?.region ? String(body.region) : null,
+      venueCategory,
+      groupSizeMin: Number.isFinite(Number(body?.groupSizeMin)) && Number(body.groupSizeMin) > 0
+        ? Number(body.groupSizeMin)
+        : null,
+      groupSizeMax: Number.isFinite(Number(body?.groupSizeMax)) && Number(body.groupSizeMax) > 0
+        ? Number(body.groupSizeMax)
+        : null,
+      estimatedStart: toDate(body?.estimatedStart),
+      estimatedEnd: toDate(body?.estimatedEnd),
+      // No stock fallback. A default yoga photo on a coffee rave implies a
+      // category the poster never chose, so an idea with no upload renders a
+      // neutral placeholder in the browser instead.
+      photoUrl: body?.photoUrl ? String(body.photoUrl) : null,
+    },
+  };
+}
+
+/** "Revenue split (tickets), Barter" — for an invite email's deal line. */
+function describeCollabDealPreferences(idea: any): string {
+  return describeDealPreferences(idea || {});
+}
+
+/** The deal type an idea's stated preference suggests, or null. */
+function suggestedDealFromPreferences(idea: any): string | null {
+  return suggestedDealTypeFor(idea || {});
+}
+
+/**
+ * Does this account own the venue hosting the event?
+ *
+ * Used by the content library, where the venue is one of the parties a licence
+ * can be granted to. Falls back to false rather than throwing: a lookup that
+ * fails must narrow what is visible, never widen it.
+ */
+async function isVenueOwnerForExperience(experience: any, userId?: string | null): Promise<boolean> {
+  if (!userId || !experience?.linkedVenueId) return false;
+  try {
+    const venue = await storage.getVenue(experience.linkedVenueId);
+    return !!venue && (venue.createdBy === userId || (venue as any).ownerId === userId);
+  } catch (error) {
+    console.error("Could not resolve venue ownership for content visibility:", error);
+    return false;
+  }
+}
+
+/**
+ * Turn the Partners step's list into rows the *partner* can act on.
+ *
+ * The builder keeps its partner list as JSON on the draft, which is the right
+ * shape while the event is being written: it round-trips with every other
+ * field, it survives autosave, and it needs no ids the draft does not have.
+ * What it cannot do is reach the other party. A milestone barter recorded only
+ * in the organiser's draft is a deal the community can be told about and never
+ * accept, with no link to share and no count of who they brought.
+ *
+ * So publishing writes `experience_partners`, and that is what Partner Home
+ * reads. Every entry gets an unguessable invite token and a ?ref= code here
+ * rather than in the browser — a code minted client-side could collide with
+ * another partner's on the same event, and the attribution would silently go to
+ * the wrong one.
+ *
+ * Never throws into the publish path: an event that published successfully must
+ * not report failure because one invite email bounced.
+ */
+async function syncPartnersForExperience(experience: any, organizerId: string): Promise<void> {
+  const entries = sanitisePartnerEntries(experience?.eventPartners);
+  if (!experience?.id) return;
+
+  // A code has to be unique per event, and two partners called "The Bar" is an
+  // ordinary thing rather than an error.
+  //
+  // Codes that already exist are reserved before any new one is minted. Without
+  // that, reordering the list could hand an existing partner's code to a
+  // newcomer with the same name and push the original onto "thebar2" — which
+  // silently breaks a link that partner has already sent to its members, and
+  // starts crediting their arrivals to somebody else.
+  const used = new Set<string>(
+    entries.map((entry) => entry.refCode).filter(Boolean) as string[],
+  );
+  const prepared = entries.map((entry) => {
+    let refCode = entry.refCode;
+    if (!refCode) {
+      refCode = refCodeFromName(entry.name);
+      let attempt = 2;
+      while (used.has(refCode)) {
+        refCode = refCodeFromName(entry.name, String(attempt));
+        attempt += 1;
+        // A name made entirely of punctuation falls back to a random token, so
+        // this cannot spin forever on an unsuffixable name.
+        if (attempt > 50) { refCode = generatePartnerToken(12); break; }
+      }
+      used.add(refCode);
+    }
+    return {
+      ...entry,
+      refCode,
+      inviteToken: entry.inviteToken || generatePartnerToken(),
+    };
+  });
+
+  let rows: any[] = [];
+  try {
+    rows = await storage.syncExperiencePartners(experience.id, organizerId, prepared);
+  } catch (error) {
+    console.error("Failed to sync event partners:", error);
+    return;
+  }
+
+  // Keep the tokens the database settled on, so the organiser's copy of the
+  // link is the one that resolves.
+  try {
+    await storage.updateExperience(experience.id, {
+      eventPartners: rows.map((row) => ({
+        id: row.entryId || row.id,
+        partnerType: row.partnerType,
+        name: row.partnerName,
+        partnerUserId: row.partnerUserId,
+        email: row.partnerEmail,
+        source: row.source,
+        dealType: row.dealType,
+        terms: row.terms || {},
+        status: row.status,
+        inviteToken: row.inviteToken,
+        refCode: row.refCode,
+      })),
+    } as any);
+  } catch (error) {
+    console.error("Partners synced, but the event's own copy was not updated:", error);
+  }
+
+  // Invite emails, one per partner who gave an address and has not already
+  // answered. Fired without awaiting the whole set: a slow provider must not
+  // hold up the publish response.
+  (async () => {
+    const organizer = await storage.getUser(organizerId).catch(() => null);
+    const baseUrl = publicAppBaseUrl();
+    for (const row of rows) {
+      if (!row.partnerEmail || row.status !== "invited") continue;
+      try {
+        await notificationService.sendExternalPartnerInviteEmail({
+          to: row.partnerEmail,
+          partnerName: row.partnerName,
+          creatorName: organizer?.firstName || null,
+          eventName: experience.title || "an upcoming experience",
+          eventSlugOrId: experience.slug || experience.id,
+          proposedTerms: `${partnerDealLabel(row.dealType)} — ${partnerTermSummary({
+            dealType: row.dealType,
+            terms: row.terms || {},
+          })}`,
+          // Deliberately not /partner-invite/:token — that path resolves
+          // against `promotion_deals`, which is a different record with its own
+          // counter-proposal flow. A Partners-step invite is its own thing.
+          reviewUrl: `${baseUrl}/invite/${row.inviteToken}`,
+          ctaLabel: "See the deal",
+          eventKey: `event_partner_invite:${row.id}`,
+        });
+      } catch (error) {
+        console.error(`Failed to email partner invite ${row.id}:`, error);
+      }
+    }
+  })().catch(() => undefined);
+}
+
 
 // Configure multer for image uploads
 const upload = multer({
@@ -1333,6 +1573,11 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       promotionExternalInvites: Array.isArray((draft as any).promotionExternalInvites)
         ? (draft as any).promotionExternalInvites
         : [],
+      // The Partners step's repeatable list. Carried onto the published event
+      // and then written out as `experience_partners` rows, which is what lets
+      // the partner's own side act on the deal. Sanitised rather than copied:
+      // a draft saved before a deal type existed must not resurrect it.
+      eventPartners: sanitisePartnerEntries((draft as any).eventPartners),
       promoterEnabled: (draft as any).promoterEnabled ?? true,
       influencerCommissionPct: (draft as any).influencerCommissionPct || "0.00",
       promoterCommission: resolvedParticipantReferralCommissionPct,
@@ -2537,7 +2782,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const profile = await storage.createOrUpdatePromoterProfile(userId, validation.data);
+      const profile = await storage.createOrUpdatePromoterProfile(userId, {
+        ...validation.data,
+        // Only ids the taxonomy knows. An unknown category would store a value
+        // the matcher can never match and no screen can render — and this is
+        // the field two-way matching will read.
+        promotesCategories: sanitiseCategories(validation.data.promotesCategories),
+      });
       res.json(profile);
     } catch (error) {
       console.error("Error saving promoter profile:", error);
@@ -4577,6 +4828,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.createExperience({ ...experienceData, slug } as any);
       logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
+      // Partner rows, tokens and invite emails. Awaited so the response already
+      // carries the tokens the organiser is about to copy links from.
+      await syncPartnersForExperience(experience, userId);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);
       });
@@ -4658,6 +4912,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
       if (status !== "draft") {
+        await syncPartnersForExperience(experience, userId);
+      }
+      if (status !== "draft") {
         notifyCreatorEventSubmittedForReview(experience).catch((error) => {
           console.error("Failed to send event submitted email:", error);
         });
@@ -4689,6 +4946,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updated = await storage.updateExperience(req.params.id, req.body);
+
+      // Editing a live event has to move its partner roster too, or the deals
+      // the organiser can see in the builder and the ones the partners can act
+      // on drift apart. Only when the edit actually carried a partner list —
+      // an unrelated field change must not wipe the roster, which is how a
+      // venue's agreed terms were lost on publish once already.
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "eventPartners")) {
+        await syncPartnersForExperience(
+          { ...updated, eventPartners: sanitisePartnerEntries(req.body.eventPartners) },
+          experience.creatorId || userId,
+        );
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Error updating experience:", error);
@@ -6609,6 +6879,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.createExperience(experienceData as any);
       logUntrackedVenueDeal(experience, (experienceData as any).venueCompensationModel);
       await syncBuilderParticipantRoles(experience);
+      await syncPartnersForExperience(experience, experience.creatorId || userId);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);
       });
@@ -10799,7 +11070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // with nothing in it: that turned a database hiccup into an empty feed and
     // left the count and the list disagreeing with no way to tell which was
     // right.
-    const [openEvents, flashDeals, pool, ideas] = await Promise.all([
+    const [openEvents, flashDeals, pool, ideas, pastIdeaRows] = await Promise.all([
       storage.getOpenVenueEvents(),
       db
         .select({ deal: venueFlashDeals, venue: venues })
@@ -10808,6 +11079,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(and(eq(venueFlashDeals.status, "active"), eq(venues.approved, true))),
       storage.getPromotableExperiences(),
       storage.getOpenCollabIdeas(),
+      // Kept apart rather than filtered out. A poster wants to find the idea
+      // they posted in August; nobody wants it competing with the one that
+      // needs a venue by Friday.
+      storage.getPastCollabIdeas(),
     ]);
 
     // "Ready to act on": a real date, a real counterparty, a concrete button.
@@ -10881,19 +11156,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
       ].filter(Boolean).join(" - "),
       seekingPartnerType: idea.seekingPartnerType,
+      seekingPartnerTypes: idea.seekingPartnerTypes || [idea.seekingPartnerType],
       posterId: idea.posterId,
       actionLabel: "I am interested",
     }));
 
-    return { ready, forming };
+    const pastIdeas = pastIdeaRows.map((idea: any) => ({
+      kind: "collab_idea",
+      id: idea.id,
+      tag: idea.status === "matched" ? "became an event" : "past idea",
+      title: idea.title,
+      location: [idea.city, idea.region].filter(Boolean).join(", ") || null,
+      imageUrl: idea.photoUrl || null,
+      groupSize: Number(idea.groupSizeMax) || Number(idea.groupSizeMin) || null,
+      dealLabel: idea.dealPreference || null,
+      detail: [
+        formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
+        formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
+      ].filter(Boolean).join(" - "),
+      seekingPartnerType: idea.seekingPartnerType,
+      seekingPartnerTypes: idea.seekingPartnerTypes || [idea.seekingPartnerType],
+      posterId: idea.posterId,
+      status: idea.status,
+      // Still openable — the whole point is being able to read it back — but
+      // there is nothing left to answer.
+      actionLabel: "View",
+    }));
+
+    return { ready, forming, pastIdeas };
   }
 
   app.get("/api/collab/opportunities", isAuthenticated, async (_req: any, res) => {
     try {
-      const { ready, forming } = await buildCollabOpportunities();
+      const { ready, forming, pastIdeas } = await buildCollabOpportunities();
       res.json({
         ready,
         forming,
+        pastIdeas,
         // Same numbers the summary badge shows, from the same call, so a badge
         // that disagrees with the list is immediately visible as a bug.
         readyCount: ready.length,
@@ -10917,6 +11216,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to summarise opportunities" });
     }
   });
+  /**
+   * How many Collab Ideas are open, as a number and nothing else.
+   *
+   * Public, because the homepage strip has to draw for a signed-out visitor —
+   * a venue owner browsing the site is often exactly who an open idea is
+   * looking for, and asking them to sign in before telling them anything is
+   * open defeats the point. A count is not a listing: no titles, no cities, no
+   * posters. The ideas themselves stay behind the partner gate.
+   */
+  app.get("/api/collab/ideas/open-count", async (_req: any, res) => {
+    try {
+      const ideas = await storage.getOpenCollabIdeas(200);
+      res.json({ openCount: ideas.length });
+    } catch (error) {
+      // Zero rather than an error: the strip simply does not draw, which is the
+      // behaviour before this existed.
+      console.error("Error counting open collab ideas:", error);
+      res.json({ openCount: 0 });
+    }
+  });
+
 
   /**
    * Standing preferences, read off the profile this account already filled in.
@@ -11132,38 +11452,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!posterId) return res.status(401).json({ message: "Not authenticated" });
 
       const body = req.body || {};
-      const title = String(body.title || "").trim();
-      const seekingPartnerType = String(body.seekingPartnerType || "").trim();
-      if (!title) return res.status(400).json({ message: "Give your idea a title" });
-      if (!seekingPartnerType) {
-        return res.status(400).json({ message: "Say what kind of partner you are looking for" });
-      }
+      const parsed = parseCollabIdeaBody(body);
+      if (parsed.error) return res.status(400).json({ message: parsed.error });
 
-      const toDate = (value: unknown) => {
-        if (!value) return null;
-        const parsed = new Date(String(value));
-        return Number.isNaN(parsed.getTime()) ? null : parsed;
-      };
-      const estimatedStart = toDate(body.estimatedStart);
-      const estimatedEnd = toDate(body.estimatedEnd);
+      const seekingPartnerType = parsed.values.seekingPartnerType as string;
+      const estimatedEnd = parsed.values.estimatedEnd as Date | null;
 
       const poster = await storage.getUser(posterId);
       const idea = await storage.createCollabIdea({
         posterId,
         posterRole: poster?.role || "creator",
-        title,
-        description: body.description ? String(body.description) : null,
-        seekingPartnerType,
-        audience: body.audience ? String(body.audience) : null,
-        city: body.city ? String(body.city) : null,
-        region: body.region ? String(body.region) : null,
-        venueCategory: body.venueCategory ? String(body.venueCategory) : null,
-        groupSizeMin: Number.isFinite(Number(body.groupSizeMin)) ? Number(body.groupSizeMin) : null,
-        groupSizeMax: Number.isFinite(Number(body.groupSizeMax)) ? Number(body.groupSizeMax) : null,
-        estimatedStart,
-        estimatedEnd,
-        dealPreference: body.dealPreference ? String(body.dealPreference) : null,
+        ...parsed.values,
         status: "open",
+        // "Bring your own community?" — the poster's own trackable link, minted
+        // server-side so two ideas can never share a code. Always issued: it
+        // costs nothing unused, and generating it later would mean a second
+        // round trip at the moment the poster wants to paste it somewhere.
+        ownCommunityToken: generatePartnerToken(12),
         // A retreat is planned months out, so the window has to clear the
         // period being proposed or it expires before anyone is thinking about
         // those dates.
@@ -11341,6 +11646,934 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to update posting" });
     }
   });
+  /**
+   * One Collab Idea, in full.
+   *
+   * The listing page had no detail view at all: a card showed a title and an
+   * "I'm interested" button, and the poster's own card was not even clickable —
+   * so the one person who most needed to re-read what they had written could
+   * not. Everything the poster entered comes back here, including the fields
+   * the card has no room for.
+   */
+  app.get("/api/collab/ideas/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "That idea is no longer listed" });
+
+      const isOwner = idea.posterId === userId;
+      const poster = await storage.getUser(idea.posterId).catch(() => null);
+      const responses = isOwner ? await storage.getCollabIdeaResponses(idea.id) : [];
+      const counts = await storage.countCollabResponsesByIdea([idea.id]);
+      // Invite rows name a specific counterparty and carry their email, so they
+      // are the poster's to see and nobody else's.
+      const invites = isOwner ? await storage.getCollabIdeaInvites(idea.id) : [];
+
+      res.json({
+        ...idea,
+        isOwner,
+        posterName: poster?.firstName || "A member",
+        period: formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
+        groupSize: formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
+        responseCount: counts.get(idea.id) || 0,
+        responses: responses.map((response) => ({
+          id: response.id,
+          responderId: response.responderId,
+          responderRole: response.responderRole,
+          message: response.message,
+          status: response.status,
+          createdAt: response.createdAt,
+        })),
+        invites,
+      });
+    } catch (error) {
+      console.error("Error loading collab idea:", error);
+      res.status(500).json({ message: "Failed to load that idea" });
+    }
+  });
+
+  /**
+   * Edit a posting.
+   *
+   * Separate from the PATCH below, which only moves status. There was no way to
+   * correct a typo in a posted idea — the only options were to leave it wrong
+   * or withdraw it and lose the interest it had already collected.
+   */
+  app.put("/api/collab/ideas/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "Not found" });
+      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const body = req.body || {};
+      const parsed = parseCollabIdeaBody(body);
+      if (parsed.error) return res.status(400).json({ message: parsed.error });
+
+      const updated = await storage.updateCollabIdea(idea.id, {
+        ...parsed.values,
+        // The expiry follows the period: an edit that pushes a retreat out to
+        // December must not leave the posting expiring in October.
+        expiresAt: resolveCollabExpiry(parsed.values.estimatedEnd),
+      } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error editing collab idea:", error);
+      res.status(500).json({ message: "Failed to save your changes" });
+    }
+  });
+
+  /** Delete a posting outright, with its invites and responses. */
+  app.delete("/api/collab/ideas/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "Not found" });
+      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      await storage.deleteCollabIdea(idea.id);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("Error deleting collab idea:", error);
+      res.status(500).json({ message: "Failed to delete that posting" });
+    }
+  });
+
+  /**
+   * Invite a specific partner into an idea, by link and optionally by email.
+   *
+   * "Post to board" broadcasts and waits to be discovered, which is the wrong
+   * shape when the poster already has somebody in mind — and until now the only
+   * way to invite a named partner was inside the Event Builder, which means
+   * after the idea had already become an event.
+   *
+   * The link is always generated. Most contacts on this platform are known by
+   * an Instagram handle, not an address, so an email-only invite path would
+   * cover the minority of cases. An email, when given, sends a transactional
+   * invite *in addition* to the link.
+   *
+   * Both paths coexist with the board: posting to the board for a sponsor while
+   * directly inviting a venue already in mind is one idea, not two.
+   */
+  app.post("/api/collab/ideas/:id/invites", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "Not found" });
+      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const partnerType = String(req.body?.partnerType || "").trim();
+      if (!partnerType) return res.status(400).json({ message: "Say which kind of partner this invite is for" });
+
+      const rawEmail = String(req.body?.email || "").trim().toLowerCase();
+      const email = rawEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : null;
+      if (rawEmail && !email) {
+        return res.status(400).json({ message: "That email address does not look right" });
+      }
+
+      const invite = await storage.createCollabIdeaInvite({
+        ideaId: idea.id,
+        partnerType,
+        token: generatePartnerToken(),
+        email,
+      });
+
+      const inviteUrl = `${getAppBaseUrl(req)}/collab-invite/${invite.token}`;
+
+      // The link exists whether or not the email lands. A failed send must not
+      // read to the poster as an invite that was never created.
+      let emailed = false;
+      if (email) {
+        try {
+          const poster = await storage.getUser(userId);
+          await notificationService.sendExternalPartnerInviteEmail({
+            to: email,
+            partnerName: null,
+            creatorName: poster?.firstName || null,
+            eventName: idea.title,
+            proposedTerms: describeCollabDealPreferences(idea),
+            reviewUrl: inviteUrl,
+            ctaLabel: "See the idea",
+            eventKey: `collab_idea_invite:${invite.id}`,
+          });
+          emailed = true;
+        } catch (error) {
+          console.error("Collab invite created, but the email did not send:", error);
+          await storage.updateCollabIdeaInvite(invite.id, { status: "link_generated" }).catch(() => undefined);
+        }
+      }
+
+      res.status(201).json({ invite: { ...invite, status: emailed ? "email_sent" : "link_generated" }, inviteUrl, emailed });
+    } catch (error) {
+      console.error("Error creating collab invite:", error);
+      res.status(500).json({ message: "Failed to create that invite" });
+    }
+  });
+
+  /**
+   * What an invited party sees when they open their link.
+   *
+   * Public on purpose: the whole point is that the invitee may not have an
+   * account yet. The token is the credential, and nothing here exposes the
+   * poster's contact details — accepting is what opens a channel.
+   */
+  app.get("/api/collab/invites/:token", async (req: any, res) => {
+    try {
+      const invite = await storage.getCollabIdeaInviteByToken(req.params.token);
+      if (!invite) return res.status(404).json({ message: "That invite link is not valid" });
+
+      const idea = await storage.getCollabIdea(invite.ideaId);
+      if (!idea) return res.status(404).json({ message: "The idea behind this invite is gone" });
+
+      // "Opened" is recorded once and never walks a later state backwards.
+      if (!invite.openedAt && invite.status !== "accepted") {
+        await storage.updateCollabIdeaInvite(invite.id, { opened: true, status: "opened" })
+          .catch(() => undefined);
+      }
+
+      const poster = await storage.getUser(idea.posterId).catch(() => null);
+      res.json({
+        invite: { id: invite.id, partnerType: invite.partnerType, status: invite.status, email: invite.email },
+        idea: {
+          id: idea.id,
+          title: idea.title,
+          description: idea.description,
+          city: idea.city,
+          region: idea.region,
+          audience: idea.audience,
+          photoUrl: idea.photoUrl,
+          seekingPartnerTypes: idea.seekingPartnerTypes || [idea.seekingPartnerType],
+          typeDetails: idea.typeDetails || {},
+          dealPreferences: idea.dealPreferences || [],
+          period: formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
+          groupSize: formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
+          status: idea.status,
+        },
+        posterName: poster?.firstName || "A member",
+      });
+    } catch (error) {
+      console.error("Error loading collab invite:", error);
+      res.status(500).json({ message: "Failed to load that invite" });
+    }
+  });
+
+  /**
+   * Accept a direct invite.
+   *
+   * Requires an account, because accepting is joining a deal — and the account
+   * is what Partner Home is attached to. An invitee who is new to the platform
+   * signs up first and lands back here; the idea is then waiting for them as a
+   * pending invite, exactly like an Event Builder partner invite.
+   */
+  app.post("/api/collab/invites/:token/accept", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const invite = await storage.getCollabIdeaInviteByToken(req.params.token);
+      if (!invite) return res.status(404).json({ message: "That invite link is not valid" });
+
+      const idea = await storage.getCollabIdea(invite.ideaId);
+      if (!idea) return res.status(404).json({ message: "The idea behind this invite is gone" });
+      if (idea.posterId === userId) {
+        return res.status(400).json({ message: "This is your own posting" });
+      }
+
+      await storage.updateCollabIdeaInvite(invite.id, { accepted: true, invitedUserId: userId });
+
+      // Accepting records interest through the same path the board uses, so the
+      // poster sees one list of interested parties rather than two.
+      const responder = await storage.getUser(userId);
+      await storage.recordCollabInterest({
+        ideaId: idea.id,
+        responderId: userId,
+        responderRole: responder?.role || null,
+        venueId: req.body?.venueId || null,
+        message: req.body?.message ? String(req.body.message) : "Accepted your direct invite.",
+      }).catch((error: any) => {
+        console.error("Invite accepted, but interest was not recorded:", error);
+      });
+
+      let dealRoomId: string | null = null;
+      try {
+        const { room } = await ensureDealRoom({
+          subjectType: "collab_idea",
+          subjectId: idea.id,
+          initiatorId: userId,
+          counterpartId: idea.posterId,
+          initiatorRole: responder?.role ?? null,
+          counterpartRole: idea.posterRole ?? null,
+          title: idea.title,
+          currentTerms: {},
+          openingMessage: "I've accepted your invite — let's work out the details.",
+        });
+        dealRoomId = room.id;
+      } catch (error) {
+        console.error("Invite accepted, but the deal room did not open:", error);
+      }
+
+      try {
+        const poster = await storage.getUser(idea.posterId);
+        if (poster?.email) {
+          await notificationService.sendCollabInterestEmail({
+            to: poster.email,
+            posterName: poster.firstName,
+            ideaTitle: idea.title,
+            responderName: responder?.firstName || "Someone",
+            ideaUrl: `${getAppBaseUrl(req)}/collab-opportunities`,
+            eventKey: `collab_invite_accepted:${invite.id}`,
+          });
+        }
+      } catch (error) {
+        console.error("Invite accepted, but the poster was not emailed:", error);
+      }
+
+      res.json({ accepted: true, dealRoomId, ideaId: idea.id });
+    } catch (error) {
+      console.error("Error accepting collab invite:", error);
+      res.status(500).json({ message: "Failed to accept that invite" });
+    }
+  });
+
+  /**
+   * Collab Idea → Event Builder.
+   *
+   * What happens when an idea gets a match had no defined mechanic: the idea
+   * sat on the board, the conversation moved to WhatsApp, and the event was
+   * eventually typed in from scratch with none of the idea's own answers.
+   *
+   * This does not create the event. It returns a prefill the Event Builder
+   * opens with — because single-day vs multi-day is asked at this point, and
+   * because the deal is still to be agreed in the dealroom. The idea is only
+   * marked converted once the builder actually saves, which is the PATCH below.
+   */
+  app.post("/api/collab/ideas/:id/convert", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const idea = await storage.getCollabIdea(req.params.id);
+      if (!idea) return res.status(404).json({ message: "Not found" });
+      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const matchedUserId = req.body?.matchedUserId ? String(req.body.matchedUserId) : null;
+      let matchedName: string | null = null;
+      let matchedVia: "invite" | "board" | null = null;
+
+      if (matchedUserId) {
+        const matched = await storage.getUser(matchedUserId).catch(() => null);
+        matchedName = matched?.firstName || "Partner";
+        const invites = await storage.getCollabIdeaInvites(idea.id);
+        // An accepted direct invite is an agreement to work together, so it
+        // carries through as Confirmed. A board response is interest, not terms,
+        // and stays Invited until the dealroom settles it.
+        matchedVia = invites.some(
+          (invite) => invite.invitedUserId === matchedUserId && invite.status === "accepted",
+        ) ? "invite" : "board";
+      }
+
+      const requestedType = req.body?.eventType === "multi-day" ? "multi-day" : "one-day";
+      const suggestedDeal = suggestedDealFromPreferences(idea);
+      const matchedType = isPartnerType(req.body?.partnerType) ? req.body.partnerType : null;
+
+      res.json({
+        prefill: {
+          collabIdeaId: idea.id,
+          title: idea.title,
+          description: idea.description || "",
+          eventType: requestedType,
+          location: [idea.city, idea.region].filter(Boolean).join(", "),
+          maxParticipants: idea.groupSizeMax || idea.groupSizeMin || null,
+          minimumParticipants: idea.groupSizeMin || null,
+          startDate: idea.estimatedStart,
+          endDate: idea.estimatedEnd,
+          coverImageUrl: idea.photoUrl || "",
+          // A matched venue belongs in the Venue step, not the Partners list —
+          // it has its own operational fields there and its own contract.
+          matchedVenue: matchedType === "venue" || idea.seekingPartnerType === "venue"
+            ? { userId: matchedUserId, name: matchedName }
+            : null,
+          matchedPartner: matchedUserId && matchedType && matchedType !== "venue"
+            ? {
+                partnerType: matchedType,
+                name: matchedName,
+                partnerUserId: matchedUserId,
+                // Pre-fills the suggestion, never locks it: the idea stated a
+                // preference, and the deal is still agreed in the dealroom.
+                dealType: suggestedDeal,
+                status: matchedVia === "invite" ? "confirmed" : "invited",
+              }
+            : null,
+          suggestedDealType: suggestedDeal,
+        },
+      });
+    } catch (error) {
+      console.error("Error preparing collab conversion:", error);
+      res.status(500).json({ message: "Failed to prepare that handoff" });
+    }
+  });
+
+  // ── The Partners model ───────────────────────────────────────────────────
+
+  /**
+   * Onboarded accounts that can fill a given partner type.
+   *
+   * Only ever avatar and name. Contact details belong to the partner and are
+   * theirs to share once a deal is under way — the same rule the promoter
+   * picker already follows, applied to every type rather than one.
+   */
+  app.get("/api/partners/directory", isAuthenticated, async (req: any, res) => {
+    try {
+      const partnerType = String(req.query?.type || "").trim();
+      const search = String(req.query?.q || "").trim().toLowerCase();
+
+      const directory = await storage.getPartnerDirectory();
+
+      // The type narrows nothing by itself: a run club is a creator account
+      // acting as a Community, and one brand can be a Sponsor on one event and
+      // an Affiliate on another. So every onboarded account is offered for every
+      // type, and the label just says how they turned up in the list.
+      const filtered = search
+        ? directory.filter((row) => row.displayName.toLowerCase().includes(search))
+        : directory;
+
+      res.json(filtered.slice(0, 100).map((row) => ({
+        ...row,
+        label: partnerType ? partnerTypeLabel(partnerType) : partnerTypeLabel(row.kind),
+      })));
+    } catch (error) {
+      console.error("Error loading partner directory:", error);
+      res.status(500).json({ message: "Failed to load partners" });
+    }
+  });
+
+  /** An event's partner roster, with each partner's own join count. */
+  app.get("/api/experiences/:id/partners", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Event not found" });
+
+      const rows = await storage.getExperiencePartners(experience.id);
+      const isOrganizer = experience.creatorId === userId;
+      const isPartner = rows.some((row) => row.partnerUserId === userId);
+      if (!isOrganizer && !isPartner && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const codes = rows.map((row) => row.refCode).filter(Boolean) as string[];
+      const joins = await storage.countPartnerReferralJoins(experience.id, codes).catch(() => new Map());
+
+      res.json(rows.map((row) => ({
+        ...row,
+        // The invite token is the credential behind a claim link, so only the
+        // organiser (who has to send it) ever receives it.
+        inviteToken: isOrganizer ? row.inviteToken : undefined,
+        dealLabel: partnerDealLabel(row.dealType),
+        typeLabel: partnerTypeLabel(row.partnerType),
+        termSummary: partnerTermSummary({ dealType: row.dealType, terms: row.terms || {} }),
+        joined: joins.get(row.refCode || "") || 0,
+      })));
+    } catch (error) {
+      console.error("Error loading event partners:", error);
+      res.status(500).json({ message: "Failed to load partners" });
+    }
+  });
+
+  /**
+   * What an invited partner sees before they have an account.
+   *
+   * Public, with the token as the credential — the invitee may be a run club
+   * that has never heard of this platform. The organiser's email is not in the
+   * payload; accepting is what opens a channel.
+   */
+  app.get("/api/event-partner-invites/:token", async (req: any, res) => {
+    try {
+      const row = await storage.getExperiencePartnerByToken(req.params.token);
+      if (!row) return res.status(404).json({ message: "That invite link is not valid" });
+
+      const experience = await storage.getExperience(row.experienceId);
+      const organizer = await storage.getUser(row.organizerId).catch(() => null);
+
+      res.json({
+        partner: {
+          id: row.id,
+          partnerName: row.partnerName,
+          partnerType: row.partnerType,
+          typeLabel: partnerTypeLabel(row.partnerType),
+          dealType: row.dealType,
+          dealLabel: partnerDealLabel(row.dealType),
+          termSummary: partnerTermSummary({ dealType: row.dealType, terms: row.terms || {} }),
+          status: row.status,
+        },
+        event: experience
+          ? {
+              id: experience.id,
+              slug: experience.slug,
+              title: experience.title,
+              startDate: experience.startDate,
+              location: experience.location,
+              coverImageUrl: experience.coverImageUrl,
+            }
+          : null,
+        organizerName: organizer?.firstName || "The organiser",
+      });
+    } catch (error) {
+      console.error("Error loading partner invite:", error);
+      res.status(500).json({ message: "Failed to load that invite" });
+    }
+  });
+
+  /** Accept or decline a partner invite. Requires an account to attach it to. */
+  app.post("/api/event-partner-invites/:token/respond", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const row = await storage.getExperiencePartnerByToken(req.params.token);
+      if (!row) return res.status(404).json({ message: "That invite link is not valid" });
+      if (row.organizerId === userId) {
+        return res.status(400).json({ message: "This is your own event" });
+      }
+
+      const accept = req.body?.accept !== false;
+      // Accepting claims the row for this account, which is what makes it
+      // appear on their Partner Home from then on.
+      const updated = await storage.updateExperiencePartnerStatus(
+        row.id,
+        accept ? "confirmed" : "declined",
+        { partnerUserId: row.partnerUserId || userId },
+      );
+
+      try {
+        const organizer = await storage.getUser(row.organizerId);
+        const experience = await storage.getExperience(row.experienceId);
+        if (organizer?.email && experience) {
+          await notificationService.sendPromotionOfferResponseEmail({
+            to: organizer.email,
+            recipientName: organizer.firstName,
+            partnerName: row.partnerName,
+            experienceTitle: experience.title,
+            experienceSlugOrId: experience.slug || experience.id,
+            action: accept ? "accepted" : "declined",
+            dealType: row.dealType,
+            terms: (row.terms as any) || {},
+            currency: (experience as any).currency || null,
+          });
+        }
+      } catch (error) {
+        console.error("Partner responded, but the organiser was not emailed:", error);
+      }
+
+      res.json({ partner: updated, accepted: accept });
+    } catch (error) {
+      console.error("Error responding to partner invite:", error);
+      res.status(500).json({ message: "Failed to record that response" });
+    }
+  });
+
+  /** Accept or decline from inside Partner Home, where there is no token. */
+  app.post("/api/partner-home/entries/:id/respond", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const row = await storage.getExperiencePartner(req.params.id);
+      if (!row) return res.status(404).json({ message: "Not found" });
+      if (row.partnerUserId !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const accept = req.body?.accept !== false;
+      const updated = await storage.updateExperiencePartnerStatus(row.id, accept ? "confirmed" : "declined");
+      res.json({ partner: updated, accepted: accept });
+    } catch (error) {
+      console.error("Error responding from partner home:", error);
+      res.status(500).json({ message: "Failed to record that response" });
+    }
+  });
+
+  /**
+   * Partner Home.
+   *
+   * The page that did not exist. A community could be recorded as a partner in
+   * somebody's builder, and had nowhere to accept the invite, nothing to share
+   * with its own members, and no way to see how many of them came.
+   *
+   * Third sibling to Creator Home and Venue Home — same shape, new audience.
+   * No new role: access follows from having at least one partner entry, which
+   * is a relationship rather than an account type.
+   */
+  app.get("/api/partner-home", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const entries = await storage.getPartnerEntriesForUser(userId);
+      const baseUrl = getAppBaseUrl(req);
+
+      const events = await Promise.all(entries.map(async (entry) => {
+        const experience = await storage.getExperience(entry.experienceId).catch(() => null);
+        const joins = entry.refCode
+          ? await storage.countPartnerReferralJoins(entry.experienceId, [entry.refCode]).catch(() => new Map())
+          : new Map();
+        const slugOrId = experience?.slug || entry.experienceId;
+        return {
+          id: entry.id,
+          status: entry.status,
+          partnerType: entry.partnerType,
+          typeLabel: partnerTypeLabel(entry.partnerType),
+          dealType: entry.dealType,
+          dealLabel: partnerDealLabel(entry.dealType),
+          termSummary: partnerTermSummary({ dealType: entry.dealType, terms: entry.terms || {} }),
+          eventId: entry.experienceId,
+          eventTitle: experience?.title || "An event",
+          eventDate: experience?.startDate || null,
+          eventStatus: (experience as any)?.lifecycleStatus || experience?.status || null,
+          // The partner's own trackable link: the same ?ref= attribution the
+          // Collab Idea post and the Participant Referral Perk use. One
+          // mechanism, reused three ways.
+          shareUrl: entry.refCode ? `${baseUrl}/e/${slugOrId}?ref=${entry.refCode}` : null,
+          refCode: entry.refCode,
+          joined: joins.get(entry.refCode || "") || 0,
+          // Milestone barter settles on this figure, so the target travels with it.
+          milestoneTarget: Number((entry.terms as any)?.milestoneAttendeeTarget) || null,
+        };
+      }));
+
+      const confirmed = events.filter((event) => event.status === "confirmed");
+      const pending = events.filter((event) => event.status === "invited" || event.status === "draft");
+
+      const allCodes = entries.map((entry) => entry.refCode).filter(Boolean) as string[];
+      const peopleBrought = await storage.countPartnerJoinsByCode(allCodes).catch(() => 0);
+
+      // "Credits earned" only counts what a deal actually promises. A barter
+      // partner's free tickets are a real number; a brand's exposure is not,
+      // and inventing a figure for it would be worse than showing none.
+      const creditsEarned = confirmed.reduce((total, event) => {
+        if (event.dealType !== "milestone_barter") return total;
+        const target = event.milestoneTarget || 0;
+        if (!target || event.joined < target) return total;
+        const entry = entries.find((row) => row.id === event.id);
+        return total + (Number((entry?.terms as any)?.milestoneRewardTickets) || 1);
+      }, 0);
+
+      res.json({
+        hasAccess: entries.length > 0,
+        stats: {
+          peopleBrought,
+          activeEvents: confirmed.length,
+          creditsEarned,
+        },
+        pending,
+        confirmed,
+      });
+    } catch (error) {
+      console.error("Error loading partner home:", error);
+      res.status(500).json({ message: "Failed to load your partner home" });
+    }
+  });
+  /**
+   * Does this account have any partner deals at all?
+   *
+   * Its own endpoint so the navigation can decide whether to show Partner Home
+   * without loading the page's whole feed — which resolves an experience and a
+   * join count per deal, and would run on every page render.
+   */
+  app.get("/api/partner-home/access", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const entries = await storage.getPartnerEntriesForUser(userId);
+      res.json({
+        hasAccess: entries.length > 0,
+        pendingCount: entries.filter((entry) => entry.status === "invited").length,
+      });
+    } catch (error) {
+      // Reported as unavailable rather than as "no access": hiding the entry on
+      // a failed lookup would make the page look like it had been taken away.
+      console.error("Error checking partner home access:", error);
+      res.status(500).json({ message: "Failed to check partner access" });
+    }
+  });
+
+
+  /**
+   * Message the people you brought.
+   *
+   * Routed through the platform, and that is the point. The partner never
+   * receives an email address or a phone number: this reads user ids off the
+   * referral attribution and writes platform messages to them. Raw contact
+   * details are only ever shared if that individual participant has opted in to
+   * share them with that specific partner — which is a GDPR requirement, not a
+   * nicety, and the reason `getPartnerAudienceUserIds` selects no address.
+   */
+  app.post("/api/partner-home/message", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const body = String(req.body?.message || "").trim();
+      if (!body) return res.status(400).json({ message: "Write something to send" });
+      if (body.length > 2000) return res.status(400).json({ message: "That message is too long" });
+
+      const entries = await storage.getPartnerEntriesForUser(userId);
+      const entryId = req.body?.entryId ? String(req.body.entryId) : null;
+      const scoped = entryId
+        ? entries.filter((entry) => entry.id === entryId)
+        : entries.filter((entry) => entry.status === "confirmed");
+
+      if (!scoped.length) return res.status(404).json({ message: "No audience to message yet" });
+
+      const codes = scoped.map((entry) => entry.refCode).filter(Boolean) as string[];
+      const recipients = await storage.getPartnerAudienceUserIds(codes);
+      if (!recipients.length) {
+        return res.json({ sent: 0, message: "Nobody has joined through your link yet." });
+      }
+
+      // Posted into each event's own thread rather than sent as email. That is
+      // the mechanism, not a shortcut: the partner addresses nobody directly,
+      // so there is no address for them to receive. Everyone who joined through
+      // their link is already in that thread.
+      const reached = new Set(recipients.filter((id) => id !== userId));
+      let sent = 0;
+      for (const entry of scoped) {
+        try {
+          await storage.createExperienceMessage({
+            experienceId: entry.experienceId,
+            userId,
+            message: body,
+            messageType: "partner_broadcast",
+          });
+          sent += 1;
+        } catch (error) {
+          console.error(`Failed to post partner message on ${entry.experienceId}:`, error);
+        }
+      }
+
+      res.json({
+        sent,
+        reached: reached.size,
+        message: sent === 0
+          ? "That message could not be posted — try again."
+          : `Posted to ${sent} event ${sent === 1 ? "thread" : "threads"}, reaching ${reached.size} ${reached.size === 1 ? "person" : "people"} you brought. No contact details were shared.`,
+      });
+    } catch (error) {
+      console.error("Error messaging partner audience:", error);
+      res.status(500).json({ message: "Failed to send that message" });
+    }
+  });
+
+  // ── Content licensing & distribution ─────────────────────────────────────
+
+  /**
+   * An event's content library, filtered by what this account may see.
+   *
+   * A sponsor sees what was licensed to all confirmed partners, or to Great's
+   * marketing — never content the organiser kept to the event itself. That
+   * decision is made in one place, `canViewContent`, so a new surface cannot
+   * accidentally widen it.
+   */
+  app.get("/api/experiences/:id/content", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Event not found" });
+
+      const [items, partners] = await Promise.all([
+        storage.getExperienceContent(experience.id),
+        storage.getExperiencePartners(experience.id),
+      ]);
+
+      const viewer = {
+        userId,
+        isOrganizer: experience.creatorId === userId,
+        isVenue: await isVenueOwnerForExperience(experience, userId),
+        isConfirmedPartner: partners.some(
+          (partner) => partner.partnerUserId === userId && partner.status === "confirmed",
+        ),
+        isAdmin: await checkIsAdmin(req),
+      };
+
+      const visible = items.filter((item) => canViewContent(
+        {
+          createdByRole: item.createdByRole as any,
+          createdByUserId: item.uploadedBy,
+          scope: item.scope as any,
+          expiresDaysAfterEvent: item.expiresDaysAfterEvent,
+          commercialOptIn: item.commercialOptIn === true,
+          attribution: item.attribution,
+        },
+        viewer,
+        experience.startDate,
+      ));
+
+      res.json(visible.map((item) => ({
+        ...item,
+        // Stated per item, because "I can see it" and "I can use it" are two
+        // different permissions and conflating them is how rights get breached.
+        canUseCommercially: canUseCommercially(
+          {
+            createdByRole: item.createdByRole as any,
+            createdByUserId: item.uploadedBy,
+            scope: item.scope as any,
+            expiresDaysAfterEvent: item.expiresDaysAfterEvent,
+            commercialOptIn: item.commercialOptIn === true,
+            attribution: item.attribution,
+          },
+          viewer,
+          experience.startDate,
+        ),
+        isMine: item.uploadedBy === userId,
+      })));
+    } catch (error) {
+      console.error("Error loading event content:", error);
+      res.status(500).json({ message: "Failed to load the content library" });
+    }
+  });
+
+  /** Upload to an event's library. The licence is captured here, not later. */
+  app.post("/api/experiences/:id/content", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Event not found" });
+
+      const mediaUrl = String(req.body?.mediaUrl || "").trim();
+      if (!mediaUrl) return res.status(400).json({ message: "Nothing to upload" });
+
+      const partners = await storage.getExperiencePartners(experience.id);
+      const isOrganizer = experience.creatorId === userId;
+      const isPartner = partners.some(
+        (partner) => partner.partnerUserId === userId && partner.status === "confirmed",
+      );
+      const isVenue = await isVenueOwnerForExperience(experience, userId);
+
+      // The role is derived from the relationship, never taken from the body: a
+      // participant claiming to be the organiser would otherwise be able to
+      // license their own upload to every partner on the event.
+      const createdByRole = isOrganizer
+        ? "organizer"
+        : isVenue
+          ? "venue"
+          : isPartner
+            ? "partner"
+            : "participant";
+
+      const license = sanitiseLicense({
+        createdByRole,
+        createdByUserId: userId,
+        scope: isContentScope(req.body?.scope) ? req.body.scope : "event_only",
+        expiresDaysAfterEvent: req.body?.expiresDaysAfterEvent,
+        // A participant cannot grant commercial reuse in the same breath as
+        // uploading: the switch is theirs to flip afterwards, deliberately.
+        commercialOptIn: createdByRole === "participant" ? false : req.body?.commercialOptIn === true,
+        attribution: req.body?.attribution,
+      });
+
+      const created = await storage.addExperienceContent({
+        experienceId: experience.id,
+        uploadedBy: userId,
+        createdByRole: license.createdByRole,
+        mediaUrl,
+        mediaType: req.body?.mediaType === "video" ? "video" : "image",
+        caption: req.body?.caption ? String(req.body.caption).slice(0, 300) : null,
+        scope: license.scope,
+        expiresDaysAfterEvent: license.expiresDaysAfterEvent,
+        commercialOptIn: license.commercialOptIn === true,
+        attribution: license.attribution,
+      } as any);
+
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("Error uploading event content:", error);
+      res.status(500).json({ message: "Failed to upload that" });
+    }
+  });
+
+  /**
+   * The participant's own commercial-reuse switch.
+   *
+   * Only the uploader may flip it, and only on their own upload. An organiser
+   * who could set this for somebody else would make the consent meaningless.
+   */
+  app.patch("/api/content/:id/commercial-opt-in", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const item = await storage.getExperienceContentItem(req.params.id);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      if (item.uploadedBy !== userId) {
+        return res.status(403).json({ message: "Only the person who uploaded this can change its terms" });
+      }
+
+      const updated = await storage.setContentCommercialOptIn(item.id, req.body?.optIn === true);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating content opt-in:", error);
+      res.status(500).json({ message: "Failed to update that" });
+    }
+  });
+
+  app.delete("/api/content/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const item = await storage.getExperienceContentItem(req.params.id);
+      if (!item) return res.status(404).json({ message: "Not found" });
+
+      const experience = await storage.getExperience(item.experienceId).catch(() => null);
+      const isOrganizer = experience?.creatorId === userId;
+      if (item.uploadedBy !== userId && !isOrganizer && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      await storage.deleteExperienceContent(item.id);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("Error deleting content:", error);
+      res.status(500).json({ message: "Failed to delete that" });
+    }
+  });
+
+  // ── Sponsor / Brand standing preferences ─────────────────────────────────
+
+  app.get("/api/sponsor-profile", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      const profile = await storage.getSponsorProfile(userId);
+      if (!profile) return res.status(404).json({ message: "No sponsor profile yet" });
+      res.json(profile);
+    } catch (error) {
+      console.error("Error loading sponsor profile:", error);
+      res.status(500).json({ message: "Failed to load that profile" });
+    }
+  });
+
+  app.post("/api/sponsor-profile", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const offering = ["product", "budget", "both"].includes(String(req.body?.offering))
+        ? String(req.body.offering)
+        : "product";
+
+      const profile = await storage.createOrUpdateSponsorProfile(userId, {
+        displayName: req.body?.displayName ? String(req.body.displayName).slice(0, 200) : null,
+        logoUrl: req.body?.logoUrl ? String(req.body.logoUrl) : null,
+        // Only ids the taxonomy knows: an unknown category would store a value
+        // the matcher can never match and no screen can render.
+        sponsorCategories: sanitiseCategories(req.body?.sponsorCategories),
+        targetAudience: req.body?.targetAudience ? String(req.body.targetAudience).slice(0, 300) : null,
+        offering,
+        offerDescription: req.body?.offerDescription ? String(req.body.offerDescription).slice(0, 1000) : null,
+        openToContact: req.body?.openToContact !== false,
+        completed: true,
+      });
+      res.json(profile);
+    } catch (error) {
+      console.error("Error saving sponsor profile:", error);
+      res.status(500).json({ message: "Failed to save that profile" });
+    }
+  });
+
 
   app.get("/api/venue-flash-deals", async (req: any, res) => {
     try {

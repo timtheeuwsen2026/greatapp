@@ -239,3 +239,109 @@ describe("Free RSVP under a ticket deduction", () => {
     ).toBe(-120);
   });
 });
+
+describe("partner shares — no longer hardcoded to the venue", () => {
+  it("gives each ticket-revenue partner its own row, and subtracts all of them", () => {
+    // The case the Partners model exists for: a free outdoor location with no
+    // paid venue at all, where a community and an affiliate are what make the
+    // event happen and take the cut.
+    const breakdown = calculateEventEconomics({
+      ticketGross: 900,
+      paidTickets: 60,
+      platformPct: 15,
+      venueDealModel: null,
+      venueDealValue: 0,
+      partnerShares: [
+        { key: "community", label: "Community — Good Soles", pct: 20 },
+        { key: "affiliate", label: "Affiliate — Ana", pct: 10 },
+      ],
+    });
+
+    expect(breakdown.lines.map((line) => line.key)).toEqual([
+      "ticket_gross",
+      "platform_fee",
+      "partner_share_community",
+      "partner_share_affiliate",
+    ]);
+    expect(breakdown.partnerTicketCost).toBe(270);
+    // 900 - 135 fee - 180 - 90
+    expect(breakdown.net).toBe(495);
+  });
+
+  it("keeps the total equal to the sum of the rows it printed", () => {
+    const breakdown = calculateEventEconomics({
+      ticketGross: 500,
+      paidTickets: 25,
+      platformPct: 15,
+      venueDealModel: "revenue_share",
+      venueDealValue: 20,
+      partnerShares: [{ key: "a", label: "Affiliate — Ana", pct: 8 }],
+    });
+    const sum = breakdown.lines.reduce((total, line) => total + line.amount, 0);
+    expect(Math.round(sum * 100) / 100).toBe(breakdown.net);
+  });
+
+  it("renders no partner row at all when nobody takes a percentage", () => {
+    // Chris's breathwork class: platform fee and nothing else.
+    const breakdown = calculateEventEconomics({
+      ticketGross: 200,
+      paidTickets: 10,
+      platformPct: 15,
+      venueDealModel: null,
+      venueDealValue: 0,
+      partnerShares: [],
+    });
+    expect(breakdown.lines.map((line) => line.key)).toEqual(["ticket_gross", "platform_fee"]);
+    expect(breakdown.partnerTicketCost).toBe(0);
+  });
+
+  it("skips a partner whose percentage is zero or missing", () => {
+    // An entry added but not yet priced must not print a "(0%)" row.
+    const breakdown = calculateEventEconomics({
+      ticketGross: 300,
+      paidTickets: 15,
+      platformPct: 15,
+      venueDealModel: null,
+      venueDealValue: 0,
+      partnerShares: [
+        { key: "a", label: "Affiliate — unpriced", pct: 0 },
+        { key: "b", label: "Affiliate — Ana", pct: 10 },
+      ],
+    });
+    expect(breakdown.lines.map((line) => line.key)).toEqual([
+      "ticket_gross",
+      "platform_fee",
+      "partner_share_b",
+    ]);
+  });
+
+  it("charges partner shares against ticket revenue only, never against add-ons", () => {
+    // Rule 1: the two paths only meet at the sum. A 20% partner cut is not
+    // charged against a coffee.
+    const breakdown = calculateEventEconomics({
+      ticketGross: 100,
+      paidTickets: 10,
+      platformPct: 0,
+      venueDealModel: null,
+      venueDealValue: 0,
+      addOnVenueGross: 50,
+      addOnCreatorGross: 20,
+      partnerShares: [{ key: "a", label: "Affiliate — Ana", pct: 20 }],
+    });
+    // 20% of the £100 of tickets, not of £120.
+    expect(breakdown.partnerTicketCost).toBe(20);
+    expect(breakdown.net).toBe(100);
+  });
+
+  it("ignores a share list that is not an array", () => {
+    const breakdown = calculateEventEconomics({
+      ticketGross: 100,
+      paidTickets: 10,
+      platformPct: 15,
+      venueDealModel: null,
+      venueDealValue: 0,
+      partnerShares: "20%" as any,
+    });
+    expect(breakdown.partnerTicketCost).toBe(0);
+  });
+});

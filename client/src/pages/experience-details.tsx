@@ -6,6 +6,7 @@ import Navigation from "@/components/navigation";
 import SimpleSmartButton from "@/components/simple-smart-button";
 import ParticipantAvatars from "@/components/participant-avatars";
 import { SocialProofGallery } from "@/components/SocialProofGallery";
+import EventContentLibrary from "@/components/EventContentLibrary";
 import ParticipantList from "@/components/ParticipantList";
 import { ParticipantInteractions } from "@/components/participant-interactions";
 import { EventSocialProofToast } from "@/components/EventSocialProofToast";
@@ -798,6 +799,21 @@ export default function ExperienceDetails() {
                 emptyText="This organiser has no reviews yet."
               />
             </div>
+            {/* The event's content library.
+                Signed-in only: what a given account may see is decided by the
+                licence each upload carries, and there is no such decision to
+                make for an anonymous visitor. The organiser gets the scope
+                picker; everyone else uploads to the event's moments and keeps
+                the commercial-reuse switch to themselves. */}
+            {isAuthenticated && (
+              <div className="mb-8">
+                <EventContentLibrary
+                  experienceId={experience.id}
+                  canSetScope={isCreator}
+                />
+              </div>
+            )}
+
 
             {/* Creator Profile Section - Always show when we have a creatorId */}
             {experience.creatorId && (

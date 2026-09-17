@@ -744,7 +744,7 @@ export default function AdminDashboard() {
         <div className="mb-6 flex gap-4">
           <Button variant="outline" onClick={() => setLocation('/admin/promoters')}>
             <Target className="h-4 w-4 mr-2" />
-            Manage Promoters
+            Manage Affiliates
           </Button>
         </div>
 
@@ -1467,7 +1467,7 @@ export default function AdminDashboard() {
                   <option value="creator">Creators</option>
                   <option value="venue_provider">Venue providers</option>
                   <option value="service_provider">Service providers</option>
-                  <option value="promoter">Promoters</option>
+                  <option value="promoter">Affiliates</option>
                   <option value="admin">Admins</option>
                 </select>
               </div>
@@ -1575,7 +1575,7 @@ export default function AdminDashboard() {
                                 <option value="creator">Creator</option>
                                 <option value="venue_provider">Venue provider</option>
                                 <option value="service_provider">Service provider</option>
-                                <option value="promoter">Promoter</option>
+                                <option value="promoter">Affiliate</option>
                                 <option value="admin">Admin</option>
                               </select>
                             </TableCell>

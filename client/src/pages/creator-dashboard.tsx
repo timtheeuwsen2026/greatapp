@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
 import Navigation from "@/components/navigation";
+import CreateExperienceFork from "@/components/CreateExperienceFork";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary } from "@shared/venueDealModels";
@@ -149,6 +150,9 @@ function OnboardingChecklist({ checklist, progress, onComplete }: OnboardingChec
         return stepData.completed ? (
           <Badge className="bg-green-100 text-green-800">{stepData.data.experiencesCreated} Created</Badge>
         ) : (
+          // Straight to the builder rather than through the fork, and
+          // deliberately: this is the onboarding checklist's "publish your
+          // first event" step, and posting an idea would not tick it.
           <Button size="sm" onClick={() => setLocation('/event-builder')}>
             Create First Experience
           </Button>
@@ -393,6 +397,10 @@ function CreatorDashboardContent() {
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const breadcrumbs = useBreadcrumbs();
+  // Every "start something new" button on this dashboard opens the fork rather
+  // than the builder. Opening an existing draft or editing a live event still
+  // goes straight in — those are not creation entry points.
+  const [createForkOpen, setCreateForkOpen] = useState(false);
 
   // Check if creator profile exists
   const { data: creatorProfile, isLoading: profileLoading } = useQuery({
@@ -1364,8 +1372,9 @@ function CreatorDashboardContent() {
               <div className="flex justify-between items-center">
                 <h2 className="text-xl font-semibold">My Experiences</h2>
                 <Button 
-                  onClick={() => setLocation('/event-builder')}
+                  onClick={() => setCreateForkOpen(true)}
                   className="flex items-center gap-2"
+                  data-testid="button-dashboard-create-experience"
                 >
                   <Plus className="w-4 h-4" />
                   Create New Experience
@@ -1581,7 +1590,7 @@ function CreatorDashboardContent() {
                       <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                       <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No experiences yet</h3>
                       <p className="text-gray-600 dark:text-gray-400 mb-4">Start creating amazing experiences for your community</p>
-                      <Button onClick={() => setLocation('/event-builder')}>
+                      <Button onClick={() => setCreateForkOpen(true)}>
                         Create Your First Experience
                       </Button>
                     </CardContent>
@@ -3288,6 +3297,8 @@ function CreatorDashboardContent() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <CreateExperienceFork open={createForkOpen} onOpenChange={setCreateForkOpen} />
     </div>
   );
 }

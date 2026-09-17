@@ -27,7 +27,7 @@ import {
  * This gives the two sides the same shape.
  */
 export default function VenueHome() {
-  const [location, setLocation] = useLocation();
+  const [location] = useLocation();
   const { isAuthenticated, hasRequiredRole, isLoading: authLoading } = useVenueAuth();
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
 
@@ -46,7 +46,7 @@ export default function VenueHome() {
 
   // Listing status drives the third card, the same way profile completion does
   // on the creator side.
-  const { data: venues = [], isSuccess: venuesLoaded } = useQuery<any[]>({
+  const { data: venues = [] } = useQuery<any[]>({
     queryKey: ['/api/user/venues'],
     enabled: isAuthenticated,
   });
@@ -54,22 +54,13 @@ export default function VenueHome() {
   const hasVenue = venues.length > 0;
   const hasApprovedVenue = venues.some((venue: any) => venue.status === 'approved');
 
-  // A creator who finishes their profile is carried straight into the event
-  // builder. A venue was not: it landed here with nothing listed and no sign
-  // that "What kind of space are you listing?" was the next step, so the flow
-  // simply stopped. Only for an account with no listing at all — a venue that
-  // has one is here to manage it, and must not be bounced into a new listing.
-  const [autoContinued, setAutoContinued] = useState(false);
-  useEffect(() => {
-    if (autoContinued) return;
-    if (!isAuthenticated || authLoading || !hasRequiredRole) return;
-    if (!venuesLoaded || hasVenue) return;
-    // A venue arriving from its own just-completed listing must not be sent
-    // straight back into a second one.
-    if (new URLSearchParams(window.location.search).get('profileCompleted') === 'true') return;
-    setAutoContinued(true);
-    setLocation('/venues/new');
-  }, [autoContinued, isAuthenticated, authLoading, hasRequiredRole, venuesLoaded, hasVenue, setLocation]);
+  // Routing an account with no listing into the builder used to happen here.
+  // It is `VenueOnboardingGate` now, wrapped around this route in App.tsx: a
+  // page-level redirect only covered whoever happened to land on this page,
+  // and the dashboard, the Day Event / Multi-Day split and every other venue
+  // surface stayed reachable around it. The gate covers all of them, and also
+  // catches accounts created before this flow existed, whose listing is stuck
+  // in `draft` and who were never prompted at all.
 
   if (authLoading) {
     return (
@@ -176,7 +167,10 @@ export default function VenueHome() {
                   )}
                 </div>
                 <CardTitle className="text-xl">
-                  {hasApprovedVenue ? "Listing Live" : hasVenue ? "Listing Pending" : "List Your Venue"}
+                  {/* "Create Venue Profile" and "List Venue" were two names for
+                      one flow, which read as two separate things to do. One
+                      name, on the one button that opens it. */}
+                  {hasApprovedVenue ? "Listing Live" : hasVenue ? "Listing Pending" : "Create Venue Profile"}
                 </CardTitle>
               </CardHeader>
               <CardContent>

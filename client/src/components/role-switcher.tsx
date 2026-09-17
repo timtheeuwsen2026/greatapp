@@ -40,7 +40,7 @@ const roleConfig: Record<UserRole, { label: string; icon: any; color: string; de
     description: "Platform administration"
   },
   promoter: {
-    label: "Promoter",
+    label: "Affiliate",
     icon: Megaphone,
     color: "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300",
     description: "Promote experiences and earn commissions"

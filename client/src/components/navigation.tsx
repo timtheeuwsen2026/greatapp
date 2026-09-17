@@ -9,7 +9,8 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Briefcase, Building2, Crown, GraduationCap, Handshake, LayoutGrid, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, Shield, Ticket, TrendingUp, User, Users, Wrench, X } from "lucide-react";
+import { Briefcase, Building2, Crown, GraduationCap, Handshake, LayoutGrid, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, Plus, Shield, Ticket, TrendingUp, User, Users, Wrench, X } from "lucide-react";
+import CreateExperienceFork from "@/components/CreateExperienceFork";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
@@ -21,7 +22,12 @@ import BrandLogo from "@/components/BrandLogo";
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
   participant:       { label: "Participant",         icon: <User className="h-4 w-4" /> },
   creator:           { label: "Creator / Organiser", icon: <Crown className="h-4 w-4" /> },
-  promoter:          { label: "Promoter",            icon: <Megaphone className="h-4 w-4" /> },
+  // "Affiliate" is the standard term for exactly this mechanic — a referrer
+  // paid per sale — and it does not collide with "Partner", which is already
+  // the umbrella term for the whole step. The stored role value stays
+  // `promoter`: renaming it would orphan every existing account, every route
+  // and every commission row for the sake of a label.
+  promoter:          { label: "Affiliate",           icon: <Megaphone className="h-4 w-4" /> },
   venue_provider:    { label: "Space / Venue",       icon: <Building2 className="h-4 w-4" /> },
   service_provider:  { label: "Service Provider",    icon: <LayoutGrid className="h-4 w-4" /> },
 };
@@ -89,12 +95,21 @@ async function resolveRoleDestination(role: string): Promise<string> {
 
 export default function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // The single "Create experience" fork. Lives in the nav because the nav is
+  // the one entry point present on every page.
+  const [createForkOpen, setCreateForkOpen] = useState(false);
   const [switchingRole, setSwitchingRole] = useState<string | null>(null);
   const { user, isAuthenticated, isLoading } = useAuth();
   const [pathname, navigate] = useLocation();
   const queryClient = useQueryClient();
   const { data: inbox } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/messages/inbox"], enabled: isAuthenticated, refetchInterval: 15000,
+  });
+  // Whether to offer Partner Home, and how many invites are waiting. Its own
+  // lightweight endpoint: the page's feed resolves an experience and a join
+  // count per deal, which is far too much to run on every page render.
+  const { data: partnerAccess } = useQuery<{ hasAccess: boolean; pendingCount: number }>({
+    queryKey: ["/api/partner-home/access"], enabled: isAuthenticated,
   });
 
   // A user has one active role. Role changes are available from My Account.
@@ -171,15 +186,27 @@ export default function Navigation() {
               How It Works
             </Link>
 
-            <Link href="/login?returnTo=/profile-setup">
-              <Button
-                variant="outline"
-                className="border-primary/30 bg-primary/5 text-primary hover:bg-primary hover:text-white font-semibold px-5 py-2 h-auto"
-                data-testid="nav-for-creators-venues"
-              >
-                For Creators &amp; Venues
-              </Button>
-            </Link>
+            {/* One entry point. "For Creators & Venues" described an
+                audience rather than an action, and it competed with the Collab
+                Idea modal and the Event Builder, each reachable by its own
+                shortcut elsewhere. This opens the fork; the fork decides which
+                of the two existing flows to open. A signed-out visitor is sent
+                to sign in first, because both destinations need an account. */}
+            <Button
+              variant="outline"
+              className="border-primary/30 bg-primary/5 text-primary hover:bg-primary hover:text-white font-semibold px-5 py-2 h-auto"
+              onClick={() => {
+                if (!isAuthenticated) {
+                  window.location.href = "/login?returnTo=/profile-setup";
+                  return;
+                }
+                setCreateForkOpen(true);
+              }}
+              data-testid="nav-create-experience"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Create experience
+            </Button>
 
             {/* Auth section */}
             {isLoading ? (
@@ -285,7 +312,24 @@ export default function Navigation() {
                     <DropdownMenuItem asChild>
                       <Link href="/promoter" className="gap-2">
                         <Megaphone className="h-4 w-4 text-muted-foreground" />
-                        Promoter Dashboard
+                        Affiliate Dashboard
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
+                  {/* Partner Home: shown to any account actually holding a
+                      partner deal, whatever its role. Not role-gated, because
+                      being somebody's partner is a relationship — a venue owner
+                      and a participant can both be one. */}
+                  {partnerAccess?.hasAccess && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/partner" className="gap-2">
+                        <Handshake className="h-4 w-4 text-muted-foreground" />
+                        Partner Home
+                        {!!partnerAccess.pendingCount && (
+                          <span className="ml-auto rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-800">
+                            {partnerAccess.pendingCount}
+                          </span>
+                        )}
                       </Link>
                     </DropdownMenuItem>
                   )}
@@ -426,11 +470,21 @@ export default function Navigation() {
             </Link>
 
             <div className="px-3 py-2">
-              <Link href="/login?returnTo=/profile-setup" onClick={() => setMobileMenuOpen(false)}>
-                <Button className="w-full bg-primary hover:bg-primary/90 text-white font-semibold" data-testid="mobile-nav-for-creators-venues">
-                  For Creators &amp; Venues
-                </Button>
-              </Link>
+              <Button
+                className="w-full bg-primary hover:bg-primary/90 text-white font-semibold"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  if (!isAuthenticated) {
+                    window.location.href = "/login?returnTo=/profile-setup";
+                    return;
+                  }
+                  setCreateForkOpen(true);
+                }}
+                data-testid="mobile-nav-create-experience"
+              >
+                <Plus className="mr-1.5 h-4 w-4" />
+                Create experience
+              </Button>
             </div>
 
             <div className="border-t border-gray-100 pt-2 mt-2">
@@ -616,6 +670,8 @@ export default function Navigation() {
           </div>
         </div>
       )}
+
+      <CreateExperienceFork open={createForkOpen} onOpenChange={setCreateForkOpen} />
     </nav>
   );
 }

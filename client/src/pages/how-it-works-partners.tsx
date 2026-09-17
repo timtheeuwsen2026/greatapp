@@ -138,7 +138,7 @@ export default function HowItWorksPartners() {
             </div>
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
               <Megaphone className="h-6 w-6 text-primary mb-3" />
-              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Promoter / Brand</h3>
+              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Affiliate / Brand</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Brings the audience, and is rewarded for it — agreed the same way a venue
                 deal is.

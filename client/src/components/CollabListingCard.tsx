@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Users, Sparkles } from "lucide-react";
+import { MapPin, Users, Sparkles, Handshake, Pencil, Trash2 } from "lucide-react";
 import { getCoverImage } from "@/lib/utils";
 
 /**
@@ -38,9 +38,6 @@ export type CollabListing = {
   actionLabel: string;
 };
 
-const PLACEHOLDER =
-  "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=300";
-
 export default function CollabListingCard({
   listing,
   /** A rough idea has no date and no counterparty; it is drawn as the sketch it is. */
@@ -48,6 +45,11 @@ export default function CollabListingCard({
   onAction,
   actionDisabled = false,
   footer,
+  /** Opens the detail view. Every card has one, including the poster's own. */
+  onOpen,
+  /** The poster's own controls, shown on the card as well as in the detail view. */
+  onEdit,
+  onDelete,
   testId,
 }: {
   listing: CollabListing;
@@ -55,16 +57,27 @@ export default function CollabListingCard({
   onAction?: () => void;
   actionDisabled?: boolean;
   footer?: ReactNode;
+  onOpen?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
   testId?: string;
 }) {
-  const image = getCoverImage(listing.imageUrl || undefined, undefined) || PLACEHOLDER;
+  // No stock fallback. Every idea card used to render the same yoga photo,
+  // which quietly told a visitor that a coffee rave was a wellness retreat. An
+  // idea with no upload gets a neutral tile instead.
+  const image = getCoverImage(listing.imageUrl || undefined, undefined);
 
   const action = (
     <Button
       variant={muted ? "outline" : "default"}
       className={muted ? "" : "btn-gradient"}
       disabled={actionDisabled}
-      onClick={onAction}
+      onClick={(event) => {
+        // The card itself opens the detail view, so the button must not open it
+        // too on its way to doing its own job.
+        event.stopPropagation();
+        onAction?.();
+      }}
       data-testid={`button-collab-action-${listing.id}`}
     >
       {listing.actionLabel}
@@ -73,20 +86,65 @@ export default function CollabListingCard({
 
   return (
     <Card
-      className={`experience-card group overflow-hidden ${muted ? "border-dashed bg-gray-50/60" : ""}`}
+      className={`experience-card group overflow-hidden ${muted ? "border-dashed bg-gray-50/60" : ""} ${onOpen ? "cursor-pointer" : ""}`}
+      onClick={onOpen}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={onOpen ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      } : undefined}
       data-testid={testId}
     >
       <div className="relative">
-        <img
-          src={image}
-          alt=""
-          className={`h-40 w-full object-cover transition-transform duration-500 group-hover:scale-105 ${muted ? "opacity-80" : ""}`}
-        />
+        {image ? (
+          <img
+            src={image}
+            alt=""
+            className={`h-40 w-full object-cover transition-transform duration-500 group-hover:scale-105 ${muted ? "opacity-80" : ""}`}
+          />
+        ) : (
+          <div className="flex h-40 w-full items-center justify-center bg-indigo-50 dark:bg-indigo-950/40">
+            <Handshake className="h-9 w-9 text-indigo-300" />
+          </div>
+        )}
         <div className="absolute left-3 top-3">
           <Badge variant={muted ? "outline" : "secondary"} className="bg-white/90 text-gray-900">
             {listing.tag}
           </Badge>
         </div>
+        {(onEdit || onDelete) && (
+          <div className="absolute right-2 top-2 flex gap-1">
+            {onEdit && (
+              <Button
+                type="button"
+                size="icon"
+                variant="secondary"
+                className="h-7 w-7 bg-white/90"
+                aria-label="Edit this posting"
+                onClick={(event) => { event.stopPropagation(); onEdit(); }}
+                data-testid={`button-collab-edit-${listing.id}`}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {onDelete && (
+              <Button
+                type="button"
+                size="icon"
+                variant="secondary"
+                className="h-7 w-7 bg-white/90 text-red-700"
+                aria-label="Delete this posting"
+                onClick={(event) => { event.stopPropagation(); onDelete(); }}
+                data-testid={`button-collab-delete-${listing.id}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <CardContent className="p-4">
@@ -134,7 +192,13 @@ export default function CollabListingCard({
 
         <div className="flex items-center justify-between gap-3">
           {footer ?? <span />}
-          {listing.href && !onAction ? <Link href={listing.href}>{action}</Link> : action}
+          {listing.href && !onAction
+            ? (
+              <Link href={listing.href} onClick={(event) => event.stopPropagation()}>
+                {action}
+              </Link>
+            )
+            : action}
         </div>
       </CardContent>
     </Card>

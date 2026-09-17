@@ -28,6 +28,7 @@ import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import BrandLogo from "@/components/BrandLogo";
 import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
 import { FeaturedCommunities } from "@/components/FeaturedCommunities";
+import CollabIdeasStrip from "@/components/CollabIdeasStrip";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -69,8 +70,8 @@ export default function Home() {
   const { toast } = useToast();
   const depositMutation = useDepositMutation();
   const { isConnected } = useRealtimeMVGUpdates('all');
-  const trendingScrollRef = useRef<HTMLDivElement>(null);
-  const newlyAddedScrollRef = useRef<HTMLDivElement>(null);
+  const happeningScrollRef = useRef<HTMLDivElement>(null);
+  const provenScrollRef = useRef<HTMLDivElement>(null);
 
   const scrollSwimlane = (ref: React.RefObject<HTMLDivElement>, direction: 1 | -1) => {
     ref.current?.scrollBy({ left: direction * 640, behavior: 'smooth' });
@@ -89,8 +90,8 @@ export default function Home() {
       sessionStorage.removeItem("scrollToTrips");
       const tryScroll = () => {
         const el =
-          document.getElementById("trending-now-section") ||
-          document.getElementById("newly-added-section") ||
+          document.getElementById("happening-now-section") ||
+          document.getElementById("proven-popular-section") ||
           document.getElementById("catalyst-trip-section") ||
           document.getElementById("forming-trips-section") ||
           document.getElementById("confirmed-trips-section");
@@ -229,13 +230,38 @@ export default function Home() {
   });
 
   // ── Swimlane feeds ────────────────────────────────────────────────────────
-  // "Trending Now" — forming experiences closest to hitting their MVG (highest funding %)
-  const trendingExps = visibleExperiences
-    .filter((e: any) => e.lifecycleStatus === 'forming')
-    .sort((a: any, b: any) => (b.fundingPercentage || 0) - (a.fundingPercentage || 0));
-  // "Newly Added" — the newest experiences still gathering their first members
-  const newlyAddedExps = [...visibleExperiences]
-    .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  //
+  // "Trending Now" and "Newly Added" both went: neither added anything the
+  // FORMING NOW / IT'S HAPPENING badge on every card already says, and between
+  // them they filled the homepage with empty, not-yet-funded events — which is
+  // the worst possible first impression for a visitor deciding whether anything
+  // here actually happens.
+  //
+  // "Happening now" is everything open for sign-up, whatever its MVG status,
+  // soonest first. The existing badges carry forming vs. confirmed, so no new
+  // badge logic was needed.
+  const happeningNowExps = [...visibleExperiences]
+    .filter((e: any) => e.lifecycleStatus === 'forming' || e.lifecycleStatus === 'confirmed')
+    .sort((a: any, b: any) => {
+      const aDate = new Date(a.startDate || a.fundingDeadline || 0).getTime();
+      const bDate = new Date(b.startDate || b.fundingDeadline || 0).getTime();
+      return aDate - bDate;
+    });
+
+  // "Proven & popular" — what already filled up or already happened, ranked by
+  // how many people came. This is the social proof that was missing entirely:
+  // Good Soles' full runs had no homepage presence at all, so a first-time
+  // visitor only ever saw events nobody had joined yet.
+  const provenExps = [...visibleExperiences]
+    .filter((e: any) => {
+      const joined = Number(e.currentParticipants || 0);
+      const capacity = Number(e.maxParticipants || 0);
+      const isPast = e.startDate ? new Date(e.startDate).getTime() < Date.now() : false;
+      const soldOut = capacity > 0 && joined >= capacity;
+      return joined > 0 && (isPast || soldOut || e.lifecycleStatus === 'completed');
+    })
+    .sort((a: any, b: any) =>
+      Number(b.currentParticipants || 0) - Number(a.currentParticipants || 0));
 
   // Human gap psychology — people help people, not percentages
   const getUrgencyLabel = (spotsNeeded: number) => {
@@ -561,16 +587,17 @@ export default function Home() {
               </div>
             ) : (
               <>
-                {/* 2. Trending Now — closest to hitting their MVG */}
-                {trendingExps.length > 0 && (
-                  <section id="trending-now-section">
+                {/* 2. Happening now — everything open for sign-up */}
+                {happeningNowExps.length > 0 && (
+                  <section id="happening-now-section">
                     <div className="mb-5 flex items-start justify-between gap-4">
                       <div>
                         <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
-                          🔥 Trending Now
+                          ⚡ Happening now
                         </h2>
                         <p className="text-gray-500 dark:text-gray-400">
-                          Experiences closest to hitting their group goal — one more member could make it real.
+                          Everything open for sign-up. The badge on each card tells you
+                          whether it's still forming or already confirmed.
                         </p>
                       </div>
                       <div className="hidden sm:flex items-center gap-2 shrink-0">
@@ -579,9 +606,9 @@ export default function Home() {
                           size="icon"
                           variant="outline"
                           className="rounded-full h-9 w-9"
-                          onClick={() => scrollSwimlane(trendingScrollRef, -1)}
-                          aria-label="Scroll trending experiences left"
-                          data-testid="button-trending-scroll-left"
+                          onClick={() => scrollSwimlane(happeningScrollRef, -1)}
+                          aria-label="Scroll experiences happening now left"
+                          data-testid="button-happening-scroll-left"
                         >
                           <ChevronLeft className="h-4 w-4" />
                         </Button>
@@ -590,30 +617,31 @@ export default function Home() {
                           size="icon"
                           variant="outline"
                           className="rounded-full h-9 w-9"
-                          onClick={() => scrollSwimlane(trendingScrollRef, 1)}
-                          aria-label="Scroll trending experiences right"
-                          data-testid="button-trending-scroll-right"
+                          onClick={() => scrollSwimlane(happeningScrollRef, 1)}
+                          aria-label="Scroll experiences happening now right"
+                          data-testid="button-happening-scroll-right"
                         >
                           <ChevronRight className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
-                    <div ref={trendingScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="trending-swimlane">
-                      {trendingExps.map((experience: any) => renderDiscoveryCard(experience))}
+                    <div ref={happeningScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="happening-now-swimlane">
+                      {happeningNowExps.map((experience: any) => renderDiscoveryCard(experience))}
                     </div>
                   </section>
                 )}
 
-                {/* 3. Newly Added — new experiences looking for their first members */}
-                {newlyAddedExps.length > 0 && (
-                  <section id="newly-added-section">
+                {/* 3. Proven & popular — real join counts, as social proof */}
+                {provenExps.length > 0 && (
+                  <section id="proven-popular-section">
                     <div className="mb-5 flex items-start justify-between gap-4">
                       <div>
                         <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
-                          ✨ Newly Added
+                          ⭐ Proven &amp; popular
                         </h2>
                         <p className="text-gray-500 dark:text-gray-400">
-                          Fresh experiences gathering their first members. Be an early founder.
+                          Experiences that filled up or already happened, with the
+                          numbers that actually turned out.
                         </p>
                       </div>
                       <div className="hidden sm:flex items-center gap-2 shrink-0">
@@ -622,9 +650,9 @@ export default function Home() {
                           size="icon"
                           variant="outline"
                           className="rounded-full h-9 w-9"
-                          onClick={() => scrollSwimlane(newlyAddedScrollRef, -1)}
-                          aria-label="Scroll newly added experiences left"
-                          data-testid="button-newly-added-scroll-left"
+                          onClick={() => scrollSwimlane(provenScrollRef, -1)}
+                          aria-label="Scroll proven experiences left"
+                          data-testid="button-proven-scroll-left"
                         >
                           <ChevronLeft className="h-4 w-4" />
                         </Button>
@@ -633,19 +661,28 @@ export default function Home() {
                           size="icon"
                           variant="outline"
                           className="rounded-full h-9 w-9"
-                          onClick={() => scrollSwimlane(newlyAddedScrollRef, 1)}
-                          aria-label="Scroll newly added experiences right"
-                          data-testid="button-newly-added-scroll-right"
+                          onClick={() => scrollSwimlane(provenScrollRef, 1)}
+                          aria-label="Scroll proven experiences right"
+                          data-testid="button-proven-scroll-right"
                         >
                           <ChevronRight className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
-                    <div ref={newlyAddedScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="newly-added-swimlane">
-                      {newlyAddedExps.map((experience: any) => renderDiscoveryCard(experience))}
+                    <div ref={provenScrollRef} className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="proven-popular-swimlane">
+                      {provenExps.map((experience: any) => renderDiscoveryCard(experience))}
                     </div>
                   </section>
                 )}
+
+                {/* 4. Collab Ideas — one row, on purpose.
+                    A venue owner browsing the homepage might be exactly who an
+                    open idea is looking for, and ideas had no homepage presence
+                    at all. Kept to a single line rather than a card grid: at
+                    current volume a full section would be mostly empty, which
+                    would read as the feature being dead. Promote it once the
+                    volume justifies one. */}
+                <CollabIdeasStrip />
               </>
             )}
           </div>
@@ -730,9 +767,9 @@ export default function Home() {
               size="lg"
               className="bg-primary hover:bg-primary/90 text-white font-semibold px-10 py-6 h-auto text-base"
               onClick={() => {
-                const trendingEl = document.getElementById('trending-now-section');
-                const newlyEl = document.getElementById('newly-added-section');
-                (trendingEl || newlyEl)?.scrollIntoView({ behavior: 'smooth' });
+                const happeningEl = document.getElementById('happening-now-section');
+                const provenEl = document.getElementById('proven-popular-section');
+                (happeningEl || provenEl)?.scrollIntoView({ behavior: 'smooth' });
               }}
               data-testid="button-how-it-works-find-trip"
             >
@@ -864,12 +901,12 @@ export default function Home() {
       <div className="bg-gray-900 dark:bg-black py-4 border-y border-gray-800" data-testid="b2b-divider">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-gray-300">
-            For Creators, Venues &amp; Promoters
+            For Creators, Venues &amp; Partners
           </p>
         </div>
       </div>
 
-      {/* 7. Win/Win/Win — For Participants, For Creators, For Venues & Promoters */}
+      {/* 7. Win/Win/Win — For Participants, For Creators, For Venues & Partners */}
       <section className="py-16 lg:py-20 bg-gradient-to-br from-gray-100 via-white to-gray-100 dark:from-gray-800 dark:via-gray-900 dark:to-gray-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
@@ -934,14 +971,14 @@ export default function Home() {
               </Button>
             </div>
 
-            {/* For Venues & Promoters */}
+            {/* For Venues & Partners */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 shadow-lg hover:shadow-2xl transition-shadow border border-gray-100 dark:border-gray-700">
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
                   <Building2 className="h-6 w-6 text-primary" />
                 </div>
                 <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-                  For Venues &amp; Promoters
+                  For Venues &amp; Partners
                 </h3>
               </div>
 
@@ -1081,9 +1118,9 @@ export default function Home() {
                 </ul>
               </div>
 
-              {/* For Venues, Promoters & Providers */}
+              {/* For Venues, Partners & Providers */}
               <div>
-                <h3 className="text-lg font-semibold mb-4">For Venues &amp; Promoters</h3>
+                <h3 className="text-lg font-semibold mb-4">For Venues &amp; Partners</h3>
                 <ul className="space-y-2">
                   <li>
                     <button

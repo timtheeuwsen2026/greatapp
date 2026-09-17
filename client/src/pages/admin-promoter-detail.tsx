@@ -100,7 +100,7 @@ export default function AdminPromoterDetailPage() {
     const headers = [
       'Booking ID',
       'Experience',
-      'Promoter',
+      'Affiliate',
       'Commission Amount',
       'Currency',
       'Status',
@@ -162,9 +162,9 @@ export default function AdminPromoterDetailPage() {
         <main className="container mx-auto px-4 py-8">
           <div className="text-center py-16">
             <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-            <h2 className="text-xl font-semibold mb-2">Promoter Not Found</h2>
+            <h2 className="text-xl font-semibold mb-2">Affiliate Not Found</h2>
             <Link href="/admin/promoters">
-              <Button variant="outline">Back to Promoters</Button>
+              <Button variant="outline">Back to Affiliates</Button>
             </Link>
           </div>
         </main>
@@ -194,7 +194,7 @@ export default function AdminPromoterDetailPage() {
           <Link href="/admin/promoters">
             <Button variant="ghost" size="sm" className="mb-4">
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Promoters
+              Back to Affiliates
             </Button>
           </Link>
           <div className="flex items-center justify-between">

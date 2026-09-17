@@ -10,11 +10,13 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { apiRequest } from "@/lib/queryClient";
 import PostCollabIdeaModal from "@/components/PostCollabIdeaModal";
+import CollabIdeaDetailDialog from "@/components/CollabIdeaDetailDialog";
 import CollabListingCard, { type CollabListing } from "@/components/CollabListingCard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
-import { Handshake, Plus, Sparkles } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { Handshake, Plus, Sparkles, History } from "lucide-react";
 
-type Opportunity = CollabListing & { posterId?: string };
+type Opportunity = CollabListing & { posterId?: string; status?: string };
 
 /**
  * Collab Opportunities — one place to see what is open, across every role.
@@ -42,11 +44,16 @@ export default function CollabOpportunities() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [postOpen, setPostOpen] = useState(false);
+  const [editingIdea, setEditingIdea] = useState<any | null>(null);
+  const [openIdeaId, setOpenIdeaId] = useState<string | null>(null);
+  const [showPast, setShowPast] = useState(false);
   const [, navigate] = useLocation();
+  const { user } = useAuth();
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<{
     ready: Opportunity[];
     forming: Opportunity[];
+    pastIdeas: Opportunity[];
   }>({
     queryKey: ["/api/collab/opportunities"],
   });
@@ -94,7 +101,46 @@ export default function CollabOpportunities() {
 
   const ready = data?.ready ?? [];
   const forming = data?.forming ?? [];
+  const pastIdeas = data?.pastIdeas ?? [];
   const suggestions = suggestionsQuery.data?.suggestions ?? [];
+
+  /** Is this card the signed-in poster's own? Decides Edit/Delete. */
+  const isMine = (item: Opportunity) => !!user?.id && item.posterId === user.id;
+
+  const deleteIdea = useMutation({
+    mutationFn: async (ideaId: string) => {
+      const res = await apiRequest("DELETE", `/api/collab/ideas/${ideaId}`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Posting deleted", description: "It is off the board." });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/mine"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities/summary"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Could not delete that",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /** Load the full posting before opening the edit form, so nothing is lost. */
+  const openEditor = async (ideaId: string) => {
+    try {
+      const res = await apiRequest("GET", `/api/collab/ideas/${ideaId}`);
+      setEditingIdea(await res.json());
+      setPostOpen(true);
+    } catch (error: any) {
+      toast({
+        title: "Could not open that posting",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -112,7 +158,10 @@ export default function CollabOpportunities() {
               still taking shape.
             </p>
           </div>
-          <Button onClick={() => setPostOpen(true)} data-testid="button-post-collab-idea">
+          <Button
+            onClick={() => { setEditingIdea(null); setPostOpen(true); }}
+            data-testid="button-post-collab-idea"
+          >
             <Plus className="h-4 w-4 mr-2" />
             Post a Collab Idea
           </Button>
@@ -204,16 +253,68 @@ export default function CollabOpportunities() {
                         {forming.map((item) => (
                           <CollabListingCard
                             key={item.id}
-                            listing={item}
+                            listing={
+                              isMine(item)
+                                ? { ...item, actionLabel: "Open" }
+                                : item
+                            }
                             muted
                             actionDisabled={registerInterest.isPending}
-                            onAction={() => registerInterest.mutate(item.id)}
+                            /* Your own posting has nothing to express interest
+                               in — opening it is the action. */
+                            onAction={
+                              isMine(item)
+                                ? () => setOpenIdeaId(item.id)
+                                : () => registerInterest.mutate(item.id)
+                            }
+                            onOpen={() => setOpenIdeaId(item.id)}
+                            onEdit={isMine(item) ? () => openEditor(item.id) : undefined}
+                            onDelete={isMine(item) ? () => deleteIdea.mutate(item.id) : undefined}
                             testId={`collab-forming-${item.id}`}
                           />
                         ))}
                       </div>
                     )}
                   </section>
+
+                  {/* Past ideas, out of the live list entirely and collapsed by
+                      default. They were sitting at the top mixed in with open
+                      ones, which is how an August weekend ended up competing
+                      with something that needed a venue by Friday. Kept rather
+                      than hidden: a poster wants to find what they wrote. */}
+                  {pastIdeas.length > 0 && (
+                    <section className="mt-10">
+                      <button
+                        type="button"
+                        onClick={() => setShowPast((current) => !current)}
+                        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-700"
+                        data-testid="button-toggle-past-ideas"
+                      >
+                        <History className="h-3.5 w-3.5" />
+                        Past ideas ({pastIdeas.length})
+                        <span className="font-normal normal-case tracking-normal">
+                          {showPast ? "hide" : "show"}
+                        </span>
+                      </button>
+
+                      {showPast && (
+                        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          {pastIdeas.map((item) => (
+                            <CollabListingCard
+                              key={`past-${item.id}`}
+                              listing={item}
+                              muted
+                              onAction={() => setOpenIdeaId(item.id)}
+                              onOpen={() => setOpenIdeaId(item.id)}
+                              onEdit={isMine(item) ? () => openEditor(item.id) : undefined}
+                              onDelete={isMine(item) ? () => deleteIdea.mutate(item.id) : undefined}
+                              testId={`collab-past-${item.id}`}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
 
                   <p className="text-xs text-gray-500 mt-6">
                     "I'm interested" opens a conversation, not a booking. Once terms are
@@ -277,6 +378,7 @@ export default function CollabOpportunities() {
                           ? () => registerInterest.mutate(item.id)
                           : undefined
                       }
+                      onOpen={item.kind === "collab_idea" ? () => setOpenIdeaId(item.id) : undefined}
                       testId={`collab-suggested-${item.id}`}
                     />
                   ))}
@@ -292,7 +394,26 @@ export default function CollabOpportunities() {
         </PartnerToolingGate>
       </div>
 
-      <PostCollabIdeaModal open={postOpen} onOpenChange={setPostOpen} />
+      <PostCollabIdeaModal
+        open={postOpen}
+        onOpenChange={(next) => {
+          setPostOpen(next);
+          // Closing the form drops the posting being edited, so the next
+          // "Post a Collab Idea" opens blank rather than on somebody's edit.
+          if (!next) setEditingIdea(null);
+        }}
+        editing={editingIdea}
+      />
+
+      <CollabIdeaDetailDialog
+        ideaId={openIdeaId}
+        open={!!openIdeaId}
+        onOpenChange={(next) => { if (!next) setOpenIdeaId(null); }}
+        onEdit={(idea) => {
+          setEditingIdea(idea);
+          setPostOpen(true);
+        }}
+      />
     </div>
   );
 }

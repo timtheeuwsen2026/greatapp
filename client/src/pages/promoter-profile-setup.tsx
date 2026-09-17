@@ -12,6 +12,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SingleChoiceField } from "@/components/TaxonomyFields";
+import ChipToggle from "@/components/ChipToggle";
+import { Switch } from "@/components/ui/switch";
 import {
   OTHER_ID,
   PARTNER_CATEGORIES,
@@ -32,6 +34,22 @@ type PromoterProfileForm = {
   city: string;
   category: string;
   categoryOther: string;
+  /**
+   * Standing preferences, the same shape as a venue's "Who you want to host"
+   * and a creator's "What you host, and what you look for".
+   *
+   * An affiliate had neither, so it could only exist inside somebody else's
+   * event once personally invited — never independently discoverable. These are
+   * the fields two-way matching will read: an organiser's Experience Pool
+   * listing surfacing to relevant affiliates, not only the reverse.
+   *
+   * `category` above is what they mainly do; this is everything they will take.
+   * Reach is free text on purpose — a number field would compare a 2,000-person
+   * mailing list against 8,000 followers as though they were the same thing.
+   */
+  promotesCategories: string[];
+  typicalReach: string;
+  openToCommissionDeals: boolean;
 };
 
 const initialForm: PromoterProfileForm = {
@@ -43,6 +61,9 @@ const initialForm: PromoterProfileForm = {
   city: "",
   category: "",
   categoryOther: "",
+  promotesCategories: [],
+  typicalReach: "",
+  openToCommissionDeals: true,
 };
 
 function userDisplayName(user: any) {
@@ -72,6 +93,13 @@ export default function PromoterProfileSetup() {
         city: profile.city || "",
         category: profile.category || "",
         categoryOther: profile.categoryOther || "",
+        promotesCategories: Array.isArray(profile.promotesCategories)
+          ? profile.promotesCategories
+          // An existing profile's single category is the best statement of what
+          // they promote, so it seeds the multi-select rather than starting blank.
+          : (profile.category ? [profile.category] : []),
+        typicalReach: profile.typicalReach || "",
+        openToCommissionDeals: profile.openToCommissionDeals !== false,
       });
       return;
     }
@@ -99,6 +127,9 @@ export default function PromoterProfileSetup() {
         city: form.city.trim(),
         category: form.category,
         categoryOther: form.category === OTHER_ID ? form.categoryOther.trim() : null,
+        promotesCategories: form.promotesCategories,
+        typicalReach: form.typicalReach.trim() || null,
+        openToCommissionDeals: form.openToCommissionDeals,
         completed: true,
       });
 
@@ -107,7 +138,7 @@ export default function PromoterProfileSetup() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/promoter-profile"] });
       toast({
-        title: "Promoter profile complete",
+        title: "Affiliate profile complete",
         description: "The Experience Pool is open — these are the events you can promote.",
       });
       setLocation("/promoter/experience-pool");
@@ -213,7 +244,7 @@ export default function PromoterProfileSetup() {
             </div>
 
             <SingleChoiceField
-              label="What kind of promoter are you?"
+              label="What kind of affiliate are you?"
               description="This decides what you get offered. An influencer and a brand are pitched very differently."
               options={PROMOTER_TYPES}
               value={form.promoterType}
@@ -251,6 +282,68 @@ export default function PromoterProfileSetup() {
               required
               testId="field-promoter-category"
             />
+
+            {/* ── Standing preferences ──────────────────────────────────────
+                What this account is typically after, answered once instead of
+                per event. Optional: an affiliate who only ever takes direct
+                invites does not need them, and blocking the profile on them
+                would just make the Experience Pool harder to reach. */}
+            <div className="space-y-4 rounded-xl border p-4">
+              <div>
+                <p className="text-sm font-semibold">What else would you promote?</p>
+                <p className="text-xs text-muted-foreground">
+                  Everything you'd consider, not just your main category. This is
+                  what lets an organiser's open deal find you, rather than you
+                  having to go looking.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {PARTNER_CATEGORIES.filter((option) => option.id !== OTHER_ID).map((option) => (
+                    <ChipToggle
+                      key={option.id}
+                      label={option.label}
+                      selected={form.promotesCategories.includes(option.id)}
+                      onClick={() => updateField(
+                        "promotesCategories",
+                        form.promotesCategories.includes(option.id)
+                          ? form.promotesCategories.filter((id) => id !== option.id)
+                          : [...form.promotesCategories, option.id],
+                      )}
+                      testId={`chip-promotes-${option.id}`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="typical-reach">Typical reach</Label>
+                <Input
+                  id="typical-reach"
+                  value={form.typicalReach}
+                  onChange={(event) => updateField("typicalReach", event.target.value)}
+                  placeholder="e.g. 8,000 followers, or a 2,000-person mailing list"
+                  data-testid="input-typical-reach"
+                />
+                <p className="text-xs text-muted-foreground">
+                  In your own words. A mailing list and a follower count are not
+                  the same thing, so there's no single number to ask for.
+                </p>
+              </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Open to Commission per Ticket deals</p>
+                  <p className="text-xs text-muted-foreground">
+                    Off means organisers won't offer you one. Direct invites still
+                    reach you either way.
+                  </p>
+                </div>
+                <Switch
+                  checked={form.openToCommissionDeals}
+                  onCheckedChange={(checked) => updateField("openToCommissionDeals", checked)}
+                  data-testid="switch-open-to-commission"
+                />
+              </div>
+            </div>
 
             <div className="flex justify-end">
               <Button

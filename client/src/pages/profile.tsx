@@ -160,7 +160,7 @@ const ALL_ROLES = [
   { value: "creator", label: "Creator / Organiser", description: "Create and host experiences", icon: Sparkles },
   { value: "venue_provider", label: "Venue Provider", description: "List your space for events", icon: MapPin },
   { value: "service_provider", label: "Service Provider", description: "Offer photography, catering, or wellness", icon: Briefcase },
-  { value: "promoter", label: "Promoter", description: "Promote trips and earn commission", icon: Ticket },
+  { value: "promoter", label: "Affiliate", description: "Drive ticket sales through your own reach, paid on commission", icon: Ticket },
 ] as const;
 
 export default function Profile() {
@@ -197,7 +197,7 @@ export default function Profile() {
     creator: "Creator",
     venue_provider: "Venue Provider",
     service_provider: "Service Provider",
-    promoter: "Promoter",
+    promoter: "Affiliate",
     admin: "Admin",
   };
 
@@ -275,7 +275,7 @@ export default function Profile() {
               {showParticipant && <TabsTrigger value="participant">Participant</TabsTrigger>}
               {showCreator && <TabsTrigger value="creator">Creator</TabsTrigger>}
               {showVenueProvider && <TabsTrigger value="venues">Venues</TabsTrigger>}
-              {showPromoter && <TabsTrigger value="promoter">Promoter</TabsTrigger>}
+              {showPromoter && <TabsTrigger value="promoter">Affiliate</TabsTrigger>}
               {showServiceProvider && <TabsTrigger value="services">Services</TabsTrigger>}
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>

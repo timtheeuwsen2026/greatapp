@@ -49,26 +49,30 @@ export default function CreateExperienceFork({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-lg">
+        {/* Two cards and a sentence, and it was still cramped: at
+            `sm:max-w-lg` the choice that decides which of two flows somebody
+            enters looked like a confirmation prompt. Generous, and a full
+            sheet on a phone — but still an overlay, not a page. Point 28a. */}
+        <DialogContent className="w-full max-w-none rounded-none p-6 sm:max-w-2xl sm:rounded-lg sm:p-10">
           <DialogHeader>
-            <DialogTitle>Create an experience</DialogTitle>
-            <DialogDescription>
+            <DialogTitle className="text-2xl">Create an experience</DialogTitle>
+            <DialogDescription className="text-base">
               Two ways in, depending on how far along you are.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 py-2 sm:grid-cols-2">
             <button
               type="button"
               onClick={chooseIdea}
-              className="rounded-xl border p-4 text-left transition-colors hover:border-indigo-400 hover:bg-indigo-50/40"
+              className="rounded-2xl border p-6 text-left transition-colors hover:border-indigo-400 hover:bg-indigo-50/40"
               data-testid="button-fork-have-idea"
             >
-              <Lightbulb className="mb-2 h-5 w-5 text-amber-500" />
-              <p className="text-sm font-semibold text-gray-900 dark:text-white">
+              <Lightbulb className="mb-3 h-7 w-7 text-amber-500" />
+              <p className="text-base font-semibold text-gray-900 dark:text-white">
                 I have an idea
               </p>
-              <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+              <p className="mt-1.5 text-sm text-gray-600 dark:text-gray-400">
                 Post it to the collab board, or invite specific partners to join.
               </p>
             </button>
@@ -76,20 +80,20 @@ export default function CreateExperienceFork({
             <button
               type="button"
               onClick={chooseBuild}
-              className="rounded-xl border-2 border-indigo-500 p-4 text-left transition-colors hover:bg-indigo-50/40"
+              className="rounded-2xl border-2 border-indigo-500 bg-indigo-50/40 p-6 text-left transition-colors hover:bg-indigo-50/70 dark:bg-indigo-950/30"
               data-testid="button-fork-ready-to-build"
             >
-              <Hammer className="mb-2 h-5 w-5 text-indigo-600" />
-              <p className="text-sm font-semibold text-gray-900 dark:text-white">
+              <Hammer className="mb-3 h-7 w-7 text-indigo-600" />
+              <p className="text-base font-semibold text-gray-900 dark:text-white">
                 I'm ready to build
               </p>
-              <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+              <p className="mt-1.5 text-sm text-gray-600 dark:text-gray-400">
                 I already know which partners I'm working with.
               </p>
             </button>
           </div>
 
-          <p className="text-xs text-gray-500">
+          <p className="text-sm text-gray-500">
             An idea can become an event later, carrying over what you've already
             answered — you're not choosing once and for all.
           </p>

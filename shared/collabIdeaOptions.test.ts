@@ -40,7 +40,10 @@ describe("sanitiseTypeDetails — answers follow the types that are selected", (
       },
       ["venue"],
     );
-    expect(details).toEqual({ venue: { area: "Barceloneta", kindOfSpace: "Beach spot" } });
+    // `area` is no longer one of the venue block's fields — it is the
+    // posting's own Area, asked once of everyone — so it is dropped here like
+    // any other key the type does not own.
+    expect(details).toEqual({ venue: { kindOfSpace: "Beach spot" } });
   });
 
   it("drops a type's answers once that type is unticked", () => {

@@ -34,8 +34,11 @@ export const COLLAB_SEEKING_TYPES: CollabSeekingOption[] = [
   {
     id: "venue",
     label: "A venue or space",
+    // Area used to be asked here as well as in the posting's own details, so a
+    // poster who filled one and not the other produced a record the matcher
+    // read two ways. It is asked once, in the details, and it is asked of
+    // everyone — a sponsor and a run club are just as local as a beach bar.
     fields: [
-      { key: "area", label: "Area", placeholder: "Barceloneta" },
       { key: "kindOfSpace", label: "Kind of space", placeholder: "Beach spot" },
     ],
   },

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { calculateEventEconomics } from "./eventEconomics";
+import {
+  calculateEventEconomics,
+  economicsAsFreeRsvp,
+  economicsAtAttendance,
+  findBreakEvenAttendance,
+} from "./eventEconomics";
 import { getTicketAddon } from "./ticketAddons";
 
 const sumOfLines = (lines: { amount: number }[]) =>
@@ -343,5 +348,74 @@ describe("partner shares — no longer hardcoded to the venue", () => {
       partnerShares: "20%" as any,
     });
     expect(breakdown.partnerTicketCost).toBe(0);
+  });
+});
+
+// ── Point 48: one calculator — preview, break-even and the free comparison ──
+describe("break-even and the free-RSVP comparison", () => {
+  // Ten €10 tickets, a €100 flat cost, no platform fee: the event needs ten
+  // people before it stops losing money.
+  const rental = {
+    ticketGross: 100,
+    paidTickets: 10,
+    platformPct: 0,
+    venueDealModel: "upfront_rental",
+    venueDealValue: 100,
+  };
+
+  it("walks the same function the rows come from", () => {
+    expect(findBreakEvenAttendance(rental, 10)).toBe(10);
+    expect(economicsAtAttendance(rental, 10, 5).net).toBe(-50);
+    expect(economicsAtAttendance(rental, 10, 10).net).toBe(0);
+  });
+
+  it("leaves the flat cost flat while scaling the tickets", () => {
+    // The whole point of the division: a rental does not get cheaper because
+    // fewer people came, which is what makes the break-even mean anything.
+    const half = economicsAtAttendance(rental, 10, 5);
+    expect(half.lines.find((line) => line.key === "venue_payout")?.amount).toBe(-100);
+    expect(half.lines.find((line) => line.key === "ticket_gross")?.amount).toBe(50);
+  });
+
+  it("returns 0 when the event is already above water with nobody there", () => {
+    expect(findBreakEvenAttendance({
+      ticketGross: 100, paidTickets: 10, platformPct: 0,
+      venueDealModel: "venue_sponsored", venueDealValue: 200,
+    }, 10)).toBe(0);
+  });
+
+  it("returns null when a full house still cannot cover the terms", () => {
+    expect(findBreakEvenAttendance({ ...rental, venueDealValue: 500 }, 10)).toBeNull();
+  });
+
+  it("compares the same event with free entry, add-on money intact", () => {
+    // A venue share is charged against ticket revenue, so with no tickets
+    // there is nothing to charge — and the add-on margin is untouched.
+    const free = economicsAsFreeRsvp({
+      ticketGross: 100,
+      paidTickets: 10,
+      platformPct: 0,
+      venueDealModel: "revenue_share",
+      venueDealValue: 50,
+      addOnCreatorGross: 5,
+    }, 10, 10);
+    expect(free.venueTicketCost).toBe(0);
+    expect(free.net).toBe(5);
+  });
+
+  it("groups each row by how it settles", () => {
+    const breakdown = calculateEventEconomics({
+      ticketGross: 100,
+      paidTickets: 10,
+      platformPct: 15,
+      venueDealModel: "upfront_rental",
+      venueDealValue: 100,
+      addOnCreatorGross: 5,
+    });
+    const tierOf = (key: string) => breakdown.lines.find((line) => line.key === key)?.tier;
+    expect(tierOf("ticket_gross")).toBe("per_unit");
+    expect(tierOf("platform_fee")).toBe("per_unit");
+    expect(tierOf("venue_payout")).toBe("flat");
+    expect(tierOf("addon_margin")).toBe("addon");
   });
 });

@@ -197,3 +197,55 @@ describe("what gets written onto the booking", () => {
     expect(hasTicketAddon({ pricingMode: "fixed" })).toBe(false);
   });
 });
+
+// ── Point 46: a group rate, and a price you enter rather than derive ───────
+describe("group rate and the charge the organiser sets", () => {
+  const coffee = {
+    addonEnabled: true,
+    addonName: "Coffee",
+    addonVenuePrice: 4,
+    addonGroupRate: 3.5,
+    addonChargeAmount: 4,
+  };
+
+  it("measures the margin against the group rate, not the counter price", () => {
+    expect(getTicketAddon(coffee)).toMatchObject({
+      unitPrice: 4,
+      venueAmount: 3.5,
+      creatorAmount: 0.5,
+      venuePrice: 4,
+      costBasis: 3.5,
+      // Charged exactly what the bar charges, so nobody is better off walking up.
+      aboveCounterPrice: false,
+    });
+  });
+
+  it("falls back to the counter price when no group rate was agreed", () => {
+    expect(getTicketAddon({ ...coffee, addonGroupRate: 0, addonChargeAmount: 5 }))
+      .toMatchObject({ unitPrice: 5, venueAmount: 4, creatorAmount: 1, aboveCounterPrice: true });
+  });
+
+  it("reports a negative margin rather than hiding it", () => {
+    // Charging below what the venue charges you loses money on every unit, and
+    // a figure clamped to zero would say the opposite.
+    expect(getTicketAddon({ ...coffee, addonChargeAmount: 3 })?.creatorAmount).toBe(-0.5);
+  });
+
+  it("reads a legacy additive margin as the same arrangement", () => {
+    expect(getTicketAddon({
+      addonEnabled: true, addonName: "Coffee",
+      addonVenuePrice: 4, addonMargin: 1, addonMarginMode: "additive",
+    })).toMatchObject({ unitPrice: 5, venueAmount: 4, creatorAmount: 1 });
+  });
+
+  it("reads a legacy deduction as a group rate under another name", () => {
+    // It always was one: the venue agreeing to take less than its counter
+    // price so the participant is charged no more than at the bar.
+    expect(getTicketAddon({
+      addonEnabled: true, addonName: "Coffee",
+      addonVenuePrice: 4, addonMargin: 0.5, addonMarginMode: "deduction",
+    })).toMatchObject({
+      unitPrice: 4, venueAmount: 3.5, creatorAmount: 0.5, costBasis: 3.5,
+    });
+  });
+});

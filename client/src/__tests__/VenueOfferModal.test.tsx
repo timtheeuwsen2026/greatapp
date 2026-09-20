@@ -158,15 +158,16 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /venue sponsorship/i })).toBeInTheDocument();
     });
-    // The five the platform can settle. The manual exception is not among them
-    // unless an admin unlocked this specific event.
-    expect(screen.getAllByRole('option')).toHaveLength(5);
+    // The six the platform can settle, Barter Deal included. The manual
+    // exception is not among them unless an admin unlocked this event.
+    expect(screen.getAllByRole('option')).toHaveLength(6);
     for (const label of [
       /^revenue split/i,
       /ticket deduction/i,
       /upfront rental/i,
       /venue sponsorship/i,
       /commitment fee \+ revenue split/i,
+      /barter deal/i,
     ]) {
       expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
     }
@@ -217,7 +218,10 @@ describe('Venue "Offer to Host" modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /per room \/ per night/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByRole('option')).toHaveLength(5);
+    // Five as always, plus Barter Deal — a retreat can be traded for as
+    // readily as a bar can.
+    expect(screen.getAllByRole('option')).toHaveLength(6);
+    expect(screen.getByRole('option', { name: /barter deal/i })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /access-only/i })).not.toBeInTheDocument();
   });
 });

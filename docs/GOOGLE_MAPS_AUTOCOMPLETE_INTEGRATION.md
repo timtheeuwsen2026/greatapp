@@ -1,5 +1,13 @@
 # Google Maps Places Autocomplete Integration Guide
 
+> **Implemented** (Sep 2026, redesign point 52) as
+> `client/src/components/AddressAutocomplete.tsx`, in the fallback-capable
+> shape this guide describes: with `VITE_GOOGLE_MAPS_API_KEY` set it suggests
+> addresses; without it, it is an ordinary text input and nothing breaks. In
+> use on the Event Builder's Location and Manual Address fields and on a
+> venue's Full Address. Coordinate capture and reverse geocoding, described
+> further down, are still unbuilt.
+
 **Date:** October 17, 2025  
 **Purpose:** Integrate Google Maps Places Autocomplete for venue location selection  
 **Framework:** React + TypeScript + Vite + React Hook Form  

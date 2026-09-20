@@ -5138,10 +5138,21 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
   const eventType = form.watch('type');
   const venueType = form.watch('venueType') || 'catalog';
   const selectedVenueId = form.watch('selectedVenueId') || '';
-  const venueName = form.watch('venueName')
-    || form.watch('manualVenueName')
-    || form.watch('selectedVenueName')
-    || '';
+  // The chosen venue's name, for the row and the tile. A catalog venue is
+  // stored by id alone, so it is looked up; a manually-invited one carries its
+  // own name on the form. Neither is fatal if it does not resolve — the row
+  // still reads "Venue" and the deal is still editable.
+  const { data: chosenVenue } = useQuery<any>({
+    queryKey: ['/api/venues', selectedVenueId],
+    queryFn: async () => {
+      const response = await apiRequest('GET', `/api/venues/${selectedVenueId}`);
+      if (!response.ok) return null;
+      return response.json();
+    },
+    enabled: venueType === 'catalog' && !!selectedVenueId,
+    staleTime: 5 * 60_000,
+  });
+  const venueName = form.watch('manualVenueName') || chosenVenue?.name || '';
   const isDaytimeDeal = eventType !== 'multi-day';
 
   /**

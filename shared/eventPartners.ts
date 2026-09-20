@@ -25,11 +25,26 @@
  *     shows no partner cards at all — not four greyed-out placeholders implying
  *     something is missing. Simple events must stay simple.
  *
- * Venue is deliberately absent from `PARTNER_TYPES`. It has its own step, its
- * own operational fields (capacity, address, space type) and its own contract
- * table; duplicating it here would give an organiser two places to set one
- * deal. It still takes part in the revenue waterfall — see
- * `revenueShareEligible` — it just is not added through this list.
+ * Venue is deliberately absent from `PARTNER_TYPES`. Its *deal* is now agreed
+ * on the Partners step beside everyone else's, but it is not added through
+ * this list: it has its own step, its own operational fields (capacity,
+ * address, space type) and its own contract table, and duplicating it here
+ * would give an organiser two places to set one thing. Its deal vocabulary
+ * lives in `venueDealModels.ts`.
+ *
+ * Two things are deliberately NOT modelled here. Both are written up in
+ * `docs/PARTNER_MODEL_OPEN_QUESTIONS.md`, and neither is an oversight:
+ *
+ *  - **Three-party chains.** A community's reach often lands the sponsor, and
+ *    the money then flows sponsor → organiser → community with the organiser
+ *    deciding by judgement how much to pass on. Every deal here has exactly
+ *    one counterparty, and a row in the waterfall would promise a payment the
+ *    platform does not make.
+ *
+ *  - **Whether Community and Affiliate are one type.** Both are "someone who
+ *    brings people"; the intended difference is the deal's shape rather than
+ *    what they do, and a real partner can fit either. Unresolved, so build
+ *    against these four.
  */
 
 export type PartnerTypeId =

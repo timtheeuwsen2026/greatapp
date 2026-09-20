@@ -27,6 +27,7 @@ import LegalConsentLabel from '@/components/LegalConsentLabel';
 import { MultiChoiceField, PreferenceToggle } from "@/components/TaxonomyFields";
 import { QuietSlotGrid, PeriodListEditor } from "@/components/VenueOpenTime";
 import VenueAddonCatalogEditor from "@/components/VenueAddonCatalogEditor";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 import {
   PARTNER_CATEGORIES,
   TRIP_LENGTH_PREFERENCES,
@@ -1398,11 +1399,15 @@ export default function VenueProfileSetup() {
                             Full Address *
                           </FormLabel>
                           <FormControl>
-                            <Input 
-                              placeholder="123 Main Street, Ubud, Bali, Indonesia" 
-                              {...field} 
-                              maxLength={500}
-                              data-testid="input-location" 
+                            {/* Point 52. A venue's own address is the one the
+                                map embed, the invite email and every
+                                participant read, so it is the last place a
+                                near-miss spelling should be possible. */}
+                            <AddressAutocomplete
+                              placeholder="123 Main Street, Ubud, Bali, Indonesia"
+                              value={field.value ?? ''}
+                              onChange={field.onChange}
+                              data-testid="input-location"
                             />
                           </FormControl>
                           <FormDescription className="flex justify-between">

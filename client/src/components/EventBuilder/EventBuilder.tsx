@@ -78,6 +78,8 @@ import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import DiscountLinkManager from "@/components/DiscountLinkManager";
 import AddPartnerModal from "@/components/AddPartnerModal";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
+import MinimalSection from "@/components/EventBuilder/MinimalSection";
 import VenueDealEditor from "@/components/EventBuilder/VenueDealEditor";
 import {
   brandBarterPerkSource,
@@ -3596,7 +3598,12 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
         excludeExperienceId={editingExperienceId}
       />
 
-      {/* Location Input */}
+      {/* Location Input.
+          Point 52: suggestions rather than free text. "Barceloneta",
+          "barceloneta beach" and "the beach by the W" are one place written
+          four ways, and the map embed, the collab matcher and the participant
+          reading the line all treat them as four. Typing still wins — a pop-up
+          on a beach has no street address and has to stay enterable. */}
       <FormField
         control={form.control}
         name="location"
@@ -3604,10 +3611,10 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
           <FormItem>
             <FormLabel>Location/City *</FormLabel>
             <FormControl>
-              <Input
+              <AddressAutocomplete
                 placeholder="e.g., Bali, Indonesia or Online"
-                {...field}
                 value={field.value ?? ''}
+                onChange={field.onChange}
                 data-testid="input-location"
               />
             </FormControl>
@@ -3673,9 +3680,17 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
                       <circle cx="12" cy="8" r="2" />
                     </svg>
                     <div>
-                      <div className="font-semibold">Outdoor / Public</div>
+                      {/* Point 51. "Outdoor / Public" described one kind of
+                          place, and the option is really "I will type the
+                          address myself" — which is also what a studio, a
+                          private flat or an office in a building with no Great
+                          listing needs. Organisers with one of those picked
+                          "Invite External Venue" and waited for an acceptance
+                          that was never coming. The stored value stays
+                          `outdoor` so every saved event still resolves. */}
+                      <div className="font-semibold">Manual Address</div>
                       <div className="text-sm text-gray-600 dark:text-gray-400">
-                        Park, beach, or public space
+                        Type the address yourself — a park, a beach, a studio, anywhere
                       </div>
                     </div>
                   </div>
@@ -3890,7 +3905,7 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
         </div>
       )}
 
-      {/* Outdoor / Public Location - Minimal fields, just needs location which is already above */}
+      {/* Manual Address - Minimal fields, just needs the location entered above */}
       {venueType === "outdoor" && (
         <div className="space-y-4 border rounded-lg p-4 bg-green-50 dark:bg-green-900/20">
           <div className="flex items-center gap-3">
@@ -3899,9 +3914,10 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
               <circle cx="12" cy="8" r="2" />
             </svg>
             <div>
-              <h4 className="font-semibold text-lg text-green-800 dark:text-green-200">Outdoor / Public Location</h4>
+              <h4 className="font-semibold text-lg text-green-800 dark:text-green-200">Manual Address</h4>
               <p className="text-sm text-green-700 dark:text-green-300">
-                Parks, beaches, trails, and public spaces. Just specify the location above - no venue booking required.
+                A park, a beach, a trail, a studio, your own space — anywhere you type the
+                address for yourself. Nothing needs to be booked through Great.
               </p>
             </div>
           </div>
@@ -3946,9 +3962,10 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
               <FormItem>
                 <FormLabel>Address *</FormLabel>
                 <FormControl>
-                  <Input
+                  <AddressAutocomplete
                     placeholder="Full address or specific location details"
-                    {...field}
+                    value={field.value ?? ''}
+                    onChange={field.onChange}
                     data-testid="input-manual-venue-address"
                   />
                 </FormControl>
@@ -5586,8 +5603,19 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
       {/* ── Participant Referral Perk, now at the bottom ──────────────────
           Moved below the partner list because the perk is so often sourced
           from one of those deals. Asked first, it was asked before the
-          organiser knew what they had to offer. */}
+          organiser knew what they had to offer.
+
+          Minimal until it holds something — point 50. Most events have no
+          participant perk at all, and a full card of empty deal choices for
+          one made the step look unfinished. */}
       <div className="border-t pt-8">
+        <MinimalSection
+          title="Participant Referral Perk"
+          addLabel="Add a participant referral perk"
+          hint="What an ordinary attendee gets for bringing friends. Optional, and nothing by default."
+          isEmpty={!participantReferralDealType}
+          testId="section-participant-perk"
+        >
         <Card className="bg-gray-50/70 dark:bg-gray-900/30">
           <CardHeader>
             <div className="flex items-start justify-between gap-4">
@@ -5747,6 +5775,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
             )}
           </CardContent>
         </Card>
+        </MinimalSection>
       </div>
 
       <AddPartnerModal
@@ -7785,7 +7814,18 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
         </CardContent>
       </Card>
 
-      {/* **4. MVG + SOFT-HOLD** */}
+      {/* **4. MVG + SOFT-HOLD**
+          Off on most events, and a full panel of thresholds and hold windows
+          for one that does not use it is the kind of thing that makes a
+          two-field event feel like a form. Point 50. */}
+      <MinimalSection
+        title="Minimum Viable Group & Reservations"
+        addLabel="Require a minimum group before this goes ahead"
+        hint="Only proceeds if enough people book. Deposits are held, not taken."
+        isEmpty={!requireMinimumParticipants && !softHoldEnabled}
+        onAdd={() => form.setValue('requireMinimumParticipants', true, { shouldDirty: true })}
+        testId="section-mvg"
+      >
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -7945,6 +7985,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
           </div>
         </CardContent>
       </Card>
+      </MinimalSection>
 
       {/* **5. INFLUENCER COMMISSION POOL** */}
       {false && (

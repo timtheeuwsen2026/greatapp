@@ -530,7 +530,7 @@ export default function Profile() {
                     <CardHeader className="flex flex-row items-center justify-between gap-4">
                       <CardTitle className="flex items-center gap-2">
                         <Megaphone className="h-5 w-5" />
-                        Promoter Profile
+                        Partner Profile
                       </CardTitle>
                       <Button asChild variant="outline" size="sm">
                         <Link href="/promoter/profile-setup">
@@ -553,8 +553,8 @@ export default function Profile() {
                 ) : (
                   <EmptyRoleProfile
                     icon={<Megaphone className="h-6 w-6" />}
-                    title="Set Up Your Promoter Profile"
-                    description="Add the public recommendation details buyers will see from your affiliate link."
+                    title="Set Up Your Partner Profile"
+                    description="The public details an organiser sees, whether you bring your community, supply product, provide a service, or sell tickets on commission."
                     href="/promoter/profile-setup"
                     action="Set Up Profile"
                   />

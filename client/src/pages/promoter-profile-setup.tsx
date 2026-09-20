@@ -138,8 +138,8 @@ export default function PromoterProfileSetup() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/promoter-profile"] });
       toast({
-        title: "Affiliate profile complete",
-        description: "The Experience Pool is open — these are the events you can promote.",
+        title: "Partner profile complete",
+        description: "The Collab board is open — these are the events looking for someone like you.",
       });
       setLocation("/promoter/experience-pool");
     },
@@ -192,9 +192,22 @@ export default function PromoterProfileSetup() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
       <main className="mx-auto max-w-3xl px-4 py-24">
+        {/* Point 33. The signup read as though commission on tickets were the
+            only reason to be here, because that is what it was built for. Four
+            kinds of partner now work through this platform, and an affiliate is
+            one of them — a brand supplying product, a community bringing its
+            members and a service provider trading a licence are the other
+            three, and every one of them lands on some version of this page. A
+            run club reading "earn commission on every ticket" concluded the
+            platform had nothing for them and left. */}
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">Promoter Profile</h1>
-          <p className="mt-2 text-gray-600">Add the public details buyers will see from your referral link.</p>
+          <h1 className="text-3xl font-bold text-gray-900">Partner Profile</h1>
+          <p className="mt-2 text-gray-600">
+            The public details an organiser and their participants see. However you
+            work with an event — bringing your community, supplying product,
+            providing a service, or selling tickets on commission — this is the
+            profile they are looking at.
+          </p>
         </div>
 
         <Card>
@@ -333,8 +346,10 @@ export default function PromoterProfileSetup() {
                 <div>
                   <p className="text-sm font-medium">Open to Commission per Ticket deals</p>
                   <p className="text-xs text-muted-foreground">
-                    Off means organisers won't offer you one. Direct invites still
-                    reach you either way.
+                    One of five deal types, and the only one paid out of ticket sales.
+                    Off means organisers won't offer you this one — barter,
+                    sponsorship, content and milestone deals still reach you, and so
+                    do direct invites.
                   </p>
                 </div>
                 <Switch

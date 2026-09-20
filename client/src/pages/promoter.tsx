@@ -381,8 +381,8 @@ function PromoterProfileStatusCard({ profile, isLoading }: { profile: PromoterPr
     return (
       <Card className="mb-8 border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20">
         <CardHeader>
-          <CardTitle>Promoter Profile</CardTitle>
-          <CardDescription>Add the public trust details shown from your referral links.</CardDescription>
+          <CardTitle>Partner Profile</CardTitle>
+          <CardDescription>Add the public details an organiser sees before offering you a deal.</CardDescription>
         </CardHeader>
         <CardContent>
           <Button asChild>
@@ -398,8 +398,8 @@ function PromoterProfileStatusCard({ profile, isLoading }: { profile: PromoterPr
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <CardTitle>Promoter Profile</CardTitle>
-            <CardDescription>This is visible to buyers who open your referral links.</CardDescription>
+            <CardTitle>Partner Profile</CardTitle>
+            <CardDescription>Visible to organisers considering a deal, and to buyers who open your referral links.</CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild>
             <Link href="/promoter/profile-setup">Edit</Link>

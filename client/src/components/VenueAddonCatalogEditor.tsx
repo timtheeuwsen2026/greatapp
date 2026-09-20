@@ -17,9 +17,11 @@ import { Plus, Trash2 } from "lucide-react";
  * whichever direction the guess went.
  *
  * So the venue states its prices once, and every organiser working with it
- * picks from the list. `venuePrice` is what the venue is paid per unit — the
- * organiser's margin sits on top of it, or comes out of it, decided per event
- * and never here.
+ * picks from the list. `venuePrice` is the venue's own counter price — what a
+ * participant would pay walking in. What the organiser charges, and what the
+ * venue actually charges the organiser for a booked group, are decided per
+ * event and never here: a group rate depends on the size and the date, so one
+ * published on a profile is a rate promised to a group nobody has seen yet.
  */
 
 export type VenueAddonCatalogItem = {
@@ -130,17 +132,22 @@ export default function VenueAddonCatalogEditor({
               />
             </div>
 
-            <div className="space-y-1">
-              <Label className="text-xs font-normal text-muted-foreground">
-                Group rate or combo (optional)
-              </Label>
-              <Input
-                value={item.groupDiscountNote || ""}
-                placeholder="10% off for groups over 20"
-                onChange={(event) => update(index, { groupDiscountNote: event.target.value })}
+            {/* A group rate is deliberately not asked for here — point 34. It
+                depends on the size of the group and the date, so a rate
+                published on a profile is one the venue has promised to a group
+                it has not seen. It is agreed per invite, in the dealroom, and
+                the organiser records it on the event. A note already written
+                under the old field is kept and shown, because it was a real
+                thing a venue said. */}
+            {item.groupDiscountNote ? (
+              <p
+                className="rounded border border-dashed px-3 py-2 text-xs text-muted-foreground"
                 data-testid={`venue-addon-group-discount-${index}`}
-              />
-            </div>
+              >
+                Your earlier note: "{item.groupDiscountNote}". Group rates are agreed per
+                invite now — an organiser will ask, and you answer for that group.
+              </p>
+            ) : null}
 
             <div className="flex items-center justify-between gap-4 rounded border p-3">
               <div className="min-w-0">

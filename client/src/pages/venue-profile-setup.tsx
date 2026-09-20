@@ -1240,6 +1240,51 @@ export default function VenueProfileSetup() {
                         </FormItem>
                       )}
                     />
+                    {/* ── Your products ────────────────────────────────────
+                        Point 34: this was step 9, behind eight screens about
+                        vibes and availability, and most venues never reached
+                        it. It is not a late detail — it is the number every
+                        add-on on the platform is priced from, and a venue that
+                        skips it gets asked for a price by hand on every event
+                        that wants one.
+
+                        Name and your price, and nothing else. A group rate
+                        depends on the size and the date, so it is agreed per
+                        invite in the dealroom and is deliberately not askable
+                        here: a rate published on a profile is a rate a venue
+                        has promised to a group it has not seen. */}
+                    <div className="space-y-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
+                      <div>
+                        <h4 className="text-md font-medium">Your products</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Extras an organiser can offer alongside a ticket — a coffee, a lunch,
+                          equipment hire. Give <em>your</em> price for each. The organiser sets
+                          what participants are charged; you are paid the number you put here,
+                          and nobody quotes a price for your counter that you did not set.
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          A group rate is not asked for here. It depends on the size and the
+                          date, so it is agreed per invite in the dealroom.
+                        </p>
+                      </div>
+
+                      <FormField
+                        control={form.control}
+                        name="addonCatalog"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <VenueAddonCatalogEditor
+                                value={field.value || []}
+                                onChange={field.onChange}
+                                currencySymbol="EUR"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -2028,42 +2073,6 @@ export default function VenueProfileSetup() {
                                 checked={!!field.value}
                                 onChange={field.onChange}
                                 testId="toggle-venue-open-to-promoters"
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </div>
-
-                    {/* The add-on catalog.
-                        Path A of venue add-on pricing: the organiser stops
-                        inventing a price for your coffee and picks from this
-                        instead. Optional — a venue that skips it is asked for
-                        prices on the invite page of the first event that wants
-                        one, which is Path B. */}
-                    <div className="space-y-4 pt-4 border-t">
-                      <div>
-                        <h4 className="text-md font-medium">Your add-on prices (optional)</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Extras an organiser can offer alongside a ticket — a coffee, a lunch,
-                          equipment hire. Give <em>your</em> price for each. The organiser adds
-                          their own margin on top, or takes it out of your price; either way you
-                          are paid the number you put here, and nobody quotes a price for your
-                          counter that you did not set.
-                        </p>
-                      </div>
-
-                      <FormField
-                        control={form.control}
-                        name="addonCatalog"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormControl>
-                              <VenueAddonCatalogEditor
-                                value={field.value || []}
-                                onChange={field.onChange}
-                                currencySymbol="EUR"
                               />
                             </FormControl>
                             <FormMessage />

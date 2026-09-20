@@ -20,16 +20,19 @@ import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import {
   CONTENT_LICENSE_SUBTYPES,
-  PARTNER_DEAL_TYPES,
   PARTNER_TYPES,
+  PARTNER_DEAL_TYPES,
+  dealRestrictionReason,
+  dealTypesForPartnerType,
   generatePartnerToken,
+  milestoneRewardAt,
   validatePartnerEntry,
   type EventPartnerEntry,
   type PartnerDealTypeId,
   type PartnerTerms,
   type PartnerTypeId,
 } from "@shared/eventPartners";
-import { Check, Link2, Search } from "lucide-react";
+import { Check, Link2, Mail, Pencil, Search } from "lucide-react";
 
 /**
  * Add Partner.
@@ -41,13 +44,16 @@ import { Check, Link2, Search } from "lucide-react";
  * appear are decided by type + deal, the same way Milestone Barter asks for an
  * attendee target and Brand Barter asks what the product is.
  *
- * Venue is absent on purpose. It has its own step, its own operational fields
- * (address, capacity, space type) and its own contract; offering it here would
- * give an organiser two places to set one deal.
+ * Venue is absent on purpose, and still is. Its deal is now agreed on the same
+ * Partners step as everyone else's, but not through this modal: which venue an
+ * event is at carries an address, a capacity and a set of dates, and those
+ * belong to the Venue step. The Venue tile routes there; the deal comes back
+ * here as a row.
  *
- * "Invite via link" always works, because most partners on this platform are
- * reachable by an Instagram handle rather than an email address. The email is
- * optional on top of the link, never instead of it.
+ * Three ways to find somebody, because two were not enough. "Invite via link"
+ * always works — most partners on this platform are reachable by an Instagram
+ * handle rather than an email address — and Email is its own door rather than
+ * a field hidden inside the link option, where organisers reliably missed it.
  */
 export default function AddPartnerModal({
   open,
@@ -55,16 +61,29 @@ export default function AddPartnerModal({
   onSave,
   /** Present when editing an existing row rather than adding a new one. */
   editing,
+  initialPartnerType = null,
   currencySymbol = "€",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (entry: EventPartnerEntry) => void;
   editing?: EventPartnerEntry | null;
+  /** The tile that was tapped on the Partners step, when one was. */
+  initialPartnerType?: PartnerTypeId | null;
   currencySymbol?: string;
 }) {
   const [partnerType, setPartnerType] = useState<PartnerTypeId>("community");
-  const [source, setSource] = useState<"platform" | "invite_link">("platform");
+  /**
+   * Three ways to find somebody, not two.
+   *
+   * Email used to be a field buried inside "Invite via link", which meant an
+   * organiser who had an address and nothing else had to pick the link option
+   * first and then notice a secondary field under it. Most did not, and sent a
+   * link by hand to an address the platform already had. `email` and
+   * `invite_link` are the same stored source — what differs is which one the
+   * organiser is told they are doing.
+   */
+  const [source, setSource] = useState<"platform" | "invite_link" | "email">("platform");
   const [name, setName] = useState("");
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
   const [email, setEmail] = useState("");
@@ -76,7 +95,13 @@ export default function AddPartnerModal({
     if (!open) return;
     if (editing) {
       setPartnerType(editing.partnerType);
-      setSource(editing.source === "invite_link" ? "invite_link" : "platform");
+      setSource(
+        editing.source !== "invite_link"
+          ? "platform"
+          // Reopened on the mode they actually used: an entry with an address
+          // was invited by email, whatever the stored source calls it.
+          : editing.email ? "email" : "invite_link",
+      );
       setName(editing.name || "");
       setPartnerUserId(editing.partnerUserId || null);
       setEmail(editing.email || "");
@@ -85,7 +110,7 @@ export default function AddPartnerModal({
       setInviteToken(editing.inviteToken || "");
       return;
     }
-    setPartnerType("community");
+    setPartnerType(initialPartnerType || "community");
     setSource("platform");
     setName("");
     setPartnerUserId(null);
@@ -96,7 +121,7 @@ export default function AddPartnerModal({
     // The server mints the final one on publish, which is what actually
     // resolves — a code minted here could collide with another partner's.
     setInviteToken(generatePartnerToken());
-  }, [open, editing?.id]);
+  }, [open, editing?.id, initialPartnerType]);
 
   // Picking a type re-points the default deal at the one that type usually
   // takes, without locking anything: a community on commission is unusual but
@@ -109,6 +134,22 @@ export default function AddPartnerModal({
       setTerms({});
     }
   }, [partnerType, editing]);
+
+  /** The deals this type may be offered. Financial Sponsorship is a brand's. */
+  const dealOptions = useMemo(() => dealTypesForPartnerType(partnerType), [partnerType]);
+
+  // Switching a sponsor to a community leaves Financial Sponsorship selected
+  // and its card gone from the list — an entry that cannot be saved with no
+  // visible reason why. Move to the type's own first deal instead.
+  useEffect(() => {
+    if (dealOptions.some((deal) => deal.id === dealType)) return;
+    const fallback = PARTNER_TYPES.find((type) => type.id === partnerType)?.suggestedDeals?.[0]
+      || dealOptions[0]?.id;
+    if (fallback) {
+      setDealType(fallback);
+      setTerms({});
+    }
+  }, [dealOptions, dealType, partnerType]);
 
   const directory = useQuery<Array<{ id: string; displayName: string; profilePhoto: string | null; label: string }>>({
     queryKey: ["/api/partners/directory", partnerType],
@@ -134,18 +175,27 @@ export default function AddPartnerModal({
   const setTerm = <K extends keyof PartnerTerms>(key: K, value: PartnerTerms[K]) =>
     setTerms((current) => ({ ...current, [key]: value }));
 
+  /** `email` and `invite_link` are the same stored source: somebody off-platform. */
+  const storedSource = source === "platform" ? "platform" : "invite_link";
+  const offPlatform = storedSource === "invite_link";
+
   const draft: Partial<EventPartnerEntry> = useMemo(() => ({
     id: editing?.id,
     partnerType,
     name: name.trim(),
     partnerUserId: source === "platform" ? partnerUserId : null,
-    email: source === "invite_link" ? (email.trim() || null) : null,
-    source,
+    email: offPlatform ? (email.trim() || null) : null,
+    source: storedSource,
     dealType,
     terms,
-  }), [editing?.id, partnerType, name, partnerUserId, email, source, dealType, terms]);
+  }), [editing?.id, partnerType, name, partnerUserId, email, storedSource, offPlatform, source, dealType, terms]);
 
-  const problems = validatePartnerEntry(draft);
+  const problems = [
+    ...validatePartnerEntry(draft),
+    // Only in email mode: the link mode is deliberately happy without one,
+    // because most partners here are reachable by a handle and nothing else.
+    ...(source === "email" && !email.trim() ? ["Enter their email address"] : []),
+  ];
   const canSave = problems.length === 0;
 
   const save = () => {
@@ -155,14 +205,14 @@ export default function AddPartnerModal({
       partnerType,
       name: name.trim(),
       partnerUserId: source === "platform" ? partnerUserId : null,
-      email: source === "invite_link" ? (email.trim() || null) : null,
-      source,
+      email: offPlatform ? (email.trim() || null) : null,
+      source: storedSource,
       dealType,
       terms,
       // A partner already on the platform is invited straight away; someone
       // reached by link has not been asked yet until the link is sent.
       status: editing?.status || "invited",
-      inviteToken: source === "invite_link" ? (inviteToken || generatePartnerToken()) : null,
+      inviteToken: offPlatform ? (inviteToken || generatePartnerToken()) : null,
       refCode: editing?.refCode || null,
     });
     onOpenChange(false);
@@ -172,15 +222,21 @@ export default function AddPartnerModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      {/* Roomy on purpose. This modal carries a directory search, five deal
+          cards and a set of terms, and at `sm:max-w-lg` all three were
+          competing for a column narrower than the content — a deal list you
+          scroll past before you have read it. Full-height sheet on a phone,
+          for the same reason. */}
+      <DialogContent className="max-h-[92vh] w-full max-w-none overflow-y-auto rounded-none p-6 sm:max-w-2xl sm:rounded-lg sm:p-8">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit partner" : "Add partner"}</DialogTitle>
+          <DialogTitle className="text-xl">{editing ? "Edit partner" : "Add partner"}</DialogTitle>
           <DialogDescription>
-            Search partners already on Great, or invite someone new with a link.
+            Search partners already on Great, invite someone with a link, or send
+            it straight to their inbox.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="space-y-6">
           <div>
             <Label>Partner type</Label>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -203,7 +259,7 @@ export default function AddPartnerModal({
 
           <div>
             <Label>Find them</Label>
-            <div className="mt-2 flex gap-2">
+            <div className="mt-2 flex flex-wrap gap-2">
               <ChipToggle
                 label="Search on Great"
                 selected={source === "platform"}
@@ -216,22 +272,54 @@ export default function AddPartnerModal({
                 onClick={() => setSource("invite_link")}
                 testId="chip-partner-source-link"
               />
+              <ChipToggle
+                label="Email"
+                selected={source === "email"}
+                onClick={() => setSource("email")}
+                testId="chip-partner-source-email"
+              />
             </div>
 
             {source === "platform" ? (
-              <div className="mt-3 rounded-lg border">
-                <Command>
-                  <CommandInput placeholder="Search by name…" data-testid="input-partner-search" />
-                  <CommandList className="max-h-48">
-                    <CommandEmpty>
-                      {directory.isLoading
-                        ? "Loading partners…"
-                        : "Nobody on Great matches that. Invite them by link instead."}
-                    </CommandEmpty>
-                    <CommandGroup>
-                      {(directory.data || []).map((candidate) => {
-                        const selected = partnerUserId === candidate.id;
-                        return (
+              /* Picking somebody used to leave the whole directory sitting open
+                 underneath with a tick buried in it, so there was no moment
+                 where the modal said "this one". The list collapses to the
+                 chosen partner instead, with a way back to it. */
+              partnerUserId ? (
+                <div
+                  className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/40"
+                  data-testid="partner-selected"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Check className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
+                    <span className="truncate text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                      {name}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => { setPartnerUserId(null); setName(""); }}
+                    data-testid="button-partner-change-selection"
+                  >
+                    <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                    Change
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-3 rounded-lg border">
+                  <Command>
+                    <CommandInput placeholder="Search by name…" data-testid="input-partner-search" />
+                    <CommandList className="max-h-64">
+                      <CommandEmpty>
+                        {directory.isLoading
+                          ? "Loading partners…"
+                          : "Nobody on Great matches that. Invite them by link or email instead."}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {(directory.data || []).map((candidate) => (
                           <CommandItem
                             key={candidate.id}
                             value={candidate.displayName}
@@ -241,7 +329,6 @@ export default function AddPartnerModal({
                             }}
                             data-testid={`partner-candidate-${candidate.id}`}
                           >
-                            <Check className={cn("mr-2 h-4 w-4", selected ? "opacity-100" : "opacity-0")} />
                             {candidate.profilePhoto ? (
                               <img src={candidate.profilePhoto} alt="" className="mr-2 h-6 w-6 rounded-full object-cover" />
                             ) : (
@@ -251,29 +338,33 @@ export default function AddPartnerModal({
                             )}
                             <span className="flex-1 truncate">{candidate.displayName}</span>
                           </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-                {/* Contact details are never in this list. An organiser needs to
-                    recognise a person, not to hold their address — that is the
-                    partner's to share once a deal is under way. */}
-                <p className="border-t px-3 py-2 text-xs text-gray-500">
-                  <Search className="mr-1 inline h-3 w-3" />
-                  Names and photos only — no contact details until they accept.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-3 space-y-3 rounded-lg border p-3">
-                <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2">
-                  <Link2 className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                  <code className="flex-1 truncate text-xs text-indigo-700">{inviteUrl}</code>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                  {/* Contact details are never in this list. An organiser needs to
+                      recognise a person, not to hold their address — that is the
+                      partner's to share once a deal is under way. */}
+                  <p className="border-t px-3 py-2 text-xs text-gray-500">
+                    <Search className="mr-1 inline h-3 w-3" />
+                    Names and photos only — no contact details until they accept.
+                  </p>
                 </div>
-                <p className="text-xs text-gray-500">
-                  The final link is issued when you publish — paste that one into
-                  a DM or WhatsApp.
-                </p>
+              )
+            ) : (
+              <div className="mt-3 space-y-3 rounded-lg border p-4">
+                {source === "invite_link" && (
+                  <>
+                    <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2">
+                      <Link2 className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                      <code className="flex-1 truncate text-xs text-indigo-700">{inviteUrl}</code>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      The final link is issued when you publish — paste that one into
+                      a DM or WhatsApp.
+                    </p>
+                  </>
+                )}
                 <div>
                   <Label htmlFor="partner-name" className="text-xs">Their name</Label>
                   <Input
@@ -286,18 +377,26 @@ export default function AddPartnerModal({
                 </div>
                 <div>
                   <Label htmlFor="partner-email" className="text-xs">
-                    Email address <span className="font-normal text-gray-500">optional</span>
+                    Email address{" "}
+                    {source === "invite_link" && (
+                      <span className="font-normal text-gray-500">optional</span>
+                    )}
                   </Label>
                   <Input
                     id="partner-email"
                     type="email"
-                    placeholder="Leave blank if you only have a handle"
+                    placeholder={source === "email"
+                      ? "them@theirvenue.com"
+                      : "Leave blank if you only have a handle"}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     data-testid="input-partner-email"
                   />
-                  <p className="mt-1 text-xs text-gray-500">
-                    Filled in, we email them the deal as well as giving you the link.
+                  <p className="mt-1 flex items-center gap-1 text-xs text-gray-500">
+                    <Mail className="h-3 w-3" />
+                    {source === "email"
+                      ? "We send them the deal directly, and you still get the link to share."
+                      : "Filled in, we email them the deal as well as giving you the link."}
                   </p>
                 </div>
               </div>
@@ -308,7 +407,7 @@ export default function AddPartnerModal({
           <div>
             <Label>Deal type</Label>
             <div className="mt-2 space-y-2">
-              {PARTNER_DEAL_TYPES.map((deal) => {
+              {dealOptions.map((deal) => {
                 const active = dealType === deal.id;
                 return (
                   <button
@@ -347,6 +446,14 @@ export default function AddPartnerModal({
                 );
               })}
             </div>
+            {/* Said rather than silently omitted: a deal that was on the list
+                for a sponsor and is not on the list for a community looks like
+                a bug unless the reason is on screen. */}
+            {dealOptions.length < PARTNER_DEAL_TYPES.length && (
+              <p className="mt-2 text-xs text-gray-500" data-testid="text-deal-restriction">
+                {dealRestrictionReason("financial_sponsorship")}
+              </p>
+            )}
           </div>
 
           {/* ── The fields this deal needs, and only those ─────────────── */}
@@ -411,31 +518,75 @@ export default function AddPartnerModal({
             </div>
           )}
 
+          {/* ── Milestone Barter, as a ratio ──────────────────────────────
+              A fixed threshold and a ticket-only reward did not survive
+              contact with real deals. A community that brings sixty people
+              under "15 attendees → 1 free ticket" has earned one ticket, which
+              is not what either side thought they agreed; and "20 T-shirts
+              from Strong X for 20 people" cannot be written in tickets at all.
+              So: how many, per how many people, and what the reward actually
+              is. */}
           {dealType === "milestone_barter" && (
-            <div className="grid grid-cols-2 gap-3 rounded-xl border p-4">
-              <div>
-                <Label htmlFor="partner-milestone-target">Target attendees for free access</Label>
-                <Input
-                  id="partner-milestone-target"
-                  type="number"
-                  min="1"
-                  placeholder="15"
-                  value={terms.milestoneAttendeeTarget ?? ""}
-                  onChange={(e) => setTerm("milestoneAttendeeTarget", e.target.value ? parseInt(e.target.value, 10) : undefined)}
-                  data-testid="input-partner-milestone-target"
-                />
+            <div className="space-y-3 rounded-xl border p-4">
+              <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+                <div>
+                  <Label htmlFor="partner-milestone-reward">Reward quantity</Label>
+                  <Input
+                    id="partner-milestone-reward"
+                    type="number"
+                    min="1"
+                    value={terms.milestoneRewardTickets ?? 1}
+                    onChange={(e) => setTerm("milestoneRewardTickets", e.target.value ? parseInt(e.target.value, 10) : 1)}
+                    data-testid="input-partner-milestone-reward"
+                  />
+                </div>
+                <span className="pb-2.5 text-sm text-gray-500">per</span>
+                <div>
+                  <Label htmlFor="partner-milestone-target">People brought</Label>
+                  <Input
+                    id="partner-milestone-target"
+                    type="number"
+                    min="1"
+                    placeholder="1"
+                    value={terms.milestoneAttendeeTarget ?? ""}
+                    onChange={(e) => setTerm("milestoneAttendeeTarget", e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                    data-testid="input-partner-milestone-target"
+                  />
+                </div>
               </div>
+
               <div>
-                <Label htmlFor="partner-milestone-reward">Free tickets earned</Label>
+                <Label htmlFor="partner-milestone-description">What they earn</Label>
                 <Input
-                  id="partner-milestone-reward"
-                  type="number"
-                  min="1"
-                  value={terms.milestoneRewardTickets ?? 1}
-                  onChange={(e) => setTerm("milestoneRewardTickets", e.target.value ? parseInt(e.target.value, 10) : 1)}
-                  data-testid="input-partner-milestone-reward"
+                  id="partner-milestone-description"
+                  placeholder="T-shirt from Strong X"
+                  value={terms.milestoneRewardDescription || ""}
+                  onChange={(e) => setTerm("milestoneRewardDescription", e.target.value)}
+                  data-testid="input-partner-milestone-description"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Leave blank and it is free tickets. Anything else — product,
+                  access, kit — write it here.
+                </p>
               </div>
+
+              {/* The ratio worked out at a headcount worth checking, because a
+                  ratio that reads fine at one person can be alarming at twenty. */}
+              {Number(terms.milestoneAttendeeTarget) > 0 && (
+                <div
+                  className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-900/50"
+                  data-testid="text-milestone-preview"
+                >
+                  <span className="text-xs text-gray-600 dark:text-gray-300">
+                    At 20 people brought
+                  </span>
+                  <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                    {milestoneRewardAt(terms, 20)}{" "}
+                    {terms.milestoneRewardDescription?.trim()
+                      || `free ticket${milestoneRewardAt(terms, 20) === 1 ? "" : "s"}`}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

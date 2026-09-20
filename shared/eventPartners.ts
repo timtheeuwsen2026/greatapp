@@ -150,6 +150,130 @@ export const CONTENT_LICENSE_SUBTYPES = [
 
 export type ContentLicenseSubtype = (typeof CONTENT_LICENSE_SUBTYPES)[number]["id"];
 
+/**
+ * Which deals a given partner type may actually be offered.
+ *
+ * Financial Sponsorship was selectable on every type, including Community —
+ * so a run club bringing thirty runners was offered a deal that reads as the
+ * run club paying to attend. Nobody would pick it deliberately, but it sat
+ * there in the list implying it was a normal thing to ask of a community.
+ * Money paid *to* the organiser is a brand's move, so it is a brand's option.
+ *
+ * Everything not named here stays available to everyone: the point is to
+ * remove one nonsensical combination, not to prescribe what a partner may
+ * agree to.
+ */
+const DEAL_TYPE_RESTRICTIONS: Partial<Record<PartnerDealTypeId, PartnerTypeId[]>> = {
+  financial_sponsorship: ["sponsor_brand"],
+};
+
+export function dealAvailableForPartnerType(
+  dealType: unknown,
+  partnerType: unknown,
+): boolean {
+  const allowed = DEAL_TYPE_RESTRICTIONS[dealType as PartnerDealTypeId];
+  if (!allowed) return true;
+  return allowed.includes(partnerType as PartnerTypeId);
+}
+
+/** The deals this partner type can be offered, in list order. */
+export function dealTypesForPartnerType(partnerType: unknown): PartnerDealOption[] {
+  return PARTNER_DEAL_TYPES.filter((deal) =>
+    dealAvailableForPartnerType(deal.id, partnerType));
+}
+
+/** Why a deal is not offered, for the one case where it is worth saying. */
+export function dealRestrictionReason(dealType: unknown): string | null {
+  if (dealType === "financial_sponsorship") {
+    return "Financial Sponsorship is a Sponsor / Brand deal — money paid towards the event, not something to ask of a community or a service provider.";
+  }
+  return null;
+}
+
+/**
+ * How a deal settles, which is the only grouping that makes the Commercial
+ * Model readable.
+ *
+ *  - `per_unit` — scales with what the event sells. A percentage or a per-head
+ *    amount: nobody knows the figure until the tickets are sold.
+ *  - `flat` — one number, agreed now, whichever way it travels.
+ *  - `barter` — no money moves at all.
+ *
+ * Mixing the three in one list is what made the summary unreadable: a "15%"
+ * and a "€100" and a "product for exposure" sitting side by side look like
+ * three numbers of the same kind, and they are not comparable at all.
+ */
+export type DealTier = "per_unit" | "flat" | "barter";
+
+export const DEAL_TIERS: Array<{ id: DealTier; label: string; glyph: string }> = [
+  { id: "per_unit", label: "Per-unit", glyph: "↕" },
+  { id: "flat", label: "Flat", glyph: "€" },
+  { id: "barter", label: "Barter", glyph: "◇" },
+];
+
+export function dealTierLabel(tier: DealTier): string {
+  return DEAL_TIERS.find((entry) => entry.id === tier)?.label || "";
+}
+
+export function dealTierGlyph(tier: DealTier): string {
+  return DEAL_TIERS.find((entry) => entry.id === tier)?.glyph || "";
+}
+
+/** Which tier a partner's deal settles in. */
+export function partnerDealTier(
+  partner: { dealType?: unknown; terms?: PartnerTerms | null },
+): DealTier {
+  switch (partner?.dealType) {
+    case "commission_per_ticket":
+      return "per_unit";
+    case "financial_sponsorship":
+      return "flat";
+    case "content_license":
+      return partner?.terms?.licenseSubtype === "flat_fee" ? "flat" : "barter";
+    case "milestone_barter":
+    case "brand_barter":
+    default:
+      return "barter";
+  }
+}
+
+/**
+ * What this partner actually brings to the event, in three or four words.
+ *
+ * The deal terms say what they are paid; this says what they are paid *for*,
+ * and without it a list of percentages beside a list of names does not tell an
+ * organiser why any of them are on the event. Where the organiser has already
+ * described it — a brand barter's product line — that is used verbatim rather
+ * than replaced with a generic phrase.
+ */
+export function partnerBringsLine(
+  partner: { partnerType?: unknown; dealType?: unknown; terms?: PartnerTerms | null },
+): string {
+  const described = String(partner?.terms?.productDescription || "").trim();
+  if (partner?.dealType === "brand_barter" && described) {
+    return described.length > 80 ? `${described.slice(0, 77)}…` : described;
+  }
+
+  switch (partner?.partnerType) {
+    case "community":
+      return "its members";
+    case "sponsor_brand":
+      return partner?.dealType === "financial_sponsorship"
+        ? "budget for the event"
+        : partner?.dealType === "content_license"
+          ? "content, for exposure"
+          : "products, for exposure";
+    case "service_provider":
+      return partner?.dealType === "content_license"
+        ? "content, licensed to you"
+        : "a service for the event";
+    case "affiliate":
+      return "ticket sales";
+    default:
+      return "";
+  }
+}
+
 /** How a partner was found. Drives whether an invite email or a link is sent. */
 export type PartnerSourceId = "platform" | "invite_link";
 
@@ -161,9 +285,24 @@ export type PartnerSourceId = "platform" | "invite_link";
 export type PartnerTerms = {
   /** commission_per_ticket — percentage of ticket revenue. */
   commissionPct?: number;
-  /** milestone_barter — heads they must bring, and what they earn. */
+  /**
+   * milestone_barter — a *ratio*, not a threshold.
+   *
+   * `milestoneRewardTickets` is the reward quantity and
+   * `milestoneAttendeeTarget` the number of people it takes to earn it, so the
+   * pair reads "1 per 1" or "2 per 10". The old fixed-threshold reading is the
+   * first rung of the same ratio, which is why the two column names are kept:
+   * the fulfilment engine and `promotion_deals` both already store them, and
+   * renaming would have meant a migration for no change in meaning.
+   */
   milestoneAttendeeTarget?: number;
   milestoneRewardTickets?: number;
+  /**
+   * What they actually earn. Free text because the reward is very often not a
+   * ticket — "20 T-shirts from Strong X for 20 people" is a real deal that a
+   * ticket-only reward could not express at all.
+   */
+  milestoneRewardDescription?: string;
   /** brand_barter — what the brand supplies and what they get back. */
   productDescription?: string;
   /** financial_sponsorship / content_license flat fee. */
@@ -256,6 +395,43 @@ export function totalPartnerSharePct(partners: Array<{ dealType?: unknown; terms
 }
 
 /**
+ * "1 T-shirt from Strong X per 1 person brought".
+ *
+ * A ratio rather than a threshold, because a fixed target does not scale: a
+ * community that brings sixty people under a "15 attendees → 1 free ticket"
+ * deal has earned one ticket and nothing else, which is not what either side
+ * agreed. The reward is free text for the same reason — "20 T-shirts from
+ * Strong X for 20 people" cannot be written in tickets.
+ */
+export function describeMilestoneRatio(terms: PartnerTerms | null | undefined): string {
+  const per = Math.max(1, Math.floor(Number(terms?.milestoneAttendeeTarget) || 0));
+  const quantity = Math.max(1, Math.floor(Number(terms?.milestoneRewardTickets) || 1));
+  const reward = String(terms?.milestoneRewardDescription || "").trim();
+
+  if (!Number(terms?.milestoneAttendeeTarget)) {
+    return reward ? `${reward}, per person brought` : "Reward per person brought";
+  }
+
+  const rewardLabel = reward
+    || `free ticket${quantity === 1 ? "" : "s"}`;
+  return `${quantity} × ${rewardLabel} per ${per === 1 ? "person" : `${per} people`} brought`;
+}
+
+/**
+ * What the ratio comes to at a given headcount — the preview line under the
+ * two fields, and the figure the organiser is actually agreeing to.
+ */
+export function milestoneRewardAt(
+  terms: PartnerTerms | null | undefined,
+  peopleBrought: number,
+): number {
+  const per = Math.max(1, Math.floor(Number(terms?.milestoneAttendeeTarget) || 0));
+  const quantity = Math.max(1, Math.floor(Number(terms?.milestoneRewardTickets) || 1));
+  const heads = Math.max(0, Math.floor(Number(peopleBrought) || 0));
+  return Math.floor(heads / per) * quantity;
+}
+
+/**
  * The key term, in one line, for the partner list row and the Split Deal
  * Preview. Deliberately terse — the row already carries the deal's name.
  */
@@ -267,13 +443,8 @@ export function partnerTermSummary(
   switch (partner?.dealType) {
     case "commission_per_ticket":
       return `${Number(terms.commissionPct || 0)}% of ticket revenue`;
-    case "milestone_barter": {
-      const target = Number(terms.milestoneAttendeeTarget || 0);
-      const tickets = Number(terms.milestoneRewardTickets || 1);
-      return target > 0
-        ? `${target}+ attendees → ${tickets} free ticket${tickets === 1 ? "" : "s"}`
-        : "Free access at a target headcount";
-    }
+    case "milestone_barter":
+      return describeMilestoneRatio(terms);
     case "brand_barter":
       return terms.productDescription?.trim() || "Product for exposure";
     case "financial_sponsorship":
@@ -299,6 +470,14 @@ export function validatePartnerEntry(entry: Partial<EventPartnerEntry>): string[
   if (!isPartnerType(entry.partnerType)) problems.push("Choose a partner type");
   if (!String(entry.name || "").trim()) problems.push("Name the partner");
   if (!isPartnerDealType(entry.dealType)) problems.push("Choose a deal type");
+  // A restricted combination is blocked at the point of saving rather than
+  // stripped on read: an entry saved before the restriction existed still has
+  // to render on the event it belongs to, it just cannot be re-agreed.
+  else if (!dealAvailableForPartnerType(entry.dealType, entry.partnerType)) {
+    problems.push(
+      `${partnerDealLabel(entry.dealType)} is not available for a ${partnerTypeLabel(entry.partnerType)} partner`,
+    );
+  }
 
   const terms = entry.terms || {};
   switch (entry.dealType) {
@@ -306,7 +485,8 @@ export function validatePartnerEntry(entry: Partial<EventPartnerEntry>): string[
       if (!(Number(terms.commissionPct) > 0)) problems.push("Enter a commission percentage above zero");
       break;
     case "milestone_barter":
-      if (!(Number(terms.milestoneAttendeeTarget) > 0)) problems.push("Enter the attendee target for free access");
+      if (!(Number(terms.milestoneAttendeeTarget) > 0)) problems.push("Enter how many people they have to bring");
+      if (!(Number(terms.milestoneRewardTickets) > 0)) problems.push("Enter the reward quantity");
       break;
     case "brand_barter":
       if (!String(terms.productDescription || "").trim()) problems.push("Describe what the brand supplies");
@@ -366,6 +546,7 @@ export function sanitisePartnerEntry(input: any, index = 0): EventPartnerEntry |
     case "milestone_barter":
       terms.milestoneAttendeeTarget = Math.max(0, Math.floor(Number(rawTerms.milestoneAttendeeTarget) || 0));
       terms.milestoneRewardTickets = Math.max(1, Math.floor(Number(rawTerms.milestoneRewardTickets) || 1));
+      terms.milestoneRewardDescription = cleanText(rawTerms.milestoneRewardDescription, 300);
       break;
     case "brand_barter":
       terms.productDescription = cleanText(rawTerms.productDescription);

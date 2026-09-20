@@ -608,6 +608,9 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // Commitment Fee + Revenue Split: the one-off amount the venue pays the
   // organiser upfront, alongside the share they take of ticket revenue.
   venueCommitmentFee: decimal("venue_commitment_fee", { precision: 10, scale: 2 }).default("0.00"),
+  // Barter Deal: no money either way, so there is no amount to store — only
+  // what each side agreed to supply, in the organiser's own words.
+  venueBarterTerms: text("venue_barter_terms"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)
@@ -1017,6 +1020,9 @@ export const experiences = pgTable("experiences", {
   // Commitment Fee + Revenue Split: the one-off amount the venue pays the
   // organiser upfront, alongside the share they take of ticket revenue.
   venueCommitmentFee: decimal("venue_commitment_fee", { precision: 10, scale: 2 }).default("0.00"),
+  // Barter Deal: no money either way, so there is no amount to store — only
+  // what each side agreed to supply, in the organiser's own words.
+  venueBarterTerms: text("venue_barter_terms"),
   venueAccessFee: decimal("venue_access_fee", { precision: 10, scale: 2 }).default("0.00"),
 
   // Legacy Revenue Splits (keep for backward compatibility)

@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
   brandBarterPerkSource,
+  dealTypesForPartnerType,
   deriveLegacyPromotionFields,
   generatePartnerToken,
+  milestoneRewardAt,
+  partnerBringsLine,
+  partnerDealTier,
   partnerTermSummary,
   refCodeFromName,
   revenueShareEligible,
   revenueSharePartners,
+  sanitisePartnerEntry,
   sanitisePartnerEntries,
   totalPartnerSharePct,
   validatePartnerEntry,
@@ -146,7 +151,7 @@ describe("validatePartnerEntry", () => {
 
     expect(validatePartnerEntry({
       partnerType: "community", name: "Run Club", dealType: "milestone_barter", terms: {},
-    })).toContain("Enter the attendee target for free access");
+    })).toContain("Enter how many people they have to bring");
 
     expect(validatePartnerEntry({
       partnerType: "sponsor_brand", name: "Beach Bar", dealType: "brand_barter", terms: {},
@@ -172,7 +177,7 @@ describe("validatePartnerEntry", () => {
 
 describe("partnerTermSummary", () => {
   it("states the key term in one line, per deal", () => {
-    expect(partnerTermSummary(partner())).toBe("15+ attendees → 2 free tickets");
+    expect(partnerTermSummary(partner())).toBe("2 × free tickets per 15 people brought");
     expect(partnerTermSummary(partner({
       dealType: "commission_per_ticket", terms: { commissionPct: 10 },
     }))).toBe("10% of ticket revenue");
@@ -182,13 +187,100 @@ describe("partnerTermSummary", () => {
   });
 
   it("says something useful when the number is not set yet", () => {
-    expect(partnerTermSummary(partner({ terms: {} }))).toBe("Free access at a target headcount");
+    expect(partnerTermSummary(partner({ terms: {} }))).toBe("Reward per person brought");
   });
 
-  it("uses the singular for a single free ticket", () => {
+  it("uses the singular for one person and one ticket", () => {
     expect(partnerTermSummary(partner({
-      terms: { milestoneAttendeeTarget: 10, milestoneRewardTickets: 1 },
-    }))).toBe("10+ attendees → 1 free ticket");
+      terms: { milestoneAttendeeTarget: 1, milestoneRewardTickets: 1 },
+    }))).toBe("1 × free ticket per person brought");
+  });
+
+  // Point 37: the reward is very often not a ticket at all, and a fixed
+  // threshold pays a community that brought sixty people the same as one that
+  // brought fifteen.
+  it("reads the reward back in the organiser's own words", () => {
+    expect(partnerTermSummary(partner({
+      terms: {
+        milestoneAttendeeTarget: 1,
+        milestoneRewardTickets: 1,
+        milestoneRewardDescription: "T-shirt from Strong X",
+      },
+    }))).toBe("1 × T-shirt from Strong X per person brought");
+  });
+
+  it("scales with the headcount rather than stopping at the threshold", () => {
+    const oneEach = { milestoneAttendeeTarget: 1, milestoneRewardTickets: 1 };
+    expect(milestoneRewardAt(oneEach, 20)).toBe(20);
+    // Two per ten: twenty-nine people is still only five, because the sixth
+    // rung has not been reached.
+    expect(milestoneRewardAt({ milestoneAttendeeTarget: 10, milestoneRewardTickets: 2 }, 29)).toBe(4);
+    expect(milestoneRewardAt(oneEach, 0)).toBe(0);
+  });
+});
+
+describe("deal availability by partner type", () => {
+  // Point 39: offered to a Community, Financial Sponsorship reads as if the
+  // run club has to pay to attend.
+  it("keeps Financial Sponsorship to Sponsor / Brand", () => {
+    expect(dealTypesForPartnerType("sponsor_brand").map((deal) => deal.id))
+      .toContain("financial_sponsorship");
+    for (const type of ["community", "service_provider", "affiliate"] as const) {
+      expect(dealTypesForPartnerType(type).map((deal) => deal.id))
+        .not.toContain("financial_sponsorship");
+    }
+  });
+
+  it("leaves every other combination alone", () => {
+    expect(dealTypesForPartnerType("community").map((deal) => deal.id)).toEqual([
+      "commission_per_ticket",
+      "milestone_barter",
+      "brand_barter",
+      "content_license",
+    ]);
+  });
+
+  // An entry saved before the restriction existed still has to render on the
+  // event it belongs to. It just cannot be re-agreed.
+  it("blocks a restricted combination at the point of saving, not on read", () => {
+    const saved = {
+      partnerType: "community" as const,
+      name: "Run Club",
+      dealType: "financial_sponsorship" as const,
+      terms: { amount: 250 },
+    };
+    expect(validatePartnerEntry(saved).join(". "))
+      .toContain("not available for a Community partner");
+    expect(sanitisePartnerEntry({ ...saved, id: "p1", source: "platform", status: "draft" }))
+      .toMatchObject({ dealType: "financial_sponsorship" });
+  });
+});
+
+describe("deal tiers and brings-lines", () => {
+  // Point 35: "15%", "€100" and "product for exposure" read as three
+  // comparable numbers in one list, and they are not comparable at all.
+  it("groups a deal by how it settles", () => {
+    expect(partnerDealTier({ dealType: "commission_per_ticket" })).toBe("per_unit");
+    expect(partnerDealTier({ dealType: "financial_sponsorship" })).toBe("flat");
+    expect(partnerDealTier({ dealType: "brand_barter" })).toBe("barter");
+    expect(partnerDealTier({ dealType: "milestone_barter" })).toBe("barter");
+    // A content licence is whichever it was agreed as.
+    expect(partnerDealTier({ dealType: "content_license", terms: { licenseSubtype: "flat_fee" } }))
+      .toBe("flat");
+    expect(partnerDealTier({ dealType: "content_license", terms: { licenseSubtype: "barter" } }))
+      .toBe("barter");
+  });
+
+  it("says what a partner brings, preferring the organiser's own words", () => {
+    expect(partnerBringsLine({ partnerType: "community", dealType: "milestone_barter" }))
+      .toBe("its members");
+    expect(partnerBringsLine({ partnerType: "affiliate", dealType: "commission_per_ticket" }))
+      .toBe("ticket sales");
+    expect(partnerBringsLine({
+      partnerType: "sponsor_brand",
+      dealType: "brand_barter",
+      terms: { productDescription: "50 cans of cold brew" },
+    })).toBe("50 cans of cold brew");
   });
 });
 

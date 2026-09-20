@@ -28,6 +28,12 @@ export const VENUE_DEAL_MODELS = [
   // those two are mutually exclusive by design and this is the one sanctioned
   // case of a venue both paying in and taking a cut.
   "commitment_plus_revenue_share",
+  // No money moves either way: the venue supplies the space, the organiser
+  // supplies something the venue wants — a night of footfall, content, a bar
+  // it keeps the takings from. Every other model in this list assumes a
+  // payment in one direction, so an organiser with a genuine barter had to
+  // record a €0 rental and explain it in a note.
+  "venue_barter",
   // An escape hatch, not a pricing model: the money is taken at the venue's own
   // register and the platform never sees it. Kept last, and marked untracked
   // everywhere it is offered, so it reads as the exception it is.
@@ -49,7 +55,7 @@ type VenueDealDefinition = {
   description: string;
   valueKind: VenueDealValueKind;
   /** Key inside venueContracts.terms that carries the number. */
-  termsKey: "revenueSharePct" | "fixedFee" | "perHeadAmount" | "perRoomPerNight" | "minimumSpend" | "accessFee" | "counterRevenuePct" | null;
+  termsKey: "revenueSharePct" | "fixedFee" | "perHeadAmount" | "perRoomPerNight" | "minimumSpend" | "accessFee" | "counterRevenuePct" | "barterTerms" | null;
   /**
    * A second number the deal carries, where one number cannot describe it.
    * Only Commitment Fee + Revenue Share needs this: the percentage flows from
@@ -163,6 +169,18 @@ const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
     secondaryValueLabel: "Commitment fee the venue pays you ({cur})",
     secondaryDirection: "venue_pays_creator",
   },
+  venue_barter: {
+    model: "venue_barter",
+    label: "Barter Deal",
+    description:
+      "No money either way — you agree what each side supplies and what each side gets.",
+    // Nothing numeric to enter, and inventing a notional value would put a
+    // figure into the calculator that nobody agreed to.
+    valueKind: "none",
+    termsKey: "barterTerms",
+    valueLabel: "What they supply, what they get",
+    direction: "attendee_funded",
+  },
   minimum_spend: {
     model: "minimum_spend",
     label: "Minimum Spend Guarantee ({cur})",
@@ -182,6 +200,10 @@ const MULTI_DAY_MODELS: VenueDealModel[] = [
   "upfront_rental",
   "per_room_night",
   "commitment_plus_revenue_share",
+  // The five above are the Multi-Day list as it has always been. Barter is the
+  // only addition; a retreat's deal names (Price Per Participant Package, Per
+  // Room / Per Night) stay as they are and do not follow the day event's.
+  "venue_barter",
   "manual_counter_revenue",
 ];
 
@@ -191,6 +213,7 @@ const DAY_EVENT_MODELS: VenueDealModel[] = [
   "upfront_rental",
   "venue_sponsored",
   "commitment_plus_revenue_share",
+  "venue_barter",
   "manual_counter_revenue",
 ];
 
@@ -302,6 +325,109 @@ export function isOffPlatformVenueDeal(model: unknown): boolean {
   return normalized === "access_only"
     || normalized === "minimum_spend"
     || normalized === "manual_counter_revenue";
+}
+
+/**
+ * How a venue deal settles — the same three-way grouping the partner deals
+ * use, so one Commercial Model summary can list the venue beside everyone
+ * else without three incomparable kinds of number sitting side by side.
+ *
+ *  - `per_unit` — scales with what the event sells.
+ *  - `flat` — one agreed number, whichever way it travels.
+ *  - `barter` — nothing to settle in money at all.
+ */
+export type VenueDealTier = "per_unit" | "flat" | "barter";
+
+export function venueDealTierOf(model: unknown): VenueDealTier {
+  switch (normalizeVenueDealModel(model)) {
+    case "revenue_share":
+    case "commitment_plus_revenue_share":
+    case "fixed_fee":
+    case "per_head":
+    case "per_room_night":
+    case "manual_counter_revenue":
+    case "minimum_spend":
+      return "per_unit";
+    case "upfront_rental":
+    case "venue_sponsored":
+      return "flat";
+    case "venue_barter":
+    case "access_only":
+    default:
+      return "barter";
+  }
+}
+
+/**
+ * The deal in one line — "Revenue split — 15%", "€100 flat", "Barter".
+ *
+ * Written once here because three surfaces render it: the venue's row on the
+ * Partners step, the read-only summary the Pricing step now shows in place of
+ * its old inputs, and the Commercial Model grid. Three copies of this sentence
+ * is three chances for them to disagree about the same deal.
+ */
+export function summariseVenueDeal(input: {
+  model: unknown;
+  /** `target` means proposed, not agreed, and the figure lives elsewhere. */
+  mode?: "settled" | "target";
+  currencySymbol?: string;
+  revenueSharePct?: unknown;
+  fixedFee?: unknown;
+  perHeadAmount?: unknown;
+  perRoomPerNight?: unknown;
+  commitmentFee?: unknown;
+  barterTerms?: unknown;
+  /** The single figure a proposal carries before anyone has accepted it. */
+  targetValue?: unknown;
+}): string {
+  const model = normalizeVenueDealModel(input.model);
+  if (!model) return "";
+
+  const symbol = input.currencySymbol || "€";
+  const num = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const money = (value: unknown) => `${symbol}${num(value).toFixed(2)}`;
+  const isTarget = input.mode === "target";
+  // A proposal has one generic figure; a settled deal has a named field per
+  // deal type. Reading the wrong one is how a 15% share printed as "€0.00".
+  const primary = isTarget ? input.targetValue : undefined;
+
+  switch (model) {
+    case "revenue_share":
+      return `Revenue split — ${num(isTarget ? primary : input.revenueSharePct)}% of ticket revenue`;
+    case "commitment_plus_revenue_share": {
+      const share = `${num(isTarget ? primary : input.revenueSharePct)}% of ticket revenue`;
+      const fee = num(input.commitmentFee);
+      return fee > 0
+        ? `Commitment fee ${money(fee)} to you + ${share} to them`
+        : `Commitment fee + ${share} to them`;
+    }
+    case "fixed_fee":
+      return `Ticket deduction — ${money(isTarget ? primary : input.fixedFee)} per paid ticket`;
+    case "per_head":
+      return `Per-participant package — ${money(isTarget ? primary : input.perHeadAmount)} each`;
+    case "per_room_night":
+      return `${money(isTarget ? primary : input.perRoomPerNight)} per room per night`;
+    case "upfront_rental":
+      return `Upfront rental — ${money(isTarget ? primary : input.fixedFee)} you pay them`;
+    case "venue_sponsored":
+      return `Venue sponsorship — ${money(isTarget ? primary : input.fixedFee)} they pay you`;
+    case "venue_barter": {
+      const terms = String(input.barterTerms ?? "").trim();
+      if (!terms) return "Barter — no money either way";
+      return `Barter — ${terms.length > 90 ? `${terms.slice(0, 87)}…` : terms}`;
+    }
+    case "manual_counter_revenue":
+      return `Manual agreement (untracked) — ${num(isTarget ? primary : input.revenueSharePct)}% of counter revenue`;
+    case "minimum_spend":
+      return `Minimum spend guarantee — ${money(input.fixedFee)}`;
+    case "access_only":
+      return "Access-only — the venue keeps what guests spend on site";
+    default:
+      return "";
+  }
 }
 
 export type VenueDealOptionsInput = {
@@ -617,6 +743,11 @@ export function calculateVenueEarnings(input: VenueEarningsInput): VenueEarnings
         earned: gross * (value / 100),
         owed: Number.isFinite(input.secondaryValue ?? 0) ? (input.secondaryValue ?? 0) : 0,
       };
+    // Nothing earned and nothing owed, and deliberately not marked
+    // off-platform: an off-platform deal means money the app cannot see, while
+    // a barter means there is no money at all.
+    case "venue_barter":
+      return none;
     case "access_only":
     case "minimum_spend":
     case "manual_counter_revenue":
@@ -893,6 +1024,13 @@ export function explainVenueDealMechanics(input: VenueDealMechanicsInput): strin
       return `Two figures moving in opposite directions: the venue pays you a one-off commitment `
         + `fee upfront, and separately takes ${value}% of paid ticket revenue afterwards. At `
         + `${money(gross)} in sales their share is ${money(round2(gross * (value / 100)))}.`;
+
+    case "venue_barter":
+      // No arithmetic to show, and saying "€0.00 to the venue" would read as a
+      // deal that pays them nothing rather than one that was never about money.
+      return `No money moves either way. You each supply what you agreed, and the calculator `
+        + `leaves the venue out of the ticket split entirely — so whatever the tickets earn is `
+        + `yours after the platform fee.`;
 
     case "minimum_spend":
       return `A spend guarantee settled at the venue's own register. The platform never sees this `

@@ -33,6 +33,7 @@ describe("venue deal vocabulary", () => {
       "upfront_rental",
       "per_room_night",
       "commitment_plus_revenue_share",
+      "venue_barter",
     ]);
     expect(options.map((o) => o.label)).toEqual([
       "Revenue Split (%)",
@@ -40,6 +41,7 @@ describe("venue deal vocabulary", () => {
       "Upfront Rental / Flat Fee (€)",
       "Per Room / Per Night (€)",
       "Commitment Fee + Revenue Split (€ + %)",
+      "Barter Deal",
     ]);
   });
 
@@ -52,6 +54,7 @@ describe("venue deal vocabulary", () => {
       "Upfront Rental / Flat Fee (€)",
       "Venue Sponsorship (€)",
       "Commitment Fee + Revenue Split (€ + %)",
+      "Barter Deal",
     ]);
   });
 
@@ -63,6 +66,7 @@ describe("venue deal vocabulary", () => {
       "upfront_rental",
       "per_room_night",
       "commitment_plus_revenue_share",
+      "venue_barter",
       "manual_counter_revenue",
     ]);
     expect(getVenueDealOptions({ isDaytime: true, surface: "event", allowUntracked: true })
@@ -72,6 +76,7 @@ describe("venue deal vocabulary", () => {
       "upfront_rental",
       "venue_sponsored",
       "commitment_plus_revenue_share",
+      "venue_barter",
       "manual_counter_revenue",
     ]);
   });

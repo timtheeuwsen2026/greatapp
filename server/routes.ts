@@ -326,6 +326,8 @@ function applyMarketplaceEconomics(input: any = {}) {
     // a column on both tables and was written to neither — the fee travelled as
     // far as the form and stopped there.
     venueCommitmentFee: input.venueCommitmentFee ?? "0.00",
+    // Barter has no amount at all, so the terms themselves are the deal.
+    venueBarterTerms: input.venueBarterTerms ?? null,
     venueRevenuePercentage: revenueSharePct,
     participantReferralDealType,
     participantReferralCommissionPct,
@@ -1531,6 +1533,7 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       // column on `experiences` and was never written to it, so the venue's
       // one-off commitment existed only until the event was published.
       venueCommitmentFee: (draft as any).venueCommitmentFee || "0.00",
+      venueBarterTerms: (draft as any).venueBarterTerms || null,
       venuePerRoomPerNight: (draft as any).venuePerRoomPerNight || "0.00",
 
       // ── Self-Hosted / Manual Address logic ──────────────────────────────

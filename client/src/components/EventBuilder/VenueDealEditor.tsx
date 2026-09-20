@@ -34,6 +34,7 @@ export function VenueDealEditor({
   currencySymbol,
   isDaytime,
   manualDealUnlocked = false,
+  paidTicketsConfigured = true,
   mode = "settled",
 }: {
   form: any;
@@ -41,6 +42,12 @@ export function VenueDealEditor({
   /** A one-day event or a daytime space gets the day list. */
   isDaytime: boolean;
   manualDealUnlocked?: boolean;
+  /**
+   * False only when the event has tickets and every one of them is free. A
+   * venue taking a percentage of ticket revenue would then be taking a
+   * percentage of nothing, so those two models are not offered.
+   */
+  paidTicketsConfigured?: boolean;
   /**
    * `settled` — a venue is chosen, so the deal is the deal and lives in the
    * named amount fields the payout engine reads.
@@ -62,7 +69,10 @@ export function VenueDealEditor({
     currencySymbol,
     currentValue: model,
     allowUntracked: manualDealUnlocked,
-  });
+  }).filter((option) =>
+    paidTicketsConfigured
+    || option.value === model
+    || (option.value !== "revenue_share" && option.value !== "commitment_plus_revenue_share"));
   const selected = options.find((option) => option.value === model) || null;
 
   const choose = (option: VenueDealOption) => {
@@ -393,6 +403,13 @@ export function VenueDealEditor({
         Anything bought at the venue's own till on the day is invisible to the app, so
         don't propose a share of it — there would be nothing to calculate it from.
       </p>
+
+      {!paidTicketsConfigured && (
+        <p className="text-xs text-gray-500" data-testid="text-venue-no-paid-ticket">
+          Revenue Split is not offered: every ticket on this event is free, so there
+          is no ticket revenue for the venue to take a share of.
+        </p>
+      )}
 
       {isTarget && (
         <p className="text-xs text-amber-700 dark:text-amber-400">

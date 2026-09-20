@@ -53,6 +53,14 @@ export type EconomicsLine = {
    * `promotion` – cashback or commission paid away.
    */
   kind: "gross" | "fee" | "venue" | "addon" | "promotion";
+  /**
+   * How this row settles, for the grouping the calculator renders.
+   *
+   * A percentage that scales with ticket sales and a flat fee agreed in
+   * advance are different kinds of number, and listing them as consecutive
+   * rows of a single column invites reading them as comparable.
+   */
+  tier: "per_unit" | "flat" | "addon";
 };
 
 export type EventEconomicsInput = {
@@ -234,6 +242,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: "Gross Ticket Revenue",
       amount: ticketGross,
       kind: "gross",
+      tier: "per_unit",
     });
   }
 
@@ -243,6 +252,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: `Platform Fee (${platformPct}%)`,
       amount: -platformFee,
       kind: "fee",
+      tier: "per_unit",
     });
   }
 
@@ -254,6 +264,8 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
         : "Venue Payout",
       amount: -venueTicketCost,
       kind: "venue",
+      // A rental is agreed up front; a share moves with the tickets.
+      tier: model === "upfront_rental" ? "flat" : "per_unit",
     });
   }
 
@@ -263,6 +275,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: "Venue Sponsorship",
       amount: sponsorship,
       kind: "venue",
+      tier: "flat",
     });
   }
 
@@ -272,6 +285,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: "Commitment Fee from Venue",
       amount: commitmentFee,
       kind: "venue",
+      tier: "flat",
     });
   }
 
@@ -281,6 +295,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: "Your Add-on Margin",
       amount: addOnCreatorMargin,
       kind: "addon",
+      tier: "addon",
     });
   }
 
@@ -290,6 +305,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       label: `${share.label} (${share.pct}%)`,
       amount: -share.amount,
       kind: "promotion",
+      tier: "per_unit",
     });
   }
 
@@ -298,6 +314,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       key: "promoter_bounty",
       label: `Participant Cashback (${promoterCommissionPct}%)`,
       amount: -promoterBounty,
+      tier: "per_unit",
       kind: "promotion",
     });
   }
@@ -316,4 +333,79 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     addOnVenueRevenue,
     offPlatform,
   };
+}
+
+/**
+ * The same event at a different turnout.
+ *
+ * Everything that scales with heads is scaled; everything agreed in advance —
+ * a rental, a commitment fee, a room-night bill on rooms you hold whether they
+ * fill or not — is left exactly as it is. That division is the whole point:
+ * it is what makes a break-even number mean something.
+ */
+export function economicsAtAttendance(
+  input: EventEconomicsInput,
+  /** Heads the figures in `input` describe. Usually full capacity. */
+  atCapacity: number,
+  /** Heads to re-state them at. */
+  heads: number,
+): EventEconomics {
+  const capacity = Math.max(1, finite(atCapacity));
+  const scale = Math.max(0, finite(heads)) / capacity;
+
+  return calculateEventEconomics({
+    ...input,
+    ticketGross: round2(finite(input.ticketGross) * scale),
+    paidTickets: Math.round(finite(input.paidTickets) * scale),
+    addOnVenueGross: round2(finite(input.addOnVenueGross) * scale),
+    addOnCreatorGross: round2(finite(input.addOnCreatorGross) * scale),
+  });
+}
+
+/**
+ * How many people have to come before the organiser stops losing money.
+ *
+ * Found by asking the calculator itself rather than by solving an equation
+ * beside it. Every deal type bends the curve differently — a rental is flat, a
+ * per-ticket deduction is linear, a commitment fee is a lump the other way —
+ * and a closed-form answer would have to know about all of them and would go
+ * out of date the first time a deal type was added. Walking the same function
+ * the rows are drawn from cannot disagree with them.
+ *
+ * Returns null when the event never breaks even within its own capacity, and 0
+ * when it is already above water with nobody there at all (a venue
+ * sponsorship, typically).
+ */
+export function findBreakEvenAttendance(
+  input: EventEconomicsInput,
+  atCapacity: number,
+): number | null {
+  const capacity = Math.max(1, Math.round(finite(atCapacity)));
+  if (economicsAtAttendance(input, capacity, 0).net >= 0) return 0;
+
+  for (let heads = 1; heads <= capacity; heads += 1) {
+    if (economicsAtAttendance(input, capacity, heads).net >= 0) return heads;
+  }
+  return null;
+}
+
+/**
+ * What this event would net with every ticket free, at a given turnout.
+ *
+ * The comparison an organiser actually wants and could never get: a free RSVP
+ * with a paid add-on beats a cheap ticket surprisingly often, because the
+ * venue deal is charged against ticket revenue and there is none. Built from
+ * the same input so the two figures are the same event under two ticket
+ * policies, not two different calculations.
+ */
+export function economicsAsFreeRsvp(
+  input: EventEconomicsInput,
+  atCapacity: number,
+  heads: number,
+): EventEconomics {
+  return economicsAtAttendance(
+    { ...input, ticketGross: 0, paidTickets: 0 },
+    atCapacity,
+    heads,
+  );
 }

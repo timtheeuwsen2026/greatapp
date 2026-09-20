@@ -27,22 +27,41 @@ export type TicketAddonSkuLike = {
    * from `pricingMode === "combi"`, which is what carried the same meaning.
    */
   addonEnabled?: boolean | null;
-  /** What the venue charges for the item — often already a thin collab rate. */
+  /**
+   * The venue's own counter price — what a participant would pay walking in.
+   *
+   * A reference figure, not a cost. It exists so the platform can tell whether
+   * what it is about to charge is more than the item costs at the bar, which
+   * is the one thing that makes buying it here pointless.
+   */
   addonVenuePrice?: number | string | null;
-  /** The organiser's cut, as a flat amount. Never a percentage. */
+  /**
+   * What the venue actually charges the organiser for a booked group.
+   *
+   * Usually below the counter price — that is what a group rate is for — and
+   * it is agreed per invite in the dealroom rather than published on a venue's
+   * profile, because it depends on the size and the date. Where it is set, it
+   * is the cost the margin is measured against.
+   */
+  addonGroupRate?: number | string | null;
+  /**
+   * What the participant is charged. One field, entered directly.
+   *
+   * The organiser used to enter a margin and a direction for it to travel in,
+   * and the price the participant would see was derived from those two. That
+   * is backwards: the price is the decision, and the margin is what falls out
+   * of it once the cost is known.
+   */
+  addonChargeAmount?: number | string | null;
+  /** Superseded by `addonChargeAmount`. Read for tickets saved before it. */
   addonMargin?: number | string | null;
   /**
-   * Which way the organiser's margin travels — chosen per add-on, never
-   * platform-wide.
+   * Superseded by `addonGroupRate` + `addonChargeAmount`.
    *
-   * `additive`: the participant pays the venue's price plus the margin. The
-   * venue still receives its counter price in full.
-   *
-   * `deduction`: the participant pays the venue's price and nothing more, and
-   * the margin comes out of the venue's cut.
-   *
-   * The default is `additive`, which is what every add-on saved before this
-   * existed meant.
+   * `additive` meant the participant paid the venue's price plus the margin;
+   * `deduction` meant they paid the venue's price and the margin came out of
+   * the venue's cut. A deduction was always a group rate under another name —
+   * the venue agreeing to take less — so that is how one is read now.
    */
   addonMarginMode?: string | null;
   /** Optional cap, independent of how many people are attending. */
@@ -59,20 +78,19 @@ export function normalizeAddonMarginMode(value: unknown): AddonMarginMode {
 
 export type TicketAddon = {
   name: string;
-  /**
-   * What the participant pays. Under an additive margin that is the venue's
-   * price plus the margin; under a deduction it is the venue's price alone,
-   * which is the whole point of the deduction — the platform never shows a
-   * price higher than the one on the venue's own menu.
-   */
+  /** What the participant is charged, per unit. */
   unitPrice: number;
-  /** Of that, what the venue keeps. */
+  /** Of that, what the venue is paid — its group rate, or its counter price. */
   venueAmount: number;
-  /** Of that, what the organiser earns. */
+  /** Of that, what the organiser earns. Negative when charging below cost. */
   creatorAmount: number;
-  /** The venue's own counter price, before either margin direction is applied. */
+  /** The venue's own counter price, for the "is this cheaper at the bar?" check. */
   venuePrice: number;
-  /** Which way the organiser's margin travelled. */
+  /** What the venue charges the organiser. Equals `venuePrice` when unset. */
+  costBasis: number;
+  /** True when the participant pays more than the venue's own counter price. */
+  aboveCounterPrice: boolean;
+  /** Which way the margin travelled, kept for surfaces that still ask. */
   marginMode: AddonMarginMode;
 };
 
@@ -123,11 +141,9 @@ export function getTicketAddon(sku: TicketAddonSkuLike | null | undefined): Tick
   if (!isAddonEnabled(sku)) return null;
 
   const venuePrice = toAmount(sku!.addonVenuePrice);
-  const margin = toAmount(sku!.addonMargin);
-  const marginMode = normalizeAddonMarginMode(sku!.addonMarginMode);
 
-  // A ticket saved before the split existed carries only the total. All of it
-  // is the venue's until the organiser states a margin of their own.
+  // A ticket saved before any split existed carries only the total. All of it
+  // is the venue's until the organiser states a price of their own.
   if (venuePrice <= 0) {
     const legacyPrice = toAmount(sku!.addonPrice);
     if (legacyPrice <= 0) return null;
@@ -137,23 +153,46 @@ export function getTicketAddon(sku: TicketAddonSkuLike | null | undefined): Tick
       venueAmount: legacyPrice,
       creatorAmount: 0,
       venuePrice: legacyPrice,
+      costBasis: legacyPrice,
+      aboveCounterPrice: false,
       marginMode: "additive",
     };
   }
 
-  // A deduction can never take more than the venue is being paid. Clamping
-  // rather than rejecting keeps a half-typed margin from showing the venue a
-  // negative cut mid-keystroke.
-  const creatorAmount = marginMode === "deduction" ? Math.min(margin, venuePrice) : margin;
-  const unitPrice = marginMode === "deduction" ? venuePrice : round2(venuePrice + creatorAmount);
+  const groupRate = toAmount(sku!.addonGroupRate);
+  const marginMode = normalizeAddonMarginMode(sku!.addonMarginMode);
+  const legacyMargin = toAmount(sku!.addonMargin);
+
+  // What the venue is actually paid. A group rate is the direct answer; a
+  // legacy deduction was the same arrangement under another name — the venue
+  // agreeing to take the margin out of its own price — so it is read as one.
+  const costBasis = groupRate > 0
+    ? Math.min(groupRate, venuePrice)
+    : marginMode === "deduction"
+      ? round2(Math.max(0, venuePrice - Math.min(legacyMargin, venuePrice)))
+      : venuePrice;
+
+  // The charge is entered directly now. Where it has not been — a ticket saved
+  // before the field existed — it is reconstructed from the old margin, which
+  // is the number that produced the participant's price back then.
+  const charged = toAmount(sku!.addonChargeAmount);
+  const unitPrice = charged > 0
+    ? charged
+    : marginMode === "deduction"
+      ? venuePrice
+      : round2(venuePrice + legacyMargin);
   if (unitPrice <= 0) return null;
 
   return {
     name: addonName(sku),
     unitPrice,
-    venueAmount: marginMode === "deduction" ? round2(venuePrice - creatorAmount) : venuePrice,
-    creatorAmount,
+    venueAmount: costBasis,
+    // Not clamped at zero: an organiser charging below the group rate is
+    // losing money on every unit, and the calculator has to be able to say so.
+    creatorAmount: round2(unitPrice - costBasis),
     venuePrice,
+    costBasis,
+    aboveCounterPrice: unitPrice > venuePrice + 0.005,
     marginMode,
   };
 }

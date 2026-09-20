@@ -21,7 +21,6 @@ import { cn } from "@/lib/utils";
 import {
   CONTENT_LICENSE_SUBTYPES,
   PARTNER_TYPES,
-  PARTNER_DEAL_TYPES,
   dealRestrictionReason,
   dealTypesForPartnerType,
   generatePartnerToken,
@@ -62,6 +61,7 @@ export default function AddPartnerModal({
   /** Present when editing an existing row rather than adding a new one. */
   editing,
   initialPartnerType = null,
+  paidTicketsConfigured = true,
   currencySymbol = "€",
 }: {
   open: boolean;
@@ -70,6 +70,11 @@ export default function AddPartnerModal({
   editing?: EventPartnerEntry | null;
   /** The tile that was tapped on the Partners step, when one was. */
   initialPartnerType?: PartnerTypeId | null;
+  /**
+   * False only when the event has tickets and every one of them is free.
+   * Commission per Ticket is then a share of nothing, so it is not offered.
+   */
+  paidTicketsConfigured?: boolean;
   currencySymbol?: string;
 }) {
   const [partnerType, setPartnerType] = useState<PartnerTypeId>("community");
@@ -136,7 +141,15 @@ export default function AddPartnerModal({
   }, [partnerType, editing]);
 
   /** The deals this type may be offered. Financial Sponsorship is a brand's. */
-  const dealOptions = useMemo(() => dealTypesForPartnerType(partnerType), [partnerType]);
+  const dealOptions = useMemo(
+    () => dealTypesForPartnerType(partnerType).filter((deal) =>
+      // An entry already saved on commission keeps its card, so editing it is
+      // possible; it simply cannot be newly chosen on a free event.
+      paidTicketsConfigured
+      || !deal.revenueShareEligible
+      || editing?.dealType === deal.id),
+    [partnerType, paidTicketsConfigured, editing?.dealType],
+  );
 
   // Switching a sponsor to a community leaves Financial Sponsorship selected
   // and its card gone from the list — an entry that cannot be saved with no
@@ -449,9 +462,16 @@ export default function AddPartnerModal({
             {/* Said rather than silently omitted: a deal that was on the list
                 for a sponsor and is not on the list for a community looks like
                 a bug unless the reason is on screen. */}
-            {dealOptions.length < PARTNER_DEAL_TYPES.length && (
-              <p className="mt-2 text-xs text-gray-500" data-testid="text-deal-restriction">
-                {dealRestrictionReason("financial_sponsorship")}
+            {dealOptions.some((deal) => deal.id === "financial_sponsorship")
+              || (
+                <p className="mt-2 text-xs text-gray-500" data-testid="text-deal-restriction">
+                  {dealRestrictionReason("financial_sponsorship")}
+                </p>
+              )}
+            {!paidTicketsConfigured && (
+              <p className="mt-2 text-xs text-gray-500" data-testid="text-no-paid-ticket">
+                Commission per Ticket is not offered: every ticket on this event is
+                free, so there is no ticket revenue to take a share of.
               </p>
             )}
           </div>

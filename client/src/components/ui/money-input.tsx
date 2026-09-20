@@ -34,6 +34,17 @@ export type MoneyInputProps = Omit<
   /** Whole numbers only — a head count or an inventory cap. */
   integer?: boolean;
   allowNegative?: boolean;
+  /**
+   * A currency symbol shown inside the field rather than beside it.
+   *
+   * Every money field used to be a grey box holding "€" sitting next to the
+   * input, which is a second control-sized element per field: a row with a
+   * name, a price and a format had three boxes competing for the same width,
+   * and on a phone the symbol wrapped onto its own line away from the number
+   * it belonged to. In the field it reads as part of the value, which is what
+   * it is.
+   */
+  prefix?: string;
 };
 
 /** What may sit in the box mid-keystroke: "", "-", ".", "0.", "1.5". */
@@ -53,7 +64,7 @@ function toText(value: number | string | null | undefined): string {
 
 export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(
   function MoneyInput(
-    { value, onValueChange, integer = false, allowNegative = false, className, onBlur, onFocus, ...rest },
+    { value, onValueChange, integer = false, allowNegative = false, prefix, className, onBlur, onFocus, ...rest },
     ref,
   ) {
     const [text, setText] = React.useState(() => toText(value));
@@ -68,7 +79,7 @@ export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(
       setText((current) => (Number(current) === Number(incoming) && current !== "" ? current : incoming));
     }, [value, focused]);
 
-    return (
+    const field = (
       <Input
         {...rest}
         ref={ref}
@@ -79,7 +90,7 @@ export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(
         type="text"
         inputMode={integer ? "numeric" : "decimal"}
         value={text}
-        className={cn(className)}
+        className={cn(prefix && "pl-7", className)}
         onFocus={(event) => {
           setFocused(true);
           onFocus?.(event);
@@ -104,6 +115,20 @@ export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(
           onBlur?.(event);
         }}
       />
+    );
+
+    if (!prefix) return field;
+
+    return (
+      <div className="relative">
+        <span
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 dark:text-gray-500"
+          aria-hidden="true"
+        >
+          {prefix}
+        </span>
+        {field}
+      </div>
     );
   },
 );

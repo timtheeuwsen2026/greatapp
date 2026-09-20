@@ -134,3 +134,20 @@ export function summariseTicketRevenue(
     };
   }, { ...EMPTY });
 }
+
+/**
+ * Has the organiser priced anything at all?
+ *
+ * Asked before offering a deal that takes a percentage of ticket revenue. On
+ * an event whose tickets are all Free RSVP there is no ticket revenue to take
+ * a percentage of, so a Revenue Split or a Commission per Ticket is a share of
+ * nothing — offered anyway, it reads as income the event will never produce.
+ *
+ * Deliberately false only once tickets exist: an organiser who has not reached
+ * the Pricing step yet has configured nothing, and hiding a deal type from
+ * them because of that would punish working in a different order.
+ */
+export function hasPaidTicketConfigured(skus: RevenueSkuLike[] | null | undefined): boolean {
+  if (!Array.isArray(skus) || skus.length === 0) return true;
+  return skus.some((sku) => getSkuEntryPrice(sku) > 0);
+}

@@ -81,6 +81,7 @@ import AddPartnerModal from "@/components/AddPartnerModal";
 import VenueDealEditor from "@/components/EventBuilder/VenueDealEditor";
 import {
   brandBarterPerkSource,
+  DEAL_TIERS,
   dealTierGlyph,
   dealTierLabel,
   deriveLegacyPromotionFields,
@@ -120,13 +121,18 @@ import {
   validateExperienceDealTerms,
 } from "@shared/dealTermGuards";
 import { getTicketAddon, isAddonEnabled, normalizeAddonMarginMode } from "@shared/ticketAddons";
-import { calculateEventEconomics } from "@shared/eventEconomics";
+import {
+  calculateEventEconomics,
+  economicsAsFreeRsvp,
+  findBreakEvenAttendance,
+} from "@shared/eventEconomics";
 import { usePlatformFee } from "@/hooks/usePlatformFee";
 import { findDealConflicts, getDealConflictReason } from "@shared/dealExclusions";
 import { getPerkApprovalMessage, getPerkApprovalState } from "@shared/perkApproval";
 import {
   getSkuCapacity,
   getSkuEntryPrice,
+  hasPaidTicketConfigured,
   summariseTicketRevenue,
 } from "@shared/ticketRevenue";
 import {
@@ -340,8 +346,14 @@ const eventBuilderSchema = z.object({
     addonCatalogItemId: z.string().optional(),
     /** Path B: heads the organiser expects to want this, when no price exists yet. */
     addonExpectedDemand: z.number().min(0).optional(),
+    // Superseded by addonGroupRate + addonChargeAmount, kept so a ticket saved
+    // under the old vocabulary still loads and still prices correctly.
     addonMargin: z.number().min(0).optional(),
     addonMarginMode: z.enum(["additive", "deduction"]).optional(),
+    /** What the venue charges the organiser — agreed per invite, never published. */
+    addonGroupRate: z.number().min(0).optional(),
+    /** What the participant is charged. The one number the organiser decides. */
+    addonChargeAmount: z.number().min(0).optional(),
     addonInventory: z.number().min(0).optional(),
     depositPerPerson: z.number().min(0, "Deposit cannot be negative"),
     ticketCapacity: z.number().int().min(1, "Capacity must be at least 1"),
@@ -447,6 +459,24 @@ type EventBuilderData = z.infer<typeof eventBuilderSchema>;
 const DATES_STEP_ID = 3;
 const VENUE_STEP_ID = 4;
 const PARTNERS_STEP_ID = 8;
+
+/**
+ * Paid, pay-what-you-want, free. Three, and they fit on one row — which is why
+ * the dropdown went: an organiser had to open it to discover that free RSVP
+ * was even an option.
+ */
+/** The three groups the Grand Total Calculator prints its rows under. */
+const CALCULATOR_TIERS = [
+  { id: 'per_unit', label: '↕ Per-unit' },
+  { id: 'flat', label: '€ Flat' },
+  { id: 'addon', label: 'Add-on' },
+] as const;
+
+const TICKET_FORMATS = [
+  { value: 'fixed', label: 'Paid' },
+  { value: 'pwyw', label: 'PWYW' },
+  { value: 'free_rsvp', label: 'Free' },
+] as const;
 
 const ALL_STEPS = [
   { id: 1, title: "Basic Info", icon: Info, description: "Title, description, and category" },
@@ -5078,6 +5108,11 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
 
   const perkSource = brandBarterPerkSource(partners);
   const ticketPartners = revenueSharePartners(partners);
+  // Point 42: on an event whose tickets are all Free RSVP, a percentage of
+  // ticket revenue is a percentage of nothing. Nothing is hidden before any
+  // ticket exists — an organiser working Partners before Pricing has not said
+  // the event is free, only that they have not priced it yet.
+  const paidTicketsConfigured = hasPaidTicketConfigured(form.watch('ticketSkus'));
 
   // ── The venue, as a partner row ──────────────────────────────────────────
   // It was the only party edited somewhere else. Its operational fields still
@@ -5338,6 +5373,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
                   currencySymbol={currencySymbol}
                   isDaytime={isDaytimeDeal}
                   manualDealUnlocked={manualDealUnlocked}
+                  paidTicketsConfigured={paidTicketsConfigured}
                   mode={venueDealMode === 'target' ? 'target' : 'settled'}
                 />
               </div>
@@ -5725,6 +5761,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
         onSave={savePartner}
         editing={editingPartner}
         initialPartnerType={presetType}
+        paidTicketsConfigured={paidTicketsConfigured}
         currencySymbol={currencySymbol}
       />
     </div>
@@ -5883,6 +5920,11 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
   // same list and each event length receives only compatible on-platform deals.
   const dealCurrencySymbol =
     CURRENCY_CONFIG[String(form.watch('currency') || 'eur').toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€';
+  // Every money field on this step prints the symbol inside itself now, so it
+  // is read off one place rather than re-derived beside each input.
+  const currencySymbol = currency
+    ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol || '€'
+    : '€';
   const isDaytimeDeal = !isMultiDayEvent;
 
   const targetDealOptions = useMemo(
@@ -6324,6 +6366,78 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     );
   };
 
+  /**
+   * The Commercial Model's cards, grouped by how each deal settles.
+   *
+   * Assembled here rather than in the markup so the venue and the partners are
+   * described by the same three fields — who, what they bring, what the terms
+   * are — instead of by two nearly-identical blocks that drifted apart.
+   */
+  const pricingTierGroups = useMemo(() => {
+    type TierEntry = {
+      key: string;
+      title: string;
+      brings: string;
+      terms: string;
+      pullsFromTickets: boolean;
+      partner?: EventPartnerEntry;
+    };
+    const groups: Record<DealTier, TierEntry[]> = { per_unit: [], flat: [], barter: [] };
+
+    if (venueDealContext !== "external" && activeVenueDeal) {
+      const pulls = activeVenueDeal === "revenue_share"
+        || activeVenueDeal === "commitment_plus_revenue_share";
+      groups[venueDealTierOf(activeVenueDeal)].push({
+        key: "venue",
+        title: "Venue",
+        brings: isMultiDayEvent ? "the location" : "the space",
+        terms: summariseVenueDeal({
+          model: activeVenueDeal,
+          mode: (venueDealContext === "open" || venueDealContext === "invited") ? "target" : "settled",
+          currencySymbol: dealCurrencySymbol,
+          revenueSharePct: venueRevenueSharePct,
+          fixedFee: venueFixedFee,
+          perHeadAmount: venuePerHeadAmount,
+          perRoomPerNight: venuePerRoomPerNight,
+          commitmentFee: form.watch('venueCommitmentFee'),
+          barterTerms: form.watch('venueBarterTerms'),
+          targetValue: venueTargetDealValue,
+        }),
+        pullsFromTickets: pulls,
+      });
+    }
+
+    for (const partner of pricingPartners) {
+      groups[partnerDealTier(partner)].push({
+        key: partner.id,
+        title: `${partnerTypeLabel(partner.partnerType)} — ${partner.name}`,
+        brings: partnerBringsLine(partner),
+        terms: partnerTermSummary(partner, dealCurrencySymbol),
+        pullsFromTickets: revenueShareEligible(partner.dealType),
+        partner,
+      });
+    }
+
+    return groups;
+  }, [
+    pricingPartners, activeVenueDeal, venueDealContext, isMultiDayEvent, dealCurrencySymbol,
+    venueRevenueSharePct, venueFixedFee, venuePerHeadAmount, venuePerRoomPerNight,
+    venueTargetDealValue, form.watch('venueCommitmentFee'), form.watch('venueBarterTerms'),
+  ]);
+
+  /**
+   * Is there anything in the Commercial Model to look at?
+   *
+   * A venue deal on its own counts. With neither a venue deal nor a partner,
+   * the section is the platform fee and nothing else, and it says so rather
+   * than rendering an empty grid.
+   */
+  const hasCommercialModel = pricingPartners.length > 0
+    || (venueDealContext !== "external" && !!activeVenueDeal);
+
+  /** Point 42: a share of ticket revenue means nothing on a Free-RSVP event. */
+  const hasPaidTicket = hasPaidTicketConfigured(ticketSkus);
+
   const isCommissionPromotion = participantReferralDealType === 'commission_per_ticket';
   // Add-on money splits two ways: the venue's own price for the item, and the
   // organiser's flat margin. The margin is the organiser's earnings, so it
@@ -6335,7 +6449,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
   // One breakdown, whose total is the sum of the rows it hands back. The rows
   // used to be assembled in the markup and the total in an expression beside
   // them, and the two drifted: four rows adding to $55 over a total of -$30.
-  const economics = calculateEventEconomics({
+  const economicsInput = {
     ticketGross: totalRevenue,
     paidTickets: chargeableCapacity,
     platformPct,
@@ -6360,8 +6474,27 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     // worked out somewhere else entirely, which is how a creator could read a
     // net that ignored it.
     partnerShares: partnerShareRows,
-  });
-  const estimatedCreatorNet = economics.net;
+  };
+  const economics = calculateEventEconomics(economicsInput);
+
+  // ── The three questions the calculator answers ──────────────────────────
+  // Preview, comparison and break-even used to be separate ideas an organiser
+  // had to hold in their head at once. They are the same arithmetic asked
+  // three ways, so they come from the same input.
+  const [calculatorMode, setCalculatorMode] = useState<'paid' | 'free'>('paid');
+  const calculatorCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : effectiveCapacity;
+  const freeRsvpEconomics = useMemo(
+    () => economicsAsFreeRsvp(economicsInput, calculatorCapacity, calculatorCapacity),
+    [economicsInput, calculatorCapacity],
+  );
+  const shownEconomics = calculatorMode === 'free' ? freeRsvpEconomics : economics;
+  const breakEvenAttendance = useMemo(
+    () => findBreakEvenAttendance(
+      calculatorMode === 'free' ? { ...economicsInput, ticketGross: 0, paidTickets: 0 } : economicsInput,
+      calculatorCapacity,
+    ),
+    [economicsInput, calculatorCapacity, calculatorMode],
+  );
 
   // The existing rule, extended to every party rather than just the venue:
   // everyone's share plus the platform fee has to leave something behind.
@@ -6580,44 +6713,63 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                           </div>
                         )}
 
-                        {/* Ticket Format selector */}
-                        <div>
-                          <Label htmlFor={`sku-format-${sku.id}`}>Ticket Format</Label>
-                          <Select
-                            value={sku.pricingMode || 'fixed'}
-                            onValueChange={(val) => updateTicketFormat(sku.id, val)}
-                          >
-                            <SelectTrigger id={`sku-format-${sku.id}`} data-testid={`select-ticket-format-${index}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="fixed">Paid Ticket</SelectItem>
-                              <SelectItem value="free_rsvp">Free RSVP</SelectItem>
-                              <SelectItem value="pwyw">Pay-What-You-Want</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        {/* Paid Ticket: single price */}
-                        {(!sku.pricingMode || sku.pricingMode === 'fixed') && (
-                          <div>
-                            <Label htmlFor={`sku-price-${sku.id}`}>Price Per Person *</Label>
-                            <div className="flex gap-2">
-                              <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
-                              </span>
+                        {/* Format and price, side by side.
+                            Three choices fit on one row, so a dropdown that
+                            has to be opened before the other two can even be
+                            read was hiding the decision rather than asking it.
+                            Point 45. */}
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {/* Paid Ticket: single price. Currency sits inside the
+                              field rather than in a grey box beside it —
+                              point 44. */}
+                          {(!sku.pricingMode || sku.pricingMode === 'fixed') && (
+                            <div>
+                              <Label htmlFor={`sku-price-${sku.id}`}>Price *</Label>
                               <MoneyInput
                                 id={`sku-price-${sku.id}`}
+                                prefix={currencySymbol}
                                 value={sku.pricePerPerson || ''}
                                 onValueChange={(amount) => updateTicketSku(sku.id, 'pricePerPerson', amount ?? 0)}
                                 placeholder="0.00"
                                 disabled={!currency}
                                 data-testid={`input-ticket-price-${index}`}
-                                className="flex-1"
                               />
                             </div>
+                          )}
+
+                          <div className={cn(sku.pricingMode && sku.pricingMode !== 'fixed' && "sm:col-span-2")}>
+                            <Label htmlFor={`sku-format-${sku.id}`}>Format</Label>
+                            <div
+                              id={`sku-format-${sku.id}`}
+                              role="radiogroup"
+                              aria-label="Ticket format"
+                              className="mt-1 inline-flex rounded-full bg-gray-100 p-1 dark:bg-gray-900"
+                              data-testid={`select-ticket-format-${index}`}
+                            >
+                              {TICKET_FORMATS.map((format) => {
+                                const active = (sku.pricingMode || 'fixed') === format.value;
+                                return (
+                                  <button
+                                    key={format.value}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={active}
+                                    onClick={() => updateTicketFormat(sku.id, format.value)}
+                                    className={cn(
+                                      "rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors",
+                                      active
+                                        ? "bg-indigo-600 text-white"
+                                        : "text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white",
+                                    )}
+                                    data-testid={`ticket-format-${format.value}-${index}`}
+                                  >
+                                    {format.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
-                        )}
+                        </div>
 
                         {/* Free RSVP: price locked at $0 */}
                         {sku.pricingMode === 'free_rsvp' && (
@@ -6726,7 +6878,18 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                       if (!item) return;
                                       updateTicketSku(sku.id, 'addonCatalogItemId', item.id);
                                       updateTicketSku(sku.id, 'addonName', item.name);
-                                      updateTicketSku(sku.id, 'addonVenuePrice', Number(item.venuePrice) || 0);
+                                      const venuePrice = Number(item.venuePrice) || 0;
+                                      updateTicketSku(sku.id, 'addonVenuePrice', venuePrice);
+                                      // Point 34: picking an item used to fill
+                                      // the name and leave every price blank,
+                                      // so the organiser saw a margin of minus
+                                      // the whole item. The venue's published
+                                      // group rate is taken where it has one,
+                                      // and the charge opens at the counter
+                                      // price — the highest it can sensibly be.
+                                      const groupRate = Number(item.groupRate ?? item.group_rate) || 0;
+                                      updateTicketSku(sku.id, 'addonGroupRate', groupRate > 0 ? groupRate : 0);
+                                      updateTicketSku(sku.id, 'addonChargeAmount', venuePrice);
                                     }}
                                   >
                                     <SelectTrigger
@@ -6809,76 +6972,70 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                 </div>
                               )}
 
-                              <div className="grid grid-cols-2 gap-3">
+                              {/* ── What it costs, and what you charge ─────
+                                  Three numbers, and only one of them is a
+                                  decision. The venue price is what a
+                                  participant would pay at the bar; the group
+                                  rate is what the venue actually charges for a
+                                  booked group; the charge is what the
+                                  organiser sets. The margin is the difference,
+                                  and it is shown rather than entered — an
+                                  organiser used to enter a margin and a
+                                  direction for it to travel in and then work
+                                  backwards to what the participant would see.
+                                  Point 46. */}
+                              <div className="grid gap-3 sm:grid-cols-2">
                                 <div>
                                   <Label htmlFor={`sku-addon-venue-price-${sku.id}`}>Venue price</Label>
-                                  <div className="flex gap-2">
-                                    <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
-                                    </span>
-                                    <MoneyInput
-                                      id={`sku-addon-venue-price-${sku.id}`}
-                                      value={sku.addonVenuePrice ?? (sku.addonPrice ?? '')}
-                                      onValueChange={(amount) => updateTicketSku(sku.id, 'addonVenuePrice', amount ?? 0)}
-                                      placeholder="0.00"
-                                      disabled={!currency}
-                                      data-testid={`input-ticket-addon-venue-price-${index}`}
-                                      className="flex-1"
-                                    />
-                                  </div>
-                                  <p className="mt-1 text-xs text-gray-500">What the venue charges you</p>
+                                  <MoneyInput
+                                    id={`sku-addon-venue-price-${sku.id}`}
+                                    prefix={currencySymbol}
+                                    value={sku.addonVenuePrice ?? (sku.addonPrice ?? '')}
+                                    onValueChange={(amount) => updateTicketSku(sku.id, 'addonVenuePrice', amount ?? 0)}
+                                    placeholder="0.00"
+                                    disabled={!currency}
+                                    data-testid={`input-ticket-addon-venue-price-${index}`}
+                                  />
+                                  <p className="mt-1 text-xs text-gray-500">
+                                    What a participant would pay at the counter
+                                  </p>
                                 </div>
                                 <div>
-                                  <Label htmlFor={`sku-addon-margin-${sku.id}`}>Your margin</Label>
-                                  <div className="flex gap-2">
-                                    <span className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border rounded-md text-sm">
-                                      {currency ? CURRENCY_CONFIG[String(currency).toLowerCase() as keyof typeof CURRENCY_CONFIG]?.symbol : '$'}
-                                    </span>
-                                    <MoneyInput
-                                      id={`sku-addon-margin-${sku.id}`}
-                                      value={sku.addonMargin ?? ''}
-                                      onValueChange={(amount) => updateTicketSku(sku.id, 'addonMargin', amount ?? 0)}
-                                      placeholder="0.00"
-                                      disabled={!currency}
-                                      data-testid={`input-ticket-addon-margin-${index}`}
-                                      className="flex-1"
-                                    />
-                                  </div>
-                                  {/* Flat, never a percentage: the venue price is
-                                      usually already a thin collab rate, and a
-                                      percentage would cut into it. */}
-                                  <p className="mt-1 text-xs text-gray-500">A flat amount, not a %</p>
+                                  <Label htmlFor={`sku-addon-group-rate-${sku.id}`}>
+                                    Group rate <span className="text-gray-400">(cost)</span>
+                                  </Label>
+                                  <MoneyInput
+                                    id={`sku-addon-group-rate-${sku.id}`}
+                                    prefix={currencySymbol}
+                                    value={sku.addonGroupRate ?? ''}
+                                    onValueChange={(amount) => updateTicketSku(sku.id, 'addonGroupRate', amount ?? 0)}
+                                    placeholder="Same as venue price"
+                                    disabled={!currency}
+                                    data-testid={`input-ticket-addon-group-rate-${index}`}
+                                  />
+                                  {/* Never pre-set on a venue's profile: it
+                                      depends on the size and the date, so it is
+                                      agreed per invite in the dealroom. */}
+                                  <p className="mt-1 text-xs text-gray-500">
+                                    What the venue charges you, agreed in the dealroom
+                                  </p>
                                 </div>
                               </div>
 
-                              {/* Which way the margin travels — set per add-on,
-                                  never once for the whole platform. A €5 coffee
-                                  the venue sells for €5 at its own counter has
-                                  to show as €5 here, or the participant is
-                                  better off walking up to the bar and the
-                                  add-on had no reason to exist in-platform. */}
                               <div>
-                                <Label htmlFor={`sku-addon-margin-mode-${sku.id}`}>Where your margin comes from</Label>
-                                <Select
-                                  value={normalizeAddonMarginMode(sku.addonMarginMode)}
-                                  onValueChange={(value) => updateTicketSku(sku.id, 'addonMarginMode', value)}
-                                >
-                                  <SelectTrigger
-                                    id={`sku-addon-margin-mode-${sku.id}`}
-                                    data-testid={`select-ticket-addon-margin-mode-${index}`}
-                                  >
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="additive">On top — participant pays venue price + your margin</SelectItem>
-                                    <SelectItem value="deduction">Deducted — participant pays the venue price, margin comes out of the venue's cut</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                                <p className="mt-1 text-xs text-gray-500">
-                                  {normalizeAddonMarginMode(sku.addonMarginMode) === 'deduction'
-                                    ? "The participant is charged exactly what the venue charges at its counter — nothing is added on top."
-                                    : "Keep the total at or below what the venue charges at its own counter, or buying direct is cheaper than buying here."}
-                                </p>
+                                <Label htmlFor={`sku-addon-charge-${sku.id}`}>
+                                  You charge participants
+                                </Label>
+                                <MoneyInput
+                                  id={`sku-addon-charge-${sku.id}`}
+                                  prefix={currencySymbol}
+                                  className="max-w-[160px] border-indigo-300 bg-indigo-50 font-medium text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100"
+                                  value={sku.addonChargeAmount ?? ''}
+                                  onValueChange={(amount) => updateTicketSku(sku.id, 'addonChargeAmount', amount ?? 0)}
+                                  placeholder="0.00"
+                                  disabled={!currency}
+                                  data-testid={`input-ticket-addon-charge-${index}`}
+                                />
                               </div>
 
                               <div>
@@ -6898,68 +7055,79 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                 </p>
                               </div>
 
-                              {/* The whole point of a flat margin: the split is
-                                  visible the moment both numbers are entered. */}
+                              {/* The margin, shown rather than entered. */}
                               {(() => {
                                 const addon = getTicketAddon({ ...sku, addonEnabled: true });
                                 if (!addon) return null;
 
-                                // `getTicketAddon` clamps a deductive margin to
-                                // the venue's price so a half-typed number never
-                                // shows the venue a negative cut. That clamp is
-                                // right for the arithmetic and wrong to render
-                                // as a result: a €6 margin on a €4 coffee was
-                                // displayed as "You earn €4.00" beside a warning
-                                // saying those terms cannot work. Two components
-                                // describing one input differently, and the
-                                // friendlier one is the one that gets believed.
-                                //
-                                // So when the entered margin is over the limit,
-                                // this says so instead of quietly showing the
-                                // clamped figure.
-                                const enteredMargin = Number(sku.addonMargin) || 0;
-                                const marginOverLimit = addon.marginMode === 'deduction'
-                                  && enteredMargin > addon.venuePrice + 0.005;
-
-                                if (marginOverLimit) {
-                                  return (
-                                    <div
-                                      className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100"
-                                      data-testid={`ticket-addon-breakdown-${index}`}
-                                    >
-                                      <strong className="block">No split to show yet</strong>
-                                      <p className="mt-1 text-xs">
-                                        A {formatPriceByCurrency(enteredMargin, currency)} margin cannot come
-                                        out of the venue's {formatPriceByCurrency(addon.venuePrice, currency)}.
-                                        Fix the numbers above and the breakdown appears here.
-                                      </p>
-                                    </div>
-                                  );
-                                }
+                                const belowCost = addon.creatorAmount < -0.005;
 
                                 return (
-                                  <div
-                                    className="rounded-md bg-green-50 p-3 text-sm dark:bg-green-950"
-                                    data-testid={`ticket-addon-breakdown-${index}`}
-                                  >
-                                    <div className="flex justify-between text-gray-700 dark:text-gray-300">
-                                      <span>Participant pays</span>
-                                      <span className="font-semibold">{formatPriceByCurrency(addon.unitPrice, currency)}</span>
+                                  <div className="space-y-2" data-testid={`ticket-addon-breakdown-${index}`}>
+                                    <div className={cn(
+                                      "flex items-center justify-between rounded-md p-3",
+                                      belowCost
+                                        ? "bg-red-50 dark:bg-red-950"
+                                        : "bg-gray-50 dark:bg-gray-900/50",
+                                    )}>
+                                      <span className="text-sm text-gray-600 dark:text-gray-300">Your margin</span>
+                                      <span className={cn(
+                                        "text-sm font-semibold",
+                                        belowCost
+                                          ? "text-red-700 dark:text-red-300"
+                                          : "text-green-700 dark:text-green-400",
+                                      )}>
+                                        {formatPriceByCurrency(addon.creatorAmount, currency)} / unit
+                                      </span>
                                     </div>
-                                    <div className="mt-1 flex justify-between text-xs text-gray-600 dark:text-gray-400">
-                                      <span>Venue keeps</span>
-                                      <span>{formatPriceByCurrency(addon.venueAmount, currency)}</span>
-                                    </div>
-                                    <div className="flex justify-between text-xs font-medium text-green-700 dark:text-green-400">
-                                      <span>You earn</span>
-                                      <span>{formatPriceByCurrency(addon.creatorAmount, currency)}</span>
-                                    </div>
-                                    <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
-                                      {addon.marginMode === 'deduction'
-                                        ? `Your ${formatPriceByCurrency(addon.creatorAmount, currency)} comes out of the venue's `
-                                          + `${formatPriceByCurrency(addon.venuePrice, currency)}, so the participant pays the venue's own price.`
-                                        : `Added on top of the venue's ${formatPriceByCurrency(addon.venuePrice, currency)}.`}
-                                      {' '}Calculated separately from your venue commercial deal.
+
+                                    {belowCost && (
+                                      <p className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
+                                        You are charging less than the venue charges you, so every one
+                                        sold costs you money. Raise the charge, or negotiate a lower
+                                        group rate on the Partners step.
+                                      </p>
+                                    )}
+
+                                    {/* The one thing that makes an in-platform
+                                        add-on pointless: charging more than the
+                                        bar does for the same coffee. */}
+                                    {addon.aboveCounterPrice && !belowCost && (
+                                      <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                                        This is above the venue's own counter price of{' '}
+                                        {formatPriceByCurrency(addon.venuePrice, currency)} — a participant
+                                        is better off walking up to the bar, and the add-on had no reason
+                                        to exist here.
+                                      </p>
+                                    )}
+
+                                    <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-400">
+                                      Bundled into the ticket price instead? The margin uses the group
+                                      rate as its cost basis either way — one clean price, no visible
+                                      per-item markup.
+                                    </p>
+
+                                    {/* A margin on a coffee is a margin on a
+                                        coffee. An organiser who needs the event
+                                        to make money is looking at the wrong
+                                        lever, and this is where they are
+                                        standing when they realise it. */}
+                                    <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-400">
+                                      Looking for real income rather than a small margin? Negotiate a
+                                      Commitment Fee with the venue on the{' '}
+                                      <button
+                                        type="button"
+                                        className="font-medium underline underline-offset-2"
+                                        onClick={() => goToStep?.(PARTNERS_STEP_ID)}
+                                        data-testid={`link-addon-commitment-fee-${index}`}
+                                      >
+                                        Partners step
+                                      </button>.
+                                    </p>
+
+                                    <p className="text-xs text-gray-500">
+                                      Venue is paid {formatPriceByCurrency(addon.venueAmount, currency)} per
+                                      unit, directly. Calculated separately from your venue commercial deal.
                                     </p>
                                   </div>
                                 );
@@ -7101,107 +7269,118 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
               )}
             </div>
             {/* ── Target deal per partner ──────────────────────────────────
-                Only renders a card for a partner actually added in the Partners
-                step. An event with no partners shows nothing here — not four
-                greyed-out placeholders for Venue / Community / Sponsor /
-                Affiliate implying something is missing. That was the whole
-                complaint about the earlier mock: it made a one-deal event look
-                half-finished. */}
-            {pricingPartners.length > 0 && (
+                Only renders a card for a party actually on the event. One with
+                none shows nothing here — not five greyed-out placeholders for
+                Venue / Community / Sponsor / Service Provider / Affiliate
+                implying something is missing, which is what made a one-deal
+                event look half-finished. */}
+            {hasCommercialModel && (
               <div className="rounded-lg border p-4" data-testid="partner-deal-grid">
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">
                   Target deal per partner
                 </p>
                 <p className="mt-1 text-xs text-gray-500">
-                  Every partner carries a target deal. Only Revenue Split /
-                  Commission per Ticket pulls from the ticket revenue below —
-                  barter and flat-fee partners settle separately.
+                  {hasPaidTicket
+                    ? "Only Revenue Split / Commission per Ticket pulls from the ticket revenue below — barter and flat-fee partners settle separately."
+                    /* Point 42: with nothing priced, a percentage of ticket
+                       revenue is a percentage of nothing, and saying so is more
+                       use than showing the field and letting the organiser
+                       wonder why the total never moves. */
+                    : "This event has no paid ticket, so nothing here can take a share of ticket revenue — every deal below settles outside ticket sales."}
                 </p>
 
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {/* The venue is a party to the waterfall like any other, so
-                      once this grid is on screen it belongs in it. Read-only
-                      here: its percentage and its deal model are set in the
-                      Commercial Model fields below, which is also where its
-                      benchmarks and payout-cap warning live. */}
-                  {venueDealContext !== "external" && activeVenueDeal && (
-                    <div
-                      className={cn(
-                        "rounded-lg border p-3",
-                        activeVenueDeal === "revenue_share" || activeVenueDeal === "commitment_plus_revenue_share"
-                          ? "border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40"
-                          : "opacity-70",
-                      )}
-                      data-testid="pricing-partner-card-venue"
-                    >
-                      <p className="text-xs font-semibold text-gray-900 dark:text-white">Venue</p>
-                      <p className="text-xs text-gray-600 dark:text-gray-300">
-                        {getVenueDealLabel(activeVenueDeal, dealCurrencySymbol)} —{' '}
-                        {activeVenueDeal === "revenue_share" || activeVenueDeal === "commitment_plus_revenue_share"
-                          ? `${activeRevenueSharePct || 0}% of ticket revenue`
-                          : "set below"}
+                {/* ── Grouped by how each deal settles ──────────────────
+                    This IS a grid, unlike the Partners-step rows, and that
+                    is exactly why the grouping matters: "15%", "€100" and
+                    "product for exposure" sitting side by side in a
+                    two-column layout read as three comparable numbers, and
+                    cards of wildly different shapes sit jaggedly beside
+                    each other. Grouped by tier they are comparable within
+                    a group and never compared across one. Point 47. */}
+                {DEAL_TIERS.map((tier) => {
+                  const entries = pricingTierGroups[tier.id];
+                  if (!entries.length) return null;
+                  return (
+                    <div key={tier.id} className="mt-3" data-testid={`pricing-tier-${tier.id}`}>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                        {tier.glyph} {tier.label}
                       </p>
-                    </div>
-                  )}
-                  {pricingPartners.map((partner) => {
-                    const pullsFromTickets = revenueShareEligible(partner.dealType);
-                    return (
-                      <div
-                        key={partner.id}
-                        className={cn(
-                          "rounded-lg border p-3",
-                          pullsFromTickets
-                            ? "border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40"
-                            : "opacity-70",
-                        )}
-                        data-testid={`pricing-partner-card-${partner.id}`}
-                      >
-                        <p className={cn(
-                          "text-xs font-semibold",
-                          pullsFromTickets
-                            ? "text-indigo-900 dark:text-indigo-100"
-                            : "text-gray-900 dark:text-white",
-                        )}>
-                          {partnerTypeLabel(partner.partnerType)} — {partner.name}
-                        </p>
-                        <p className={cn(
-                          "text-xs",
-                          pullsFromTickets
-                            ? "text-indigo-800 dark:text-indigo-200"
-                            : "text-gray-500",
-                        )}>
-                          {partnerDealLabel(partner.dealType)} —{' '}
-                          {pullsFromTickets ? "pulls from tickets" : "settled outside tickets"}
-                        </p>
+                      <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {entries.map((entry) => (
+                          <div
+                            key={entry.key}
+                            className={cn(
+                              "rounded-lg border p-3",
+                              entry.pullsFromTickets
+                                ? "border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40"
+                                : "opacity-70",
+                            )}
+                            data-testid={`pricing-partner-card-${entry.key}`}
+                          >
+                            <p className={cn(
+                              "text-xs font-semibold",
+                              entry.pullsFromTickets
+                                ? "text-indigo-900 dark:text-indigo-100"
+                                : "text-gray-900 dark:text-white",
+                            )}>
+                              {entry.title}
+                            </p>
+                            <p className="text-xs text-gray-600 dark:text-gray-300">
+                              Brings: {entry.brings}
+                            </p>
+                            <p className={cn(
+                              "text-xs",
+                              entry.pullsFromTickets
+                                ? "text-indigo-800 dark:text-indigo-200"
+                                : "text-gray-500",
+                            )}>
+                              {entry.terms}
+                            </p>
 
-                        {/* One percentage field per ticket-revenue partner,
-                            editable here so the organiser sets every number
-                            that moves the total in one place. */}
-                        {pullsFromTickets && (
-                          <div className="mt-2 flex items-center gap-2">
-                            <Input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.5"
-                              aria-label={`${partner.name} share of ticket revenue`}
-                              value={partner.terms?.commissionPct ?? ''}
-                              onChange={(e) => setPartnerSharePct(
-                                partner.id,
-                                e.target.value ? parseFloat(e.target.value) : 0,
-                              )}
-                              className="h-8 max-w-[90px]"
-                              data-testid={`input-partner-share-${partner.id}`}
-                            />
-                            <span className="text-xs text-indigo-900 dark:text-indigo-100">
-                              % of ticket revenue
-                            </span>
+                            {/* One percentage field per ticket-revenue
+                                partner, editable here so the organiser sets
+                                every number that moves the total in one
+                                place. The venue's own number is not among
+                                them: it is set on Partners now, with the
+                                rest of its deal. */}
+                            {entry.partner && entry.pullsFromTickets && hasPaidTicket && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.5"
+                                  aria-label={`${entry.partner.name} share of ticket revenue`}
+                                  value={entry.partner.terms?.commissionPct ?? ''}
+                                  onChange={(e) => setPartnerSharePct(
+                                    entry.partner!.id,
+                                    e.target.value ? parseFloat(e.target.value) : 0,
+                                  )}
+                                  className="h-8 max-w-[90px]"
+                                  data-testid={`input-partner-share-${entry.partner.id}`}
+                                />
+                                <span className="text-xs text-indigo-900 dark:text-indigo-100">
+                                  % of ticket revenue
+                                </span>
+                              </div>
+                            )}
+
+                            {entry.key === 'venue' && (
+                              <button
+                                type="button"
+                                className="mt-2 text-xs font-medium text-indigo-600 underline underline-offset-2 dark:text-indigo-400"
+                                onClick={() => goToStep?.(PARTNERS_STEP_ID)}
+                                data-testid="link-venue-card-edit-on-partners"
+                              >
+                                Edit on Partners ›
+                              </button>
+                            )}
                           </div>
-                        )}
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })}
 
                 {/* The existing under-100% rule, applied to everyone rather
                     than to the venue alone. A deal that cannot be paid is worth
@@ -7224,7 +7403,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                 Commercial Model is just the platform fee — and says so, instead
                 of leaving an empty revenue-share row the organiser wonders
                 about. */}
-            {pricingPartners.length > 0 && ticketRevenuePartners.length === 0
+            {hasCommercialModel && ticketRevenuePartners.length === 0
               && venueCompensationModel !== "revenue_share"
               && venueCompensationModel !== "commitment_plus_revenue_share" && (
               <p
@@ -7353,40 +7532,94 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                   : "Venue compensation is negotiated separately from the 15% platform infrastructure fee."}
             </p>
 
-            {/* Estimated grand total calculation */}
-            {/* Every row below comes out of the same breakdown the total does,
-                and the total is defined as their sum. A row the calculator
-                shows can never fail to move the figure underneath it. */}
+            {/* ── One calculator ────────────────────────────────────────────
+                Preview, comparison and break-even were three separate things
+                an organiser had to assemble in their head. They are the same
+                arithmetic asked three ways, so they are one panel: what this
+                event nets, how many people it takes to stop losing money, and
+                what the same event would net with free entry instead.
+                Point 48.
+
+                Every row comes out of the same breakdown the total does, and
+                the total is defined as their sum — a row the calculator shows
+                can never fail to move the figure underneath it. */}
             <div className="bg-green-50 dark:bg-green-950 p-4 rounded-lg">
-              <div className="flex items-baseline justify-between gap-2 mb-1">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
                 <h4 className="font-medium text-green-900 dark:text-green-100">Estimated Grand Total Calculator</h4>
+                {/* Only offered where it means something: an event with no
+                    paid ticket is already the free case. */}
+                {hasPaidTicket && (
+                  <div
+                    role="radiogroup"
+                    aria-label="Ticket policy to preview"
+                    className="inline-flex rounded-full bg-white/70 p-1 dark:bg-black/30"
+                  >
+                    {([
+                      { value: 'paid' as const, label: 'Paid' },
+                      { value: 'free' as const, label: 'Free RSVP' },
+                    ]).map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={calculatorMode === option.value}
+                        onClick={() => setCalculatorMode(option.value)}
+                        className={cn(
+                          "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                          calculatorMode === option.value
+                            ? "bg-indigo-600 text-white"
+                            : "text-green-900 dark:text-green-100",
+                        )}
+                        data-testid={`calculator-mode-${option.value}`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               {/* Every figure here assumes the event sells out and everyone
                   takes the add-on. Read as a committed number it is a promise
                   the event has not made. */}
               <p className="text-xs text-green-800/80 dark:text-green-200/80 mb-2" data-testid="text-revenue-potential-caveat">
-                Potential at full capacity{addOnCreatorMargin > 0 || addOnVenueRevenue > 0 ? " and full add-on uptake" : ""} — not a guarantee.
+                {calculatorMode === 'free'
+                  ? 'The same event with free entry, at full capacity and full add-on uptake.'
+                  : `Potential at full capacity${addOnCreatorMargin > 0 || addOnVenueRevenue > 0 ? " and full add-on uptake" : ""} — not a guarantee.`}
               </p>
               <div className="text-sm space-y-1">
-                {economics.lines.map((line) => (
-                  <div className="flex justify-between" key={line.key} data-testid={`text-economics-${line.key}`}>
-                    <span>{line.label}</span>
-                    <span
-                      className={
-                        line.kind === "gross"
-                          ? "font-medium"
-                          : line.amount > 0
-                            ? "text-green-600 font-medium"
-                            : line.amount < 0
-                              ? (line.kind === "promotion" ? "text-amber-600" : "text-red-600")
-                              : ""
-                      }
-                    >
-                      {line.kind === "gross" ? "" : line.amount > 0 ? "+" : line.amount < 0 ? "-" : ""}
-                      {formatPriceByCurrency(Math.abs(line.amount), currency)}
-                    </span>
-                  </div>
-                ))}
+                {/* Grouped the same three ways the Commercial Model is, so a
+                    percentage and a flat fee are never read as one column of
+                    comparable numbers. */}
+                {CALCULATOR_TIERS.map((tier) => {
+                  const rows = shownEconomics.lines.filter((line) => line.tier === tier.id);
+                  if (!rows.length) return null;
+                  return (
+                    <div key={tier.id} data-testid={`economics-tier-${tier.id}`}>
+                      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-green-800/60 dark:text-green-200/50">
+                        {tier.label}
+                      </p>
+                      {rows.map((line) => (
+                        <div className="flex justify-between" key={line.key} data-testid={`text-economics-${line.key}`}>
+                          <span>{line.label}</span>
+                          <span
+                            className={
+                              line.kind === "gross"
+                                ? "font-medium"
+                                : line.amount > 0
+                                  ? "text-green-600 font-medium"
+                                  : line.amount < 0
+                                    ? (line.kind === "promotion" ? "text-amber-600" : "text-red-600")
+                                    : ""
+                            }
+                          >
+                            {line.kind === "gross" ? "" : line.amount > 0 ? "+" : line.amount < 0 ? "-" : ""}
+                            {formatPriceByCurrency(Math.abs(line.amount), currency)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
 
                 {revenueSummary.hasFreeTickets && (
                   <p className="text-xs text-gray-500" data-testid="text-free-tickets-note">
@@ -7410,11 +7643,70 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                 )}
 
                 <div className="border-t pt-1 flex justify-between font-semibold text-green-700 dark:text-green-300">
-                  <span>Estimated Net to You</span>
-                  <span data-testid="text-your-payout">
-                    {estimatedCreatorNet < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(estimatedCreatorNet), currency)}
+                  <span>Net to you</span>
+                  <span
+                    className={shownEconomics.net < 0 ? 'text-red-600 dark:text-red-400' : undefined}
+                    data-testid="text-your-payout"
+                  >
+                    {shownEconomics.net < 0 ? '-' : ''}{formatPriceByCurrency(Math.abs(shownEconomics.net), currency)}
                   </span>
                 </div>
+
+                {/* ── Break-even ─────────────────────────────────────────
+                    Walked out of the same function the rows come from, so it
+                    can never disagree with them. The figure an organiser is
+                    actually deciding on: not what a sell-out pays, but how
+                    many people have to turn up before the evening stops
+                    costing them money. */}
+                {shownEconomics.net < 0 && breakEvenAttendance !== null && breakEvenAttendance > 0 && (
+                  <div
+                    className="mt-2 flex items-center gap-1.5 rounded-md bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+                    data-testid="text-break-even"
+                  >
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    Break even at ~{breakEvenAttendance} attendee{breakEvenAttendance === 1 ? '' : 's'}.
+                  </div>
+                )}
+                {shownEconomics.net < 0 && breakEvenAttendance === null && (
+                  <div
+                    className="mt-2 flex items-center gap-1.5 rounded-md bg-red-100 px-3 py-2 text-xs text-red-900 dark:bg-red-950 dark:text-red-100"
+                    data-testid="text-break-even"
+                  >
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    A full house still does not cover these terms. Lower a cost or raise the price.
+                  </div>
+                )}
+
+                {/* ── The comparison ─────────────────────────────────────
+                    A free RSVP with a paid add-on beats a cheap ticket more
+                    often than anyone expects, because the venue deal is
+                    charged against ticket revenue and there is none. Offered
+                    only when it is actually the better of the two — otherwise
+                    it is a suggestion to earn less. */}
+                {hasPaidTicket && calculatorMode === 'paid' && freeRsvpEconomics.net > economics.net && (
+                  <button
+                    type="button"
+                    onClick={() => setCalculatorMode('free')}
+                    className="mt-2 block w-full rounded-md bg-white/70 px-3 py-2 text-left text-xs text-gray-600 dark:bg-black/30 dark:text-gray-300"
+                    data-testid="text-free-rsvp-comparison"
+                  >
+                    ↔ Free RSVP{addOnCreatorMargin > 0 ? ' + add-on' : ''} would net{' '}
+                    <strong>{formatPriceByCurrency(freeRsvpEconomics.net, currency)}</strong> at{' '}
+                    {calculatorCapacity} — switch to compare
+                  </button>
+                )}
+                {calculatorMode === 'free' && (
+                  <button
+                    type="button"
+                    onClick={() => setCalculatorMode('paid')}
+                    className="mt-2 block w-full rounded-md bg-white/70 px-3 py-2 text-left text-xs text-gray-600 dark:bg-black/30 dark:text-gray-300"
+                    data-testid="text-paid-comparison"
+                  >
+                    ↔ Your priced tickets net{' '}
+                    <strong>{formatPriceByCurrency(economics.net, currency)}</strong> at the same
+                    turnout — switch back
+                  </button>
+                )}
 
                 {/* The venue's own price for the add-on. Kept out of the split —
                     the venue is paid for it directly, and no platform fee is

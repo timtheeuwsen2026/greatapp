@@ -111,11 +111,14 @@ export function checkTicketDeductionAgainstPrice(
 }
 
 export type AddOnMarginCheckInput = {
-  /** `deduction` takes the margin out of the venue's price; `additive` adds to it. */
-  marginMode: unknown;
-  /** The organiser's margin per unit. */
-  margin: unknown;
-  /** What the venue charges per unit. */
+  /** Superseded by `charge` + `groupRate`; read for tickets saved before them. */
+  marginMode?: unknown;
+  margin?: unknown;
+  /** What the venue charges the organiser per unit, where a group rate is set. */
+  groupRate?: unknown;
+  /** What the participant is charged per unit. */
+  charge?: unknown;
+  /** The venue's own counter price per unit. */
   venuePrice: unknown;
   /** For the message, when an event has more than one add-on. */
   addOnName?: string | null;
@@ -123,33 +126,70 @@ export type AddOnMarginCheckInput = {
 };
 
 /**
- * Does a deductive margin eat more than the venue's own price?
+ * Is the organiser charging less than the add-on costs them?
  *
- * Only ever checked in deduction mode. In additive mode the margin sits on top
- * of the venue's price and the venue is paid in full by construction, so there
- * is nothing to exceed.
+ * The check used to ask whether a deductive margin ate more than the venue's
+ * price, which was the same question in the vocabulary of the time: a margin
+ * bigger than the price left the venue owing money. Now that the organiser
+ * enters what they charge and the venue's group rate is its own figure, the
+ * question is simply whether one is below the other — and it applies to every
+ * add-on rather than only to the ones in deduction mode.
  */
 export function checkAddOnMarginAgainstVenuePrice(
   input: AddOnMarginCheckInput,
 ): DealTermIssue | null {
-  if (String(input.marginMode ?? "additive") !== "deduction") return null;
-
-  const margin = finite(input.margin);
   const venuePrice = finite(input.venuePrice);
-  if (margin <= 0 || venuePrice <= 0) return null;
-  if (margin <= venuePrice + 0.005) return null;
+  if (venuePrice <= 0) return null;
+
+  const groupRate = finite(input.groupRate);
+  const legacyMargin = finite(input.margin);
+  const legacyDeduction = String(input.marginMode ?? "additive") === "deduction";
 
   const symbol = input.currencySymbol || "€";
   const name = String(input.addOnName || "").trim();
+
+  // The original form of this check, kept because the records are still out
+  // there: a deductive margin bigger than the venue's own price left the venue
+  // owing money on every unit sold.
+  if (groupRate <= 0 && legacyDeduction && legacyMargin > venuePrice + 0.005) {
+    return {
+      key: "addon_margin_exceeds_venue_price",
+      severity: "block",
+      field: "addonChargeAmount",
+      message:
+        `Your ${money(legacyMargin, symbol)} margin${name ? ` on ${name}` : ""} comes out of the `
+        + `venue's ${money(venuePrice, symbol)}, which would leave them `
+        + `${money(venuePrice - legacyMargin, symbol)}. Lower the margin, raise the venue's `
+        + `price, or charge the participant more than the venue's own price.`,
+    };
+  }
+
+  // What the venue is paid, under whichever vocabulary this ticket was saved in.
+  const cost = groupRate > 0
+    ? Math.min(groupRate, venuePrice)
+    : legacyDeduction
+      ? venuePrice - legacyMargin
+      : venuePrice;
+
+  const charged = finite(input.charge);
+  const unitPrice = charged > 0
+    ? charged
+    : legacyDeduction
+      ? venuePrice
+      : venuePrice + legacyMargin;
+
+  if (unitPrice <= 0) return null;
+  if (unitPrice >= cost - 0.005) return null;
+
   return {
     key: "addon_margin_exceeds_venue_price",
     severity: "block",
-    field: "addonMargin",
+    field: "addonChargeAmount",
     message:
-      `Your ${money(margin, symbol)} margin${name ? ` on ${name}` : ""} comes out of the venue's `
-      + `${money(venuePrice, symbol)}, which would leave them `
-      + `${money(venuePrice - margin, symbol)}. Lower the margin, raise the venue's price, or `
-      + `switch this add-on to "on top of the venue's price".`,
+      `You are charging ${money(unitPrice, symbol)}${name ? ` for ${name}` : ""} and the venue `
+      + `charges you ${money(cost, symbol)}, so every one sold costs you `
+      + `${money(cost - unitPrice, symbol)}. Raise what you charge, or negotiate a lower group `
+      + `rate with the venue on the Partners step.`,
   };
 }
 
@@ -310,6 +350,8 @@ export function checkExperienceDealTerms(input: ExperienceDealTermsInput): DealT
       .map((sku) => ({
         marginMode: sku?.addonMarginMode,
         margin: sku?.addonMargin,
+        groupRate: sku?.addonGroupRate,
+        charge: sku?.addonChargeAmount,
         venuePrice: sku?.addonVenuePrice,
         addOnName: sku?.addonName,
       })),

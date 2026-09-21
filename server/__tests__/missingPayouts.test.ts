@@ -5,12 +5,15 @@ import { join } from "node:path";
 /**
  * A paid event must never end without a payout.
  *
- * "BET ON YOURSELF" (Alek dela Cruz, Sep 19) sold two tickets and has no
- * scheduled payout at all. The payout row is only ever written at the moment
- * money lands, and the webhook's rebuild path — confirmation arriving before
- * the booking existed — rebuilt the booking and returned without scheduling
- * anything. With no row, the hourly run had nothing to find, and the creator
- * would simply never have been paid.
+ * The payout row is only ever written at the moment money lands, and the
+ * webhook's rebuild path — confirmation arriving before the booking existed —
+ * rebuilt the booking and returned without scheduling anything. With no row,
+ * the hourly run had nothing to find, and the creator would simply never have
+ * been paid.
+ *
+ * And the other direction: a free event must not get a payout row at all. A
+ * free RSVP is stored as `fully_paid` at €0, and a "€0.00 scheduled" line on
+ * the organiser's Earnings tab reads exactly like being told they won't be paid.
  */
 
 let candidateRows: any[] = [];
@@ -31,9 +34,11 @@ vi.mock("../db", () => ({
   },
 }));
 
+let paidBookingsOverride: any[] | null = null;
+
 vi.mock("../storage", () => ({
   storage: {
-    getPaidBookings: async () => [
+    getPaidBookings: async () => paidBookingsOverride ?? [
       { status: "fully_paid", amount: "10.00", totalPrice: "10.00" },
       { status: "fully_paid", amount: "10.00", totalPrice: "10.00" },
     ],
@@ -51,6 +56,7 @@ vi.mock("../venuePayouts", () => ({ resolveVenuePayoutAccount: async () => null 
 const { scheduleMissingPayouts } = await import("../payout-scheduler");
 
 beforeEach(() => {
+  paidBookingsOverride = null;
   candidateRows = [];
   queryShouldFail = false;
   upserts.length = 0;
@@ -60,7 +66,7 @@ describe("scheduleMissingPayouts", () => {
   it("schedules the payout an ended, paid event never got", async () => {
     const ended = new Date("2026-09-20T07:00:00Z");
     candidateRows = [{
-      id: "bet-on-yourself",
+      id: "paid-event",
       endDate: ended,
       requireMinimumParticipants: false,
       mvgEnabled: false,
@@ -69,7 +75,7 @@ describe("scheduleMissingPayouts", () => {
 
     expect(await scheduleMissingPayouts(new Date("2026-09-21T09:00:00Z"))).toBe(1);
     expect(upserts).toHaveLength(1);
-    expect(upserts[0].experienceId).toBe("bet-on-yourself");
+    expect(upserts[0].experienceId).toBe("paid-event");
     // Seven days after the event, like every other path.
     expect(upserts[0].scheduledFor.toISOString()).toBe("2026-09-27T07:00:00.000Z");
     // Two €10 tickets, counted from fully_paid — not the zero that counting
@@ -83,6 +89,22 @@ describe("scheduleMissingPayouts", () => {
       endDate: new Date("2026-09-10T07:00:00Z"),
       requireMinimumParticipants: true,
       mvgEnabled: true,
+      mvgStatus: "pending",
+    }];
+    expect(await scheduleMissingPayouts(new Date("2026-09-21T09:00:00Z"))).toBe(0);
+    expect(upserts).toHaveLength(0);
+  });
+
+  it("never schedules a payout for a free event", async () => {
+    paidBookingsOverride = [
+      { status: "fully_paid", amount: "0.00", totalPrice: "0.00" },
+      { status: "fully_paid", amount: "0.00", totalPrice: "0.00" },
+    ];
+    candidateRows = [{
+      id: "free-run",
+      endDate: new Date("2026-09-20T07:00:00Z"),
+      requireMinimumParticipants: false,
+      mvgEnabled: false,
       mvgStatus: "pending",
     }];
     expect(await scheduleMissingPayouts(new Date("2026-09-21T09:00:00Z"))).toBe(0);
@@ -104,6 +126,8 @@ describe("the query and the wiring, as written", () => {
     // admin's to retry, not something to schedule a second time.
     expect(scheduler).toContain('PAYABLE_EVENT_STATUSES = ["approved", "published"]');
     expect(scheduler).toMatch(/NOT EXISTS \(SELECT 1 FROM \$\{scheduledPayouts\}/);
+    // Money actually collected, not merely a paid-looking status.
+    expect(scheduler).toContain("${bookings.amount} > 0 OR ${bookings.totalPrice} > 0");
   });
 
   it("checks for the gap before processing what is due, hourly and on boot", () => {

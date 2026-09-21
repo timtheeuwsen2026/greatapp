@@ -253,9 +253,9 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     //
     // It did not schedule the payout, and this was the only moment anything
     // would have: the money was collected, the booking existed, and the
-    // creator was never paid. That is how "BET ON YOURSELF" sold two tickets
-    // and ended with no payout at all. The hourly safety net would catch it
-    // now, but it belongs here, at the moment the money lands.
+    // creator was never paid, with nothing ever coming back for it. The hourly
+    // safety net would catch it now, but it belongs here, at the moment the
+    // money lands.
     await rebuildMissingBooking(pi, "payment_intent.succeeded");
     await ensurePayoutScheduled(pi.metadata?.experienceId);
     return;

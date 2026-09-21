@@ -71,8 +71,12 @@ const PAYABLE_EVENT_STATUSES = ["approved", "published"] as const;
  * moment, and if it is missed nothing ever comes back for it: an event whose
  * payment confirmation arrived before its booking existed had the booking
  * rebuilt and the payout silently skipped, so the hourly run below had nothing
- * to find and the creator was simply never paid. "BET ON YOURSELF" (Sep 19)
- * sold two tickets and has no payout at all, which is exactly that.
+ * to find and the creator was simply never paid.
+ *
+ * (The event that surfaced this, Sep 19, turned out to have sold only free
+ * tickets — so nothing was owed there. The gap was real all the same, which is
+ * also why money actually collected is part of the test below: a free event
+ * must not get a "€0.00 scheduled" row on its organiser's Earnings tab.)
  *
  * So the hourly run looks for the gap itself rather than trusting that every
  * trigger fired. Deliberately narrow: only events that went ahead (not
@@ -97,9 +101,13 @@ export async function scheduleMissingPayouts(now: Date = new Date()): Promise<nu
         and(
           inArray(experiences.status, [...PAYABLE_EVENT_STATUSES] as any),
           lt(experiences.endDate, now),
+          // Money actually collected, not merely a paid-looking status: a free
+          // RSVP is stored as `fully_paid` at €0, and a free event has nothing
+          // to pay out.
           sql`EXISTS (SELECT 1 FROM ${bookings}
                        WHERE ${bookings.experienceId} = ${experiences.id}
-                         AND ${bookings.status} IN ('confirmed', 'fully_paid', 'deposit_paid'))`,
+                         AND ${bookings.status} IN ('confirmed', 'fully_paid', 'deposit_paid')
+                         AND (${bookings.amount} > 0 OR ${bookings.totalPrice} > 0))`,
           sql`NOT EXISTS (SELECT 1 FROM ${scheduledPayouts}
                            WHERE ${scheduledPayouts.experienceId} = ${experiences.id})`,
         ),
@@ -110,11 +118,16 @@ export async function scheduleMissingPayouts(now: Date = new Date()): Promise<nu
       if (!experience.endDate || !isExperiencePayoutEligible(experience as any)) continue;
 
       const paidBookings = await storage.getPaidBookings(experience.id);
+      const grossCents = sumBookingPayoutGrossCents(paidBookings as any);
+      // Belt and braces with the query above. A payout row for a free event is
+      // not harmless: it shows the organiser "€0.00 scheduled" on their
+      // Earnings tab, which reads exactly like being told they will not be paid.
+      if (grossCents <= 0) continue;
 
       await scheduleExperiencePayout(
         experience.id,
         new Date(experience.endDate),
-        sumBookingPayoutGrossCents(paidBookings as any),
+        grossCents,
       );
       scheduled++;
       console.warn(

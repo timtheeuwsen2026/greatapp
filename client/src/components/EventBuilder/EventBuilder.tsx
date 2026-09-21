@@ -6908,8 +6908,9 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                     Pick from the venue's own list
                                   </Label>
                                   <p className="mb-2 text-xs text-emerald-800 dark:text-emerald-200">
-                                    These are the venue's real prices, set by them. Choosing one fills
-                                    in the name and the venue price — your margin is still yours to set.
+                                    These are the venue's real counter prices, set by them. Choosing
+                                    one fills in the name, the venue price and an opening charge — the
+                                    group rate is what you agree with them in the dealroom.
                                   </p>
                                   <Select
                                     value={sku.addonCatalogItemId || ''}
@@ -8053,7 +8054,18 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
         </Card>
       )}
 
-      {/* **6. DISCOUNTS SYSTEM** */}
+      {/* **6. DISCOUNTS SYSTEM**
+          Most events run one price. A full panel of discount types, validity
+          windows and capacity caps for an event with no discount is exactly
+          the kind of thing point 50 is about. */}
+      <MinimalSection
+        title="Discounts"
+        addLabel="Add a discount"
+        hint="Early bird, a capacity-capped rate, a code for a partner's list."
+        isEmpty={discounts.length === 0}
+        onAdd={addDiscount}
+        testId="section-discounts"
+      >
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -8231,6 +8243,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
           </div>
         </CardContent>
       </Card>
+      </MinimalSection>
 
       {/* Summary */}
       <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950 dark:to-indigo-950">

@@ -126,3 +126,27 @@ describe("the query and the wiring, as written", () => {
     expect(body).not.toContain("getConfirmedBookings");
   });
 });
+
+describe("an event is never paid twice", () => {
+  const scheduler = readFileSync(join(process.cwd(), "server/payout-scheduler.ts"), "utf8");
+  const routes = readFileSync(join(process.cwd(), "server/routes.ts"), "utf8");
+
+  // Good Soles × Bandido has two failed payout rows for one event, and
+  // Stripe's duplicate protection is keyed per row — retrying both would
+  // have transferred the money twice.
+  it("checks for a sibling payout before moving any money", () => {
+    const start = scheduler.indexOf("async function executeExperiencePayout");
+    const body = scheduler.slice(start, start + 1_800);
+    const guard = body.indexOf("getOtherActivePayoutForExperience");
+    const processing = body.indexOf('{ status: "processing" }');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(processing);
+  });
+
+  it("refuses to re-queue a payout when the event already has one paid or queued", () => {
+    const start = routes.indexOf("app.post('/api/admin/scheduled-payouts/:id/retry'");
+    const body = routes.slice(start, start + 1_800);
+    expect(body).toContain("getOtherActivePayoutForExperience(payout.experienceId, payout.id)");
+    expect(body).toContain("would pay it twice");
+  });
+});

@@ -543,6 +543,7 @@ export interface IStorage {
   upsertScheduledPayout(experienceId: string, scheduledFor: Date, totalGrossCents: number): Promise<ScheduledPayout>;
   addScheduledPayoutAdditionalGross(experienceId: string, scheduledFor: Date, amountCents: number): Promise<ScheduledPayout>;
   getScheduledPayoutByExperience(experienceId: string): Promise<ScheduledPayout | undefined>;
+  getOtherActivePayoutForExperience(experienceId: string, excludeId: string): Promise<ScheduledPayout | undefined>;
   updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout>;
   getExperiencesReadyForPayout(): Promise<{
     experienceId: string;
@@ -5671,6 +5672,33 @@ export class DatabaseStorage implements IStorage {
       .from(scheduledPayouts)
       .where(eq(scheduledPayouts.experienceId, experienceId));
     return payout;
+  }
+
+  /**
+   * Another payout for the same event that has paid, is paying, or is queued.
+   *
+   * Scheduling is check-then-insert, so two paths firing at once can leave an
+   * event with two payout rows — the Good Soles × Bandido event has exactly
+   * that. Stripe's duplicate protection is keyed per payout row, so running
+   * both would transfer the creator's money twice. Every payout asks this
+   * before it moves anything.
+   */
+  async getOtherActivePayoutForExperience(
+    experienceId: string,
+    excludeId: string,
+  ): Promise<ScheduledPayout | undefined> {
+    const [other] = await db
+      .select()
+      .from(scheduledPayouts)
+      .where(
+        and(
+          eq(scheduledPayouts.experienceId, experienceId),
+          not(eq(scheduledPayouts.id, excludeId)),
+          inArray(scheduledPayouts.status, ["completed", "processing", "pending"] as any),
+        ),
+      )
+      .limit(1);
+    return other;
   }
 
   async updateScheduledPayout(id: string, updates: Partial<ScheduledPayout>): Promise<ScheduledPayout> {

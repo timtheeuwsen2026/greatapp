@@ -19453,6 +19453,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // An event can hold two payout rows (Good Soles × Bandido does). Queuing
+      // this one while the other has paid or is about to would pay the event
+      // twice, so it is refused with the reason.
+      const sibling = await storage.getOtherActivePayoutForExperience(payout.experienceId, payout.id);
+      if (sibling) {
+        return res.status(409).json({
+          message: `This event already has a payout that is ${sibling.status} (${String(sibling.id).slice(0, 8)}). `
+            + "Retrying this one as well would pay it twice.",
+        });
+      }
+
       const updated = await storage.updateScheduledPayout(payout.id, {
         status: "pending",
         errorMessage: null,

@@ -177,6 +177,22 @@ async function executeExperiencePayout(
   presetGrossCents = 0,
   additionalGrossCents = 0,
 ): Promise<void> {
+  // The last line of defence against paying an event twice: two payout rows
+  // for one event can both be due in the same run (a retry of one while the
+  // other was queued, or a scheduling race). Whichever runs second stops here.
+  const sibling = await storage.getOtherActivePayoutForExperience(experienceId, scheduledPayoutId);
+  if (sibling && (sibling.status === "completed" || sibling.status === "processing")) {
+    await storage.updateScheduledPayout(scheduledPayoutId, {
+      status: "failed",
+      errorMessage: `Duplicate: this event was already paid by payout ${sibling.id}. Nothing was transferred.`,
+      processedAt: new Date(),
+    });
+    console.warn(
+      `[Payout Scheduler] Skipped duplicate payout ${scheduledPayoutId} — ${sibling.id} is ${sibling.status}`,
+    );
+    return;
+  }
+
   // Mark as processing to prevent double-execution
   await storage.updateScheduledPayout(scheduledPayoutId, { status: "processing" });
 

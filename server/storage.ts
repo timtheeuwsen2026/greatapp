@@ -338,6 +338,7 @@ export interface IStorage {
   getEligibleDepositsForCapture(experienceId: string): Promise<Booking[]>;
   markDepositAsCaptured(bookingId: string): Promise<Booking>;
   getConfirmedBookings(experienceId: string): Promise<Booking[]>;
+  getPaidBookings(experienceId: string): Promise<Booking[]>;
   
   // Deposit refund operations (MVG failure)
   getEligibleBookingsForRefund(experienceId: string): Promise<Booking[]>;
@@ -2123,6 +2124,26 @@ export class DatabaseStorage implements IStorage {
       .where(eq(bookings.id, bookingId))
       .returning();
     return updated;
+  }
+
+  /**
+   * Every booking whose money counts towards a payout — the same three
+   * statuses the payout run itself sums. `getConfirmedBookings` reads only
+   * `confirmed`, which is right after an MVG capture but misses every ticket
+   * paid in full at checkout (`fully_paid`), so a payout scheduled from it on
+   * an ordinary event recorded a gross of zero and the creator's Earnings tab
+   * showed "€0.00 scheduled".
+   */
+  async getPaidBookings(experienceId: string): Promise<Booking[]> {
+    return await db
+      .select()
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.experienceId, experienceId),
+          inArray(bookings.status, ["confirmed", "fully_paid", "deposit_paid"] as any),
+        )
+      );
   }
 
   async getConfirmedBookings(experienceId: string): Promise<Booking[]> {

@@ -19,8 +19,8 @@
 import cron from "node-cron";
 import { stripe } from "./stripeClient";
 import { db } from "./db";
-import { experiences, bookings, platformSettings } from "@shared/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { experiences, bookings, platformSettings, scheduledPayouts } from "@shared/schema";
+import { eq, and, inArray, lt, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { notificationService } from "./notifications";
 import {
@@ -44,16 +44,88 @@ export function startPayoutScheduler(): void {
   // Run once per hour
   cron.schedule("0 * * * *", async () => {
     console.log("[Payout Scheduler] Hourly check — looking for ready payouts…");
+    await scheduleMissingPayouts();
     await processReadyPayouts();
   });
 
   // Immediate startup check (covers restarts mid-window)
   setImmediate(async () => {
     console.log("[Payout Scheduler] Startup check…");
+    await scheduleMissingPayouts();
     await processReadyPayouts();
   });
 
   console.log("[Payout Scheduler] Started — runs every hour");
+}
+
+// ─── Safety net: paid events that never got a payout ─────────────────────────
+
+/** Events that actually went ahead. A cancelled event is refunded, never paid out. */
+const PAYABLE_EVENT_STATUSES = ["approved", "published"] as const;
+
+/**
+ * Schedule the payout for any paid event that ended without one.
+ *
+ * A payout row is written when money lands — from the Stripe webhook, from the
+ * MVG scheduler, from a venue's acceptance. Every one of those is a single
+ * moment, and if it is missed nothing ever comes back for it: an event whose
+ * payment confirmation arrived before its booking existed had the booking
+ * rebuilt and the payout silently skipped, so the hourly run below had nothing
+ * to find and the creator was simply never paid. "BET ON YOURSELF" (Sep 19)
+ * sold two tickets and has no payout at all, which is exactly that.
+ *
+ * So the hourly run looks for the gap itself rather than trusting that every
+ * trigger fired. Deliberately narrow: only events that went ahead (not
+ * cancelled, not drafts), have ended, have money collected, pass the same MVG
+ * eligibility rule as every other path, and have no payout row of any status —
+ * a failed payout is an admin's to retry, not something to schedule twice.
+ * Scheduling is idempotent, and the amount is recomputed from the bookings at
+ * payout time either way.
+ */
+export async function scheduleMissingPayouts(now: Date = new Date()): Promise<number> {
+  try {
+    const candidates = await db
+      .select({
+        id: experiences.id,
+        endDate: experiences.endDate,
+        requireMinimumParticipants: experiences.requireMinimumParticipants,
+        mvgEnabled: experiences.mvgEnabled,
+        mvgStatus: experiences.mvgStatus,
+      })
+      .from(experiences)
+      .where(
+        and(
+          inArray(experiences.status, [...PAYABLE_EVENT_STATUSES] as any),
+          lt(experiences.endDate, now),
+          sql`EXISTS (SELECT 1 FROM ${bookings}
+                       WHERE ${bookings.experienceId} = ${experiences.id}
+                         AND ${bookings.status} IN ('confirmed', 'fully_paid', 'deposit_paid'))`,
+          sql`NOT EXISTS (SELECT 1 FROM ${scheduledPayouts}
+                           WHERE ${scheduledPayouts.experienceId} = ${experiences.id})`,
+        ),
+      );
+
+    let scheduled = 0;
+    for (const experience of candidates) {
+      if (!experience.endDate || !isExperiencePayoutEligible(experience as any)) continue;
+
+      const paidBookings = await storage.getPaidBookings(experience.id);
+
+      await scheduleExperiencePayout(
+        experience.id,
+        new Date(experience.endDate),
+        sumBookingPayoutGrossCents(paidBookings as any),
+      );
+      scheduled++;
+      console.warn(
+        `[Payout Scheduler] Scheduled a payout that was never created for experience ${experience.id}`,
+      );
+    }
+    return scheduled;
+  } catch (err: any) {
+    console.error("[Payout Scheduler] Could not check for missing payouts:", err?.message || err);
+    return 0;
+  }
 }
 
 // ─── Main processing loop ────────────────────────────────────────────────────

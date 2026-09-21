@@ -219,8 +219,11 @@ async function ensurePayoutScheduled(experienceId: string | null | undefined): P
     if (!experience?.endDate) return;
     if (!isExperiencePayoutEligible(experience)) return;
 
-    const confirmedBookings = await storage.getConfirmedBookings(experienceId);
-    const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
+    // Paid in full at checkout is `fully_paid`, not `confirmed` — counting only
+    // the latter recorded a gross of zero, which is what the creator's Earnings
+    // tab then showed them.
+    const paidBookings = await storage.getPaidBookings(experienceId);
+    const grossCents = sumBookingPayoutGrossCents(paidBookings);
 
     await scheduleExperiencePayout(experienceId, new Date(experience.endDate), grossCents);
   } catch (err: any) {
@@ -244,10 +247,17 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     }
 
     // Money captured with no booking behind it — the buyer paid with a
-    // redirect-based method and never returned to the confirmation page.
-    // Rebuilding also sets the final status and sends the confirmation emails,
-    // so there is nothing left to do here.
+    // redirect-based method and never returned to the confirmation page, or
+    // this confirmation simply arrived before the booking was written.
+    // Rebuilding sets the final status and sends the confirmation emails.
+    //
+    // It did not schedule the payout, and this was the only moment anything
+    // would have: the money was collected, the booking existed, and the
+    // creator was never paid. That is how "BET ON YOURSELF" sold two tickets
+    // and ended with no payout at all. The hourly safety net would catch it
+    // now, but it belongs here, at the moment the money lands.
     await rebuildMissingBooking(pi, "payment_intent.succeeded");
+    await ensurePayoutScheduled(pi.metadata?.experienceId);
     return;
   }
 

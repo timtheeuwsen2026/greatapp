@@ -13,6 +13,14 @@ describe("venue deal rules", () => {
     expect(normalizeVenueDealTerms("access_only", {}, "EUR")).toEqual({ accessFee: 0, currency: "EUR" });
   });
 
+  // A venue accepting or countering a barter got `undefined` back from this,
+  // and the accept failed. No amount is asked for: that is the deal.
+  it("accepts a barter with or without its terms written down yet", () => {
+    expect(normalizeVenueDealTerms("venue_barter", { barterTerms: "  The terrace, for the bar takings  " }, "eur"))
+      .toEqual({ barterTerms: "The terrace, for the bar takings", currency: "EUR" });
+    expect(normalizeVenueDealTerms("venue_barter", {}, "EUR")).toEqual({ currency: "EUR" });
+  });
+
   it("rejects invalid percentages and unsupported models", () => {
     expect(() => normalizeVenueDealTerms("revenue_share", { revenueSharePct: 101 }, "EUR")).toThrow("cannot exceed 100");
     expect(isVenueDealModel("something_else")).toBe(false);

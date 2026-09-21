@@ -27,6 +27,8 @@ export type VenueDealTerms = {
   counterRevenuePct?: number;
   /** Commitment Fee + Revenue Split: the venue's one-off payment to the creator. */
   commitmentFee?: number;
+  /** Barter Deal: what each side supplies. No amount, by design. */
+  barterTerms?: string;
   currency?: string;
 };
 
@@ -81,6 +83,14 @@ export function normalizeVenueDealTerms(
       const accessFee = Number(terms.accessFee || 0);
       if (!Number.isFinite(accessFee) || accessFee < 0) throw new Error("Access fee cannot be negative");
       return { accessFee, currency };
+    }
+    // No money either way, so there is no amount to validate — only what the
+    // two sides agreed to supply, which may be blank while they are still
+    // talking. Without this case a venue accepting or countering a barter got
+    // `undefined` back and the whole accept failed.
+    case "venue_barter": {
+      const barterTerms = String(terms.barterTerms ?? "").trim().slice(0, 2000);
+      return barterTerms ? { barterTerms, currency } : { currency };
     }
     // The platform never collects this one, but the agreed percentage is the
     // whole point of recording the deal, so it is validated like any other.

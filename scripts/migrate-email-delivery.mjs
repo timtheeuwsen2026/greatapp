@@ -23,6 +23,7 @@ const migrationUrls = [
   new URL("../migrations/20260913_grandfather_existing_creators.sql", import.meta.url),
   new URL("../migrations/20260913_partner_onboarding_and_addon_catalog.sql", import.meta.url),
   new URL("../migrations/20260917_partners_model.sql", import.meta.url),
+  new URL("../migrations/20260921_creator_approval_switch.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

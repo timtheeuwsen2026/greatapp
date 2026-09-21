@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Check, X } from "lucide-react";
@@ -40,6 +41,37 @@ export default function AdminCreatorApprovals() {
 
   const { data: pending = [], isLoading, isError } = useQuery<PendingCreator[]>({
     queryKey: ["/api/admin/creator-profiles/pending"],
+  });
+
+  const { data: settings } = useQuery<{ creatorApprovalRequired?: boolean }>({
+    queryKey: ["/api/platform-settings"],
+  });
+  const approvalRequired = settings?.creatorApprovalRequired === true;
+
+  const switchApproval = useMutation({
+    mutationFn: async (required: boolean) => {
+      const res = await apiRequest("PUT", "/api/admin/platform-settings/creator-approval", { required });
+      return res.json() as Promise<{ creatorApprovalRequired: boolean; approvedNow: number }>;
+    },
+    onSuccess: (result) => {
+      toast({
+        title: result.creatorApprovalRequired ? "Creator approval is on" : "Creator approval is off",
+        description: result.creatorApprovalRequired
+          ? "New creators will wait here for your review. Everyone already approved keeps their access."
+          : result.approvedNow > 0
+            ? `${result.approvedNow} waiting ${result.approvedNow === 1 ? "creator was" : "creators were"} let in. New creators get access as soon as their profile is complete.`
+            : "New creators get access as soon as their profile is complete.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/platform-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/creator-profiles/pending"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Couldn't change that",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   const decide = useMutation({
@@ -87,10 +119,42 @@ export default function AdminCreatorApprovals() {
         </p>
       </div>
 
+      {/* The switch. Off means nobody waits on this queue: a creator is
+          approved the moment their profile is complete. Holding a specific
+          creator below still works either way. */}
+      <Card data-testid="card-creator-approval-switch">
+        <CardContent className="flex items-start justify-between gap-4 py-4">
+          <div>
+            <p className="font-medium text-gray-900 dark:text-white">
+              Review new creators before they can build
+            </p>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {approvalRequired
+                ? "On — new creators wait here until you approve them."
+                : "Off — new creators get access as soon as their profile is complete. You can still hold someone individually."}
+            </p>
+            {!approvalRequired && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                With review off, anyone can reach the deal tooling after signing up — the
+                gate was originally added to slow down copying of the builder.
+              </p>
+            )}
+          </div>
+          <Switch
+            checked={approvalRequired}
+            disabled={switchApproval.isPending || !settings}
+            onCheckedChange={(checked) => switchApproval.mutate(checked)}
+            data-testid="switch-creator-approval-required"
+          />
+        </CardContent>
+      </Card>
+
       {pending.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-sm text-gray-500">
-            Nothing waiting. New creators appear here as soon as they complete a profile.
+            {approvalRequired
+              ? "Nothing waiting. New creators appear here as soon as they complete a profile."
+              : "Nothing waiting — with review off, new creators go straight through."}
           </CardContent>
         </Card>
       ) : (

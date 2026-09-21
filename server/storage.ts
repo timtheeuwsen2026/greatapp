@@ -79,6 +79,7 @@ import {
   type CommunityApplication,
   type InsertCommunityApplication,
   creatorProfiles,
+  platformSettings,
   type CreatorProfile,
   type InsertCreatorProfile,
   type PromoterProfile,
@@ -451,6 +452,10 @@ export interface IStorage {
   getCreatorProfile(userId: string): Promise<CreatorProfile | undefined>;
   getCreatorProfileByUserId(userId: string): Promise<CreatorProfile | undefined>;
   createOrUpdateCreatorProfile(userId: string, profileData: Omit<InsertCreatorProfile, 'userId'>): Promise<CreatorProfile>;
+  getCreatorApprovalRequired(): Promise<boolean>;
+  setCreatorApprovalRequired(required: boolean): Promise<void>;
+  setCreatorProfileApproval(profileId: string, approved: boolean): Promise<CreatorProfile | undefined>;
+  approveAllPendingCreatorProfiles(): Promise<number>;
   updateCreatorProfileStripe(userId: string, stripeAccountId: string): Promise<void>;
   setCreatorStripeVerificationStatus(userId: string, verificationStatus: string): Promise<void>;
   getPromoterProfile(userId: string): Promise<PromoterProfile | undefined>;
@@ -2791,6 +2796,64 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return created;
     }
+  }
+
+  /**
+   * Does a new creator wait for an admin before reaching the builder?
+   *
+   * Read narrowly — one column, not the whole settings row — and failing open:
+   * if the setting cannot be read (a migration still pending on a fresh
+   * database, a dropped connection), the answer is "no approval needed". The
+   * alternative is every new creator silently locked out behind a review that
+   * nobody knows is required.
+   */
+  async getCreatorApprovalRequired(): Promise<boolean> {
+    try {
+      const [row] = await db
+        .select({ required: platformSettings.creatorApprovalRequired })
+        .from(platformSettings)
+        .limit(1);
+      return row?.required === true;
+    } catch (error) {
+      console.error("[creator-approval] Could not read the setting; treating approval as off:", error);
+      return false;
+    }
+  }
+
+  async setCreatorApprovalRequired(required: boolean): Promise<void> {
+    const [existing] = await db
+      .select({ id: platformSettings.id })
+      .from(platformSettings)
+      .limit(1);
+    if (existing) {
+      await db
+        .update(platformSettings)
+        .set({ creatorApprovalRequired: required, updatedAt: new Date() })
+        .where(eq(platformSettings.id, existing.id));
+    } else {
+      await db
+        .insert(platformSettings)
+        .values({ id: "platform_settings", creatorApprovalRequired: required } as any);
+    }
+  }
+
+  async setCreatorProfileApproval(profileId: string, approved: boolean): Promise<CreatorProfile | undefined> {
+    const [updated] = await db
+      .update(creatorProfiles)
+      .set({ approved, updatedAt: new Date() })
+      .where(eq(creatorProfiles.id, profileId))
+      .returning();
+    return updated;
+  }
+
+  /** Everyone waiting on a decision, approved in one go. Returns how many. */
+  async approveAllPendingCreatorProfiles(): Promise<number> {
+    const approved = await db
+      .update(creatorProfiles)
+      .set({ approved: true, updatedAt: new Date() })
+      .where(and(eq(creatorProfiles.completed, true), eq(creatorProfiles.approved, false)))
+      .returning({ id: creatorProfiles.id });
+    return approved.length;
   }
 
   async updateCreatorProfileStripe(userId: string, stripeAccountId: string): Promise<void> {

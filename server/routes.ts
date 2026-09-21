@@ -22,9 +22,10 @@ import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabas
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { getLastEmailAttemptAt } from "./emailDeliveryLedger";
 import { registerOGRoutes } from "./og";
-import { resolvePartnerAccess } from "@shared/partnerAccess";
+import { resolvePartnerAccess, shouldAutoApproveCreator } from "@shared/partnerAccess";
 import { matchesStandingPreferences } from "@shared/collabSuggestions";
 import { dealRooms, dealRoomMessages, dealRoomReads } from "@shared/schema";
+import type { CreatorProfile } from "@shared/schema";
 import { 
   insertCommunityApplicationSchema, 
   insertParticipantProfileSchema, 
@@ -1714,6 +1715,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const resolveCurrentUserId = (req: any): string | undefined => {
     return req.user?.claims?.sub || req.user?.id || (process.env.NODE_ENV === 'development' ? "45788955" : undefined);
+  };
+
+  /**
+   * Approve a creator the moment their profile is first complete — but only
+   * while creator approval is switched off.
+   *
+   * Decided here from the platform setting, never from anything in the
+   * request: a creator still cannot approve (or un-approve) themselves by
+   * posting `approved`, which the schema strips.
+   *
+   * "First" is the important word. A creator an admin has held has a
+   * completed profile already, so their later saves are not a first
+   * completion and do not quietly undo the hold.
+   */
+  const approveOnFirstCompletionIfOpen = async (
+    before: CreatorProfile | undefined,
+    after: CreatorProfile,
+  ): Promise<CreatorProfile> => {
+    if (!after?.completed || after.approved || before?.completed === true) return after;
+    const approvalRequired = await storage.getCreatorApprovalRequired();
+    if (!shouldAutoApproveCreator({ before, after, approvalRequired })) return after;
+    return (await storage.setCreatorProfileApproval(after.id, true)) ?? after;
   };
 
   const normalizePromotionDealType = (experience: any): string | null => {
@@ -13397,7 +13420,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const profile = await storage.createOrUpdateCreatorProfile(userId, validation.data);
+      const before = await storage.getCreatorProfile(userId);
+      const saved = await storage.createOrUpdateCreatorProfile(userId, validation.data);
+      const profile = await approveOnFirstCompletionIfOpen(before, saved);
       res.json(profile);
     } catch (error) {
       console.error("Error saving creator profile:", error);
@@ -16121,7 +16146,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 errors: validation.error.issues,
               });
             }
-            result = await storage.createOrUpdateCreatorProfile(userId, validation.data as any);
+            const before = await storage.getCreatorProfile(userId);
+            const saved = await storage.createOrUpdateCreatorProfile(userId, validation.data as any);
+            result = await approveOnFirstCompletionIfOpen(before, saved);
           }
           break;
           
@@ -16633,6 +16660,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           partnerPublicVideoUrl: settings.partnerPublicVideoUrl ?? null,
           partnerTutorialVideoUrl: settings.partnerTutorialVideoUrl ?? null,
           participantTutorialVideoUrl: settings.participantTutorialVideoUrl ?? null,
+          creatorApprovalRequired: settings.creatorApprovalRequired === true,
         });
       } else {
         res.json({
@@ -16642,6 +16670,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           partnerPublicVideoUrl: null,
           partnerTutorialVideoUrl: null,
           participantTutorialVideoUrl: null,
+          creatorApprovalRequired: false,
         });
       }
     } catch (error) {
@@ -16697,6 +16726,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error saving tutorial video URLs:", error);
       res.status(500).json({ error: "Failed to save tutorial video URLs" });
+    }
+  });
+
+  /**
+   * Switch creator approval on or off.
+   *
+   * Switching it off also lets in everyone currently waiting. Otherwise the
+   * people who signed up while approval was on would stay locked out behind a
+   * review the admin has just said is no longer needed — the one outcome this
+   * switch exists to stop. Switching it on changes nobody's access: it only
+   * decides what happens to creators who complete a profile from now on.
+   */
+  app.put('/api/admin/platform-settings/creator-approval', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      if (typeof req.body?.required !== "boolean") {
+        return res.status(400).json({ message: "Send { required: true } or { required: false }" });
+      }
+
+      const required = req.body.required === true;
+      await storage.setCreatorApprovalRequired(required);
+      const approvedNow = required ? 0 : await storage.approveAllPendingCreatorProfiles();
+
+      res.json({ creatorApprovalRequired: required, approvedNow });
+    } catch (error) {
+      console.error("Error switching creator approval:", error);
+      res.status(500).json({ message: "Failed to update creator approval" });
     }
   });
 

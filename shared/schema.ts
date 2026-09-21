@@ -3639,6 +3639,19 @@ export const platformSettings = pgTable("platform_settings", {
   partnerTutorialVideoUrl: varchar("partner_tutorial_video_url"),
   participantTutorialVideoUrl: varchar("participant_tutorial_video_url"),
 
+  /**
+   * Whether a new creator waits for an admin before reaching the builder.
+   *
+   * Off by default, at Timothy's call: every new creator was waiting on one
+   * person, and a creator stuck behind "your profile is with our team" on the
+   * day they wanted to publish is how a client ends up back on their old
+   * platform. When off, a creator is approved at the moment their profile is
+   * complete — so `approved` stays the one thing the gate reads, turning this
+   * back on only affects people who sign up afterwards, and holding a single
+   * creator still works.
+   */
+  creatorApprovalRequired: boolean("creator_approval_required").default(false),
+
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

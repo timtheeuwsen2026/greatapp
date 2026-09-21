@@ -157,7 +157,7 @@ function EmptyRoleProfile({
 
 const ALL_ROLES = [
   { value: "participant", label: "Participant", description: "Discover and join experiences", icon: Users },
-  { value: "creator", label: "Creator / Organiser", description: "Create and host experiences", icon: Sparkles },
+  { value: "creator", label: "Creator / Community", description: "Create and host experiences", icon: Sparkles },
   { value: "venue_provider", label: "Venue Provider", description: "List your space for events", icon: MapPin },
   { value: "service_provider", label: "Service Provider", description: "Offer photography, catering, or wellness", icon: Briefcase },
   { value: "promoter", label: "Affiliate", description: "Drive ticket sales through your own reach, paid on commission", icon: Ticket },

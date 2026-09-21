@@ -21,7 +21,7 @@ import BrandLogo from "@/components/BrandLogo";
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
   participant:       { label: "Participant",         icon: <User className="h-4 w-4" /> },
-  creator:           { label: "Creator / Organiser", icon: <Crown className="h-4 w-4" /> },
+  creator:           { label: "Creator / Community", icon: <Crown className="h-4 w-4" /> },
   // "Affiliate" is the standard term for exactly this mechanic — a referrer
   // paid per sale — and it does not collide with "Partner", which is already
   // the umbrella term for the whole step. The stored role value stays

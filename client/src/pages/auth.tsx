@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
   },
   {
     value: "creator",
-    label: "Creator / Organiser",
+    label: "Creator / Community",
     description: "I want to create and host experiences",
   },
   {

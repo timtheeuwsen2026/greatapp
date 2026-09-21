@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolvePartnerAccess } from "./partnerAccess";
+import { resolvePartnerAccess, shouldAutoApproveCreator } from "./partnerAccess";
 
 /**
  * The gap Tim flagged: switching an account's role was the whole check, so a
@@ -69,5 +69,37 @@ describe("resolvePartnerAccess", () => {
   it("never closes in front of an admin", () => {
     const access = resolvePartnerAccess({ role: "participant", isAdmin: true });
     expect(access.canUseTooling).toBe(true);
+  });
+});
+
+describe("shouldAutoApproveCreator — creator approval switched off", () => {
+  const completed = { completed: true, approved: false };
+
+  it("approves a creator on the save that first completes their profile", () => {
+    expect(shouldAutoApproveCreator({ before: null, after: completed, approvalRequired: false })).toBe(true);
+    expect(shouldAutoApproveCreator({
+      before: { completed: false }, after: completed, approvalRequired: false,
+    })).toBe(true);
+  });
+
+  it("leaves everyone waiting while approval is switched on", () => {
+    expect(shouldAutoApproveCreator({ before: null, after: completed, approvalRequired: true })).toBe(false);
+  });
+
+  // The reason "first" matters: an admin can hold one creator with review
+  // off, and their next profile edit must not quietly let them back in.
+  it("does not undo a hold when a held creator saves again", () => {
+    expect(shouldAutoApproveCreator({
+      before: { completed: true }, after: completed, approvalRequired: false,
+    })).toBe(false);
+  });
+
+  it("does nothing for an incomplete or already-approved profile", () => {
+    expect(shouldAutoApproveCreator({
+      before: null, after: { completed: false, approved: false }, approvalRequired: false,
+    })).toBe(false);
+    expect(shouldAutoApproveCreator({
+      before: null, after: { completed: true, approved: true }, approvalRequired: false,
+    })).toBe(false);
   });
 });

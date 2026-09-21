@@ -122,7 +122,7 @@ export default function HowItWorksPartners() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
               <Crown className="h-6 w-6 text-primary mb-3" />
-              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Creator / Organiser</h3>
+              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Creator / Community</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Builds the event, sets the tickets and the terms, proposes a deal to a
                 space, and carries the event to the day itself.

@@ -136,3 +136,26 @@ export function resolvePartnerAccess(input: PartnerAccessInput): PartnerAccess {
   // adding a review step for them is a change in one place.
   return { ...OPEN, state: "approved" };
 }
+
+/**
+ * Should saving this creator profile approve it on the spot?
+ *
+ * Only while creator approval is switched off, and only on the save that
+ * first completes the profile. That second condition is what lets an admin
+ * hold one creator even with review off: a held creator already has a
+ * completed profile, so their later saves are never a *first* completion and
+ * cannot quietly undo the hold.
+ *
+ * Nothing here reads the request. Approval is decided from the platform
+ * setting and the stored profile, so a creator still cannot approve
+ * themselves by posting `approved: true`.
+ */
+export function shouldAutoApproveCreator(input: {
+  before?: { completed?: boolean | null } | null;
+  after?: { completed?: boolean | null; approved?: boolean | null } | null;
+  approvalRequired: boolean;
+}): boolean {
+  if (input.approvalRequired) return false;
+  if (!input.after?.completed || input.after.approved) return false;
+  return input.before?.completed !== true;
+}

@@ -1851,9 +1851,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.redirect("/");
   });
 
+  /**
+   * An internal path to come back to after verifying, or nothing.
+   *
+   * A participant who clicked "Book" on an event was sent to sign up, and the
+   * verification email then dropped them on the homepage — so they had to find
+   * the event again, and several did not. Only a single-leading-slash path is
+   * accepted, so this can never become an open redirect.
+   */
+  const safeReturnTo = (value: unknown): string | null => {
+    const path = typeof value === 'string' ? value.trim() : '';
+    if (!path.startsWith('/') || path.startsWith('//') || path.length > 500) return null;
+    return path;
+  };
+
+  const verifiedLoginUrl = (appBaseUrl: string, returnTo: string | null): string => {
+    const url = new URL(`${appBaseUrl}/login`);
+    url.searchParams.set('verified', '1');
+    if (returnTo) url.searchParams.set('returnTo', returnTo);
+    return url.toString();
+  };
+
+  /**
+   * Email somebody a fresh link that verifies their address and signs them in.
+   *
+   * Built on a *recovery* link rather than a magic link for one reason: a
+   * recovery link can only be generated for an account that already exists,
+   * so this can never create an account for an address nobody signed up with.
+   * Using it confirms an unconfirmed address, which is the point. The login
+   * page treats it as "verify and continue", not as a password reset.
+   *
+   * Returns false, quietly, when there is no such account — callers answer the
+   * same way either way, so it cannot be used to discover who has one.
+   */
+  const recentActionLinks = new Map<string, number>();
+  const sendFreshSignInLink = async (
+    email: string,
+    appBaseUrl: string,
+    returnTo: string | null,
+  ): Promise<boolean> => {
+    const admin = getSupabaseAdminClient();
+    if (!admin) return false;
+
+    // One a minute per address: enough for someone who missed the first email,
+    // not enough to bomb an inbox by holding the button down.
+    const last = recentActionLinks.get(email) || 0;
+    if (Date.now() - last < 60_000) return true;
+    if (recentActionLinks.size > 500) {
+      const cutoff = Date.now() - 60_000;
+      for (const [address, sentAt] of Array.from(recentActionLinks.entries())) {
+        if (sentAt < cutoff) recentActionLinks.delete(address);
+      }
+    }
+    recentActionLinks.set(email, Date.now());
+
+    const destination = verifiedLoginUrl(appBaseUrl, returnTo);
+    const { data, error } = await (admin.auth as any).admin.generateLink({
+      type: 'recovery',
+      email,
+      options: { redirectTo: destination },
+    });
+    if (error || !data?.properties?.action_link) {
+      console.warn('[auth] Fresh sign-in link skipped:', error?.message || 'no action link');
+      return false;
+    }
+
+    await notificationService.sendWelcomeVerifyEmail({
+      to: email,
+      userFirstName: data?.user?.user_metadata?.first_name || null,
+      verifyUrl: buildAppAuthActionUrl(data.properties.action_link, destination, 'recovery'),
+    });
+    return true;
+  };
+
+  /**
+   * "I never got the email" — for someone who signed up and cannot get in.
+   *
+   * Before this there was no way out. Logging in said "Email not confirmed";
+   * signing up again said "this email already has an account, log in instead";
+   * and round it went. Thirteen accounts in production are stuck exactly there.
+   */
+  app.post('/api/auth/resend-verification', async (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ message: 'Enter the email address you signed up with.' });
+      }
+      await sendFreshSignInLink(email, getAppBaseUrl(req), safeReturnTo(req.body?.returnTo));
+      // The same answer whether or not the account exists.
+      res.json({ message: 'If that address has an account waiting, a fresh link is on its way.' });
+    } catch (error: any) {
+      console.error('Error resending verification link:', error);
+      res.status(500).json({ message: 'Could not send a new link. Please try again.' });
+    }
+  });
+
   app.post('/api/auth/signup', async (req, res) => {
     try {
       const { email, password, role, firstName } = req.body || {};
+      const returnTo = safeReturnTo(req.body?.returnTo);
       if (!email || typeof email !== 'string') {
         return res.status(400).json({ message: 'Email is required' });
       }
@@ -1877,12 +1973,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const appBaseUrl = getAppBaseUrl(req);
       const cleanFirstName = typeof firstName === 'string' ? firstName.trim() : '';
+      const verifiedDestination = verifiedLoginUrl(appBaseUrl, returnTo);
       const { data, error } = await (admin.auth as any).admin.generateLink({
         type: 'signup',
         email: normalizedEmail,
         password,
         options: {
-          redirectTo: `${appBaseUrl}/login?verified=1`,
+          redirectTo: verifiedDestination,
           data: {
             selected_role: role,
             first_name: cleanFirstName || null,
@@ -1893,6 +1990,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error) {
         const message = String(error.message || 'Unable to create account');
         if (message.toLowerCase().includes('already')) {
+          // Signed up before but never made it in: no app account exists yet,
+          // because that is only written on first sign-in. Telling this person
+          // to "log in instead" sent them to a login that says their email is
+          // not confirmed — a loop with no exit. Send a fresh link instead.
+          const resent = await sendFreshSignInLink(normalizedEmail, appBaseUrl, returnTo);
+          if (resent) {
+            return res.json({
+              message: 'You started signing up with this email before — we sent a fresh link to finish.',
+              resent: true,
+            });
+          }
           return res.status(409).json({ message: 'This email already has an account. Please log in instead.' });
         }
         return res.status(400).json({ message });
@@ -1904,7 +2012,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const verifyUrl = buildAppAuthActionUrl(
         generatedVerifyUrl,
-        `${appBaseUrl}/login?verified=1`,
+        verifiedDestination,
         'signup',
       );
 

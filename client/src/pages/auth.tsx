@@ -5,6 +5,8 @@ import BrandLogo from "@/components/BrandLogo";
 import LegalConsentLabel from "@/components/LegalConsentLabel";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
+import { checkEmailForTypos } from "@shared/emailTypos";
 
 type Mode = "login" | "signup" | "reset";
 
@@ -48,13 +50,35 @@ export default function AuthPage() {
   const [role, setRole] = useState<Role>("participant");
   const [acceptedLegalTerms, setAcceptedLegalTerms] = useState(false);
   const [loading, setLoading] = useState(false);
+  /**
+   * Set when this address has an account that was never verified.
+   *
+   * There used to be no way out of that state: logging in said "Email not
+   * confirmed", signing up again said "this email already has an account", and
+   * round it went. Setting this shows the one thing that helps — a fresh link.
+   */
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  /** "Did you mean …@gmail.com?" — shown, never forced. */
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { refreshUser } = useAuth();
+
+  /** The internal page to come back to, carried through the verification email. */
+  const returnTo = (() => {
+    const value = new URLSearchParams(window.location.search).get("returnTo");
+    return value && value.startsWith("/") && !value.startsWith("//") ? value : null;
+  })();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tokenHash = params.get("token_hash");
-    if (!tokenHash || params.get("type") !== "signup") return;
+    const linkType = params.get("type");
+    // "signup" is the first verification email. "recovery" is the fresh link
+    // sent to someone whose first one went missing: using it verifies the
+    // address and signs them in, exactly like the original would have.
+    if (!tokenHash || (linkType !== "signup" && linkType !== "recovery")) return;
 
     params.delete("token_hash");
     params.delete("type");
@@ -65,17 +89,30 @@ export default function AuthPage() {
       `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ""}`,
     );
 
-    void supabase.auth.verifyOtp({ token_hash: tokenHash, type: "signup" }).then(({ error }) => {
+    void supabase.auth.verifyOtp({ token_hash: tokenHash, type: linkType }).then(async ({ error }) => {
       if (error) {
+        // Never "create your account again": that answered "this email already
+        // has an account", which is how people ended up in a loop.
         toast({
-          title: "Verification link expired",
-          description: "Please create your account again to receive a new verification link.",
+          title: "That link has expired",
+          description: "Enter your email below and we'll send you a fresh one.",
           variant: "destructive",
         });
+        setUnverifiedEmail("");
         return;
       }
       toast({ title: "Email verified", description: "Your Great. account is ready." });
+
+      // A signup link announces itself to the rest of the app as a sign-in and
+      // is redirected from there. A recovery link announces itself as a
+      // password reset, which nothing else acts on — so pick the user up and
+      // carry them on from here.
+      if (linkType === "recovery") {
+        const dbUser = await refreshUser().catch(() => null);
+        redirectAfterAuth(dbUser?.role ?? "participant");
+      }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toast]);
 
   function redirectAfterAuth(userRole: string) {
@@ -119,7 +156,26 @@ export default function AuthPage() {
       });
 
       if (error) {
-        toast({ title: "Login failed", description: error.message, variant: "destructive" });
+        const code = String((error as any).code || "");
+        const message = String(error.message || "");
+        if (code === "email_not_confirmed" || /not confirmed/i.test(message)) {
+          setUnverifiedEmail(email.trim());
+          toast({
+            title: "Your email isn't verified yet",
+            description: "We can send you a fresh link — use the button below.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (code === "invalid_credentials" || /invalid login credentials/i.test(message)) {
+          toast({
+            title: "That email and password don't match",
+            description: "Check for a typo, or use Reset it below to choose a new password.",
+            variant: "destructive",
+          });
+          return;
+        }
+        toast({ title: "Login failed", description: message, variant: "destructive" });
         return;
       }
 
@@ -145,17 +201,34 @@ export default function AuthPage() {
       });
       return;
     }
+    // An address with no ending cannot receive the verification email at all,
+    // so it is stopped here rather than creating an account nobody can open.
+    const emailCheck = checkEmailForTypos(email);
+    if (!emailCheck.ok) {
+      toast({ title: "Check your email address", description: emailCheck.reason, variant: "destructive" });
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, role, firstName }),
+        body: JSON.stringify({ email, password, role, firstName, returnTo }),
       });
 
       const responseData = await res.json().catch(() => ({}));
       if (res.status === 409) {
         showEmailExistsError();
+        return;
+      }
+
+      if (res.ok && responseData?.resent) {
+        toast({
+          title: "Check your inbox",
+          description: `You started signing up with ${email} before — we've sent a fresh link to finish.`,
+        });
+        setAcceptedLegalTerms(false);
+        setMode("login");
         return;
       }
 
@@ -176,6 +249,33 @@ export default function AuthPage() {
       setMode("login");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function resendVerification() {
+    const address = (unverifiedEmail || email).trim();
+    if (!address) {
+      toast({ title: "Enter your email first", description: "The one you signed up with." });
+      return;
+    }
+    setResending(true);
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: address, returnTo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Couldn't send that", description: data?.message || "Please try again.", variant: "destructive" });
+        return;
+      }
+      toast({
+        title: "Check your inbox",
+        description: `If ${address} has an account waiting, a fresh link is on its way. It can take a minute — and check spam.`,
+      });
+    } finally {
+      setResending(false);
     }
   }
 
@@ -300,10 +400,31 @@ export default function AuthPage() {
                     type="email"
                     required
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setEmailSuggestion(null); }}
+                    onBlur={() => {
+                      if (mode !== "signup") return;
+                      const check = checkEmailForTypos(email);
+                      setEmailSuggestion(check.ok && check.suggestion ? check.suggestion : null);
+                    }}
                     placeholder="you@example.com"
                     className="input-primary w-full bg-white text-sm"
+                    data-testid="input-auth-email"
                   />
+                  {/* Asked, never forced: plenty of real domains sit one
+                      letter away from a famous one. */}
+                  {mode === "signup" && emailSuggestion && (
+                    <p className="mt-1.5 text-xs text-amber-700" data-testid="text-email-suggestion">
+                      Did you mean{" "}
+                      <button
+                        type="button"
+                        className="font-semibold underline underline-offset-2"
+                        onClick={() => { setEmail(emailSuggestion); setEmailSuggestion(null); }}
+                      >
+                        {emailSuggestion}
+                      </button>
+                      ?
+                    </p>
+                  )}
                 </div>
 
                 {mode !== "reset" && (
@@ -379,6 +500,29 @@ export default function AuthPage() {
                     : mode === "login" ? "Log in" : mode === "reset" ? "Send reset link" : "Create account"}
                 </button>
               </form>
+
+              {mode === "login" && unverifiedEmail !== null && (
+                <div
+                  className="mt-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+                  data-testid="panel-unverified-email"
+                >
+                  <p className="font-semibold">Your email isn't verified yet</p>
+                  <p className="mt-1 text-xs">
+                    The link we sent may have gone to spam, or expired. We'll send a fresh
+                    one to {unverifiedEmail || "the address above"} — opening it verifies your
+                    account and signs you straight in.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resendVerification}
+                    disabled={resending}
+                    className="mt-3 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                    data-testid="button-resend-verification"
+                  >
+                    {resending ? "Sending…" : "Send me a new link"}
+                  </button>
+                </div>
+              )}
 
               {mode === "login" && (
                 <p className="mt-5 text-center text-xs text-muted-foreground">

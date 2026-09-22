@@ -30,7 +30,10 @@ import {
   type PartnerDealTypeId,
   type PartnerTerms,
   type PartnerTypeId,
+  BARTER_ALLOCATIONS,
+  partnerHasBarterSupply,
 } from "@shared/eventPartners";
+import { BARTER_ALLOCATION_EXPLANATION } from "@shared/perkRewardSource";
 import { Check, Link2, Mail, Pencil, Search } from "lucide-react";
 
 /**
@@ -187,6 +190,15 @@ export default function AddPartnerModal({
 
   const setTerm = <K extends keyof PartnerTerms>(key: K, value: PartnerTerms[K]) =>
     setTerms((current) => ({ ...current, [key]: value }));
+
+  /**
+   * Only a barter deal has a supply to point. A Content License is barter only
+   * when it settles that way — a flat fee is money, and money is not a stock
+   * that two rewards can run down between them.
+   */
+  const showsBarterAllocation = dealType
+    ? partnerHasBarterSupply({ dealType, terms })
+    : false;
 
   /** `email` and `invite_link` are the same stored source: somebody off-platform. */
   const storedSource = source === "platform" ? "platform" : "invite_link";
@@ -702,6 +714,43 @@ export default function AddPartnerModal({
                     data-testid="input-partner-license-days"
                   />
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Where this partner's supply goes — asked once, when the proposal
+              is set, because a supply is finite and nothing here counts what is
+              left of it. Splitting one Barter Deal across both rewards would
+              let the event promise more than the partner committed. */}
+          {showsBarterAllocation && (
+            <div className="space-y-3 rounded-xl border p-4" data-testid="block-barter-allocation">
+              <div>
+                <Label>Who does this supply reward?</Label>
+                <p className="mt-1 text-xs text-gray-500">
+                  {BARTER_ALLOCATION_EXPLANATION}
+                </p>
+              </div>
+              <div className="grid gap-2">
+                {BARTER_ALLOCATIONS.map((allocation) => {
+                  const selected = (terms.barterAllocation || "host") === allocation.id;
+                  return (
+                    <button
+                      key={allocation.id}
+                      type="button"
+                      onClick={() => setTerm("barterAllocation", allocation.id)}
+                      aria-pressed={selected}
+                      className={`rounded-lg border p-3 text-left transition ${
+                        selected
+                          ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500 dark:bg-emerald-950/40"
+                          : "border-gray-200 hover:border-gray-300 dark:border-gray-700"
+                      }`}
+                      data-testid={`chip-barter-allocation-${allocation.id}`}
+                    >
+                      <span className="block text-sm font-medium">{allocation.label}</span>
+                      <span className="mt-0.5 block text-xs text-gray-500">{allocation.hint}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -102,3 +102,69 @@ describe("a perk the venue has to fund", () => {
     })).toBeNull();
   });
 });
+
+// Point 55: the same "do not promise what is not yours" rule, one step past the
+// venue. A reward drawn from a partner's Barter Deal waits on that partner.
+
+const partnerPerk = {
+  participantReferralDealType: "milestone_barter",
+  participantReferralMilestoneAttendeeTarget: 3,
+  participantReferralMilestoneRewardDescription: "a 1-on-1 session with Chris",
+  participantReferralRewardSourcePartnerId: "chris",
+};
+
+const chris = {
+  id: "chris",
+  partnerType: "service_provider",
+  name: "Chris",
+  dealType: "brand_barter",
+  terms: { productDescription: "5 × 1-on-1 sessions", barterAllocation: "participants" },
+  status: "invited",
+};
+
+describe("a perk sourced from a partner's Barter Deal", () => {
+  it("is held back until that partner accepts", () => {
+    expect(getPerkApprovalState({ ...partnerPerk, partners: [chris] })).toBe("awaiting_partner");
+    expect(canPromisePerk({ ...partnerPerk, partners: [chris] })).toBe(false);
+  });
+
+  it("goes live on their acceptance, with no second approval column to keep in step", () => {
+    const accepted = { ...partnerPerk, partners: [{ ...chris, status: "confirmed" }] };
+
+    expect(getPerkApprovalState(accepted)).toBe("partner_approved");
+    expect(canPromisePerk(accepted)).toBe(true);
+  });
+
+  it("stops being promisable when the partner is removed or re-points their supply", () => {
+    const removed = { ...partnerPerk, partners: [] };
+    const repointed = {
+      ...partnerPerk,
+      partners: [{ ...chris, terms: { ...chris.terms, barterAllocation: "host" } }],
+    };
+
+    expect(getPerkApprovalState(removed)).toBe("source_missing");
+    expect(getPerkApprovalState(repointed)).toBe("source_missing");
+    expect(canPromisePerk(removed)).toBe(false);
+    expect(canPromisePerk(repointed)).toBe(false);
+    expect(getPerkApprovalMessage("source_missing")).toContain("Pick another");
+  });
+
+  it("does not accuse a caller of losing the partner when it was never handed the list", () => {
+    // A reader with no partner list cannot tell "gone" from "not looked up".
+    // Both hide the perk; only one of them should tell the organiser to go and
+    // choose a new source.
+    expect(getPerkApprovalState(partnerPerk)).toBe("awaiting_partner");
+    expect(canPromisePerk(partnerPerk)).toBe(false);
+  });
+
+  it("leaves the venue path exactly as it was", () => {
+    expect(getPerkApprovalState(venuePerk)).toBe("awaiting_venue");
+    expect(getPerkApprovalState({
+      ...venuePerk,
+      participantReferralVenueApprovedAt: "2026-09-22T10:00:00.000Z",
+    })).toBe("venue_approved");
+    // A venue-backed perk is not a partner-sourced one, so an empty partner
+    // list must not turn it into `source_missing`.
+    expect(getPerkApprovalState({ ...venuePerk, partners: [] })).toBe("awaiting_venue");
+  });
+});

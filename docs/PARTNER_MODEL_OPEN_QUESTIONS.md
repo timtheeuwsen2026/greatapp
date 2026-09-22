@@ -1,8 +1,8 @@
 # Partner model — what is deliberately not built
 
-Two items from the Create Experience / Partners / Pricing redesign are recorded
-here rather than implemented. Both were reviewed and both were left alone on
-purpose, so this is the place to look before anyone "fixes" either of them.
+Three items from the Create Experience / Partners / Pricing redesign are
+recorded here rather than implemented. All were reviewed and all were left alone
+on purpose, so this is the place to look before anyone "fixes" any of them.
 
 ---
 
@@ -43,6 +43,41 @@ Why it is not being built yet:
 
 If this is ever built, the thing to get right first is who is liable when the
 sponsor pays and the organiser does not pass anything on.
+
+---
+
+## No inventory behind a partner's committed supply
+
+*(point 38 situation C, and the reason point 55.2 is an either/or)*
+
+A barter partner commits a **quantity**: twenty T-shirts, five 1-on-1 sessions.
+Two separate mechanisms can spend that quantity —
+
+- the recruiting host's **Milestone Barter** reward (point 37), and
+- individual guests' **Participant Referral Perk** rewards (point 55).
+
+Nothing counts what is left. There is no stock record, nothing decrements when
+a reward is earned, and no deal record is linked to another deal record. If both
+mechanisms drew on one supply at once, the event could promise a sixth session
+out of the five Chris agreed to, and the first anyone would hear of it is a
+participant turning up to claim it.
+
+**What is built instead:** the organiser points each Barter Deal once, at one or
+the other, when the proposal goes out — `terms.barterAllocation` on the partner
+entry, `"host"` or `"participants"`. A partner pointed at the host does not
+appear in the Participant Referral Perk's source list at all, and the Pricing
+step says why rather than leaving the organiser hunting for a partner they know
+they added.
+
+This is a deliberate narrowing, not a half-built feature. True and/and support —
+one supply funding both mechanisms with a shared count decrementing correctly
+across them — is the thing that needs real design work, and it may not be worth
+the complexity at the partner volumes a single event actually carries.
+
+What to get right first, if it is ever built: what happens when the count runs
+out **after** a participant has already been promised a reward. Refusing at the
+door is the failure this narrowing exists to avoid, so a fix that only tracks
+the number without deciding that question would not be an improvement.
 
 ---
 

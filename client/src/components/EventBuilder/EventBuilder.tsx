@@ -103,6 +103,13 @@ import {
   type PartnerTerms,
   type PartnerTypeId,
 } from "@shared/eventPartners";
+import {
+  BARTER_ALLOCATION_EXPLANATION,
+  listPerkRewardSources,
+  partnersAllocatedToHost,
+  perkRewardSourceFields,
+  resolvePerkRewardSourceId,
+} from "@shared/perkRewardSource";
 import LegalConsentLabel from "@/components/LegalConsentLabel";
 import Navigation from "@/components/navigation";
 import { 
@@ -286,6 +293,9 @@ const eventBuilderSchema = z.object({
   // The reward is the venue's to give, so it goes to them for sign-off before
   // anyone is promised it.
   participantReferralVenueBacked: z.boolean().optional().default(false),
+  // Or a partner's, when the reward is a sponsor's product or a service
+  // provider's sessions rather than anything the venue stocks.
+  participantReferralRewardSourcePartnerId: z.string().nullable().optional(),
   participantReferralCommissionPct: z.coerce.number().min(0).max(50).optional().nullable().default(0),
   participantReferralMilestoneAttendeeTarget: z.coerce.number().int().min(1).optional().nullable(),
   participantReferralMilestoneRewardDescription: z.string().max(500, "Participant reward is too long").optional(),
@@ -752,6 +762,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       totalRooms: undefined,
       participantReferralDealType: null,
       participantReferralVenueBacked: false,
+      participantReferralRewardSourcePartnerId: null,
       participantReferralCommissionPct: 0,
       participantReferralMilestoneAttendeeTarget: undefined,
       participantReferralMilestoneRewardDescription: '',
@@ -1289,6 +1300,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       platformPct: FIXED_PLATFORM_FEE_PCT,
       participantReferralDealType: data.participantReferralDealType ?? null,
       participantReferralVenueBacked: data.participantReferralVenueBacked === true,
+      participantReferralRewardSourcePartnerId: data.participantReferralRewardSourcePartnerId ?? null,
       participantReferralCommissionPct: data.participantReferralCommissionPct != null
         ? parseFloat(data.participantReferralCommissionPct)
         : 0,
@@ -1612,6 +1624,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Participant referral perk (B2C loop attached to attendee referral links)
         participantReferralDealType: formData.participantReferralDealType ?? null,
         participantReferralVenueBacked: formData.participantReferralVenueBacked === true,
+        participantReferralRewardSourcePartnerId: formData.participantReferralRewardSourcePartnerId ?? null,
         participantReferralCommissionPct: formData.participantReferralCommissionPct ?? 0,
         participantReferralMilestoneAttendeeTarget: formData.participantReferralMilestoneAttendeeTarget ?? null,
         participantReferralMilestoneRewardDescription: formData.participantReferralMilestoneRewardDescription || '',
@@ -2173,6 +2186,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Participant referral perk (B2C loop attached to attendee referral links)
         participantReferralDealType: formData.participantReferralDealType ?? null,
         participantReferralVenueBacked: formData.participantReferralVenueBacked === true,
+        participantReferralRewardSourcePartnerId: formData.participantReferralRewardSourcePartnerId ?? null,
         participantReferralCommissionPct: formData.participantReferralCommissionPct ?? 0,
         participantReferralMilestoneAttendeeTarget: formData.participantReferralMilestoneAttendeeTarget ?? null,
         participantReferralMilestoneRewardDescription: formData.participantReferralMilestoneRewardDescription || '',
@@ -5111,6 +5125,11 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
   const participantReferralMilestoneTarget = form.watch('participantReferralMilestoneAttendeeTarget');
   const participantReferralMilestoneReward = form.watch('participantReferralMilestoneRewardDescription') || '';
 
+  const perkRewardSourceId = resolvePerkRewardSourceId({
+    participantReferralVenueBacked: form.watch('participantReferralVenueBacked'),
+    participantReferralRewardSourcePartnerId: form.watch('participantReferralRewardSourcePartnerId'),
+  });
+
   const rawPartners = form.watch('eventPartners');
   const partners: EventPartnerEntry[] = useMemo(
     () => sanitisePartnerEntries(rawPartners),
@@ -5154,6 +5173,33 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
   });
   const venueName = form.watch('manualVenueName') || chosenVenue?.name || '';
   const isDaytimeDeal = eventType !== 'multi-day';
+
+  // ── Who funds the Participant Referral Perk ──────────────────────────────
+  // Every partner who has committed a supply and pointed it at participants,
+  // plus the venue and the organiser themselves. Declared here rather than at
+  // the top of the component because it needs both the partner list and the
+  // resolved venue name.
+  const perkRewardSources = useMemo(
+    () => listPerkRewardSources({ partners, venueName }),
+    [partners, venueName],
+  );
+  const perkSourcesOnHost = useMemo(
+    () => partnersAllocatedToHost({ partners }),
+    [partners],
+  );
+
+  /**
+   * Writing the choice as two mutually exclusive fields, never both.
+   *
+   * The venue keeps its boolean because its sign-off rides on the venue
+   * contract rather than a partner invite; a partner is stored by id. Setting
+   * one always clears the other, so no draft can claim two funders.
+   */
+  const setPerkRewardSource = (sourceId: string) => {
+    const fields = perkRewardSourceFields(sourceId);
+    form.setValue('participantReferralVenueBacked', fields.participantReferralVenueBacked, { shouldDirty: true });
+    form.setValue('participantReferralRewardSourcePartnerId', fields.participantReferralRewardSourcePartnerId, { shouldDirty: true });
+  };
 
   /**
    * Three states, and the row says which one it is in:
@@ -5259,6 +5305,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
     form.setValue('participantReferralMilestoneAttendeeTarget', undefined, { shouldDirty: true });
     form.setValue('participantReferralMilestoneRewardDescription', '', { shouldDirty: true });
     form.setValue('participantReferralVenueBacked', false, { shouldDirty: true });
+    form.setValue('participantReferralRewardSourcePartnerId', null, { shouldDirty: true });
   };
 
   /** Reuse a sponsor's product as the participant reward, rather than inventing one. */
@@ -5766,22 +5813,65 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
               </div>
             )}
 
-            {/* A venue-backed perk is the venue's to give, so it goes to them
-                for sign-off before anyone is promised it. */}
+            {/* Whose reward this actually is. Anything that is not the
+                organiser's own margin goes to its owner for sign-off first:
+                promising a sponsor's product without asking is the same
+                mistake as promising the venue's coffee. */}
             {participantReferralDealType === 'milestone_barter' && (
-              <div className="flex items-start justify-between gap-3 rounded-xl border p-3">
+              <div className="space-y-3 rounded-xl border p-3">
                 <div>
-                  <p className="text-sm font-medium">The venue provides this reward</p>
+                  <p className="text-sm font-medium">Who provides this reward?</p>
                   <p className="text-xs text-gray-500">
-                    Sends it to the venue for sign-off, and keeps it hidden from
-                    participants until they accept.
+                    Anything you are not funding yourself is sent to its owner for
+                    sign-off, and stays hidden from participants until they accept.
                   </p>
                 </div>
-                <Switch
-                  checked={!!form.watch('participantReferralVenueBacked')}
-                  onCheckedChange={(checked) => form.setValue('participantReferralVenueBacked', checked, { shouldDirty: true })}
-                  data-testid="switch-participant-perk-venue-backed"
-                />
+
+                <div className="grid gap-2">
+                  {perkRewardSources.map((option) => {
+                    const selected = perkRewardSourceId === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setPerkRewardSource(option.id)}
+                        aria-pressed={selected}
+                        className={`rounded-lg border p-3 text-left transition ${
+                          selected
+                            ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500 dark:bg-emerald-950/40'
+                            : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
+                        }`}
+                        data-testid={`perk-reward-source-${option.id}`}
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">{option.label}</span>
+                          {selected && (
+                            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                              Selected
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-gray-500">{option.hint}</span>
+                        {option.supply && (
+                          <span className="mt-1 block text-xs italic text-gray-500">
+                            They supply: {option.supply}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Why a barter partner the organiser knows they added is not
+                    in the list above. Without this they would simply hunt. */}
+                {perkSourcesOnHost.length > 0 && (
+                  <p className="text-xs text-gray-500" data-testid="perk-reward-source-host-note">
+                    {perkSourcesOnHost.map((entry) => entry.name).join(', ')}
+                    {perkSourcesOnHost.length === 1 ? ' has' : ' have'} a Barter Deal going to
+                    the host who brings the people. {BARTER_ALLOCATION_EXPLANATION} Change it
+                    on their row above to offer it here instead.
+                  </p>
+                )}
               </div>
             )}
           </CardContent>

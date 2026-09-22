@@ -10,7 +10,20 @@
  * and is held back until the venue accepts. A perk the organiser funds
  * themselves — cashback out of their own margin — needs nobody's permission and
  * is live immediately.
+ *
+ * The same reasoning applies past the venue. A reward can equally be a
+ * sponsor's product or a service provider's sessions, drawn from that partner's
+ * Barter Deal, and committing those without asking is the identical mistake —
+ * so a partner-sourced perk waits on that partner's acceptance. Which partners
+ * may be named, and why one supply cannot fund two rewards at once, is in
+ * `perkRewardSource.ts`.
  */
+
+import {
+  partnerFundsParticipantPerk,
+  type EventPartnerEntry,
+  type PartnerTerms,
+} from "./eventPartners";
 
 export type PerkApprovalInput = {
   participantReferralDealType?: string | null;
@@ -21,6 +34,14 @@ export type PerkApprovalInput = {
   participantReferralVenueBacked?: boolean | null;
   /** Stamped when the venue accepts a contract carrying the perk. */
   participantReferralVenueApprovedAt?: string | Date | null;
+  /** The partner whose Barter Deal supplies this reward, when it is not the venue's. */
+  participantReferralRewardSourcePartnerId?: string | null;
+  /**
+   * The event's partner list, needed only to read the named partner's status.
+   * Optional so every existing caller — the venue paths, which have no partner
+   * list to hand — keeps working untouched.
+   */
+  partners?: Array<EventPartnerEntry | { id?: unknown; dealType?: unknown; terms?: PartnerTerms | null; status?: unknown }> | null;
 };
 
 export type PerkApprovalState =
@@ -31,7 +52,17 @@ export type PerkApprovalState =
   /** The venue's to give, and they have not answered yet. */
   | "awaiting_venue"
   /** The venue agreed to it. */
-  | "venue_approved";
+  | "venue_approved"
+  /** A partner's Barter Deal supplies it, and they have not accepted yet. */
+  | "awaiting_partner"
+  /** The partner accepted, so their supply is committed. */
+  | "partner_approved"
+  /**
+   * A partner was named and is no longer backing it — removed from the event,
+   * or their supply re-pointed at the recruiting host. Nothing is funding the
+   * perk, so it must not be shown, and the organiser has to choose again.
+   */
+  | "source_missing";
 
 function isNumericallySet(value: unknown): boolean {
   const parsed = Number(value ?? 0);
@@ -54,6 +85,23 @@ export function isPerkConfigured(input: PerkApprovalInput | null | undefined): b
 
 export function getPerkApprovalState(input: PerkApprovalInput | null | undefined): PerkApprovalState {
   if (!isPerkConfigured(input)) return "none";
+
+  // A named partner is asked first. Their acceptance is the partner entry's own
+  // status, so there is no second approval column to keep in step with it.
+  const partnerId = String(input?.participantReferralRewardSourcePartnerId || "").trim();
+  if (partnerId) {
+    // No list to check against is not the same as a partner who has gone. A
+    // caller that never had the partners to hand gets the cautious answer —
+    // the perk stays hidden — without being told to go and pick a new source.
+    if (!Array.isArray(input?.partners)) return "awaiting_partner";
+
+    const source = input!.partners!.find(
+      (partner) => String((partner as any)?.id || "") === partnerId,
+    );
+    if (!source || !partnerFundsParticipantPerk(source as any)) return "source_missing";
+    return (source as any).status === "confirmed" ? "partner_approved" : "awaiting_partner";
+  }
+
   if (input?.participantReferralVenueBacked !== true) return "self_funded";
   return input?.participantReferralVenueApprovedAt ? "venue_approved" : "awaiting_venue";
 }
@@ -67,7 +115,9 @@ export function getPerkApprovalState(input: PerkApprovalInput | null | undefined
  */
 export function canPromisePerk(input: PerkApprovalInput | null | undefined): boolean {
   const state = getPerkApprovalState(input);
-  return state === "self_funded" || state === "venue_approved";
+  return state === "self_funded"
+    || state === "venue_approved"
+    || state === "partner_approved";
 }
 
 /** What the organiser is told while a perk is held back. */
@@ -78,6 +128,15 @@ export function getPerkApprovalMessage(state: PerkApprovalState): string | null 
         + "it is their product to give, not yours to promise.";
     case "venue_approved":
       return "Your venue agreed to this perk. It is live on the event page.";
+    case "awaiting_partner":
+      return "Sent to the partner whose Barter Deal supplies it. Participants won't see this perk "
+        + "until they accept — it is their product to give, not yours to promise.";
+    case "partner_approved":
+      return "The partner supplying this reward has accepted. It is live on the event page.";
+    case "source_missing":
+      return "The partner who was supplying this reward is no longer backing it — removed from the "
+        + "event, or their Barter Deal now goes to the host who brings the people. Pick another "
+        + "source, or fund it yourself.";
     default:
       return null;
   }

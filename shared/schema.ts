@@ -503,6 +503,11 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // an organiser must not promise someone else's coffee on their behalf.
   participantReferralVenueBacked: boolean("participant_referral_venue_backed").default(false),
   participantReferralVenueApprovedAt: timestamp("participant_referral_venue_approved_at"),
+  // The reward is just as often a sponsor's product or a service provider's
+  // sessions as it is anything a venue stocks, so the source is an id into
+  // `event_partners` rather than a second boolean. Their acceptance is that
+  // entry's own status — no approval column to keep in step with it.
+  participantReferralRewardSourcePartnerId: varchar("participant_referral_reward_source_partner_id"),
   participantReferralDealType: varchar("participant_referral_deal_type"),
   participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
     precision: 5,
@@ -827,6 +832,11 @@ export const experiences = pgTable("experiences", {
   // an organiser must not promise someone else's coffee on their behalf.
   participantReferralVenueBacked: boolean("participant_referral_venue_backed").default(false),
   participantReferralVenueApprovedAt: timestamp("participant_referral_venue_approved_at"),
+  // The reward is just as often a sponsor's product or a service provider's
+  // sessions as it is anything a venue stocks, so the source is an id into
+  // `event_partners` rather than a second boolean. Their acceptance is that
+  // entry's own status — no approval column to keep in step with it.
+  participantReferralRewardSourcePartnerId: varchar("participant_referral_reward_source_partner_id"),
   participantReferralDealType: varchar("participant_referral_deal_type"),
   participantReferralCommissionPct: decimal("participant_referral_commission_pct", {
     precision: 5,

@@ -220,6 +220,34 @@ export function dealRestrictionReason(dealType: unknown): string | null {
  */
 export type DealTier = "per_unit" | "flat" | "barter";
 
+/**
+ * Who a barter partner's committed supply is for.
+ *
+ *  - `host` — the recruiting host's Milestone Barter reward. The default,
+ *    because it is what every barter deal written before this choice existed
+ *    already meant.
+ *  - `participants` — the event's Participant Referral Perk, so individual
+ *    guests who bring friends draw on it instead.
+ */
+export type BarterAllocation = "host" | "participants";
+
+export const BARTER_ALLOCATIONS: Array<{
+  id: BarterAllocation;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "host",
+    label: "The host who brings the people",
+    hint: "One account earns it for recruiting — their Milestone Barter reward.",
+  },
+  {
+    id: "participants",
+    label: "Individual participants who refer friends",
+    hint: "Funds the Participant Referral Perk on the Pricing step instead.",
+  },
+];
+
 export const DEAL_TIERS: Array<{ id: DealTier; label: string; glyph: string }> = [
   { id: "per_unit", label: "Per-unit", glyph: "↕" },
   { id: "flat", label: "Flat", glyph: "€" },
@@ -320,6 +348,27 @@ export type PartnerTerms = {
   milestoneRewardDescription?: string;
   /** brand_barter — what the brand supplies and what they get back. */
   productDescription?: string;
+  /**
+   * Where this partner's barter supply is pointed — and it is one or the
+   * other, never both.
+   *
+   * A barter partner commits a finite quantity of something: twenty T-shirts,
+   * five 1-on-1 sessions. Two separate mechanisms can spend it — the recruiting
+   * host's Milestone Barter reward, and the Participant Referral Perk that
+   * rewards individual guests for bringing friends. Nothing on the platform
+   * tracks the remaining stock, so letting both draw on one supply at once
+   * would let an organiser promise more sessions than Chris ever agreed to,
+   * and the first anyone would hear of it is a participant turning up to claim
+   * the sixth of five.
+   *
+   * So the organiser points the supply once, when the proposal goes out. Until
+   * real inventory tracking exists this stays a single either/or choice rather
+   * than a split — see `docs/PARTNER_MODEL_OPEN_QUESTIONS.md`.
+   *
+   * Only a barter-tier deal carries this; there is no supply to point on a
+   * commission or a cash sponsorship.
+   */
+  barterAllocation?: BarterAllocation;
   /** financial_sponsorship / content_license flat fee. */
   amount?: number;
   currency?: string;
@@ -588,6 +637,15 @@ export function sanitisePartnerEntry(input: any, index = 0): EventPartnerEntry |
       break;
   }
 
+  // Only a barter deal has a supply to point, so the field is stored only
+  // where it means something. Anything unrecognised reads as `host` — the way
+  // every barter deal written before this choice existed already behaved.
+  if (partnerDealTier({ dealType: input.dealType, terms }) === "barter") {
+    terms.barterAllocation = rawTerms.barterAllocation === "participants"
+      ? "participants"
+      : "host";
+  }
+
   const notes = cleanText(rawTerms.notes, 1000);
   if (notes) terms.notes = notes;
 
@@ -616,6 +674,42 @@ export function sanitisePartnerEntries(input: unknown): EventPartnerEntry[] {
   return list
     .map((entry, index) => sanitisePartnerEntry(entry, index))
     .filter(Boolean) as EventPartnerEntry[];
+}
+
+/**
+ * Does this partner commit a supply of something, rather than money or a
+ * percentage? Barter is the only tier with a quantity behind it, and therefore
+ * the only tier that can fund a reward somebody else hands out.
+ */
+export function partnerHasBarterSupply(
+  partner: { dealType?: unknown; terms?: PartnerTerms | null } | null | undefined,
+): boolean {
+  if (!partner) return false;
+  return partnerDealTier(partner) === "barter";
+}
+
+/** Where this partner's supply is pointed. `host` unless they say otherwise. */
+export function partnerBarterAllocation(
+  partner: { dealType?: unknown; terms?: PartnerTerms | null } | null | undefined,
+): BarterAllocation {
+  if (!partnerHasBarterSupply(partner)) return "host";
+  return partner?.terms?.barterAllocation === "participants" ? "participants" : "host";
+}
+
+/**
+ * May this partner's supply fund the Participant Referral Perk?
+ *
+ * Both halves matter. The deal has to be barter — there is no supply to draw
+ * on otherwise — and the organiser has to have pointed it at participants,
+ * because the same supply cannot also be paying the recruiting host.
+ * A declined partner supplies nothing at all.
+ */
+export function partnerFundsParticipantPerk(
+  partner: { dealType?: unknown; terms?: PartnerTerms | null; status?: unknown } | null | undefined,
+): boolean {
+  if (!partnerHasBarterSupply(partner)) return false;
+  if (partner?.status === "declined") return false;
+  return partnerBarterAllocation(partner) === "participants";
 }
 
 /**

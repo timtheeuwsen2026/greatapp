@@ -10,6 +10,10 @@ export type ParticipantReferralPerkOffer = {
   participantReferralMilestoneRewardDescription?: string | null;
   participantReferralVenueBacked?: boolean | null;
   participantReferralVenueApprovedAt?: string | Date | null;
+  /** The partner whose Barter Deal supplies the reward, when it is not the venue's. */
+  participantReferralRewardSourcePartnerId?: string | null;
+  /** The event's partner list, so that partner's acceptance can be read off it. */
+  eventPartners?: unknown;
 };
 
 type ParticipantReferralPerkCardProps = {
@@ -24,9 +28,17 @@ type ParticipantReferralPerkCardProps = {
  * A perk the organiser marked as the venue's is held back until the venue has
  * actually agreed to it. Showing it earlier promises someone else's coffee on
  * their behalf, and the first they would hear of it is a guest at the counter.
+ *
+ * A perk sourced from a partner's Barter Deal waits the same way, on that
+ * partner's own acceptance — so the list has to travel with the experience for
+ * the answer to be anything other than "not yet".
  */
 export function hasActiveParticipantReferralPerk(experience?: ParticipantReferralPerkOffer | null): boolean {
-  return canPromisePerk(experience);
+  if (!experience) return false;
+  return canPromisePerk({
+    ...experience,
+    partners: Array.isArray(experience.eventPartners) ? (experience.eventPartners as any[]) : null,
+  });
 }
 
 export default function ParticipantReferralPerkCard({

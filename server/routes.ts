@@ -965,6 +965,50 @@ async function isVenueOwnerForExperience(experience: any, userId?: string | null
  * Never throws into the publish path: an event that published successfully must
  * not report failure because one invite email bounced.
  */
+/** One `experience_partners` row in the shape `experiences.event_partners` holds. */
+function partnerRowToEntry(row: any) {
+  return {
+    id: row.entryId || row.id,
+    partnerType: row.partnerType,
+    name: row.partnerName,
+    partnerUserId: row.partnerUserId,
+    email: row.partnerEmail,
+    source: row.source,
+    dealType: row.dealType,
+    terms: row.terms || {},
+    status: row.status,
+    inviteToken: row.inviteToken,
+    refCode: row.refCode,
+  };
+}
+
+/**
+ * Copy the partner rows back onto the experience's own `event_partners` JSON.
+ *
+ * The rows are what a partner acts on — accept, decline, claim the ?ref= link.
+ * The JSON is what the event page, the builder and the Pricing step read. Until
+ * now only publishing wrote the JSON, so a partner who accepted still read as
+ * "invited" everywhere the organiser and participants look.
+ *
+ * That gap is load-bearing now: a Participant Referral Perk drawn from a
+ * partner's Barter Deal stays hidden until that partner has accepted, and the
+ * status it waits on is this one.
+ *
+ * Never throws — a mirror that fails must not turn an accepted invite into an
+ * error for the partner who just accepted it.
+ */
+async function mirrorPartnerRowsToExperience(experienceId: string): Promise<void> {
+  if (!experienceId) return;
+  try {
+    const rows = await storage.getExperiencePartners(experienceId);
+    await storage.updateExperience(experienceId, {
+      eventPartners: rows.map(partnerRowToEntry),
+    } as any);
+  } catch (error) {
+    console.error("Failed to mirror partner rows onto the experience:", error);
+  }
+}
+
 async function syncPartnersForExperience(experience: any, organizerId: string): Promise<void> {
   const entries = sanitisePartnerEntries(experience?.eventPartners);
   if (!experience?.id) return;
@@ -1013,19 +1057,7 @@ async function syncPartnersForExperience(experience: any, organizerId: string): 
   // link is the one that resolves.
   try {
     await storage.updateExperience(experience.id, {
-      eventPartners: rows.map((row) => ({
-        id: row.entryId || row.id,
-        partnerType: row.partnerType,
-        name: row.partnerName,
-        partnerUserId: row.partnerUserId,
-        email: row.partnerEmail,
-        source: row.source,
-        dealType: row.dealType,
-        terms: row.terms || {},
-        status: row.status,
-        inviteToken: row.inviteToken,
-        refCode: row.refCode,
-      })),
+      eventPartners: rows.map(partnerRowToEntry),
     } as any);
   } catch (error) {
     console.error("Partners synced, but the event's own copy was not updated:", error);
@@ -1529,6 +1561,12 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       standingCapacity: (draft as any).standingCapacity ?? null,
       seatedCapacity: (draft as any).seatedCapacity ?? null,
       participantReferralVenueBacked: (draft as any).participantReferralVenueBacked === true,
+      // Which partner's Barter Deal supplies the perk, when it is not the
+      // venue's. Carried here for the same reason as the line above: the
+      // column exists on `experiences` and a mapping that omits it deletes the
+      // organiser's answer at publish time.
+      participantReferralRewardSourcePartnerId:
+        (draft as any).participantReferralRewardSourcePartnerId || null,
       // Carried explicitly, like every other figure in this block. It has a
       // column on `experiences` and was never written to it, so the venue's
       // one-off commitment existed only until the event was published.
@@ -12276,6 +12314,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         accept ? "confirmed" : "declined",
         { partnerUserId: row.partnerUserId || userId },
       );
+      // So the event itself reflects the answer, not just the partner's row.
+      await mirrorPartnerRowsToExperience(row.experienceId);
 
       try {
         const organizer = await storage.getUser(row.organizerId);
@@ -12314,6 +12354,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const accept = req.body?.accept !== false;
       const updated = await storage.updateExperiencePartnerStatus(row.id, accept ? "confirmed" : "declined");
+      await mirrorPartnerRowsToExperience(row.experienceId);
       res.json({ partner: updated, accepted: accept });
     } catch (error) {
       console.error("Error responding from partner home:", error);

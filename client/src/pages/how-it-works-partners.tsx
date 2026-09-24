@@ -62,41 +62,7 @@ export default function HowItWorksPartners() {
             three find each other, agree terms in writing, and get paid automatically
             afterwards.
           </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            {alreadyPartner ? (
-              <Link href="/tutorials/partners">
-                <Button
-                  size="lg"
-                  className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto"
-                  data-testid="link-full-partner-tutorial"
-                >
-                  Open the full tutorial
-                  <ArrowRight className="ml-2 h-5 w-5" />
-                </Button>
-              </Link>
-            ) : (
-              <Link href="/login?mode=signup">
-                <Button
-                  size="lg"
-                  className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto"
-                  data-testid="link-partner-signup"
-                >
-                  Create a partner account
-                  <ArrowRight className="ml-2 h-5 w-5" />
-                </Button>
-              </Link>
-            )}
-            <Link href="/how-it-works">
-              <Button
-                size="lg"
-                variant="outline"
-                className="font-semibold px-8 py-5 h-auto"
-                data-testid="link-participant-guide"
-              >
-                I'm here to book something
-              </Button>
-            </Link>
-          </div>
+
         </div>
       </section>
 
@@ -210,36 +176,41 @@ export default function HowItWorksPartners() {
             negotiation works, and worked examples with your own numbers — all of it is in
             the partner tutorial, open to verified creator, venue and promoter accounts.
           </p>
-          {alreadyPartner ? (
-            <Link href="/tutorials/partners">
-              <Button
-                size="lg"
-                className="bg-primary hover:bg-primary/90 text-white font-semibold px-10 py-5 h-auto text-base"
-                data-testid="link-full-partner-tutorial-footer"
-              >
-                Open the full tutorial
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-          ) : (
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Link href="/login?mode=signup">
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            {alreadyPartner ? (
+              <Link href="/tutorials/partners">
                 <Button
                   size="lg"
-                  className="bg-primary hover:bg-primary/90 text-white font-semibold px-10 py-5 h-auto text-base"
-                  data-testid="link-partner-signup-footer"
+                  className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto"
+                  data-testid="link-full-partner-tutorial"
                 >
-                  Sign up — it's free
+                  Open the full tutorial
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
-              <Link href="/login">
-                <Button size="lg" variant="outline" className="font-semibold px-10 py-5 h-auto text-base">
-                  I already have an account
+            ) : (
+              <Link href="/login?mode=signup">
+                <Button
+                  size="lg"
+                  className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto"
+                  data-testid="link-partner-signup"
+                >
+                  Create a partner account
+                  <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
-            </div>
-          )}
+            )}
+            <Link href="/how-it-works">
+              <Button
+                size="lg"
+                variant="outline"
+                className="font-semibold px-8 py-5 h-auto"
+                data-testid="link-participant-guide"
+              >
+                I'm here to book something
+              </Button>
+            </Link>
+          </div>
         </div>
       </section>
     </div>

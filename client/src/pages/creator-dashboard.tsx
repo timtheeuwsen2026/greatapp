@@ -1,3 +1,5 @@
+import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
+import type { TicketRegistrationCount } from "@shared/ticketAvailability";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
@@ -556,6 +558,7 @@ function CreatorDashboardContent() {
     rsvps: number;
     ticketsSold: number;
     attendees: number;
+    ticketRegistrations: TicketRegistrationCount[];
     donations: number;
     grossRevenue: number;
   };
@@ -568,6 +571,7 @@ function CreatorDashboardContent() {
     mixedCurrencies?: boolean;
   }>({
     queryKey: ["/api/creator/headcount"],
+    refetchInterval: 30_000,
   });
 
   // Everyone who has booked one of this creator's events. Built from bookings,
@@ -1687,6 +1691,7 @@ function CreatorDashboardContent() {
                         )}
                         
                         {/* MVG progress and deadline */}
+                        <TicketRegistrationBreakdown rows={headcount?.events.find((event) => event.id === experience.id)?.ticketRegistrations} />
                         {(experience.mvgEnabled || (experience.minimumParticipants && experience.minimumParticipants > 0)) && (
                           <div className="text-xs text-gray-500 mb-3" data-testid={`mvg-progress-text-${experience.id}`}>
                             <span className="flex items-center gap-1">
@@ -3226,6 +3231,7 @@ function CreatorDashboardContent() {
                             <p className="text-xs text-muted-foreground">
                               {event.startDate ? new Date(event.startDate).toLocaleDateString() : "Date TBC"}
                             </p>
+                            <TicketRegistrationBreakdown rows={event.ticketRegistrations} />
                           </TableCell>
                           <TableCell>{event.rsvps}</TableCell>
                           <TableCell>{event.ticketsSold}</TableCell>

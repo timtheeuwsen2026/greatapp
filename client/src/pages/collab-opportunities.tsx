@@ -16,7 +16,7 @@ import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { useAuth } from "@/hooks/useAuth";
 import { Handshake, Plus, Sparkles, History } from "lucide-react";
 
-type Opportunity = CollabListing & { posterId?: string; status?: string };
+type Opportunity = CollabListing & { posterId?: string; status?: string; canManage?: boolean };
 
 /**
  * Collab Opportunities — one place to see what is open, across every role.
@@ -104,8 +104,8 @@ export default function CollabOpportunities() {
   const pastIdeas = data?.pastIdeas ?? [];
   const suggestions = suggestionsQuery.data?.suggestions ?? [];
 
-  /** Is this card the signed-in poster's own? Decides Edit/Delete. */
-  const isMine = (item: Opportunity) => !!user?.id && item.posterId === user.id;
+  /** Owners and administrators can maintain postings. Server verifies both. */
+  const isMine = (item: Opportunity) => item.canManage || (!!user?.id && item.posterId === user.id);
 
   const deleteIdea = useMutation({
     mutationFn: async (ideaId: string) => {
@@ -117,6 +117,8 @@ export default function CollabOpportunities() {
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/mine"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/open-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/suggestions"] });
     },
     onError: (error: any) => {
       toast({

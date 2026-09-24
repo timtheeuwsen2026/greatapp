@@ -4197,6 +4197,7 @@ export interface MVGProgressData {
 
 // Enhanced Experience interface with computed fields for frontend
 export interface ExperienceWithStats extends Experience {
+  ticketRegistrations?: import("./ticketAvailability").TicketRegistrationCount[];
   stats?: {
     averageRating: number;
     totalReviews: number;

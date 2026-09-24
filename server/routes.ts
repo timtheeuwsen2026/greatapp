@@ -12,6 +12,7 @@ import { stripe } from "./stripeClient";
 import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
+import { availableBookingQuantity, BookingCapacityError, isActiveRegistration, ticketId, ticketRegistrationCounts, withTicketCapacity } from "@shared/ticketAvailability";
 import { db } from "./db";
 import { discountLinks, bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks, creatorProfiles } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
@@ -204,26 +205,12 @@ function parseRequestedTicketQuantity(value: unknown): number | null {
 
 async function getAvailableTicketQuantity(
   experienceId: string,
-  ticketSkuId: string,
-  ticketCapacity: unknown,
-  recordedSoldCount: unknown,
+  ticketSkuId: string | null,
 ): Promise<number | null> {
-  const capacity = Number(ticketCapacity);
-  if (!Number.isFinite(capacity) || capacity < 0) return null;
-
+  const experience = await storage.getExperience(experienceId);
+  if (!experience) return 0;
   const existingBookings = await storage.getBookingsByExperience(experienceId);
-  const bookedQuantity = sumBookingTicketQuantity(
-    existingBookings.filter((booking) =>
-      isActiveParticipantBooking(booking.status)
-      && booking.ticketSkuId === ticketSkuId
-    ),
-  );
-  const persistedSoldCount = Number(recordedSoldCount);
-  const soldQuantity = Number.isFinite(persistedSoldCount)
-    ? Math.max(bookedQuantity, persistedSoldCount)
-    : bookedQuantity;
-
-  return Math.max(0, capacity - soldQuantity);
+  return availableBookingQuantity(experience, existingBookings, ticketSkuId);
 }
 
 /**
@@ -4325,6 +4312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // MVG-gated ones — the listing/card UI shows "X / Y participants" for all of them.
       const enrichWithLiveLifecycle = async (exps: any[]) => {
         return Promise.all(exps.map(async (exp) => {
+          exp = withTicketCapacity(exp);
           const mvgProgress = await storage.getMVGProgress(exp.id);
           const curr = mvgProgress.current_participants;
           if (exp.requireMinimumParticipants) {
@@ -4456,16 +4444,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Get stats and bookings
-      const stats = await storage.getExperienceStats(req.params.id);
-      const bookings = await storage.getBookingsByExperience(req.params.id);
-      const reviews = await storage.getReviewsByExperience(req.params.id);
+      const stats = await storage.getExperienceStats(experience.id);
+      const bookings = await storage.getBookingsByExperience(experience.id);
+      const reviews = await storage.getReviewsByExperience(experience.id);
       // Enrich with live MVG count for accurate lifecycle status
-      const mvgProgress = await storage.getMVGProgress(req.params.id);
+      const mvgProgress = await storage.getMVGProgress(experience.id);
       const mvgMet = mvgProgress.mvg_met;
       const resolvedMvgStatus = mvgMet ? 'met' : (experience.mvgStatus || 'pending');
+      const ticketRegistrations = ticketRegistrationCounts(experience.ticketSkus, bookings);
 
       res.json({
         ...experience,
+        ticketRegistrations,
+        ticketSkus: Array.isArray(experience.ticketSkus) ? experience.ticketSkus.map((ticket: any, index: number) => ({
+          ...ticket,
+          soldCount: ticketRegistrations.find((row) => row.ticketSkuId === ticketId(ticket, index))?.registered ?? 0,
+        })) : experience.ticketSkus,
         // Override stale DB column with live booking count — single source of truth
         currentParticipants: mvgProgress.current_participants,
         stats,
@@ -5634,12 +5628,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             || `ticket-${ticketSkus.indexOf(selectedTicket)}`,
           )
         : null;
-      if (selectedTicket) {
+      {
         const availableTickets = await getAvailableTicketQuantity(
           experienceId,
-          resolvedTicketSkuId!,
-          selectedTicket.ticketCapacity,
-          selectedTicket.soldCount,
+          resolvedTicketSkuId,
         );
         if (
           availableTickets !== null
@@ -5783,6 +5775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let paymentIntentId = stripePaymentIntentId;
       let paymentReadyForNotifications = fullPrice === 0;
+      let paymentInFlight = false;
 
       // If no payment intent ID provided, create a new one
       if (!paymentIntentId && (isDepositOnly ? depositAmount : fullPrice) > 0) {
@@ -5871,6 +5864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             paymentIntent = await stripe.paymentIntents.capture(paymentIntent.id);
           }
           paymentReadyForNotifications = ['requires_capture', 'succeeded'].includes(paymentIntent.status);
+          paymentInFlight = true;
         }
       }
 
@@ -5963,8 +5957,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // moment it exists: it is what gets scanned at the door and at the
           // counter, and a booking without one cannot be checked in.
           qrToken: randomBytes(32).toString("hex"),
-        });
+        }, { paymentInFlight });
       } catch (insertError: any) {
+        if (insertError instanceof BookingCapacityError) {
+          return { status: 409, body: { message: insertError.message, availableTickets: insertError.availableTickets } };
+        }
         // The idempotency check above is read-then-insert, so two concurrent
         // creators (in-page checkout, the confirmation page's recovery, the
         // reconciler) can both pass it. The partial unique index on
@@ -6559,6 +6556,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
+    if (Array.isArray(experience.ticketSkus) && experience.ticketSkus.length > 0) {
+      return res.status(409).json({ message: "Please select a ticket on the event page to book this event.", code: "TICKET_SELECTION_REQUIRED" });
+    }
+
     // Validation 3: Experience must be published
     if (experience.status !== "published" && experience.status !== "approved") {
       return res.status(400).json({ 
@@ -7105,6 +7106,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message: "Experience not found",
         });
       }
+      if (Array.isArray(depositExperience.ticketSkus) && depositExperience.ticketSkus.length > 0) {
+        return res.status(409).json({ message: "Please select a ticket on the event page to book this event.", code: "TICKET_SELECTION_REQUIRED" });
+      }
+
       const depositSchedule = getDepositSchedule({
         experienceType: depositExperience.experienceType,
         startDate: depositExperience.startDate,
@@ -7767,12 +7772,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             || `ticket-${ticketSkus.indexOf(selectedTicket)}`,
           )
         : null;
-      if (selectedTicket) {
+      {
         const availableTickets = await getAvailableTicketQuantity(
           experienceId,
-          resolvedTicketSkuId!,
-          selectedTicket.ticketCapacity,
-          selectedTicket.soldCount,
+          resolvedTicketSkuId,
         );
         if (
           availableTickets !== null
@@ -8036,17 +8039,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get booking stats for MVG experiences
   app.get("/api/experiences/:id/booking-stats", async (req, res) => {
     try {
-      const experienceId = req.params.id;
+      const experience = await storage.getExperience(req.params.id)
+        || await storage.getExperienceBySlug(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Experience not found" });
+      const experienceId = experience.id;
       const bookings = await storage.getBookingsByExperience(experienceId);
       
       const currentBookings = sumBookingTicketQuantity(
-        bookings.filter(b => isActiveParticipantBooking(b.status)),
+        bookings.filter(isActiveRegistration),
       );
       const confirmedBookings = sumBookingTicketQuantity(
-        bookings.filter(b => b.status === "confirmed"),
+        bookings.filter(b => isActiveRegistration(b) && b.status === "confirmed"),
       );
       
-      res.json({ currentBookings, confirmedBookings });
+      res.json({ currentBookings, confirmedBookings, capacity: experience.maxParticipants,
+        ticketRegistrations: ticketRegistrationCounts(experience.ticketSkus, bookings) });
     } catch (error: any) {
       res.status(500).json({ message: "Error fetching booking stats: " + error.message });
     }
@@ -11358,13 +11365,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { ready, forming, pastIdeas };
   }
 
-  app.get("/api/collab/opportunities", isAuthenticated, async (_req: any, res) => {
+  app.get("/api/collab/opportunities", isAuthenticated, async (req: any, res) => {
     try {
       const { ready, forming, pastIdeas } = await buildCollabOpportunities();
+      const userId = resolveCurrentUserId(req);
+      const isAdmin = await checkIsAdmin(req);
+      const withPermissions = (idea: any) => ({ ...idea, canManage: idea.posterId === userId || isAdmin });
       res.json({
         ready,
-        forming,
-        pastIdeas,
+        forming: forming.map(withPermissions),
+        pastIdeas: pastIdeas.map(withPermissions),
         // Same numbers the summary badge shows, from the same call, so a badge
         // that disagrees with the list is immediately visible as a bug.
         readyCount: ready.length,
@@ -11834,6 +11844,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!idea) return res.status(404).json({ message: "That idea is no longer listed" });
 
       const isOwner = idea.posterId === userId;
+      const canManage = isOwner || await checkIsAdmin(req);
       const poster = await storage.getUser(idea.posterId).catch(() => null);
       const responses = isOwner ? await storage.getCollabIdeaResponses(idea.id) : [];
       const counts = await storage.countCollabResponsesByIdea([idea.id]);
@@ -11844,6 +11855,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         ...idea,
         isOwner,
+        canManage,
         posterName: poster?.firstName || "A member",
         period: formatCollabPeriod(idea.estimatedStart, idea.estimatedEnd),
         groupSize: formatCollabGroupSize(idea.groupSizeMin, idea.groupSizeMax),
@@ -11876,7 +11888,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = resolveCurrentUserId(req);
       const idea = await storage.getCollabIdea(req.params.id);
       if (!idea) return res.status(404).json({ message: "Not found" });
-      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+      if (idea.posterId !== userId && !await checkIsAdmin(req)) return res.status(403).json({ message: "Access denied" });
 
       const body = req.body || {};
       const parsed = parseCollabIdeaBody(body);
@@ -11901,7 +11913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = resolveCurrentUserId(req);
       const idea = await storage.getCollabIdea(req.params.id);
       if (!idea) return res.status(404).json({ message: "Not found" });
-      if (idea.posterId !== userId) return res.status(403).json({ message: "Access denied" });
+      if (idea.posterId !== userId && !await checkIsAdmin(req)) return res.status(403).json({ message: "Access denied" });
 
       await storage.deleteCollabIdea(idea.id);
       res.json({ deleted: true });
@@ -13987,10 +13999,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const events = await Promise.all(owned.map(async (experience: any) => {
         const all = await storage.getBookingsByExperience(experience.id);
-        const active = (all || []).filter((booking: any) => isActiveParticipantBooking(booking.status));
+        const active = (all || []).filter(isActiveRegistration);
 
         const skus: any[] = Array.isArray(experience.ticketSkus) ? experience.ticketSkus : [];
-        const skuById = new Map(skus.map((sku: any) => [sku.id, sku]));
+        const skuById = new Map(skus.map((sku: any, index: number) => [ticketId(sku, index), sku]));
 
         let rsvps = 0;
         let ticketsSold = 0;
@@ -14052,6 +14064,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rsvps,
           ticketsSold,
           attendees: rsvps + ticketsSold,
+          ticketRegistrations: ticketRegistrationCounts(experience.ticketSkus, all),
           donations,
           grossRevenue,
           addOnRevenue,
@@ -17273,6 +17286,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: 'Experience not found' });
       }
 
+      if (Array.isArray(experience.ticketSkus) && experience.ticketSkus.length > 0) {
+        return res.status(409).json({ message: "Please select a ticket on the event page to book this event.", code: "TICKET_SELECTION_REQUIRED" });
+      }
+
       // Check availability
       if ((experience.currentParticipants || 0) >= experience.maxParticipants) {
         return res.status(400).json({ error: 'Experience is fully booked' });
@@ -17333,6 +17350,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.getExperience(experienceId);
       if (!experience) {
         return res.status(404).json({ error: 'Experience not found' });
+      }
+
+      if (Array.isArray(experience.ticketSkus) && experience.ticketSkus.length > 0) {
+        return res.status(409).json({ message: "Please select a ticket on the event page to book this event.", code: "TICKET_SELECTION_REQUIRED" });
       }
 
       // Check if soft-hold is enabled
@@ -17415,6 +17436,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.getExperience(reservation.experienceId);
       if (!experience) {
         return res.status(404).json({ error: 'Experience not found' });
+      }
+
+      if (Array.isArray(experience.ticketSkus) && experience.ticketSkus.length > 0) {
+        return res.status(409).json({ message: "Please select a ticket on the event page to book this event.", code: "TICKET_SELECTION_REQUIRED" });
       }
 
       // Calculate amounts

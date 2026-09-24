@@ -1,3 +1,4 @@
+import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -116,6 +117,7 @@ export default function ExperienceDetails() {
   const { data: experience, isLoading, error } = useQuery<ExperienceWithStats>({
     queryKey: ["/api/experiences", experienceId, previewToken ?? ""],
     enabled: !!experienceId,
+    refetchInterval: 30_000,
     queryFn: async () => {
       const url = `/api/experiences/${experienceId}`
         + (previewToken ? `?preview=${encodeURIComponent(previewToken)}` : "");
@@ -899,6 +901,7 @@ export default function ExperienceDetails() {
                     </div>
                   </div>
 
+                  {isCreator && <TicketRegistrationBreakdown rows={experience.ticketRegistrations} />}
                   {/* Current Participants */}
                   {liveParticipantCount > 0 ? (
                     <div className="space-y-4">

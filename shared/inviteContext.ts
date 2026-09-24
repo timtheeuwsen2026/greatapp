@@ -11,6 +11,7 @@
  */
 
 import { CURRENCY_CONFIG } from "./pricingService";
+import { eventCapacity } from "./ticketAvailability";
 
 export type InviteTicketLine = {
   name: string;
@@ -85,19 +86,13 @@ export function summariseTicketTypes(
 }
 
 /**
- * How many people the event can take. The capacity the creator set wins; a
- * draft that only ever set per-ticket capacities falls back to their sum.
+ * The same ticket-derived capacity used by booking and event pages.
  */
 export function resolveEventCapacity(event: {
   maxParticipants?: number | string | null;
   ticketSkus?: TicketSkuLike[] | null;
 } | null | undefined): number | null {
-  const stated = toNumber(event?.maxParticipants);
-  if (stated > 0) return Math.round(stated);
-
-  const fromTickets = (Array.isArray(event?.ticketSkus) ? event!.ticketSkus! : [])
-    .reduce((total, sku) => total + toNumber(sku?.ticketCapacity), 0);
-  return fromTickets > 0 ? Math.round(fromTickets) : null;
+  return event ? eventCapacity(event) : null;
 }
 
 export function describeEventCapacity(capacity: number | null | undefined): string | null {

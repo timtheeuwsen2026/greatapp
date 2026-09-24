@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { compareHappeningEvents } from "@shared/homepageOrder";
 import { useLocation } from "wouter";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -238,15 +239,10 @@ export default function Home() {
   // here actually happens.
   //
   // "Happening now" is everything open for sign-up, whatever its MVG status,
-  // soonest first. The existing badges carry forming vs. confirmed, so no new
-  // badge logic was needed.
+  // confirmed first, then strongest signups, with date as the tiebreaker.
   const happeningNowExps = [...visibleExperiences]
     .filter((e: any) => e.lifecycleStatus === 'forming' || e.lifecycleStatus === 'confirmed')
-    .sort((a: any, b: any) => {
-      const aDate = new Date(a.startDate || a.fundingDeadline || 0).getTime();
-      const bDate = new Date(b.startDate || b.fundingDeadline || 0).getTime();
-      return aDate - bDate;
-    });
+    .sort(compareHappeningEvents);
 
   // "Proven & popular" — what already filled up or already happened, ranked by
   // how many people came. This is the social proof that was missing entirely:

@@ -33,25 +33,7 @@ export default function HowItWorks() {
           <p className="text-xl text-gray-500 dark:text-gray-400 mb-8 max-w-xl mx-auto">
             Three steps. One commitment. Nothing charged if the group never comes together.
           </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/experiences">
-              <Button size="lg" className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto">
-                Explore Experiences
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-            {/* Anyone who lands here wearing the wrong hat needs one click out. */}
-            <Link href="/how-it-works/partners">
-              <Button
-                size="lg"
-                variant="outline"
-                className="font-semibold px-8 py-5 h-auto"
-                data-testid="link-partner-guide"
-              >
-                I'm a creator, venue or promoter
-              </Button>
-            </Link>
-          </div>
+
         </div>
       </section>
 
@@ -128,12 +110,23 @@ export default function HowItWorks() {
             </p>
           </div>
 
-          {/* CTA */}
-          <div className="text-center">
+          {/* Actions follow the video and steps. */}
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link href="/experiences">
-              <Button size="lg" className="bg-primary hover:bg-primary/90 text-white font-semibold px-12 py-6 h-auto text-lg">
-                Find something to go to
+              <Button size="lg" className="bg-primary hover:bg-primary/90 text-white font-semibold px-8 py-5 h-auto">
+                Explore Experiences
                 <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </Link>
+            {/* Anyone who lands here wearing the wrong hat needs one click out. */}
+            <Link href="/how-it-works/partners">
+              <Button
+                size="lg"
+                variant="outline"
+                className="font-semibold px-8 py-5 h-auto"
+                data-testid="link-partner-guide"
+              >
+                I'm a creator, venue or promoter
               </Button>
             </Link>
           </div>

@@ -126,6 +126,7 @@ import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
 import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillmentRules";
 import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
+import { availableBookingQuantity, BookingCapacityError, withTicketCapacity } from "@shared/ticketAvailability";
 import { getVenueDealTermsKey, normalizeVenueDealModel } from "@shared/venueDealModels";
 
 /**
@@ -292,7 +293,7 @@ export interface IStorage {
   rejectExperience(id: string, reviewedBy: string, reviewNotes?: string): Promise<Experience>;
 
   // Booking operations
-  createBooking(booking: InsertBooking): Promise<Booking>;
+  createBooking(booking: InsertBooking, options?: { paymentInFlight?: boolean }): Promise<Booking>;
   getBooking(id: string): Promise<Booking | undefined>;
   getBookingByUserAndExperience(userId: string, experienceId: string): Promise<Booking | undefined>;
   getUserBookings(userId: string): Promise<Booking[]>;
@@ -660,7 +661,7 @@ export class DatabaseStorage implements IStorage {
 
   // Experience operations
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
-    const normalizedExperience = withoutManualDealUnlock(withoutSingleDayDeposits(experienceData));
+    const normalizedExperience = withTicketCapacity(withoutManualDealUnlock(withoutSingleDayDeposits(experienceData)));
     const [experience] = await db.insert(experiences).values([normalizedExperience]).returning();
     this.syncDirectPromotionDeals(experience.id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
@@ -670,16 +671,17 @@ export class DatabaseStorage implements IStorage {
 
   async getExperience(id: string): Promise<Experience | undefined> {
     const [experience] = await db.select().from(experiences).where(eq(experiences.id, id));
-    return experience;
+    return experience ? withTicketCapacity(experience) : undefined;
   }
 
   async getExperienceBySlug(slug: string): Promise<Experience | undefined> {
     const [experience] = await db.select().from(experiences).where(eq(experiences.slug, slug));
-    return experience;
+    return experience ? withTicketCapacity(experience) : undefined;
   }
 
   async getAllExperiences(): Promise<Experience[]> {
-    return await db.select().from(experiences).orderBy(desc(experiences.createdAt));
+    const rows = await db.select().from(experiences).orderBy(desc(experiences.createdAt));
+    return rows.map(withTicketCapacity);
   }
 
   async getExperiences(options: { category?: string; status?: string; limit?: number } = {}): Promise<Experience[]> {
@@ -845,11 +847,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getExperiencesByCreator(creatorId: string): Promise<Experience[]> {
-    return await db
+    const rows = await db
       .select()
       .from(experiences)
       .where(eq(experiences.creatorId, creatorId))
       .orderBy(desc(experiences.createdAt));
+    return rows.map(withTicketCapacity);
   }
 
   async getExperiencesByVenue(venueId: string): Promise<Experience[]> {
@@ -881,6 +884,7 @@ export class DatabaseStorage implements IStorage {
       : updates;
     const updateData = {
       ...withoutManualDealUnlock(normalizedUpdates),
+      ...(current ? { maxParticipants: withTicketCapacity({ ...current, ...normalizedUpdates }).maxParticipants } : {}),
       updatedAt: new Date(),
     } as any;
     const [experience] = await db
@@ -1394,9 +1398,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Booking operations
-  async createBooking(bookingData: InsertBooking): Promise<Booking> {
-    const [booking] = await db.insert(bookings).values(bookingData).returning();
-    return booking;
+  async createBooking(bookingData: InsertBooking, options: { paymentInFlight?: boolean } = {}): Promise<Booking> {
+    return db.transaction(async (tx) => {
+      // Serialise competing RSVPs across server instances. A read before the
+      // insert alone lets two people both take the last seat.
+      const [event] = await tx.select().from(experiences)
+        .where(eq(experiences.id, bookingData.experienceId)).for("update");
+      if (!event) throw new Error("Experience not found");
+      const existing = await tx.select().from(bookings)
+        .where(eq(bookings.experienceId, event.id));
+      const remaining = availableBookingQuantity(event, existing, bookingData.ticketSkuId ?? null);
+      if (remaining !== null && sumBookingTicketQuantity([bookingData]) > remaining) {
+        // Payment recovery must keep its existing behaviour: a payment already
+        // in progress/captured cannot be abandoned without a booking. Paid
+        // checkout also checks capacity before creating its PaymentIntent.
+        if (!options.paymentInFlight || !bookingData.stripePaymentIntentId) throw new BookingCapacityError(remaining);
+        console.warn(`[Booking] Payment recovery exceeds capacity for experience ${event.id}`);
+      }
+      const [booking] = await tx.insert(bookings).values(bookingData).returning();
+      return booking;
+    });
   }
 
   async getBooking(id: string): Promise<Booking | undefined> {
@@ -5995,9 +6016,11 @@ export class DatabaseStorage implements IStorage {
 
   /** Withdrawing an idea takes its invites with it. */
   async deleteCollabIdea(id: string): Promise<void> {
-    await db.delete(collabIdeaInvites).where(eq(collabIdeaInvites.ideaId, id));
-    await db.delete(collabIdeaResponses).where(eq(collabIdeaResponses.ideaId, id));
-    await db.delete(collabIdeas).where(eq(collabIdeas.id, id));
+    await db.transaction(async (tx) => {
+      await tx.delete(collabIdeaInvites).where(eq(collabIdeaInvites.ideaId, id));
+      await tx.delete(collabIdeaResponses).where(eq(collabIdeaResponses.ideaId, id));
+      await tx.delete(collabIdeas).where(eq(collabIdeas.id, id));
+    });
   }
 
   // ── The Partners model ──────────────────────────────────────────────────

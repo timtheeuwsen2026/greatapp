@@ -1,3 +1,4 @@
+import { withTicketCapacity, ticketCapacityTotal } from "@shared/ticketAvailability";
 import { useState, useEffect, useMemo, useRef, useCallback, Component, ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -621,7 +622,7 @@ function normalizeDraftForSave(draft: any) {
 }
 
 function normalizeEventTripFields(draft: any) {
-  const copy = { ...draft };
+  const copy = withTicketCapacity({ ...draft });
   const type = copy.type || 'one-day';
   copy.greatPillars = normalizeGreatPillars(copy.greatPillars);
   copy.monetisationMode = 'creator_led';
@@ -6213,8 +6214,15 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, maxParticipants, eventType, isMultiDayEvent, isNonRoomEvent, hasRooms]);
 
-  // Sync pricePerPerson to legacy price field for backend compatibility
-  // Set legacy pricePerPerson to the lowest ticket price
+  // Keep the event total in sync when ticket capacities are edited.
+  const configuredTicketCapacity = ticketCapacityTotal(ticketSkus);
+  useEffect(() => {
+    if (configuredTicketCapacity !== null && configuredTicketCapacity !== maxParticipants) {
+      form.setValue('maxParticipants', configuredTicketCapacity, { shouldDirty: true });
+    }
+  }, [configuredTicketCapacity, maxParticipants, form]);
+
+  // Set legacy pricePerPerson to the lowest ticket price.
   useEffect(() => {
     if (ticketSkus && ticketSkus.length > 0) {
       const prices = ticketSkus.map((s: any) => Number(s.pricePerPerson || 0)).filter((p: number) => Number.isFinite(p));

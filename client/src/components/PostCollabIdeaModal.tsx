@@ -248,6 +248,9 @@ export default function PostCollabIdeaModal({
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/mine"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/open-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/suggestions"] });
+      if (editing?.id) queryClient.invalidateQueries({ queryKey: [`/api/collab/ideas/${editing.id}`] });
       onOpenChange(false);
     },
     onError: (error: any) => {

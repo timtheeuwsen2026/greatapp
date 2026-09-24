@@ -92,6 +92,8 @@ export default function CollabIdeaDetailDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/mine"] });
       queryClient.invalidateQueries({ queryKey: ["/api/collab/opportunities/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/ideas/open-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/collab/suggestions"] });
       setConfirmDelete(false);
       onOpenChange(false);
     },
@@ -273,7 +275,7 @@ export default function CollabIdeaDetailDialog({
               )}
 
               {/* ── The poster's own view ─────────────────────────────── */}
-              {idea.isOwner ? (
+              {(idea.isOwner || idea.canManage) ? (
                 <div className="space-y-4 border-t pt-4">
                   <p className="text-sm text-gray-600 dark:text-gray-300">
                     {idea.responseCount === 0
@@ -282,7 +284,7 @@ export default function CollabIdeaDetailDialog({
                   </p>
 
                   {/* Your own trackable link, for your own audience. */}
-                  {idea.ownCommunityToken && (
+                  {idea.isOwner && idea.ownCommunityToken && (
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
                         Your community link
@@ -350,7 +352,7 @@ export default function CollabIdeaDetailDialog({
                     </Button>
                     {/* The handoff: an idea that found its match becomes an
                         event pre-filled with what was already answered here. */}
-                    {idea.status === "open" && (
+                    {idea.isOwner && idea.status === "open" && (
                       <Button
                         className="ml-auto"
                         disabled={convert.isPending}

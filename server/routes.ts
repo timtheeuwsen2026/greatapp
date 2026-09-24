@@ -1,3 +1,5 @@
+import { acceptedPartnerCommissionPct, partnerMemberDiscount, partnerShareUrl } from '@shared/partnerPromotion';
+import { venueInviteTerms, savedVenueInviteTerms } from '@shared/venueInviteTerms';
 import type { Express } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
@@ -551,7 +553,8 @@ async function createVenueInviteForExperience(experience: any) {
     venueCapacity: experience.manualVenueCapacity ?? null,
     propertyUrl: experience.manualVenuePropertyUrl || null,
     proposedModel: experience.venueTargetDeal || null,
-    proposedValue: experience.venueTargetDealValue ?? null,
+    proposedValue: experience.venueTargetDeal === 'venue_barter' ? null : experience.venueTargetDealValue ?? null,
+    proposedTerms: venueInviteTerms(experience),
     currency: (experience.currency || 'eur').toLowerCase(),
     status: 'pending',
     expiresAt: new Date(Date.now() + VENUE_INVITE_TTL_DAYS * 24 * 60 * 60 * 1000),
@@ -570,9 +573,10 @@ function buildRequestedVenueContractObject(input: any) {
   // Each model stores its number under its own key — the vocabulary owns that
   // mapping so a new deal type cannot be half-wired.
   const termsKey = getVenueDealTermsKey(model);
-  if (termsKey) {
+  if (termsKey && model !== 'venue_barter') {
     terms[termsKey] = targetValue;
   }
+  Object.assign(terms, venueInviteTerms(input));
 
   return {
     model,
@@ -969,6 +973,14 @@ function partnerRowToEntry(row: any) {
   };
 }
 
+async function eventPartnerShareLink(row: any, experience: any, baseUrl: string) {
+  if (row.status !== 'confirmed' || !row.partnerUserId) return null;
+  const tracking = await storage.getPromoterExperience(row.partnerUserId, row.experienceId, 'official_partner');
+  if (!tracking || tracking.promotionDealId !== row.id) return null;
+  const discount = row.dealType === 'member_discount' ? await storage.getPartnerDiscountLink(row.id) : null;
+  return partnerShareUrl(baseUrl, experience?.slug || row.experienceId, row.refCode, tracking.shareToken, discount?.token);
+}
+
 /**
  * Copy the partner rows back onto the experience's own `event_partners` JSON.
  *
@@ -1057,10 +1069,13 @@ async function syncPartnersForExperience(experience: any, organizerId: string): 
     const organizer = await storage.getUser(organizerId).catch(() => null);
     const baseUrl = publicAppBaseUrl();
     for (const row of rows) {
-      if (!row.partnerEmail || row.status !== "invited") continue;
+      if (row.status !== "invited") continue;
+      const account = row.partnerUserId ? await storage.getUser(row.partnerUserId).catch(() => null) : null;
+      const recipient = row.partnerEmail || account?.email;
+      if (!recipient) continue;
       try {
         await notificationService.sendExternalPartnerInviteEmail({
-          to: row.partnerEmail,
+          to: recipient,
           partnerName: row.partnerName,
           creatorName: organizer?.firstName || null,
           eventName: experience.title || "an upcoming experience",
@@ -2478,9 +2493,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid referral code" });
       }
 
-      const trackedPromotion = shareToken
+      let trackedPromotion = shareToken
         ? await storage.getPromoterExperienceByShareToken(String(shareToken))
         : undefined;
+
+      if (!trackedPromotion && referralCode && experienceId) {
+        const event = await storage.getExperience(String(experienceId)) || await storage.getExperienceBySlug(String(experienceId));
+        if (event) trackedPromotion = await storage.getEventPartnerTracking(event.id, referralCode);
+      }
+      const partnerEntry = trackedPromotion?.promotionDealId
+        ? await storage.getExperiencePartner(trackedPromotion.promotionDealId) : undefined;
+      const partnerCode = partnerEntry?.status === 'confirmed' && partnerEntry.partnerUserId === trackedPromotion?.promoterId
+        ? partnerEntry.refCode : null;
 
       let promoter = trackedPromotion
         ? await storage.getUser(trackedPromotion.promoterId)
@@ -2494,11 +2518,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Referral code not found" });
       }
 
-      if (referralCode && promoter.promoterCode && promoter.promoterCode !== referralCode) {
+      if (referralCode && promoter.promoterCode && promoter.promoterCode !== referralCode && partnerCode !== referralCode) {
         return res.status(400).json({ message: "Referral link is invalid for this promoter" });
       }
 
-      const effectiveReferralCode = promoter.promoterCode || referralCode;
+      const effectiveReferralCode = partnerCode || promoter.promoterCode || referralCode;
       if (!effectiveReferralCode) {
         return res.status(400).json({ message: "Referral code is missing for this promoter" });
       }
@@ -5112,6 +5136,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updated = await storage.updateExperience(req.params.id, req.body);
+      if (updated.venueType === 'manual' && updated.manualVenueEmail) {
+        await createVenueInviteForExperience(updated);
+      }
 
       // Editing a live event has to move its partner roster too, or the deals
       // the organiser can see in the builder and the ones the partners can act
@@ -5326,6 +5353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updated = await storage.updateExperience(existing.id, updates);
       await syncBuilderParticipantRoles(updated);
+      await syncPartnersForExperience(updated, existing.creatorId);
 
       // A venue added after the event went live still needs its contract row —
       // the Deal Ledger and the venue's own dashboard both read from it.
@@ -5342,12 +5370,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // moment a claim link can be owed.
       const manualEmail = String(updates.manualVenueEmail || "").trim();
       const previousManualEmail = String((existing as any).manualVenueEmail || "").trim();
-      if (updates.venueType === "manual" && manualEmail && manualEmail.toLowerCase() !== previousManualEmail.toLowerCase()) {
+      if (updates.venueType === "manual" && manualEmail) {
+        const invite = await createVenueInviteForExperience({ ...updated, creatorId: existing.creatorId });
+        if (manualEmail.toLowerCase() !== previousManualEmail.toLowerCase()) {
         (async () => {
-          const invite = await createVenueInviteForExperience({
-            ...updated,
-            creatorId: existing.creatorId,
-          });
           await notificationService.sendExternalVenueInvitation({
             ...updated,
             inviteToken: invite?.token,
@@ -5355,9 +5381,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })().catch((error) => {
           console.error("Failed to send external venue invitation:", error);
         });
+        }
       }
 
-      res.json(updated);
+      res.json(await storage.getExperience(updated.id) || updated);
     } catch (error) {
       console.error("Error updating experience from builder:", error);
       res.status(500).json({ message: "Failed to update experience" });
@@ -5560,6 +5587,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const promoter = await storage.getUser(trackedPromotion.promoterId);
           referralCode = promoter?.promoterCode || providedReferralCode || null;
         }
+      }
+
+      if (!trackedPromotion && providedReferralCode) {
+        trackedPromotion = await storage.getEventPartnerTracking(experienceId, providedReferralCode);
+        if (trackedPromotion) {
+          promoterExperienceId = trackedPromotion.id;
+          referralAudience = 'official_partner';
+          promoterId = trackedPromotion.promoterId;
+        }
+      }
+      if (trackedPromotion?.promotionDealId) {
+        const partnerEntry = await storage.getExperiencePartner(trackedPromotion.promotionDealId);
+        if (partnerEntry?.status === 'confirmed' && partnerEntry.partnerUserId === promoterId) referralCode = partnerEntry.refCode;
       }
 
       if (!promoterId && providedPromoterId) {
@@ -5885,14 +5925,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const acceptedDeal = trackedPromotion?.promotionDealId
             ? await storage.getPromotionDeal(trackedPromotion.promotionDealId)
             : undefined;
-          const officialDealType = acceptedDeal?.dealType || experience.promotionDealType;
-          if (officialDealType === 'commission_per_ticket') {
-            referralCommissionPct = Number(
-              acceptedDeal?.terms?.commissionPct
-                ?? experience.influencerCommissionPct
-                ?? 0,
-            );
-          }
+          referralCommissionPct = acceptedPartnerCommissionPct(acceptedDeal, experienceId, promoterId);
         } else if (experience.participantReferralDealType === 'commission_per_ticket') {
           referralCommissionPct = Number(experience.participantReferralCommissionPct || 0);
         }
@@ -12246,16 +12279,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const codes = rows.map((row) => row.refCode).filter(Boolean) as string[];
       const joins = await storage.countPartnerReferralJoins(experience.id, codes).catch(() => new Map());
 
-      res.json(rows.map((row) => ({
+      res.json(await Promise.all(rows.map(async (row) => ({
         ...row,
         // The invite token is the credential behind a claim link, so only the
         // organiser (who has to send it) ever receives it.
         inviteToken: isOrganizer ? row.inviteToken : undefined,
+        shareUrl: await eventPartnerShareLink(row, experience, getAppBaseUrl(req)),
         dealLabel: partnerDealLabel(row.dealType),
         typeLabel: partnerTypeLabel(row.partnerType),
         termSummary: partnerTermSummary({ dealType: row.dealType, terms: row.terms || {} }),
         joined: joins.get(row.refCode || "") || 0,
-      })));
+      }))));
     } catch (error) {
       console.error("Error loading event partners:", error);
       res.status(500).json({ message: "Failed to load partners" });
@@ -12318,13 +12352,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "This is your own event" });
       }
 
+      if (row.partnerUserId && row.partnerUserId !== userId) return res.status(403).json({ message: 'This invitation belongs to another account' });
+      if (row.status === 'confirmed' || row.status === 'declined') return res.json({ partner: row, accepted: row.status === 'confirmed' });
+
       const accept = req.body?.accept !== false;
       // Accepting claims the row for this account, which is what makes it
       // appear on their Partner Home from then on.
       const updated = await storage.updateExperiencePartnerStatus(
         row.id,
         accept ? "confirmed" : "declined",
-        { partnerUserId: row.partnerUserId || userId },
+        { partnerUserId: userId },
       );
       // So the event itself reflects the answer, not just the partner's row.
       await mirrorPartnerRowsToExperience(row.experienceId);
@@ -12363,6 +12400,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const row = await storage.getExperiencePartner(req.params.id);
       if (!row) return res.status(404).json({ message: "Not found" });
       if (row.partnerUserId !== userId) return res.status(403).json({ message: "Access denied" });
+      if (row.status === 'confirmed' || row.status === 'declined') return res.json({ partner: row, accepted: row.status === 'confirmed' });
 
       const accept = req.body?.accept !== false;
       const updated = await storage.updateExperiencePartnerStatus(row.id, accept ? "confirmed" : "declined");
@@ -12399,6 +12437,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? await storage.countPartnerReferralJoins(entry.experienceId, [entry.refCode]).catch(() => new Map())
           : new Map();
         const slugOrId = experience?.slug || entry.experienceId;
+        const tracking = entry.status === 'confirmed' && entry.partnerUserId
+          ? await storage.getPromoterExperience(entry.partnerUserId, entry.experienceId, 'official_partner') : null;
+        const discount = entry.dealType === 'member_discount' ? await storage.getPartnerDiscountLink(entry.id) : null;
         return {
           id: entry.id,
           status: entry.status,
@@ -12414,7 +12455,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // The partner's own trackable link: the same ?ref= attribution the
           // Collab Idea post and the Participant Referral Perk use. One
           // mechanism, reused three ways.
-          shareUrl: entry.refCode ? `${baseUrl}/e/${slugOrId}?ref=${entry.refCode}` : null,
+          shareUrl: tracking?.promotionDealId === entry.id
+            ? partnerShareUrl(baseUrl, slugOrId, entry.refCode, tracking.shareToken, discount?.token) : null,
           refCode: entry.refCode,
           joined: joins.get(entry.refCode || "") || 0,
           // Milestone barter settles on this figure, so the target travels with it.
@@ -17100,7 +17142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = link ? await storage.getExperience(link.experienceId) : null;
       const resolution = resolveDiscountLink({
         link: link as any,
-        discounts: (experience?.discounts as any[]) || [],
+        discounts: await discountsForLink(experience, link),
         ticketSkuId: typeof req.query.ticketSkuId === "string" ? req.query.ticketSkuId : null,
       });
 
@@ -17159,7 +17201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const resolution = resolveDiscountLink({
       link: link as any,
-      discounts: (experience.discounts as any[]) || [],
+      discounts: await discountsForLink(experience, link),
       ticketSkuId,
     });
     if (!resolution.ok) return { linkId: null, perTicket: 0 };
@@ -17168,6 +17210,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       linkId: link.id,
       perTicket: discountAmountForUnitPrice(resolution.discount, unitPrice),
     };
+  }
+
+  async function discountsForLink(experience: any, link: any) {
+    if (!String(link?.discountId || '').startsWith('partner:')) return experience?.discounts || [];
+    const partner = await storage.getExperiencePartner(link.discountId.slice('partner:'.length));
+    if (partner?.experienceId !== experience?.id) return [];
+    const discount = partnerMemberDiscount(partner);
+    return discount ? [discount] : [];
   }
 
   // Revenue calculation endpoint for real-time preview
@@ -17990,6 +18040,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       deal: {
         model: invite.proposedModel,
         value: invite.proposedValue ? Number(invite.proposedValue) : null,
+        terms: savedVenueInviteTerms(invite),
         currency: invite.currency || experience?.currency || 'eur',
       },
       experience: experience ? {
@@ -18152,7 +18203,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         venueStatus: 'venue_pending',
       } as any);
 
-      const requested = buildRequestedVenueContractObject(experience);
+      const requested = buildRequestedVenueContractObject({ ...experience, venueTargetDeal: invite.proposedModel, venueTargetDealValue: invite.proposedValue });
+      requested.terms = { ...requested.terms, ...savedVenueInviteTerms(invite) };
       const existingContract = await storage.getVenueContractByExperience(invite.experienceId);
       if (!existingContract) {
         await storage.upsertVenueContract({
@@ -19135,6 +19187,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         manualVenueName: invite.venueName,
         venueTargetDeal: invite.proposedModel,
         venueTargetDealValue: invite.proposedValue,
+        proposedTerms: savedVenueInviteTerms(invite),
         currency: invite.currency || (experience as any).currency,
         inviteToken: invite.token,
         resendKey: String(Date.now()),
@@ -19144,6 +19197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const refreshed = await storage.updateVenueInvite(invite.id, {
         status: 'pending',
         expiresAt,
+        lastSentAt: new Date(),
       } as any);
 
       res.json({

@@ -44,6 +44,7 @@ type VenueInvite = {
   deal: {
     model: string | null;
     value: number | null;
+    terms?: Record<string, any>;
     currency: string;
   };
   /** A perk the organiser is asking this venue to provide, if any. */
@@ -98,7 +99,7 @@ function describeDeal(deal: VenueInvite['deal']): string {
   if (!model) return 'To be agreed';
 
   const termsKey = getVenueDealTermsKey(model);
-  const terms = termsKey && deal.value != null ? { [termsKey]: deal.value } : {};
+  const terms = deal.terms || (termsKey && deal.value != null ? { [termsKey]: deal.value } : {});
   return formatVenueDealSummary(model, terms, deal.currency);
 }
 

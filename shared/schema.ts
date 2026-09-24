@@ -2119,6 +2119,8 @@ export const venueInvites = pgTable("venue_invites", {
   // Proposed deal, mirroring experiences.venueTargetDeal / venueTargetDealValue.
   proposedModel: varchar("proposed_model", { length: 50 }),
   proposedValue: decimal("proposed_value", { precision: 10, scale: 2 }),
+  proposedTerms: jsonb("proposed_terms").$type<Record<string, any>>().default({}),
+  lastSentAt: timestamp("last_sent_at").defaultNow(),
   currency: varchar("currency", { length: 10 }).default("eur"),
 
   // pending → claimed → accepted | countered | declined, or expired

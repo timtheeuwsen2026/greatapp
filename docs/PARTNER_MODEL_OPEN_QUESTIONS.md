@@ -1,6 +1,6 @@
 # Partner model — what is deliberately not built
 
-Three items from the Create Experience / Partners / Pricing redesign are
+Two limitations from the Create Experience / Partners / Pricing redesign are
 recorded here rather than implemented. All were reviewed and all were left alone
 on purpose, so this is the place to look before anyone "fixes" any of them.
 
@@ -81,33 +81,16 @@ the number without deciding that question would not be an improvement.
 
 ---
 
-## Community vs. Affiliate
+## Community vs. Affiliate — clarified September 24, 2026
 
-*(redesign point 53 — unresolved; build against the current four-type structure)*
+The four types describe the partner, not the payment mechanism. Any type may
+use Commission per Ticket. Accepting the invitation connects its own agreed
+terms to the shared promotion, booking attribution and payout records. The
+commission applies only to tickets attributed to that partner's link, after
+checkout discounts. Rates for different partners are alternatives and are not
+added together against the event's total revenue.
 
-Both are, in plain terms, "someone who brings people". The intended
-distinction is the shape of the deal rather than what they do:
-
-| | Community | Affiliate |
-|---|---|---|
-| Typical deal | Revenue Split or Barter | Commission per Ticket only |
-| Feels like | a co-organiser | a transaction |
-| Brings | its own members | ticket sales |
-
-A real partner can sit either side of that line, and some sit on it: a run club
-that takes a commission is doing an affiliate's deal under a community's name.
-
-Two options were put, and neither has been chosen:
-
-- **(a) Keep them separate.** The type is a structural signal about the
-  relationship even when the deal types overlap — an organiser reads
-  "Community" and "Affiliate" differently, and they should.
-- **(b) Merge them** into one "brings people" type, differentiated only by the
-  deal chosen.
-
-Until this is settled, **build against the current four-type structure**
-(`community`, `sponsor_brand`, `service_provider`, `affiliate`). That is what
-points 27, 28, 36 and 42 of the redesign were built against. The types are
-defined in one place, `PARTNER_TYPES` in `shared/eventPartners.ts`, so a merge
-later is a change to that list and to the tiles that read it — not a migration
-of every event.
+Member Discount is a separate deal available to every type. Acceptance creates
+a discount link that applies the agreed percentage at checkout; it does not
+pay a commission. Invitations are sent once, and ordinary event saves update
+the proposal without sending another invitation.

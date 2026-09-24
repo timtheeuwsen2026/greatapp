@@ -1,3 +1,4 @@
+import { savedVenueInviteTerms } from '@shared/venueInviteTerms';
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import type { TicketRegistrationCount } from "@shared/ticketAvailability";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -2007,8 +2008,7 @@ function CreatorDashboardContent() {
                     <CardContent className="text-sm text-gray-600 dark:text-gray-400">
                       {invite.proposedModel && (
                         <p>
-                          Proposed: {getVenueDealLabel(invite.proposedModel, dealSymbol(invite.currency))}
-                          {invite.proposedValue != null && ` · ${invite.proposedValue}${invite.proposedModel === "revenue_share" ? "%" : ""}`}
+                          Proposed: {formatVenueDealSummary(invite.proposedModel, savedVenueInviteTerms(invite), invite.currency)}
                         </p>
                       )}
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">

@@ -159,8 +159,8 @@ export default function AddPartnerModal({
   // visible reason why. Move to the type's own first deal instead.
   useEffect(() => {
     if (dealOptions.some((deal) => deal.id === dealType)) return;
-    const fallback = PARTNER_TYPES.find((type) => type.id === partnerType)?.suggestedDeals?.[0]
-      || dealOptions[0]?.id;
+    const suggested = PARTNER_TYPES.find((type) => type.id === partnerType)?.suggestedDeals || [];
+    const fallback = suggested.find((id) => dealOptions.some((deal) => deal.id === id)) || dealOptions[0]?.id;
     if (fallback) {
       setDealType(fallback);
       setTerms({});
@@ -489,15 +489,15 @@ export default function AddPartnerModal({
           </div>
 
           {/* ── The fields this deal needs, and only those ─────────────── */}
-          {dealType === "commission_per_ticket" && (
+          {dealType === "commission_per_ticket" && dealOptions.some((deal) => deal.id === dealType) && (
             <div className="space-y-3 rounded-xl border p-4">
               <div>
-                <Label htmlFor="partner-commission">Commission (% of ticket revenue)</Label>
+                <Label htmlFor="partner-commission">Commission (% of their attributed ticket sales)</Label>
                 <Input
                   id="partner-commission"
                   type="number"
                   min="0"
-                  max="50"
+                  max="100"
                   step="0.5"
                   value={terms.commissionPct ?? ""}
                   onChange={(e) => setTerm("commissionPct", e.target.value ? parseFloat(e.target.value) : undefined)}
@@ -505,6 +505,8 @@ export default function AddPartnerModal({
                   data-testid="input-partner-commission"
                 />
               </div>
+
+              <p className="text-xs text-muted-foreground">Applies only to tickets booked through this partner’s tracking link, after discounts. Their link becomes available on Partner Home when they accept the invitation, for every partner type.</p>
 
               {/* Affiliate's own two fields, inline — the same pattern as
                   Milestone Barter's attendee target, not a separate section. */}
@@ -547,6 +549,17 @@ export default function AddPartnerModal({
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {dealType === "member_discount" && (
+            <div className="space-y-3 rounded-xl border p-4">
+              <Label htmlFor="partner-member-discount">Member discount (%)</Label>
+              <Input id="partner-member-discount" type="number" min="0.01" max="100" step="0.5"
+                value={terms.discountPct ?? ""}
+                onChange={(event) => setTerm("discountPct", event.target.value ? Number(event.target.value) : undefined)}
+                data-testid="input-partner-member-discount" />
+              <p className="text-xs text-muted-foreground">After acceptance, their member link applies this discount at checkout. No commission is paid on this deal.</p>
             </div>
           )}
 

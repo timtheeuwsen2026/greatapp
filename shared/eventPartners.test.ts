@@ -147,7 +147,7 @@ describe("validatePartnerEntry", () => {
   it("names the field it is waiting on, per deal type", () => {
     expect(validatePartnerEntry({
       partnerType: "affiliate", name: "Ana", dealType: "commission_per_ticket", terms: {},
-    })).toContain("Enter a commission percentage above zero");
+    })).toContain("Enter a commission percentage above zero and at most 100");
 
     expect(validatePartnerEntry({
       partnerType: "community", name: "Run Club", dealType: "milestone_barter", terms: {},
@@ -180,7 +180,7 @@ describe("partnerTermSummary", () => {
     expect(partnerTermSummary(partner())).toBe("2 × free tickets per 15 people brought");
     expect(partnerTermSummary(partner({
       dealType: "commission_per_ticket", terms: { commissionPct: 10 },
-    }))).toBe("10% of ticket revenue");
+    }))).toBe("10% of ticket sales through their link");
     expect(partnerTermSummary(partner({
       dealType: "financial_sponsorship", terms: { amount: 250 },
     }), "€")).toBe("€250.00 towards the event");
@@ -233,6 +233,7 @@ describe("deal availability by partner type", () => {
 
   it("leaves every other combination alone", () => {
     expect(dealTypesForPartnerType("community").map((deal) => deal.id)).toEqual([
+      "member_discount",
       "commission_per_ticket",
       "milestone_barter",
       "brand_barter",
@@ -372,16 +373,14 @@ describe("deriveLegacyPromotionFields — what the payout engine still reads", (
     expect(legacy.influencerCommissionPct).toBe(0);
   });
 
-  it("only emails an invite to a partner who actually gave an address", () => {
+  it("leaves modern invitations to the per-partner flow instead of sending a second legacy offer", () => {
     const legacy = deriveLegacyPromotionFields([
       partner({ id: "a", source: "invite_link", email: "bar@example.com", name: "Beach Bar" }),
       partner({ id: "b", source: "invite_link", email: null, name: "Handle Only" }),
       partner({ id: "c", source: "platform", partnerUserId: "user-1", name: "On Great" }),
     ]);
-    expect(legacy.promotionExternalInvites).toEqual([
-      { id: "a", email: "bar@example.com", name: "Beach Bar", website: "" },
-    ]);
-    expect(legacy.promotionSelectedPartnerIds).toEqual(["user-1"]);
+    expect(legacy.promotionExternalInvites).toEqual([]);
+    expect(legacy.promotionSelectedPartnerIds).toEqual([]);
   });
 
   it("returns a clean set of fields for an event with no partners at all", () => {

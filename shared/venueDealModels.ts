@@ -899,6 +899,11 @@ export function formatVenueDealSummary(
   const code = String(currency || terms?.currency || "eur").toUpperCase();
   const value = readVenueDealValue(normalized, terms);
 
+  if (normalized === "venue_barter") {
+    const description = String(terms?.barterTerms || '').trim();
+    return `Barter — no money exchanged${description ? ` · ${description}` : ''}`;
+  }
+
   if (definition.valueKind === "none") {
     const accessFee = Number(terms?.accessFee || 0);
     return accessFee > 0

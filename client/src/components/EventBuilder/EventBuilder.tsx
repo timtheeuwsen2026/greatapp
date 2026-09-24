@@ -1,3 +1,6 @@
+import { newExternalVenueFields } from '@shared/venueInviteTerms';
+import { maximumPartnerCommissionPct } from '@shared/partnerPromotion';
+import PartnerLinks from '@/components/PartnerLinks';
 import { withTicketCapacity, ticketCapacityTotal } from "@shared/ticketAvailability";
 import { useState, useEffect, useMemo, useRef, useCallback, Component, ReactNode } from "react";
 import { useForm } from "react-hook-form";
@@ -97,7 +100,6 @@ import {
   revenueShareEligible,
   revenueSharePartners,
   sanitisePartnerEntries,
-  totalPartnerSharePct,
   PARTNER_TYPES,
   type DealTier,
   type EventPartnerEntry,
@@ -2258,9 +2260,10 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
         setPublishError(null);
         // Re-baseline the form so the unsaved-changes state clears.
-        form.reset(form.getValues());
+        form.reset({ ...form.getValues(), eventPartners: sanitisePartnerEntries(updated.eventPartners) });
         queryClient.invalidateQueries({ queryKey: ["/api/experiences"] });
         queryClient.invalidateQueries({ queryKey: [`/api/experiences/${editingExperienceId}`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/experiences/${editingExperienceId}/partners`] });
         queryClient.invalidateQueries({ queryKey: ["/api/creator/experiences"] });
         setLastSaved(new Date());
 
@@ -2747,7 +2750,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       case 7:
         return <RoomsStep form={form} />;
       case 8:
-        return <PromotionStep form={form} goToStep={goToStep} manualDealUnlocked={manualDealUnlocked} />;
+        return <PromotionStep form={form} goToStep={goToStep} manualDealUnlocked={manualDealUnlocked} experienceId={editingExperienceId} />;
       case 9:
         return <ItineraryStep form={form} />;
       case 10:
@@ -3716,7 +3719,9 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
                     "border-2 rounded-lg p-4 cursor-pointer transition-all hover:border-primary/50",
                     field.value === "manual" ? "border-primary bg-primary/5" : "border-gray-200 dark:border-gray-700"
                   )}
-                  onClick={() => field.onChange("manual")}
+                  onClick={() => {
+                    Object.entries(newExternalVenueFields()).forEach(([key, value]) => form.setValue(key as any, value as any, { shouldDirty: true }));
+                  }}
                   data-testid="venue-type-manual"
                 >
                   <div className="flex items-center space-x-2">
@@ -3950,7 +3955,13 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
       {/* Manual Venue Fields */}
       {venueType === "manual" && (
         <div className="space-y-4 border rounded-lg p-4 bg-gray-50 dark:bg-gray-800">
-          <h4 className="font-semibold text-lg">Invite External Venue</h4>
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="font-semibold text-lg">Venue invitation details</h4>
+            <Button type="button" variant="outline" size="sm" onClick={() => {
+              Object.entries(newExternalVenueFields()).forEach(([key, value]) => form.setValue(key as any, value as any, { shouldDirty: true }));
+            }}>Invite a different venue</Button>
+          </div>
+          <p className="text-sm text-muted-foreground">Saving updates this proposal. The invitation email is sent once; use Resend invite on your Partners dashboard to send it again.</p>
           
           <FormField
             control={form.control}
@@ -5105,8 +5116,9 @@ function RoomsStep({ form }: { form: any }) {
  * from the list. The payout engine, the Experience Pool and the promotion-deal
  * handshake all read them, and rewriting those was not the job here.
  */
-function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
+function PromotionStep({ form, goToStep, manualDealUnlocked = false, experienceId }: {
   form: any;
+  experienceId?: string;
   /**
    * The Venue tile routes to the Venue step rather than opening Add Partner.
    * Which venue an event is at is not a deal term — it carries an address, a
@@ -5604,6 +5616,9 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
                       {partner.email ? `, and emailed to ${partner.email}` : ''}.
                     </p>
                   )}
+                  {['commission_per_ticket', 'milestone_barter', 'member_discount'].includes(partner.dealType) && (
+                    <PartnerLinks experienceId={experienceId} entryId={partner.id} />
+                  )}
                 </div>
               ))}
 
@@ -5649,9 +5664,8 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false }: {
               </ul>
               {ticketPartners.length > 0 && (
                 <p className="mt-3 border-t pt-2 text-xs text-gray-600 dark:text-gray-300">
-                  {ticketPartners.length === 1 ? 'One partner takes' : `${ticketPartners.length} partners take`}{' '}
-                  <strong>{totalPartnerSharePct(partners)}%</strong> of ticket revenue
-                  between them. Set the rest of the numbers in Pricing.
+                  Each partner earns their agreed rate only on ticket sales through their own link.
+                  Rates are not added together. The highest rate is <strong>{maximumPartnerCommissionPct(partners)}%</strong>.
                 </p>
               )}
             </div>
@@ -6484,15 +6498,6 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     () => revenueSharePartners(pricingPartners),
     [pricingPartners],
   );
-  const partnerShareRows = useMemo(
-    () => ticketRevenuePartners.map((partner) => ({
-      key: partner.id,
-      label: `${partnerTypeLabel(partner.partnerType)} — ${partner.name}`,
-      pct: Number(partner.terms?.commissionPct || 0),
-    })),
-    [ticketRevenuePartners],
-  );
-
   const setPartnerSharePct = (entryId: string, pct: number) => {
     const current = sanitisePartnerEntries(form.getValues('eventPartners'));
     form.setValue(
@@ -6606,12 +6611,10 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     commitmentFee: venueCommitmentFee,
     addOnVenueGross: addOnVenueRevenue,
     addOnCreatorGross: addOnCreatorMargin,
-    promoterCommissionPct: isCommissionPromotion ? influencerCommissionPct : 0,
-    // Each ticket-revenue partner gets its own row in the calculator and its own
-    // subtraction from the total. An affiliate's commission was previously
-    // worked out somewhere else entirely, which is how a creator could read a
-    // net that ignored it.
-    partnerShares: partnerShareRows,
+    // Conservative forecast: all sales attributed at the highest agreed rate.
+    // A booking has one referrer; adding every partner's rate overstates costs.
+    promoterCommissionPct: Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners)),
+    partnerShares: [],
   };
   const economics = calculateEventEconomics(economicsInput);
 
@@ -6636,7 +6639,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
   // The existing rule, extended to every party rather than just the venue:
   // everyone's share plus the platform fee has to leave something behind.
-  const totalTicketTakePct = totalPartnerSharePct(pricingPartners)
+  const totalTicketTakePct = Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners))
     + platformPct
     + (activeVenueDeal === 'revenue_share' || activeVenueDeal === 'commitment_plus_revenue_share'
       ? Number(activeRevenueSharePct || 0)
@@ -7529,10 +7532,10 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                     className="mt-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
                     data-testid="warning-partner-shares-exceed-gross"
                   >
-                    <strong className="block mb-1">These shares add up to more than the tickets earn</strong>
-                    Partners, the venue and the {platformPct}% platform fee come to{' '}
+                    <strong className="block mb-1">The highest referral rate leaves no ticket margin</strong>
+                    The highest referral rate, venue share and {platformPct}% platform fee come to{' '}
                     {Math.round(totalTicketTakePct * 10) / 10}% of ticket revenue between
-                    them, which leaves you nothing. Lower a share before you send this.
+                    them on an attributed booking. Lower a share before you send this.
                   </div>
                 )}
               </div>

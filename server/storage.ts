@@ -1,3 +1,5 @@
+import { connectPartnerPromotion } from './partnerPromotionStorage';
+import { isDeepStrictEqual } from 'node:util';
 import {
   users,
   experiences,
@@ -31,6 +33,7 @@ import {
   promoterExperiences,
   promoterProfiles,
   promotionDeals,
+  discountLinks,
   perkFulfillments,
   type PromotionDeal,
   type InsertPromotionDeal,
@@ -1026,13 +1029,11 @@ export class DatabaseStorage implements IStorage {
       email: invite.email,
       proposedModel: invite.proposedModel,
       proposedValue: invite.proposedValue != null ? Number(invite.proposedValue) : null,
+      proposedTerms: invite.proposedTerms,
       currency: invite.currency || experience.currency || "eur",
       status: invite.status,
       sentAt: invite.createdAt,
-      // Every write to a still-pending invite is a send — the original, a
-      // republish, or a creator asking for it again — so this is when the
-      // venue was last emailed.
-      lastSentAt: invite.updatedAt || invite.createdAt,
+      lastSentAt: invite.lastSentAt || invite.createdAt,
       expiresAt: invite.expiresAt,
     }));
   }
@@ -4471,6 +4472,8 @@ export class DatabaseStorage implements IStorage {
   async syncDirectPromotionDeals(experienceId: string): Promise<void> {
     const experience = await this.getExperience(experienceId);
     if (!experience || !(experience as any).promotionDealType) return;
+    // The Partners roster owns its own invites and per-partner terms.
+    if (Array.isArray(experience.eventPartners) && experience.eventPartners.length) return;
     if (experience.status !== "approved" && experience.status !== "published") return;
 
     const dealType = (experience as any).promotionDealType as string;
@@ -4703,7 +4706,7 @@ export class DatabaseStorage implements IStorage {
     action: "accept" | "decline",
   ): Promise<PromotionDeal | undefined> {
     const deal = await this.getPromotionDeal(dealId);
-    if (!deal || deal.partnerId !== partnerId || deal.status !== "pending") return undefined;
+    if (!deal || deal.source === 'event_partner' || deal.partnerId !== partnerId || deal.status !== "pending") return undefined;
 
     const requiresPayment = deal.dealType === "financial_sponsorship" && action === "accept";
     const [updated] = await db
@@ -6077,57 +6080,68 @@ export class DatabaseStorage implements IStorage {
     organizerId: string,
     entries: Array<Record<string, any>>,
   ): Promise<ExperiencePartner[]> {
-    const existing = await this.getExperiencePartners(experienceId);
-    const byEntryId = new Map(existing.map((row) => [row.entryId || row.id, row]));
-    const keptIds = new Set<string>();
+    return db.transaction(async (tx) => {
+      await tx.select().from(experiences).where(eq(experiences.id, experienceId)).for('update');
+      const existing = await tx.select().from(experiencePartners).where(eq(experiencePartners.experienceId, experienceId));
+      const byEntryId = new Map(existing.map((row) => [row.entryId || row.id, row]));
+      const keptIds = new Set<string>();
 
-    for (const entry of entries) {
-      const entryId = String(entry.id || "");
-      const current = entryId ? byEntryId.get(entryId) : undefined;
+      for (const entry of entries) {
+        const entryId = String(entry.id || "");
+        const current = entryId ? byEntryId.get(entryId) : undefined;
 
-      const values = {
-        experienceId,
-        organizerId,
-        entryId: entryId || null,
-        partnerType: String(entry.partnerType),
-        partnerName: String(entry.name || "Partner"),
-        partnerUserId: entry.partnerUserId || null,
-        partnerEmail: entry.email || null,
-        source: entry.source === "invite_link" ? "invite_link" : "platform",
-        dealType: String(entry.dealType),
-        terms: entry.terms || {},
-        inviteToken: entry.inviteToken || null,
-        refCode: entry.refCode || null,
-        updatedAt: new Date(),
-      };
+        const values = {
+          experienceId,
+          organizerId,
+          entryId: entryId || null,
+          partnerType: String(entry.partnerType),
+          partnerName: String(entry.name || "Partner"),
+          partnerUserId: entry.partnerUserId || null,
+          partnerEmail: entry.email || null,
+          source: entry.source === "invite_link" ? "invite_link" : "platform",
+          dealType: String(entry.dealType),
+          terms: entry.terms || {},
+          inviteToken: entry.inviteToken || null,
+          refCode: entry.refCode || null,
+          updatedAt: new Date(),
+        };
 
-      if (current) {
-        // A partner who already said yes keeps their status; the organiser
-        // editing the terms does not un-accept them, and does not silently
-        // change what they agreed to either — status stays, terms move, and the
-        // partner sees the new terms on their own card.
-        const [updated] = await db
-          .update(experiencePartners)
-          .set(values)
-          .where(eq(experiencePartners.id, current.id))
-          .returning();
-        keptIds.add(current.id);
-        if (updated) byEntryId.set(entryId, updated);
-      } else {
-        const [created] = await db
-          .insert(experiencePartners)
-          .values({ ...values, status: entry.status === "confirmed" ? "confirmed" : "invited" })
-          .returning();
-        if (created) keptIds.add(created.id);
+        if (current) {
+          // Unchanged saves preserve acceptance. Changed terms require a new
+          // acceptance before any further commission is earned.
+          const termsChanged = current.dealType !== values.dealType || !isDeepStrictEqual(current.terms || {}, values.terms);
+          const [updated] = await tx
+            .update(experiencePartners)
+            .set({ ...values,
+              partnerUserId: current.partnerUserId || values.partnerUserId,
+              inviteToken: current.inviteToken || values.inviteToken,
+              refCode: current.refCode || values.refCode,
+              ...(current.status === 'confirmed' && termsChanged ? { status: 'invited' } : {}),
+            })
+            .where(eq(experiencePartners.id, current.id))
+            .returning();
+          keptIds.add(current.id);
+          if (current.status === 'confirmed' && termsChanged) {
+            await tx.update(promotionDeals).set({ status: 'pending', updatedAt: new Date() }).where(eq(promotionDeals.id, current.id));
+          }
+          if (updated) byEntryId.set(entryId, updated);
+        } else {
+          const [created] = await tx
+            .insert(experiencePartners)
+            .values({ ...values, refCode: `${(values.refCode || "partner").slice(0, 50)}-${randomBytes(5).toString("hex")}`, status: "invited" })
+            .returning();
+          if (created) keptIds.add(created.id);
+        }
       }
-    }
 
-    const removable = existing.filter((row) => !keptIds.has(row.id) && row.status !== "confirmed");
-    for (const row of removable) {
-      await db.delete(experiencePartners).where(eq(experiencePartners.id, row.id));
-    }
+      const removable = existing.filter((row) => !keptIds.has(row.id) && row.status !== "confirmed");
+      for (const row of removable) {
+        await tx.update(promotionDeals).set({ status: 'declined', updatedAt: new Date() }).where(eq(promotionDeals.id, row.id));
+        await tx.delete(experiencePartners).where(eq(experiencePartners.id, row.id));
+      }
 
-    return this.getExperiencePartners(experienceId);
+      return tx.select().from(experiencePartners).where(eq(experiencePartners.experienceId, experienceId));
+    });
   }
 
   async updateExperiencePartnerStatus(
@@ -6135,17 +6149,43 @@ export class DatabaseStorage implements IStorage {
     status: string,
     patch: { partnerUserId?: string | null } = {},
   ): Promise<ExperiencePartner | undefined> {
-    const [updated] = await db
-      .update(experiencePartners)
-      .set({
-        status,
-        ...(patch.partnerUserId !== undefined ? { partnerUserId: patch.partnerUserId } : {}),
-        respondedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(experiencePartners.id, id))
-      .returning();
-    return updated;
+    return db.transaction(async (tx) => {
+      const [current] = await tx.select().from(experiencePartners).where(eq(experiencePartners.id, id)).for('update');
+      if (!current) return undefined;
+      if (patch.partnerUserId && current.partnerUserId && current.partnerUserId !== patch.partnerUserId) {
+        throw new Error('This invitation belongs to another account');
+      }
+      if (['confirmed', 'declined'].includes(current.status || '') && current.status !== status) {
+        throw new Error('This invitation has already been answered');
+      }
+      const [updated] = await tx
+        .update(experiencePartners)
+        .set({
+          status,
+          ...(patch.partnerUserId !== undefined ? { partnerUserId: patch.partnerUserId } : {}),
+          respondedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(experiencePartners.id, id))
+        .returning();
+      if (updated) await connectPartnerPromotion(tx, updated);
+      return updated;
+    });
+  }
+
+  async getEventPartnerTracking(experienceId: string, refCode: string) {
+    const [row] = await db.select().from(experiencePartners).where(and(
+      eq(experiencePartners.experienceId, experienceId), eq(experiencePartners.refCode, refCode),
+      eq(experiencePartners.status, 'confirmed'),
+    ));
+    if (!row?.partnerUserId) return undefined;
+    const tracking = await this.getPromoterExperience(row.partnerUserId, experienceId, 'official_partner');
+    return tracking?.promotionDealId === row.id ? tracking : undefined;
+  }
+
+  async getPartnerDiscountLink(partnerId: string) {
+    const [row] = await db.select().from(discountLinks).where(eq(discountLinks.discountId, `partner:${partnerId}`));
+    return row;
   }
 
   /**
@@ -6158,54 +6198,29 @@ export class DatabaseStorage implements IStorage {
    */
   async countPartnerReferralJoins(experienceId: string, refCodes: string[]): Promise<Map<string, number>> {
     if (!refCodes.length) return new Map();
-    const rows = await db
-      .select({ code: referralClicks.promoterCode, total: count() })
-      .from(referralClicks)
-      .where(
-        and(
-          eq(referralClicks.experienceId, experienceId),
-          eq(referralClicks.converted, true),
-          inArray(referralClicks.promoterCode, refCodes),
-        ),
-      )
-      .groupBy(referralClicks.promoterCode);
-    return new Map(rows.map((row: any) => [row.code, Number(row.total) || 0]));
+    const rows = await db.select({ code: bookings.referralCode, total: sql<number>`sum(coalesce(${bookings.ticketQuantity}, 1))` })
+      .from(bookings).where(and(eq(bookings.experienceId, experienceId), inArray(bookings.referralCode, refCodes),
+        inArray(bookings.status, ['pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid']),
+        sql`${bookings.cancelledAt} IS NULL`)).groupBy(bookings.referralCode);
+    return new Map(rows.map(row => [row.code || '', Number(row.total) || 0]));
   }
 
-  /** Total joins attributed to one partner across every event they are on. */
   async countPartnerJoinsByCode(refCodes: string[]): Promise<number> {
     if (!refCodes.length) return 0;
-    const [row] = await db
-      .select({ total: count() })
-      .from(referralClicks)
-      .where(
-        and(
-          eq(referralClicks.converted, true),
-          inArray(referralClicks.promoterCode, refCodes),
-        ),
-      );
+    const [row] = await db.select({ total: sql<number>`sum(coalesce(${bookings.ticketQuantity}, 1))` }).from(bookings)
+      .where(and(inArray(bookings.referralCode, refCodes),
+        inArray(bookings.status, ['pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid']),
+        sql`${bookings.cancelledAt} IS NULL`));
     return Number(row?.total) || 0;
   }
 
-  /**
-   * Who arrived through a given partner's link and booked.
-   *
-   * Returns user ids only. "Message your audience" routes through the platform
-   * precisely so a partner never receives a list of email addresses — and the
-   * cheapest way to guarantee that is for this method never to select one.
-   */
   async getPartnerAudienceUserIds(refCodes: string[]): Promise<string[]> {
     if (!refCodes.length) return [];
-    const rows = await db
-      .select({ userId: referralClicks.visitorUserId })
-      .from(referralClicks)
-      .where(
-        and(
-          eq(referralClicks.converted, true),
-          inArray(referralClicks.promoterCode, refCodes),
-        ),
-      );
-    return Array.from(new Set(rows.map((row: any) => row.userId).filter(Boolean))) as string[];
+    const rows = await db.selectDistinct({ userId: bookings.userId }).from(bookings)
+      .where(and(inArray(bookings.referralCode, refCodes),
+        inArray(bookings.status, ['pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid']),
+        sql`${bookings.cancelledAt} IS NULL`));
+    return rows.map(row => row.userId);
   }
 
   // ── Event content and its licence ───────────────────────────────────────

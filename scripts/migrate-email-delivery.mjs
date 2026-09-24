@@ -26,6 +26,7 @@ const migrationUrls = [
   new URL("../migrations/20260921_venue_barter_deal.sql", import.meta.url),
   new URL("../migrations/20260921_creator_approval_switch.sql", import.meta.url),
   new URL("../migrations/20260922_perk_reward_source_partner.sql", import.meta.url),
+  new URL("../migrations/20260924_venue_invite_terms.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

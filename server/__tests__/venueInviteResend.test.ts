@@ -65,6 +65,27 @@ afterEach(() => {
 });
 
 describe("resending a venue invitation", () => {
+  it("sends the actual non-cash proposal with its full description", async () => {
+    const sent = captureSentEmail();
+    const { notificationService } = await import("../notifications");
+    await notificationService.sendExternalVenueInvitation({ ...invitedEvent,
+      venueTargetDeal: 'venue_barter', venueTargetDealValue: 20,
+      venueBarterTerms: 'Space for bag drop and changing, no payment',
+    });
+    expect(sent[0].html).toContain('Barter');
+    expect(sent[0].html).toContain('Space for bag drop and changing, no payment');
+    expect(sent[0].html).not.toContain('Revenue Split');
+  });
+
+  it("deduplicates partner invitations even when terms are edited and saved", async () => {
+    const sent = captureSentEmail();
+    const { notificationService } = await import("../notifications");
+    for (const proposedTerms of ['10% of attributed ticket sales', '15% of attributed ticket sales', '15% of attributed ticket sales']) {
+      await notificationService.sendExternalPartnerInviteEmail({ to: 'club@example.test', eventName: 'Run', proposedTerms, eventKey: 'event_partner_invite:partner-1' });
+    }
+    expect(sent).toHaveLength(1);
+  });
+
   it("reaches the venue again instead of being swallowed as a duplicate", async () => {
     const sent = captureSentEmail();
     const { notificationService } = await import("../notifications");

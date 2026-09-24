@@ -1,50 +1,10 @@
 /**
- * The Partners model: one event, several two-party deals.
- *
- * The Official Partner Deal used to be a single entry — one deal type, one set
- * of terms, one list of invitees. In practice one event routinely carries
- * several separate barters at once: a run club gets free access for bringing
- * fifteen people, a drinks brand supplies product for exposure, a photographer
- * shoots the day in exchange for a print licence, and an affiliate pushes
- * tickets on commission. None of those could be recorded alongside each other.
- *
- * So a partner entry is a row, not a field, and the four partner types are one
- * coherent set. Affiliate is *not* a special case bolted on beside the others:
- * it is a partner type whose deal happens to be Commission per Ticket, and it
- * is added through the same modal, rendered in the same list, and settled in
- * the same waterfall as everything else.
- *
- * Two rules the rest of the system reads off this file:
- *
- *  1. **Only a Revenue Split / Commission per Ticket deal touches ticket
- *     revenue.** Barter, sponsorship and content-licence partners are settled
- *     outside the waterfall, so they never appear in the Commercial Model's
- *     percentage list and never reduce the organiser's ticket net.
- *
- *  2. **Nothing renders for a partner nobody added.** An event with no partners
- *     shows no partner cards at all — not four greyed-out placeholders implying
- *     something is missing. Simple events must stay simple.
- *
- * Venue is deliberately absent from `PARTNER_TYPES`. Its *deal* is now agreed
- * on the Partners step beside everyone else's, but it is not added through
- * this list: it has its own step, its own operational fields (capacity,
- * address, space type) and its own contract table, and duplicating it here
- * would give an organiser two places to set one thing. Its deal vocabulary
- * lives in `venueDealModels.ts`.
- *
- * Two things are deliberately NOT modelled here. Both are written up in
- * `docs/PARTNER_MODEL_OPEN_QUESTIONS.md`, and neither is an oversight:
- *
- *  - **Three-party chains.** A community's reach often lands the sponsor, and
- *    the money then flows sponsor → organiser → community with the organiser
- *    deciding by judgement how much to pass on. Every deal here has exactly
- *    one counterparty, and a row in the waterfall would promise a payment the
- *    platform does not make.
- *
- *  - **Whether Community and Affiliate are one type.** Both are "someone who
- *    brings people"; the intended difference is the deal's shape rather than
- *    what they do, and a real partner can fit either. Unresolved, so build
- *    against these four.
+ * One event, several two-party partner deals. Partner type describes who they
+ * are; the deal controls what they earn. Community, Affiliate, Sponsor and
+ * Service Provider all use the same commission tracking and payout records.
+ * Commission belongs only to sales attributed to that partner's accepted link.
+ * Member Discount uses the existing discount-link checkout instead of a payout.
+ * Venue proposals have their own operational fields and contract table.
  */
 
 export type PartnerTypeId =
@@ -55,6 +15,7 @@ export type PartnerTypeId =
 
 export type PartnerDealTypeId =
   | "commission_per_ticket"
+  | "member_discount"
   | "milestone_barter"
   | "brand_barter"
   | "financial_sponsorship"
@@ -119,6 +80,13 @@ export type PartnerDealOption = {
 };
 
 export const PARTNER_DEAL_TYPES: PartnerDealOption[] = [
+  {
+    id: "member_discount",
+    label: "Discount for their members",
+    description: "A percentage off tickets booked through this partner’s member link.",
+    revenueShareEligible: false,
+    requires: "percentage",
+  },
   {
     id: "commission_per_ticket",
     label: "Commission per Ticket",
@@ -268,6 +236,7 @@ export function partnerDealTier(
 ): DealTier {
   switch (partner?.dealType) {
     case "commission_per_ticket":
+    case "member_discount":
       return "per_unit";
     case "financial_sponsorship":
       return "flat";
@@ -326,6 +295,7 @@ export type PartnerSourceId = "platform" | "invite_link";
  * the two fields the content licence and the affiliate pool need.
  */
 export type PartnerTerms = {
+  discountPct?: number;
   /** commission_per_ticket — percentage of ticket revenue. */
   commissionPct?: number;
   /**
@@ -506,7 +476,9 @@ export function partnerTermSummary(
   const terms = partner?.terms || {};
   switch (partner?.dealType) {
     case "commission_per_ticket":
-      return `${Number(terms.commissionPct || 0)}% of ticket revenue`;
+      return `${Number(terms.commissionPct || 0)}% of ticket sales through their link`;
+    case "member_discount":
+      return `${Number(terms.discountPct || 0)}% off tickets through their member link`;
     case "milestone_barter":
       return describeMilestoneRatio(terms);
     case "brand_barter":
@@ -546,7 +518,10 @@ export function validatePartnerEntry(entry: Partial<EventPartnerEntry>): string[
   const terms = entry.terms || {};
   switch (entry.dealType) {
     case "commission_per_ticket":
-      if (!(Number(terms.commissionPct) > 0)) problems.push("Enter a commission percentage above zero");
+      if (!(Number(terms.commissionPct) > 0 && Number(terms.commissionPct) <= 100)) problems.push("Enter a commission percentage above zero and at most 100");
+      break;
+    case "member_discount":
+      if (!(Number(terms.discountPct) > 0 && Number(terms.discountPct) <= 100)) problems.push("Enter a member discount above zero and at most 100%");
       break;
     case "milestone_barter":
       if (!(Number(terms.milestoneAttendeeTarget) > 0)) problems.push("Enter how many people they have to bring");
@@ -602,6 +577,9 @@ export function sanitisePartnerEntry(input: any, index = 0): EventPartnerEntry |
   const terms: PartnerTerms = {};
 
   switch (input.dealType as PartnerDealTypeId) {
+    case "member_discount":
+      terms.discountPct = clampPct(rawTerms.discountPct);
+      break;
     case "commission_per_ticket":
       terms.commissionPct = clampPct(rawTerms.commissionPct);
       terms.showInExperiencePool = rawTerms.showInExperiencePool === true;
@@ -774,15 +752,9 @@ export function refCodeFromName(name: string, salt = ""): string {
  * list — rather than asking an organiser to keep two places in step — is what
  * lets the list be the only thing anyone edits.
  *
- * Extracted out of the Partners step because it decides what partners are
- * actually paid: a percentage read off the wrong entry is money going to the
- * wrong party, and that is not something to leave inside a render effect with
- * no test around it.
- *
- * The affiliate is preferred over merely the first entry, because the affiliate
- * is the one whose deal moves money through the ticket rails. An event with a
- * community on barter and an affiliate on commission must report the
- * commission, not the barter.
+ * These fields support legacy event display and the public Experience Pool.
+ * Each accepted partner's own promotion_deals row controls their actual rate;
+ * the per-partner invitation flow owns all direct invitations.
  */
 export type LegacyPromotionFields = {
   promotionDealType: PartnerDealTypeId | null;
@@ -804,8 +776,8 @@ export type LegacyPromotionFields = {
 
 export function deriveLegacyPromotionFields(partners: EventPartnerEntry[]): LegacyPromotionFields {
   const list = Array.isArray(partners) ? partners : [];
-  const affiliate = list.find((partner) => partner.dealType === "commission_per_ticket");
-  const first = affiliate || list[0] || null;
+  const commissionPartner = list.find((partner) => partner.dealType === "commission_per_ticket");
+  const first = commissionPartner || list[0] || null;
   const milestone = list.find((partner) => partner.dealType === "milestone_barter");
   const brand = list.find((partner) => partner.dealType === "brand_barter");
   const sponsorship = list.find((partner) => partner.dealType === "financial_sponsorship");
@@ -814,26 +786,17 @@ export function deriveLegacyPromotionFields(partners: EventPartnerEntry[]): Lega
     // `content_license` has no legacy equivalent and nothing in the old engine
     // settles one, so an event whose only partner holds a content deal reports
     // no legacy deal type rather than a wrong one.
-    promotionDealType: first && first.dealType !== "content_license" ? first.dealType : null,
-    influencerPromotionEnabled: !!affiliate,
-    influencerCommissionPct: affiliate ? Number(affiliate.terms?.commissionPct || 0) : 0,
+    promotionDealType: first && !["content_license", "member_discount"].includes(first.dealType) ? first.dealType : null,
+    influencerPromotionEnabled: !!commissionPartner,
+    influencerCommissionPct: commissionPartner ? Number(commissionPartner.terms?.commissionPct || 0) : 0,
     promotionMilestoneAttendeeTarget: milestone?.terms?.milestoneAttendeeTarget ?? null,
     promotionMilestoneRewardTickets: milestone?.terms?.milestoneRewardTickets ?? 1,
     promotionBrandPitch: brand?.terms?.productDescription || "",
     promotionSponsorshipAmount: sponsorship?.terms?.amount ?? null,
-    promotionSelectedPartnerIds: list
-      .map((partner) => partner.partnerUserId)
-      .filter(Boolean) as string[],
-    // A partner invited by link with no email has nothing to send, so it is
-    // left out rather than emailed to an empty address.
-    promotionExternalInvites: list
-      .filter((partner) => partner.source === "invite_link" && partner.email)
-      .map((partner) => ({
-        id: partner.id,
-        email: partner.email as string,
-        name: partner.name,
-        website: "",
-      })),
-    promoterEnabled: affiliate ? affiliate.terms?.showInExperiencePool === true : null,
+    // Modern partner entries are invited once, with their own terms and token.
+    // Copying them into the single-deal lists sends a second, differently priced offer.
+    promotionSelectedPartnerIds: [],
+    promotionExternalInvites: [],
+    promoterEnabled: commissionPartner ? commissionPartner.terms?.showInExperiencePool === true : null,
   };
 }

@@ -343,11 +343,14 @@ export default function PartnerHome() {
                       />
                     ) : (
                       <p className="text-xs text-gray-500">
-                        Your link is issued when the organiser publishes the event.
+                        This deal has no active member or commission tracking link.
                       </p>
                     )}
 
                     <div className="mt-3 flex justify-end">
+                      {event.dealType === 'commission_per_ticket' && (
+                        <Link href="/promoter"><Button size="sm" variant="outline">Commission &amp; payouts</Button></Link>
+                      )}
                       <Button
                         size="sm"
                         variant="ghost"

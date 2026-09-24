@@ -1,3 +1,4 @@
+import { venueInviteTerms } from '@shared/venueInviteTerms';
 import sgMail from '@sendgrid/mail';
 import { createHash } from 'node:crypto';
 import { storage } from './storage';
@@ -1432,6 +1433,9 @@ The Great. Team
     manualVenuePropertyUrl?: string | null;
     venueTargetDeal?: string | null;
     venueTargetDealValue?: string | number | null;
+    venueBarterTerms?: string | null;
+    venueCommitmentFee?: string | number | null;
+    proposedTerms?: Record<string, any>;
     currency?: string | null;
     maxParticipants?: number | string | null;
     ticketSkus?: any[] | null;
@@ -1455,10 +1459,7 @@ The Great. Team
     // replaced knew nothing about per-head or per-room-per-night deals and
     // printed their raw keys at the venue.
     const proposedModel = normalizeVenueDealModel(event.venueTargetDeal);
-    const proposedTermsKey = getVenueDealTermsKey(proposedModel);
-    const proposedTerms = proposedTermsKey && event.venueTargetDealValue != null
-      ? { [proposedTermsKey]: Number(event.venueTargetDealValue) }
-      : {};
+    const proposedTerms = event.proposedTerms || venueInviteTerms(event);
     const dealSummary = proposedModel
       ? formatVenueDealSummary(proposedModel, proposedTerms, event.currency)
       : 'To be agreed';

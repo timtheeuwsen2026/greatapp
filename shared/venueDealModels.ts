@@ -82,7 +82,7 @@ const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
   revenue_share: {
     model: "revenue_share",
     label: "Revenue Split (%)",
-    description: "The venue takes a percentage of ticket sales.",
+    description: "The venue takes a percentage of ticket and add-on sales booked through Great.",
     valueKind: "percent",
     termsKey: "revenueSharePct",
     valueLabel: "Venue share (%)",
@@ -157,10 +157,10 @@ const DEFINITIONS: Record<VenueDealModel, VenueDealDefinition> = {
     model: "commitment_plus_revenue_share",
     label: "Commitment Fee + Revenue Split ({cur} + %)",
     description:
-      "The venue pays you a small one-off commitment fee upfront, and takes an agreed share of paid ticket revenue afterwards.",
+      "The venue pays you a small one-off commitment fee upfront, and takes an agreed share of ticket and add-on sales afterwards.",
     valueKind: "percent",
     termsKey: "revenueSharePct",
-    valueLabel: "Venue share of ticket revenue (%)",
+    valueLabel: "Venue share of ticket and add-on sales (%)",
     // The share is the ongoing term, so the deal is read as attendee-funded;
     // the fee is a separate one-off recorded alongside it.
     direction: "attendee_funded",
@@ -396,9 +396,9 @@ export function summariseVenueDeal(input: {
 
   switch (model) {
     case "revenue_share":
-      return `Revenue split — ${num(isTarget ? primary : input.revenueSharePct)}% of ticket revenue`;
+      return `Revenue split — ${num(isTarget ? primary : input.revenueSharePct)}% of ticket and add-on sales`;
     case "commitment_plus_revenue_share": {
-      const share = `${num(isTarget ? primary : input.revenueSharePct)}% of ticket revenue`;
+      const share = `${num(isTarget ? primary : input.revenueSharePct)}% of ticket and add-on sales`;
       const fee = num(input.commitmentFee);
       return fee > 0
         ? `Commitment fee ${money(fee)} to you + ${share} to them`
@@ -581,7 +581,9 @@ function affordabilityErrors(
   if (!Array.isArray(input.ticketSkus) || input.ticketSkus.length === 0) return [];
 
   const summary = summariseTicketRevenue(input.ticketSkus as any[], input.maxParticipants);
-  if (summary.ticketGross <= 0) return [];
+  const sharesAddons = model === "revenue_share" || model === "commitment_plus_revenue_share";
+  const saleGross = summary.ticketGross + (sharesAddons ? summary.addOnGross : 0);
+  if (saleGross <= 0) return [];
 
   // Two names for the platform's cut are in circulation; a missing one means no
   // platform fee is assumed, which can only ever under-report a breach.
@@ -589,7 +591,7 @@ function affordabilityErrors(
   const check = checkVenuePayoutCap({
     model,
     value: Number(value) || 0,
-    ticketGross: summary.ticketGross,
+    ticketGross: saleGross,
     paidTickets: summary.paidCapacity,
     platformPct: Number.isFinite(platformPct) ? platformPct : 0,
     currencyDisplay: currencyDisplay(input.currency),
@@ -834,13 +836,10 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
     message: exceedsGross
       ? `This deal pays out more than the event takes. The venue's ${money(venueCost)} `
         + `plus the ${platformPct}% platform fee (${money(platformFee)}) comes to `
-        + `${totalTakePct}% of ${money(gross)} in ticket sales, leaving you `
-        // "on ticket sales" is load-bearing: the cap is a ticket-revenue rule,
-        // so this figure deliberately excludes a commitment fee or an add-on
-        // margin. Without the qualifier it read as a second, contradictory net
-        // beside the calculator's.
-        + `${money(creatorNet)} on ticket sales. `
-        + `Lower the venue's terms or raise your ticket price.`
+        + `${totalTakePct}% of ${money(gross)} in sales, leaving you `
+        // Sponsorship and commitment income do not offset an unaffordable sales split.
+        + `${money(creatorNet)} on these sales. `
+        + `Review the venue's terms and your selling price.`
       : null,
   };
 }
@@ -929,7 +928,7 @@ export function formatVenueDealSummary(
       return `Minimum Spend Guarantee — ${code} ${amount}`;
     case "commitment_plus_revenue_share": {
       const fee = Number(terms?.commitmentFee || 0);
-      return `Commitment Fee + Revenue Split — venue pays ${code} ${fee} upfront, then takes ${amount}% of paid ticket revenue`;
+      return `Commitment Fee + Revenue Split — venue pays ${code} ${fee} upfront, then takes ${amount}% of ticket and add-on sales`;
     }
     case "manual_counter_revenue":
       return `Manual agreement (untracked) — ${amount}% of counter revenue, settled directly between organiser and venue`;
@@ -985,7 +984,7 @@ export function explainVenueDealMechanics(input: VenueDealMechanicsInput): strin
 
   switch (model) {
     case "revenue_share":
-      return `The venue takes ${value}% of paid ticket revenue. At ${money(gross)} in ticket sales `
+      return `The venue takes ${value}% of ticket and add-on sales booked through Great. At ${money(gross)} in sales `
         + `that is ${money(round2(gross * (value / 100)))} to them. Free RSVPs are not ticket `
         + `revenue, so they are not part of this.`;
 
@@ -1027,7 +1026,7 @@ export function explainVenueDealMechanics(input: VenueDealMechanicsInput): strin
 
     case "commitment_plus_revenue_share":
       return `Two figures moving in opposite directions: the venue pays you a one-off commitment `
-        + `fee upfront, and separately takes ${value}% of paid ticket revenue afterwards. At `
+        + `fee upfront, and separately takes ${value}% of ticket and add-on sales afterwards. At `
         + `${money(gross)} in sales their share is ${money(round2(gross * (value / 100)))}.`;
 
     case "venue_barter":

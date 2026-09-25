@@ -57,7 +57,7 @@ describe("calculateEventEconomics", () => {
     expect(withAddon.addOnVenueRevenue).toBe(30);
   });
 
-  it("takes no platform fee on the venue's own add-on price", () => {
+  it("uses gross add-on sales for percentage deals without also charging the unit cost", () => {
     const result = calculateEventEconomics({
       ticketGross: 0,
       paidTickets: 0,
@@ -68,9 +68,10 @@ describe("calculateEventEconomics", () => {
       addOnCreatorGross: 10,
     });
 
-    // 15% of the £10 margin only — the venue's £30 keeps its counter price.
-    expect(result.platformFeeBase).toBe(10);
-    expect(result.platformFee).toBe(1.5);
+    expect(result.addOnVenueRevenue).toBe(8);
+    expect(result.platformFeeBase).toBe(40);
+    expect(result.platformFee).toBe(6);
+    expect(result.net).toBe(26);
     expect(result.net).toBe(sumOfLines(result.lines));
   });
 
@@ -400,7 +401,8 @@ describe("break-even and the free-RSVP comparison", () => {
       addOnCreatorGross: 5,
     }, 10, 10);
     expect(free.venueTicketCost).toBe(0);
-    expect(free.net).toBe(5);
+    expect(free.addOnVenueRevenue).toBe(2.5);
+    expect(free.net).toBe(2.5);
   });
 
   it("groups each row by how it settles", () => {
@@ -416,6 +418,6 @@ describe("break-even and the free-RSVP comparison", () => {
     expect(tierOf("ticket_gross")).toBe("per_unit");
     expect(tierOf("platform_fee")).toBe("per_unit");
     expect(tierOf("venue_payout")).toBe("flat");
-    expect(tierOf("addon_margin")).toBe("addon");
+    expect(tierOf("addon_gross")).toBe("addon");
   });
 });

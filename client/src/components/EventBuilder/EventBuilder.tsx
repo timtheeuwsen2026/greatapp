@@ -6351,7 +6351,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
   // Compute example payout using ticket SKU totals
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
-  const totalRevenue = ticketTotalRevenue > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
+  const totalRevenue = ticketSkus.length > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
   // Heads a per-ticket or per-head venue fee is charged for. Falls back to the
   // whole event only when no ticket is priced at all, which is the same shape
   // the old single-capacity number had.
@@ -6366,7 +6366,9 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
       : venueCompensationModel;
   const activeRevenueSharePct = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueRevenueSharePct;
   const activeFlatVenueAmount = (venueDealContext === "open" || venueDealContext === "invited") ? venueTargetDealValue : venueFixedFee;
-  const venueRevenueShareAmount = safeMultiply(totalRevenue, activeRevenueSharePct / 100);
+  const sharesAddOnSales = activeVenueDeal === 'revenue_share' || activeVenueDeal === 'commitment_plus_revenue_share';
+  const venueShareGross = totalRevenue + (sharesAddOnSales ? addOnTotalRevenue : 0);
+  const venueRevenueShareAmount = safeMultiply(venueShareGross, activeRevenueSharePct / 100);
   const venuePerHeadEstimate = safeMultiply(venuePerHeadAmount, chargeableCapacity);
   // Per Room / Per Night is rate × rooms × nights. Rooms come from the Rooms
   // step, nights from the event dates; a single-day event holds no nights, so
@@ -6430,7 +6432,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
         default: return 0;
       }
     })(),
-    ticketGross: totalRevenue,
+    ticketGross: venueShareGross,
     paidTickets: chargeableCapacity,
     platformPct,
     roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
@@ -6457,7 +6459,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
       }
     })(),
     paidTickets: chargeableCapacity,
-    ticketGross: totalRevenue,
+    ticketGross: venueShareGross,
     rooms: totalRoomCount,
     nights: Math.max(1, eventNightCount),
     currencySymbol: dealCurrencySymbol,
@@ -6639,7 +6641,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
   // The existing rule, extended to every party rather than just the venue:
   // everyone's share plus the platform fee has to leave something behind.
-  const totalTicketTakePct = Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners))
+  const totalTicketTakePct = (hasPaidTicket ? Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners)) : 0)
     + platformPct
     + (activeVenueDeal === 'revenue_share' || activeVenueDeal === 'commitment_plus_revenue_share'
       ? Number(activeRevenueSharePct || 0)
@@ -6687,7 +6689,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
       <div className="text-center">
         <h3 className="text-lg font-semibold mb-2">Pricing & Monetisation</h3>
         <p className="text-gray-600 dark:text-gray-400">
-          Configure pricing, marketplace economics, and payment triggers.
+          Set your entry price, add any optional extras, then check who receives each part of the sale.
         </p>
       </div>
 
@@ -7142,7 +7144,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                     What a participant would pay at the counter
                                   </p>
                                 </div>
-                                <div>
+                                {!sharesAddOnSales && <div>
                                   <Label htmlFor={`sku-addon-group-rate-${sku.id}`}>
                                     Group rate <span className="text-gray-400">(cost)</span>
                                   </Label>
@@ -7161,7 +7163,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                   <p className="mt-1 text-xs text-gray-500">
                                     What the venue charges you, agreed in the dealroom
                                   </p>
-                                </div>
+                                </div>}
                               </div>
 
                               <div>
@@ -7202,7 +7204,14 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                 const addon = getTicketAddon({ ...sku, addonEnabled: true });
                                 if (!addon) return null;
 
-                                const belowCost = addon.creatorAmount < -0.005;
+                                const unitEconomics = calculateEventEconomics({
+                                  ticketGross: 0, paidTickets: 0, platformPct,
+                                  venueDealModel: activeVenueDeal,
+                                  venueDealValue: sharesAddOnSales ? activeRevenueSharePct : 0,
+                                  addOnVenueGross: addon.venueAmount,
+                                  addOnCreatorGross: addon.creatorAmount,
+                                });
+                                const belowCost = unitEconomics.net < -0.005;
 
                                 return (
                                   <div className="space-y-2" data-testid={`ticket-addon-breakdown-${index}`}>
@@ -7212,22 +7221,26 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                         ? "bg-red-50 dark:bg-red-950"
                                         : "bg-gray-50 dark:bg-gray-900/50",
                                     )}>
-                                      <span className="text-sm text-gray-600 dark:text-gray-300">Your margin</span>
+                                      <span className="text-sm text-gray-600 dark:text-gray-300">You keep after Great's fee</span>
                                       <span className={cn(
                                         "text-sm font-semibold",
                                         belowCost
                                           ? "text-red-700 dark:text-red-300"
                                           : "text-green-700 dark:text-green-400",
                                       )}>
-                                        {formatPriceByCurrency(addon.creatorAmount, currency)} / unit
+                                        {formatPriceByCurrency(unitEconomics.net, currency)} / unit
                                       </span>
                                     </div>
 
+                                    <p className="text-xs text-gray-600 dark:text-gray-400">
+                                      Per add-on: venue {formatPriceByCurrency(unitEconomics.addOnVenueRevenue, currency)},
+                                      Great's fee {formatPriceByCurrency(unitEconomics.platformFee, currency)}.
+                                      {sharesAddOnSales && ` The venue receives ${activeRevenueSharePct}% of the sale instead of a separate unit cost.`}
+                                    </p>
                                     {belowCost && (
                                       <p className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
-                                        You are charging less than the venue charges you, so every one
-                                        sold costs you money. Raise the charge, or negotiate a lower
-                                        group rate on the Partners step.
+                                        The venue amount and platform fee exceed the selling price.
+                                        Review the agreed terms on Partners before selling this add-on.
                                       </p>
                                     )}
 
@@ -7244,32 +7257,8 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                     )}
 
                                     <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-400">
-                                      Bundled into the ticket price instead? The margin uses the group
-                                      rate as its cost basis either way — one clean price, no visible
-                                      per-item markup.
-                                    </p>
-
-                                    {/* A margin on a coffee is a margin on a
-                                        coffee. An organiser who needs the event
-                                        to make money is looking at the wrong
-                                        lever, and this is where they are
-                                        standing when they realise it. */}
-                                    <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-400">
-                                      Looking for real income rather than a small margin? Negotiate a
-                                      Commitment Fee with the venue on the{' '}
-                                      <button
-                                        type="button"
-                                        className="font-medium underline underline-offset-2"
-                                        onClick={() => goToStep?.(PARTNERS_STEP_ID)}
-                                        data-testid={`link-addon-commitment-fee-${index}`}
-                                      >
-                                        Partners step
-                                      </button>.
-                                    </p>
-
-                                    <p className="text-xs text-gray-500">
-                                      Venue is paid {formatPriceByCurrency(addon.venueAmount, currency)} per
-                                      unit, directly. Calculated separately from your venue commercial deal.
+                                      The calculator below uses these amounts and the number available.
+                                      Only add-ons purchased through Great contribute to this estimate.
                                     </p>
                                   </div>
                                 );
@@ -7423,12 +7412,14 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                 </p>
                 <p className="mt-1 text-xs text-gray-500">
                   {hasPaidTicket
-                    ? "Only Revenue Split / Commission per Ticket pulls from the ticket revenue below — barter and flat-fee partners settle separately."
+                    ? "Venue Revenue Split covers ticket and add-on sales. Commission per Ticket covers attributed entry sales. Barter and flat-fee partners settle separately."
                     /* Point 42: with nothing priced, a percentage of ticket
                        revenue is a percentage of nothing, and saying so is more
                        use than showing the field and letting the organiser
                        wonder why the total never moves. */
-                    : "This event has no paid ticket, so nothing here can take a share of ticket revenue — every deal below settles outside ticket sales."}
+                    : addOnTotalRevenue > 0
+                      ? "Entry is free. The venue Revenue Split applies to paid add-ons; Commission per Ticket has no paid entry revenue to share."
+                      : "Entry is free and no paid add-on is configured. Revenue-based deals currently estimate zero."}
                 </p>
 
                 {/* ── Grouped by how each deal settles ──────────────────
@@ -7725,8 +7716,8 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                   the event has not made. */}
               <p className="text-xs text-green-800/80 dark:text-green-200/80 mb-2" data-testid="text-revenue-potential-caveat">
                 {calculatorMode === 'free'
-                  ? 'The same event with free entry, at full capacity and full add-on uptake.'
-                  : `Potential at full capacity${addOnCreatorMargin > 0 || addOnVenueRevenue > 0 ? " and full add-on uptake" : ""} — not a guarantee.`}
+                  ? 'The same event with free entry, at full capacity, with add-on sales limited to the quantity available.'
+                  : `Potential at full capacity${addOnCreatorMargin > 0 || addOnVenueRevenue > 0 ? ` and ${revenueSummary.addOnCapacity} add-ons sold` : ""} — not a guarantee.`}
               </p>
               <div className="text-sm space-y-1">
                 {/* Grouped the same three ways the Commercial Model is, so a
@@ -7766,21 +7757,16 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                 {revenueSummary.hasFreeTickets && (
                   <p className="text-xs text-gray-500" data-testid="text-free-tickets-note">
                     Paid tickets only — {paidTicketCapacity} of {ticketTotalCapacity} spots.
-                    Free RSVPs are attendance, not revenue, so no venue deal is charged on them.
+                    Free RSVPs contribute zero entry revenue. Paid add-ons are shown separately.
                   </p>
                 )}
 
-                {/* The fee is charged on everything that reaches the organiser
-                    through the platform, not on ticket sales alone. Stated
-                    because an organiser reading a single fee line against a
-                    single gross line will otherwise assume the difference is
-                    an error. */}
-                {economics.platformFee > 0 && economics.platformFeeBase > totalRevenue && (
+                {shownEconomics.platformFee > 0 && (
                   <p className="text-xs text-gray-500" data-testid="text-platform-fee-base">
-                    The {platformPct}% fee applies to everything that reaches you through the
-                    platform — ticket revenue, your add-on margin
-                    {economics.venueContribution > 0 ? ", and what the venue pays you" : ""} —
-                    a base of {formatPriceByCurrency(economics.platformFeeBase, currency)}.
+                    Great's {platformPct}% fee is calculated on{' '}
+                    {sharesAddOnSales ? 'ticket and add-on sales' : 'ticket revenue and your add-on margin'}
+                    {shownEconomics.venueContribution > 0 ? ', plus the venue contribution' : ''}:
+                    {' '}{formatPriceByCurrency(shownEconomics.platformFeeBase, currency)}.
                   </p>
                 )}
 
@@ -7850,28 +7836,11 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                   </button>
                 )}
 
-                {/* The venue's own price for the add-on. Kept out of the split —
-                    the venue is paid for it directly, and no platform fee is
-                    taken from it, because the whole point of the venue price is
-                    that the participant is not charged more here than at the
-                    venue's own counter. */}
-                {addOnVenueRevenue > 0 && (
-                  <div
-                    className="mt-2 border-t pt-2 flex justify-between text-xs text-gray-600 dark:text-gray-400"
-                    data-testid="text-addon-revenue"
-                  >
-                    <span>Venue keeps (add-ons, paid directly — not split)</span>
-                    <span>{formatPriceByCurrency(addOnVenueRevenue, currency)}</span>
-                  </div>
-                )}
-
-                {/* Two calculations, not one. Adding an add-on never changes
-                    how the ticket-level deal is worked out. */}
-                {(addOnVenueRevenue > 0 || addOnCreatorMargin > 0) && activeVenueDeal && (
+                {addOnTotalRevenue > 0 && (
                   <p className="text-xs text-gray-500" data-testid="text-addon-independent-note">
-                    Add-ons are calculated separately from your{' '}
-                    {getVenueDealLabel(activeVenueDeal, dealCurrencySymbol)} deal — the deal
-                    applies to ticket revenue only, never to add-ons.
+                    {sharesAddOnSales
+                      ? `The venue receives ${activeRevenueSharePct}% of add-on sales. The venue's counter price is a reference, not an extra charge on top of this share.`
+                      : 'Add-on sales and the venue unit cost are listed separately. Per-ticket venue fees and referral commissions apply only to paid entry.'}
                   </p>
                 )}
               </div>
@@ -7888,10 +7857,10 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                 <strong className="block mb-1">This deal costs more than the event earns</strong>
                 The venue's {formatPriceByCurrency(venuePayoutCap.venueCost, currency)} plus the{' '}
                 {platformPct}% platform fee ({formatPriceByCurrency(venuePayoutCap.platformFee, currency)}){' '}
-                comes to {venuePayoutCap.totalTakePct}% of {formatPriceByCurrency(totalRevenue, currency)}{' '}
-                in ticket sales, leaving you {formatPriceByCurrency(venuePayoutCap.creatorNet, currency)}{' '}
-                on ticket sales.
-                Lower the venue's terms or raise your ticket price before sending this.
+                comes to {venuePayoutCap.totalTakePct}% of {formatPriceByCurrency(venueShareGross, currency)}{' '}
+                in sales, leaving you {formatPriceByCurrency(venuePayoutCap.creatorNet, currency)}{' '}
+                on these sales.
+                Review the agreed terms and your selling price before sending this.
               </div>
             )}
 
@@ -8362,7 +8331,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
               <span className="text-blue-800 dark:text-blue-200">{platformPct}%</span>
             </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Your share:</span>{" "}
+              <span className="font-medium text-blue-900 dark:text-blue-100">Your share before venue and referral costs:</span>{" "}
               <span className="text-blue-800 dark:text-blue-200">{creatorPct}%</span>
             </div>
             <div>

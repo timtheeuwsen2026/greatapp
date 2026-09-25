@@ -13,23 +13,11 @@
  * `breakdown.lines`, by construction — a row that is not rendered cannot move
  * the total, and a row that is rendered always does.
  *
- * Two rules the arithmetic encodes, both from Tim:
- *
- *  1. **Ticket revenue and add-on revenue are two independent calculations
- *     that only meet at the sum.** The Venue Commercial Deal — revenue split,
- *     ticket deduction, rental, sponsorship, commitment fee — governs the
- *     ticket price and nothing else. A €4-per-ticket deduction is never
- *     charged against a coffee. The add-on runs on its own venue-price and
- *     margin mechanic regardless of which deal was picked, so adding an add-on
- *     adds no complexity to the deal-type logic.
- *
- *  2. **The platform fee applies to every pound that reaches the organiser
- *     through the platform**, not to ticket revenue alone: the add-on margin
- *     and the venue's commitment fee or sponsorship are charged the same
- *     percentage, because they move through the same rails. Two things are
- *     deliberately outside it — the venue's own price for an add-on, which is
- *     the venue's money and whose whole purpose is to match the counter price,
- *     and a rental the organiser *pays*, which is a cost rather than income.
+ * Venue percentage deals cover paid entry and add-on sales. The percentage
+ * replaces the add-on unit cost; it is never charged on top of that cost.
+ * Per-ticket deductions still apply only to paid entry. Referral commissions
+ * also remain scoped to entry revenue. Percentage deals use gross platform
+ * sales as the fee base, matching the existing earnings and payout engine.
  */
 
 import { calculateTicketDeductionForCount } from "./ticketDeduction";
@@ -112,7 +100,7 @@ export type EventEconomics = {
   partnerTicketCost: number;
   /** What the venue is paying the organiser: sponsorship or commitment fee. */
   venueContribution: number;
-  /** The venue's own add-on money — paid to it directly, never split. */
+  /** The venue's add-on proceeds, under the selected percentage or unit cost. */
   addOnVenueRevenue: number;
   /** True when the deal's money is settled at the venue's counter. */
   offPlatform: boolean;
@@ -133,7 +121,7 @@ function finite(value: unknown, fallback = 0): number {
  * instead — a payout row reading "+€50" for money the venue is paying reads as
  * the venue being paid.
  *
- * Add-ons are absent from every branch on purpose. That absence is rule 1.
+ * The add-on part of a percentage deal is calculated separately below.
  */
 export function venueTicketCostFor(input: {
   model: VenueDealModel | string | null;
@@ -184,8 +172,15 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
 
   const ticketGross = Math.max(0, round2(finite(input.ticketGross)));
   const platformPct = Math.max(0, finite(input.platformPct));
-  const addOnVenueRevenue = Math.max(0, round2(finite(input.addOnVenueGross)));
-  const addOnCreatorMargin = Math.max(0, round2(finite(input.addOnCreatorGross)));
+  const addOnUnitCosts = Math.max(0, round2(finite(input.addOnVenueGross)));
+  const addOnCreatorMargin = round2(finite(input.addOnCreatorGross));
+  const addOnGross = Math.max(0, round2(addOnUnitCosts + addOnCreatorMargin));
+  const sharesAddOnSales = model === "revenue_share" || model === "commitment_plus_revenue_share";
+  // A percentage deal replaces the unit-cost arrangement. Charging both would
+  // pay the venue twice for the same product.
+  const addOnVenueRevenue = sharesAddOnSales
+    ? round2(addOnGross * Math.max(0, finite(input.venueDealValue)) / 100)
+    : addOnUnitCosts;
 
   // ── Path 1: ticket revenue, distributed per the Venue Commercial Deal ────
   const venueTicketCost = venueTicketCostFor({
@@ -225,18 +220,15 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     .filter((share) => share.amount > 0);
   const partnerTicketCost = round2(partnerRows.reduce((total, share) => total + share.amount, 0));
 
-  // ── The platform's cut, on everything that reached the organiser ─────────
-  // Ticket revenue, the organiser's add-on margin and the venue's own
-  // contribution all arrive through the platform, so all three are charged.
-  // The venue's add-on price is not: it is the venue's money, and taking a cut
-  // of it would push the participant's price above the venue's counter price,
-  // which is the one thing the add-on mechanic exists to prevent.
-  const platformFeeBase = round2(ticketGross + addOnCreatorMargin + venueContribution);
+  // Percentage deals use the full sale, as the payment engine does. Other
+  // add-on arrangements keep their existing unit-cost/margin calculation.
+  const platformFeeBase = Math.max(0, round2(ticketGross
+    + (sharesAddOnSales ? addOnGross : addOnCreatorMargin) + venueContribution));
   const platformFee = round2(platformFeeBase * (platformPct / 100));
 
   const lines: EconomicsLine[] = [];
 
-  if (ticketGross > 0 || (!addOnCreatorMargin && !venueContribution)) {
+  if (ticketGross > 0 || !venueContribution) {
     lines.push({
       key: "ticket_gross",
       label: "Gross Ticket Revenue",
@@ -289,12 +281,23 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     });
   }
 
-  if (addOnCreatorMargin > 0) {
+  if (addOnGross > 0) {
     lines.push({
-      key: "addon_margin",
-      label: "Your Add-on Margin",
-      amount: addOnCreatorMargin,
-      kind: "addon",
+      key: "addon_gross",
+      label: "Gross Add-on Revenue",
+      amount: addOnGross,
+      kind: "gross",
+      tier: "addon",
+    });
+  }
+  if (addOnVenueRevenue > 0) {
+    lines.push({
+      key: "addon_venue_payout",
+      label: sharesAddOnSales
+        ? `Venue Share of Add-ons (${Math.max(0, finite(input.venueDealValue))}%)`
+        : "Venue Add-on Cost",
+      amount: -addOnVenueRevenue,
+      kind: "venue",
       tier: "addon",
     });
   }
@@ -393,10 +396,9 @@ export function findBreakEvenAttendance(
  * What this event would net with every ticket free, at a given turnout.
  *
  * The comparison an organiser actually wants and could never get: a free RSVP
- * with a paid add-on beats a cheap ticket surprisingly often, because the
- * venue deal is charged against ticket revenue and there is none. Built from
- * the same input so the two figures are the same event under two ticket
- * policies, not two different calculations.
+ * with a paid add-on still owes the venue its agreed share of add-on sales.
+ * Only entry revenue is removed, so both figures describe the same event
+ * under different entry-price policies.
  */
 export function economicsAsFreeRsvp(
   input: EventEconomicsInput,

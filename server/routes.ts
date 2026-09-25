@@ -18745,17 +18745,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isActiveParticipantBooking(booking.status));
         const attendees = sumBookingTicketQuantity(active);
 
-        // Ticket money only. An add-on is the venue's own product, sold through
-        // the platform at a rate the venue already discounted for the collab and
-        // paid to them directly — taking a share of it again would pay them for
-        // the same coffee twice.
         const addOnRevenue = active.reduce(
           (sum: number, booking: any) => sum + numberOrZero(booking.addonTotal), 0);
-        const grossRevenue = active.reduce(
+        const ticketRevenue = active.reduce(
           (sum: number, booking: any) =>
-            sum + numberOrZero(booking.amount) - numberOrZero(booking.addonTotal),
-          0,
-        );
+            sum + Math.max(0, numberOrZero(booking.amount) - numberOrZero(booking.addonTotal)), 0);
+        const sharesAddons = model === 'revenue_share' || model === 'commitment_plus_revenue_share';
+        const grossRevenue = ticketRevenue + (sharesAddons ? addOnRevenue : 0);
 
         // A per-head fee is charged for tickets that were actually sold, never
         // for a free RSVP that happens to be attending.
@@ -18801,8 +18797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           earned: Math.round(earned * 100) / 100,
           owed: Math.round(owed * 100) / 100,
           offPlatform,
-          // Reported so a venue can see what it took over the counter through
-          // the app, without that figure entering its share of ticket revenue.
+          // Gross add-on sales, already included in percentage-deal earnings.
           addOnRevenue: Math.round(addOnRevenue * 100) / 100,
           // Sponsorship is only real once it has cleared Stripe.
           settled: model === 'venue_sponsored'

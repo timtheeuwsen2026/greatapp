@@ -552,7 +552,11 @@ async function buildDefaultRecipients(
   platformFeePct: number
 ): Promise<MinimalRecipient[]> {
   const creatorPct = parseFloat(experience.creatorPct?.toString() ?? String(100 - platformFeePct));
-  const venuePct = parseFloat(experience.venueRevenueSharePct?.toString() ?? "0");
+  const percentageVenueDeal = experience.venueCompensationModel === "revenue_share"
+    || experience.venueCompensationModel === "commitment_plus_revenue_share";
+  const venuePct = percentageVenueDeal
+    ? parseFloat(experience.venueRevenueSharePct?.toString() ?? "0")
+    : 0;
 
   // Adjust creator pct to account for venue share (venue share comes from creator's portion)
   const adjustedCreatorPct = Math.max(0, creatorPct - venuePct);
@@ -569,6 +573,19 @@ async function buildDefaultRecipients(
   ];
 
   const venueFixedFee = parseFloat(experience.venueFixedFee?.toString() ?? "0");
+  if (venuePct > 0) {
+    // Keep an owed venue in the split even if its account is missing. The
+    // executor must halt for a missing account, never retain the share silently.
+    const venueAccount = await resolveVenuePayoutAccount(experience.linkedVenueId);
+    recipients.push({
+      recipientType: "venue",
+      stripeAccountId: venueAccount.stripeAccountId,
+      userId: venueAccount.userId,
+      splitMode: "percentage",
+      splitValue: String(venuePct),
+      isActive: true,
+    });
+  }
   if (
     experience.venueCompensationModel === "fixed_fee"
     && venueFixedFee > 0

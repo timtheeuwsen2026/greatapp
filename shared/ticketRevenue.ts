@@ -9,11 +9,8 @@
  *     had only ever sold €160 of tickets. Capacity for a deduction or a per-head
  *     fee therefore counts paid tickets only.
  *
- *  2. **Add-on money is never part of ticket revenue.** An add-on is the venue's
- *     own product resold through the platform at a rate the venue already
- *     discounted for the collaboration — the venue is paid for it directly. Rolling
- *     it into the gross a revenue split is taken from pays the venue for the same
- *     coffee twice. It is reported on its own line instead.
+ *  2. Add-on sales are reported separately from entry. Percentage venue deals
+ *     can apply to both; a per-ticket fee must never count a coffee as entry.
  *
  * The Event Builder used to hold private copies of this arithmetic, which is how
  * the two diverged from the ticket-level subtotals shown beside them.
@@ -39,9 +36,8 @@ export function toTicketNumber(value: unknown): number {
 /**
  * What one attendee pays to get in — entry only.
  *
- * A combi's add-on is deliberately absent: entry is what the venue deal is
- * calculated against, and on most run-club events entry is free while the add-on
- * carries all the money.
+ * A combi's add-on is deliberately absent from entry revenue. It gets a
+ * separate line so per-ticket fees and referral commissions cannot charge it.
  */
 export function getSkuEntryPrice(sku: RevenueSkuLike | null | undefined): number {
   switch (sku?.pricingMode) {
@@ -101,9 +97,8 @@ const EMPTY: TicketRevenueSummary = {
 };
 
 /**
- * The one place ticket money is added up. Venue deal estimates read `ticketGross`
- * and `paidCapacity` from here; nothing that feeds a venue deal may read
- * `addOnGross`.
+ * Entry and add-on estimates remain separate so callers can apply each deal
+ * to its correct base. Optional add-on inventory caps the estimated sales.
  */
 export function summariseTicketRevenue(
   skus: RevenueSkuLike[] | null | undefined,
@@ -115,21 +110,23 @@ export function summariseTicketRevenue(
     const capacity = getSkuCapacity(sku, skus.length, maxParticipants);
     const entryPrice = getSkuEntryPrice(sku);
     const addon = getTicketAddon(sku);
+    const inventory = Math.floor(toTicketNumber(sku.addonInventory));
+    const addonCapacity = inventory > 0 ? Math.min(capacity, inventory) : capacity;
 
     return {
       ticketGross: safeAdd(summary.ticketGross, safeMultiply(entryPrice, capacity)),
       paidCapacity: entryPrice > 0 ? summary.paidCapacity + capacity : summary.paidCapacity,
       totalCapacity: summary.totalCapacity + capacity,
       addOnGross: addon
-        ? safeAdd(summary.addOnGross, safeMultiply(addon.unitPrice, capacity))
+        ? safeAdd(summary.addOnGross, safeMultiply(addon.unitPrice, addonCapacity))
         : summary.addOnGross,
       addOnVenueGross: addon
-        ? safeAdd(summary.addOnVenueGross, safeMultiply(addon.venueAmount, capacity))
+        ? safeAdd(summary.addOnVenueGross, safeMultiply(addon.venueAmount, addonCapacity))
         : summary.addOnVenueGross,
       addOnCreatorGross: addon
-        ? safeAdd(summary.addOnCreatorGross, safeMultiply(addon.creatorAmount, capacity))
+        ? safeAdd(summary.addOnCreatorGross, safeMultiply(addon.creatorAmount, addonCapacity))
         : summary.addOnCreatorGross,
-      addOnCapacity: addon ? summary.addOnCapacity + capacity : summary.addOnCapacity,
+      addOnCapacity: addon ? summary.addOnCapacity + addonCapacity : summary.addOnCapacity,
       hasFreeTickets: summary.hasFreeTickets || (capacity > 0 && entryPrice <= 0),
     };
   }, { ...EMPTY });

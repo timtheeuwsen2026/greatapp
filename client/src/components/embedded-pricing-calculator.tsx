@@ -63,6 +63,7 @@ export default function EmbeddedPricingCalculator() {
   const activeDeal =
     dealOptions.find((option) => option.value === dealModel) ?? dealOptions[0];
 
+  const sharesAddOnSales = activeDeal?.value === 'revenue_share' || activeDeal?.value === 'commitment_plus_revenue_share';
   const tickets = Math.max(0, Math.floor(capacity ?? 0));
   const price = Math.max(0, ticketPrice ?? 0);
   const ticketGross = Math.round(price * tickets * 100) / 100;
@@ -71,14 +72,14 @@ export default function EmbeddedPricingCalculator() {
     ? getTicketAddon({
         addonEnabled: true,
         addonVenuePrice: addOnVenuePrice ?? 0,
-        addonMargin: addOnMargin ?? 0,
+        addonMargin: sharesAddOnSales ? 0 : addOnMargin ?? 0,
         addonMarginMode: addOnMarginMode,
       })
     : null;
 
   const economics = calculateEventEconomics({
     ticketGross,
-    paidTickets: tickets,
+    paidTickets: price > 0 ? tickets : 0,
     platformPct,
     venueDealModel: activeDeal?.value ?? null,
     venueDealValue: dealValue ?? 0,
@@ -104,7 +105,7 @@ export default function EmbeddedPricingCalculator() {
         </CardTitle>
         <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
           The same arithmetic the Event Builder runs — including the {platformPct}% platform fee,
-          your venue deal, and add-ons as their own separate calculation.
+          your venue deal, and a separate breakdown of add-on sales.
         </p>
       </CardHeader>
       <CardContent>
@@ -129,7 +130,7 @@ export default function EmbeddedPricingCalculator() {
                 </div>
               </div>
               <div>
-                <Label htmlFor="earnings-capacity">Paid tickets</Label>
+                <Label htmlFor="earnings-capacity">Attendees</Label>
                 <MoneyInput
                   id="earnings-capacity"
                   integer
@@ -246,7 +247,7 @@ export default function EmbeddedPricingCalculator() {
                     Offer an add-on
                   </span>
                   <span className="block text-xs text-gray-500">
-                    A coffee, a meal, a hire — calculated separately from the venue deal.
+                    A coffee, a meal, a hire — see the sales and venue share separately.
                   </span>
                 </span>
               </label>
@@ -255,7 +256,7 @@ export default function EmbeddedPricingCalculator() {
                 <div className="mt-3 space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <Label htmlFor="earnings-addon-venue-price">Venue price</Label>
+                      <Label htmlFor="earnings-addon-venue-price">{sharesAddOnSales ? "Participant price per add-on" : "Venue price"}</Label>
                       <MoneyInput
                         id="earnings-addon-venue-price"
                         value={addOnVenuePrice}
@@ -265,7 +266,7 @@ export default function EmbeddedPricingCalculator() {
                         data-testid="input-earnings-addon-venue-price"
                       />
                     </div>
-                    <div>
+                    {!sharesAddOnSales && <div>
                       <Label htmlFor="earnings-addon-margin">Your margin</Label>
                       <MoneyInput
                         id="earnings-addon-margin"
@@ -275,9 +276,9 @@ export default function EmbeddedPricingCalculator() {
                         className="mt-1"
                         data-testid="input-earnings-addon-margin"
                       />
-                    </div>
+                    </div>}
                   </div>
-                  <div>
+                  {!sharesAddOnSales && <div>
                     <Label htmlFor="earnings-addon-mode">Where your margin comes from</Label>
                     <Select
                       value={addOnMarginMode}
@@ -297,7 +298,11 @@ export default function EmbeddedPricingCalculator() {
                         {money(addon.venueAmount)}, you keep {money(addon.creatorAmount)}.
                       </p>
                     )}
-                  </div>
+                  </div>}
+                  {sharesAddOnSales && <p className="text-xs text-gray-500">
+                    The venue receives {dealValue}% of each add-on sale. The breakdown
+                    shows this share and Great's fee separately.
+                  </p>}
                 </div>
               )}
             </div>
@@ -339,12 +344,7 @@ export default function EmbeddedPricingCalculator() {
                   </span>
                 </div>
 
-                {economics.addOnVenueRevenue > 0 && (
-                  <div className="mt-2 flex justify-between border-t pt-2 text-xs text-gray-600 dark:text-gray-400">
-                    <span>Venue keeps (add-ons, paid directly — not split)</span>
-                    <span>{money(economics.addOnVenueRevenue)}</span>
-                  </div>
-                )}
+
               </div>
             </div>
 
@@ -359,18 +359,17 @@ export default function EmbeddedPricingCalculator() {
               <div className="flex gap-2">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
                 <p>
-                  The {platformPct}% platform fee applies to everything that reaches you
-                  through the platform — ticket revenue, your add-on margin, and a
-                  commitment fee or sponsorship a venue pays you. Not to the venue's own
-                  price for an add-on, and not to a rental you pay a venue.
+                  The {platformPct}% platform fee applies to{' '}
+                  {sharesAddOnSales ? 'ticket and add-on sales' : 'ticket sales and your add-on margin'},
+                  plus any commitment fee or sponsorship the venue pays you.
                 </p>
               </div>
               <div className="flex gap-2">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
                 <p>
-                  Add-on revenue is never split by the venue deal above. A per-ticket
-                  deduction applies to the ticket price only; the add-on runs on its own
-                  venue-price and margin mechanic and the two simply sum at the end.
+                  Venue Revenue Split covers tickets and add-ons booked through Great.
+                  For add-ons, it replaces the unit cost. Per-ticket deductions and
+                  referral commissions apply only to paid entry.
                 </p>
               </div>
               <div className="flex gap-2">

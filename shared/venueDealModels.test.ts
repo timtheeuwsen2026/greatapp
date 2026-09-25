@@ -512,8 +512,8 @@ describe("the over-limit warning reads the same as the calculator beside it", ()
     expect(message).not.toContain("1800.00");
   });
 
-  it("still says the figure is on ticket sales alone", () => {
-    expect(checkVenuePayoutCap(overLimit).message).toContain("on ticket sales");
+  it("names the sales basis without claiming add-ons are excluded", () => {
+    expect(checkVenuePayoutCap(overLimit).message).toContain("on these sales");
   });
 });
 

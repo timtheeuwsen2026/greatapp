@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
-const source = ts.createSourceFile('routes.ts', readFileSync('server/routes.ts', 'utf8'), ts.ScriptTarget.Latest, true);
-export function routeFunction(name: string, dependencies: Record<string, any>, method?: string) {
+
+const sources = new Map<string, ts.SourceFile>();
+export function routeFunction(name: string, dependencies: Record<string, any>, method?: string, sourcePath = "server/routes.ts") {
+  if (!sources.has(sourcePath)) sources.set(sourcePath, ts.createSourceFile(sourcePath, readFileSync(sourcePath, "utf8"), ts.ScriptTarget.Latest, true));
+  const source = sources.get(sourcePath)!;
   dependencies = { require: createRequire(import.meta.url), ...dependencies };
   let target: ts.Node | undefined;
   function visit(node: ts.Node) {

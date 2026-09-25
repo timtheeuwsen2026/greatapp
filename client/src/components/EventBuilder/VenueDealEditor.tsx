@@ -8,6 +8,7 @@ import {
   formatBenchmarkHint,
   getBenchmarkOutlierNote,
 } from "@shared/dealBenchmarks";
+import { getTicketAddon } from "@shared/ticketAddons";
 import { getVenueDealOptions, type VenueDealOption } from "@shared/venueDealModels";
 
 /**
@@ -62,6 +63,13 @@ export function VenueDealEditor({
   const modelField = isTarget ? "venueTargetDeal" : "venueCompensationModel";
   const model = form.watch(modelField) || (isTarget ? "" : "revenue_share");
   const spaceType = form.watch("venueOpenSpaceType");
+  const hasPaidAddons = (form.watch("ticketSkus") || []).some((sku: any) =>
+    (getTicketAddon(sku)?.unitPrice || 0) > 0);
+  const percentageDeal = model === "revenue_share" || model === "commitment_plus_revenue_share";
+  const revenueLabel = !paidTicketsConfigured && hasPaidAddons
+    ? "add-on sales" : "ticket and add-on sales";
+  // Ticket benchmarks say nothing about the cost of supplying a coffee.
+  const showTicketBenchmark = !percentageDeal || (paidTicketsConfigured && !hasPaidAddons);
 
   const options = getVenueDealOptions({
     isDaytime,
@@ -70,7 +78,7 @@ export function VenueDealEditor({
     currentValue: model,
     allowUntracked: manualDealUnlocked,
   }).filter((option) =>
-    paidTicketsConfigured
+    paidTicketsConfigured || hasPaidAddons
     || option.value === model
     || (option.value !== "revenue_share" && option.value !== "commitment_plus_revenue_share"));
   const selected = options.find((option) => option.value === model) || null;
@@ -94,9 +102,9 @@ export function VenueDealEditor({
     }
   };
 
-  const hint = formatBenchmarkHint(model, spaceType, currencySymbol);
+  const hint = showTicketBenchmark ? formatBenchmarkHint(model, spaceType, currencySymbol) : null;
   const outlier = (value: unknown) =>
-    getBenchmarkOutlierNote(model, spaceType, value, currencySymbol);
+    showTicketBenchmark ? getBenchmarkOutlierNote(model, spaceType, value, currencySymbol) : null;
 
   return (
     <div className="space-y-3" data-testid="venue-deal-editor">
@@ -156,7 +164,7 @@ export function VenueDealEditor({
           become the named amount the payout engine reads. */}
       {isTarget && selected && selected.valueKind !== "none" && (
         <div>
-          <Label htmlFor="venue-target-deal-value">{selected.valueLabel}</Label>
+          <Label htmlFor="venue-target-deal-value">{percentageDeal ? `Venue share of ${revenueLabel} (%)` : selected.valueLabel}</Label>
           <Input
             id="venue-target-deal-value"
             type="number"
@@ -211,7 +219,7 @@ export function VenueDealEditor({
       {/* ── Only the selected deal's fields ─────────────────────────────── */}
       {!isTarget && (model === "revenue_share" || model === "commitment_plus_revenue_share") && (
         <div>
-          <Label htmlFor="venue-deal-revenue-share">Venue share of ticket revenue (%)</Label>
+          <Label htmlFor="venue-deal-revenue-share">Venue share of {revenueLabel} (%)</Label>
           <Input
             id="venue-deal-revenue-share"
             type="number"
@@ -225,7 +233,8 @@ export function VenueDealEditor({
             data-testid="input-venue-deal-revenue-share"
           />
           <p className="mt-1 text-xs text-gray-500">
-            Taken from paid ticket sales only. Free RSVPs and add-on purchases are excluded.
+            Applied to {revenueLabel} booked through Great. Free entry contributes zero.
+            For add-ons, this percentage replaces the venue unit cost; it is not charged on top.
           </p>
           {hint && (
             <p className="mt-1 text-xs text-gray-500" data-testid="text-venue-deal-benchmark">
@@ -399,15 +408,24 @@ export function VenueDealEditor({
         className="rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100"
         data-testid={isTarget ? "note-counter-income-target" : "note-counter-income-venue"}
       >
-        Splits and per-ticket fees apply to tickets and add-ons booked through Great.
+        Venue Revenue Split applies to ticket and add-on sales booked through Great.
+        Per-ticket fees apply only to paid entry.
         Anything bought at the venue's own till on the day is invisible to the app, so
         don't propose a share of it — there would be nothing to calculate it from.
       </p>
 
-      {!paidTicketsConfigured && (
+      {!paidTicketsConfigured && !hasPaidAddons && (
         <p className="text-xs text-gray-500" data-testid="text-venue-no-paid-ticket">
-          Revenue Split is not offered: every ticket on this event is free, so there
-          is no ticket revenue for the venue to take a share of.
+          Entry is free and no paid add-on is configured yet. Add a paid extra on Pricing
+          if your venue agreement is a share of add-on sales.
+        </p>
+      )}
+
+      {percentageDeal && hasPaidAddons && (
+        <p className="text-xs text-gray-500" data-testid="text-addon-share-basis">
+          Agree a share that covers the products the venue supplies. Ticket-revenue
+          benchmarks do not apply to coffee or food sales. Pricing shows the venue
+          amount, Great's fee, and your remainder separately.
         </p>
       )}
 

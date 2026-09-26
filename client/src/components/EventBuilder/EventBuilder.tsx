@@ -5923,7 +5923,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false, experienceI
 }
 
 
-function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep }: {
+export function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep }: {
   form: any;
   /**
    * Set by an admin on this event alone, and read from the saved record rather
@@ -6319,21 +6319,8 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
-  // Entry price only. A combi's add-on is deliberately excluded: the venue is
-  // paid for the add-on directly, so folding it in here would hand them a share
-  // of their own coffee on top.
-  const skuEffectivePrice = (sku: any): number => getSkuEntryPrice(sku);
-
   const skuEffectiveCapacity = (sku: any): number =>
     getSkuCapacity(sku, ticketSkus.length, maxParticipants);
-
-  const skuRevenueOf = (sku: any): number =>
-    safeMultiply(skuEffectivePrice(sku), skuEffectiveCapacity(sku));
-
-  const skuAddonRevenueOf = (sku: any): number => {
-    const addon = getTicketAddon(sku);
-    return addon ? safeMultiply(addon.unitPrice, skuEffectiveCapacity(sku)) : 0;
-  };
 
   const revenueSummary = summariseTicketRevenue(ticketSkus, maxParticipants);
   const ticketTotalCapacity = revenueSummary.totalCapacity;
@@ -6363,6 +6350,9 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
   // Compute example payout using ticket SKU totals
   const effectiveCapacity = ticketTotalCapacity > 0 ? ticketTotalCapacity : (hasRooms ? totalCapacity : maxParticipants);
   const totalRevenue = ticketSkus.length > 0 ? ticketTotalRevenue : safeMultiply(pricePerPerson, effectiveCapacity);
+  // The upper summary is gross sales. Keep entry and extras separate underneath
+  // so the grand-total calculator still applies each fee to its correct base.
+  const totalRevenuePotential = safeAdd(totalRevenue, addOnTotalRevenue);
   // Heads a per-ticket or per-head venue fee is charged for. Falls back to the
   // whole event only when no ticket is priced at all, which is the same shape
   // the old single-capacity number had.
@@ -6818,7 +6808,8 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
                 <div className="space-y-3">
                   {ticketSkus.map((sku: any, index: number) => {
-                    const skuRevenue = skuRevenueOf(sku);
+                    const skuSummary = summariseTicketRevenue([{ ...sku, ticketCapacity: skuEffectiveCapacity(sku) }]);
+                    const skuRevenue = safeAdd(skuSummary.ticketGross, skuSummary.addOnGross);
                     return (
                       <div 
                         key={sku.id} 
@@ -7307,11 +7298,23 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                           </div>
                         )}
                         
-                        <div className="flex justify-between items-center pt-2 border-t text-sm">
-                          <span className="text-gray-600 dark:text-gray-400">Subtotal Revenue</span>
-                          <span className="font-semibold text-green-700 dark:text-green-400" data-testid={`ticket-sku-revenue-${index}`}>
-                            {formatPriceByCurrency(skuRevenue, currency)}
-                          </span>
+                        <div className="space-y-1 pt-2 border-t text-sm">
+                          {skuSummary.addOnGross > 0 && <>
+                            <div className="flex justify-between text-gray-600 dark:text-gray-400">
+                              <span>Entry Ticket Revenue</span>
+                              <span data-testid={`ticket-sku-entry-revenue-${index}`}>{formatPriceByCurrency(skuSummary.ticketGross, currency)}</span>
+                            </div>
+                            <div className="flex justify-between text-gray-600 dark:text-gray-400">
+                              <span>Add-on Revenue</span>
+                              <span data-testid={`ticket-sku-addon-revenue-${index}`}>{formatPriceByCurrency(skuSummary.addOnGross, currency)}</span>
+                            </div>
+                          </>}
+                          <div className="flex justify-between items-center">
+                            <span className="text-gray-600 dark:text-gray-400">Subtotal Revenue</span>
+                            <span className="font-semibold text-green-700 dark:text-green-400" data-testid={`ticket-sku-revenue-${index}`}>
+                              {formatPriceByCurrency(skuRevenue, currency)}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -7325,12 +7328,25 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                       <span>Total Capacity</span>
                       <span className="font-medium" data-testid="text-total-capacity">{ticketTotalCapacity} people</span>
                     </div>
+                    {addOnTotalRevenue > 0 && <>
+                      <div className="flex justify-between text-sm">
+                        <span>Entry Ticket Revenue</span>
+                        <span data-testid="text-total-entry-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span>Add-on Revenue</span>
+                        <span data-testid="text-total-addon-revenue">{formatPriceByCurrency(addOnTotalRevenue, currency)}</span>
+                      </div>
+                    </>}
                     <div className="flex justify-between font-semibold text-green-700 dark:text-green-400">
                       <span>Total Revenue Potential</span>
-                      {/* totalRevenue, not the raw ticket sum: it falls back to
-                          price × capacity when no ticket carries its own. */}
-                      <span data-testid="text-total-revenue">{formatPriceByCurrency(totalRevenue, currency)}</span>
+                      <span data-testid="text-total-revenue">{formatPriceByCurrency(totalRevenuePotential, currency)}</span>
                     </div>
+                    <p className="text-xs text-green-800/80 dark:text-green-200/80">
+                      {addOnTotalRevenue > 0
+                        ? `Before fees and partner shares. Assumes full capacity and ${revenueSummary.addOnCapacity} add-on items sold, within each product's stock limit.`
+                        : 'Before fees and partner shares, assuming full capacity.'}
+                    </p>
                   </div>
                 </div>
               </div>

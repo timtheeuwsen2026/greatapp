@@ -1,3 +1,4 @@
+import { eventFeeRates, bookingPlatformFeeCents } from "@shared/platformFees";
 /**
  * 7-Day Post-Event Payout Scheduler
  *
@@ -269,6 +270,11 @@ async function executeExperiencePayout(
     ? recipients
     : await buildDefaultRecipients(experience, platformFeePct);
 
+  // A single organizer receives what remains after the agreed partner shares.
+  // Keep the organizer last so a lower admin fee flows to them, including events
+  // with persisted split rows created when the platform fee was 15%.
+  const residualCreator = effectiveRecipients.filter(r => r.isActive && r.recipientType === "creator" && r.splitMode !== "flat_fee");
+  if (residualCreator.length === 1) effectiveRecipients.sort((a, b) => Number(a === residualCreator[0]) - Number(b === residualCreator[0]));
   const currency = (experience.currency || "eur").toLowerCase();
   const transferIds: Record<string, string> = {};
 
@@ -309,12 +315,10 @@ async function executeExperiencePayout(
     0,
   );
 
-  const platformRecipient = effectiveRecipients.find(
-    (recipient) => recipient.isActive && recipient.recipientType === "platform",
-  );
-  const platformFeeAmountCents = platformRecipient
-    ? calculateSplitAmount(platformRecipient, grossAmountCents, grossAmountCents)
-    : Math.round(grossAmountCents * (platformFeePct / 100));
+  const currentRates = eventFeeRates(experience, platformFeePct);
+  const platformFeeAmountCents = confirmedBookings.reduce(
+    (total, booking) => total + bookingPlatformFeeCents(booking, platformFeePct, true), 0,
+  ) + Math.round(Math.max(0, grossAmountCents - bookingGrossCents) * currentRates.ticketPlatformFeePct / 100);
 
   const flatFeeAmounts = new Map<MinimalRecipient, number>();
   let flatFeeReserveCents = 0;
@@ -375,7 +379,9 @@ async function executeExperiencePayout(
     const isReservedFlatFee = flatFeeAmounts.has(recipient);
     let transferAmountCents = isReservedFlatFee
       ? flatFeeAmounts.get(recipient) ?? 0
-      : calculateSplitAmount(
+      : residualCreator.length === 1 && recipient === residualCreator[0]
+        ? remainingCents
+        : calculateSplitAmount(
           recipient,
           grossAmountCents,
           remainingCents,

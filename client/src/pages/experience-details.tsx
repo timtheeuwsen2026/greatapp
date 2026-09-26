@@ -1,3 +1,5 @@
+import AddonChoicePicker from "@/components/AddonChoicePicker";
+import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
 import { useLocation, useRoute } from "wouter";
@@ -104,6 +106,7 @@ export default function ExperienceDetails() {
   // Combi-Ticket add-ons the buyer has opted into, per ticket. Nothing is
   // pre-selected: the add-on is an offer, and a buyer who ignores it books the
   // plain RSVP they came for.
+  const [addonSelections, setAddonSelections] = useState<Record<string, AddonSelection[]>>({});
   const [addonQuantities, setAddonQuantities] = useState<Record<string, number>>({});
   const [showShareModal, setShowShareModal] = useState(false);
 
@@ -1583,13 +1586,18 @@ export default function ExperienceDetails() {
                           const addonQuantity = addon
                             ? Math.min(addonQuantities[ticketId] ?? 0, selectedQuantity)
                             : 0;
-                          const addonTotal = addon ? addon.unitPrice * addonQuantity : 0;
+                          const multiAddons = Array.isArray(ticket.addons);
+                          const chosenAddons = (addonSelections[ticketId] || []).map(item => ({ ...item, quantity: Math.min(item.quantity, selectedQuantity) }));
+                          const addonTotal = multiAddons
+                            ? chosenAddons.reduce((sum, item) => sum + (getTicketAddons(ticket).find(option => option.id === item.id)?.unitPrice || 0) * item.quantity, 0)
+                            : addon ? addon.unitPrice * addonQuantity : 0;
                           const orderTotal =
                             Number(ticket.pricePerPerson || 0) * selectedQuantity + addonTotal;
                           const checkoutHref =
                             `/checkout/${experience.id}?ticketSkuId=${ticketId}`
                             + `&quantity=${selectedQuantity}`
-                            + `&addonQuantity=${addonQuantity}`;
+                            + `&addonQuantity=${multiAddons ? 0 : addonQuantity}`
+                            + (multiAddons ? `&addons=${encodeURIComponent(JSON.stringify(chosenAddons))}` : "");
                           return (
                             <div 
                               key={ticketId}
@@ -1657,7 +1665,11 @@ export default function ExperienceDetails() {
                               )}
                               {/* Combi-Ticket add-on — the optional extra bought on
                                   top of this RSVP, never a second ticket. */}
-                              {!isSoldOut && addon && (
+                              {!isClosed && multiAddons && getTicketAddons(ticket).length > 0 && (
+                                <div className="mb-3"><AddonChoicePicker sku={ticket} quantity={selectedQuantity} currency={experience.currency || "eur"}
+                                  selections={chosenAddons} onChange={items => setAddonSelections(current => ({ ...current, [ticketId]: items }))} /></div>
+                              )}
+                              {!isSoldOut && addon && !multiAddons && (
                                 <div
                                   className="mb-3 rounded-lg border border-primary/30 bg-primary/5 p-3"
                                   data-testid={`ticket-addon-${index}`}

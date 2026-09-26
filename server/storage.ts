@@ -1,3 +1,4 @@
+import { withoutEventFeeOverrides } from "@shared/platformFees";
 import { connectPartnerPromotion } from './partnerPromotionStorage';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -664,7 +665,7 @@ export class DatabaseStorage implements IStorage {
 
   // Experience operations
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
-    const normalizedExperience = withTicketCapacity(withoutManualDealUnlock(withoutSingleDayDeposits(experienceData)));
+    const normalizedExperience = withTicketCapacity(withoutEventFeeOverrides(withoutManualDealUnlock(withoutSingleDayDeposits(experienceData))));
     const [experience] = await db.insert(experiences).values([normalizedExperience]).returning();
     this.syncDirectPromotionDeals(experience.id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
@@ -886,7 +887,7 @@ export class DatabaseStorage implements IStorage {
         })
       : updates;
     const updateData = {
-      ...withoutManualDealUnlock(normalizedUpdates),
+      ...withoutEventFeeOverrides(withoutManualDealUnlock(normalizedUpdates)),
       ...(current ? { maxParticipants: withTicketCapacity({ ...current, ...normalizedUpdates }).maxParticipants } : {}),
       updatedAt: new Date(),
     } as any;
@@ -906,6 +907,14 @@ export class DatabaseStorage implements IStorage {
    * event. Deliberately the sole path that writes this column — every other
    * experience write strips it.
    */
+  async setEventPlatformFees(id: string, ticketPct: number, addonPct: number, adminId: string): Promise<Experience | undefined> {
+    const [event] = await db.update(experiences).set({
+      ticketPlatformFeePct: ticketPct.toFixed(2), addonPlatformFeePct: addonPct.toFixed(2),
+      platformFeesUpdatedAt: new Date(), platformFeesUpdatedBy: adminId, updatedAt: new Date(),
+    }).where(eq(experiences.id, id)).returning();
+    return event;
+  }
+
   async setManualDealUnlock(id: string, unlocked: boolean): Promise<Experience | undefined> {
     const [experience] = await db
       .update(experiences)

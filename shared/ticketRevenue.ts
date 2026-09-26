@@ -1,3 +1,4 @@
+import { getTicketAddons } from "./addonChoices";
 /**
  * What an event's tickets are worth, and how many of them a venue deal applies to.
  *
@@ -17,7 +18,7 @@
  */
 
 import { safeAdd, safeMultiply } from "./pricingService";
-import { getTicketAddon, type TicketAddonSkuLike } from "./ticketAddons";
+import { type TicketAddonSkuLike } from "./ticketAddons";
 
 export type RevenueSkuLike = TicketAddonSkuLike & {
   pricePerPerson?: number | string | null;
@@ -109,24 +110,20 @@ export function summariseTicketRevenue(
   return skus.reduce<TicketRevenueSummary>((summary, sku) => {
     const capacity = getSkuCapacity(sku, skus.length, maxParticipants);
     const entryPrice = getSkuEntryPrice(sku);
-    const addon = getTicketAddon(sku);
-    const inventory = Math.floor(toTicketNumber(sku.addonInventory));
-    const addonCapacity = inventory > 0 ? Math.min(capacity, inventory) : capacity;
+    const addons = getTicketAddons(sku).map(addon => ({ ...addon,
+      capacity: addon.inventory > 0 ? Math.min(capacity, addon.inventory) : capacity }));
+    const addonGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.unitPrice, addon.capacity)), 0);
+    const addonVenueGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.venueAmount, addon.capacity)), 0);
+    const addonCreatorGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.creatorAmount, addon.capacity)), 0);
 
     return {
       ticketGross: safeAdd(summary.ticketGross, safeMultiply(entryPrice, capacity)),
       paidCapacity: entryPrice > 0 ? summary.paidCapacity + capacity : summary.paidCapacity,
       totalCapacity: summary.totalCapacity + capacity,
-      addOnGross: addon
-        ? safeAdd(summary.addOnGross, safeMultiply(addon.unitPrice, addonCapacity))
-        : summary.addOnGross,
-      addOnVenueGross: addon
-        ? safeAdd(summary.addOnVenueGross, safeMultiply(addon.venueAmount, addonCapacity))
-        : summary.addOnVenueGross,
-      addOnCreatorGross: addon
-        ? safeAdd(summary.addOnCreatorGross, safeMultiply(addon.creatorAmount, addonCapacity))
-        : summary.addOnCreatorGross,
-      addOnCapacity: addon ? summary.addOnCapacity + addonCapacity : summary.addOnCapacity,
+      addOnGross: safeAdd(summary.addOnGross, addonGross),
+      addOnVenueGross: safeAdd(summary.addOnVenueGross, addonVenueGross),
+      addOnCreatorGross: safeAdd(summary.addOnCreatorGross, addonCreatorGross),
+      addOnCapacity: summary.addOnCapacity + addons.reduce((sum, addon) => sum + addon.capacity, 0),
       hasFreeTickets: summary.hasFreeTickets || (capacity > 0 && entryPrice <= 0),
     };
   }, { ...EMPTY });

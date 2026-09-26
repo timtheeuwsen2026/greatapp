@@ -199,4 +199,36 @@ describe('Combi-Ticket add-on at checkout', () => {
     expect(intentBodies().length).toBeGreaterThan(0);
     expect(intentBodies().every((body) => (body.addonQuantity || 0) === 0)).toBe(true);
   });
+  it('keeps multiple extras selected through re-pricing and returns to a free RSVP when removed', async () => {
+    const sku: any = combiExperience.ticketSkus[0];
+    sku.addonEnabled = true;
+    sku.addons = [{ id: 'coffee', addonName: 'Coffee', addonVenuePrice: 5.5 }, { id: 'loaf', addonName: 'Loaf', addonVenuePrice: 2.25 }];
+    const previousFetch = global.fetch;
+    global.fetch = vi.fn(async (input: any, init?: any) => {
+      if (String(input).includes('/api/create-payment-intent')) {
+        const body = JSON.parse(init.body);
+        const items = (body.addonSelections || []).map((item: any) => ({ ...item, name: item.id === 'coffee' ? 'Coffee' : 'Loaf', unitPrice: item.id === 'coffee' ? 5.5 : 2.25 }));
+        const total = items.reduce((sum: number, item: any) => sum + item.unitPrice * item.quantity, 0);
+        return { ok: true, json: async () => ({ freeRsvp: total === 0, clientSecret: total ? `pi_${total}_secret` : null,
+          fullPrice: total, ticketSkuId: 'sku-run', ticketQuantity: 1, addonTotal: total, addonItems: items,
+          addonQuantity: items.reduce((sum: number, item: any) => sum + item.quantity, 0) }) } as any;
+      }
+      return previousFetch(input, init);
+    }) as any;
+    try {
+      const user = userEvent.setup(); renderCheckout();
+      await user.click(await screen.findByRole('checkbox', { name: 'Add Coffee' }));
+      await screen.findByTestId('stripe-elements');
+      await user.click(screen.getByRole('checkbox', { name: 'Add Loaf' }));
+      await waitFor(() => expect(intentBodies().at(-1)?.addonSelections).toHaveLength(2));
+      expect(intentBodies().at(-1).ticketQuantity).toBe(1);
+      await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Add Loaf' }) as HTMLInputElement).disabled).toBe(false));
+      await user.click(screen.getByRole('checkbox', { name: 'Add Coffee' }));
+      await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Add Loaf' }) as HTMLInputElement).disabled).toBe(false));
+      await user.click(screen.getByRole('checkbox', { name: 'Add Loaf' }));
+      await screen.findByTestId('button-confirm-free-rsvp');
+      expect(intentBodies().at(-1)?.addonSelections).toEqual([]);
+    } finally { delete sku.addons; delete sku.addonEnabled; }
+  });
+
 });

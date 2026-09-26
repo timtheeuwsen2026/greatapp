@@ -1,3 +1,5 @@
+import TicketAddonChoicesEditor from "./TicketAddonChoicesEditor";
+import { eventFeeRates } from "@shared/platformFees";
 import { newExternalVenueFields } from '@shared/venueInviteTerms';
 import { maximumPartnerCommissionPct } from '@shared/partnerPromotion';
 import PartnerLinks from '@/components/PartnerLinks';
@@ -353,6 +355,10 @@ const eventBuilderSchema = z.object({
     // The add-on's own fields. Absent from this list they are stripped on the
     // way through the resolver, which is how a priced add-on can save as a
     // ticket with no add-on at all.
+    addons: z.array(z.object({ id: z.string().min(1).max(128), addonName: z.string().min(1).max(120),
+      addonVenuePrice: z.number().min(0), addonChargeAmount: z.number().min(0),
+      addonGroupRate: z.number().min(0).optional(), addonInventory: z.number().int().min(0).optional(),
+    })).max(20).optional(),
     addonEnabled: z.boolean().optional(),
     addonName: z.string().optional(),
     addonPrice: z.number().min(0).optional(),
@@ -419,6 +425,8 @@ const eventBuilderSchema = z.object({
   
   // Pillar A: Infrastructure fee (fixed) and creator net economics
   creatorPct: z.coerce.number().min(0).max(100).optional().nullable().default(85),
+  ticketPlatformFeePct: z.coerce.number().min(0).max(100).optional().nullable(),
+  addonPlatformFeePct: z.coerce.number().min(0).max(100).optional().nullable(),
   platformPct: z.coerce.number().min(0).max(100).optional().nullable().default(FIXED_PLATFORM_FEE_PCT),
 
   // Pillar B: Commercial venue terms
@@ -1301,6 +1309,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       venueRevenuePercentage: data.venueRevenuePercentage ?? data.venueRevenueSharePct ?? 0,
       creatorPct: data.creatorPct ?? 85,
       platformPct: FIXED_PLATFORM_FEE_PCT,
+      ...eventFeeRates(data),
       participantReferralDealType: data.participantReferralDealType ?? null,
       participantReferralVenueBacked: data.participantReferralVenueBacked === true,
       participantReferralRewardSourcePartnerId: data.participantReferralRewardSourcePartnerId ?? null,
@@ -5945,10 +5954,12 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
   const venueType = form.watch('venueType') || "catalog";
   const selectedVenueId = form.watch('selectedVenueId') || "";
   const configuredPlatformPct = usePlatformFee();
-  const creatorPct = form.watch('creatorPct') || 85;
+  const rates = eventFeeRates({ ticketPlatformFeePct: form.watch('ticketPlatformFeePct'), addonPlatformFeePct: form.watch('addonPlatformFeePct') }, configuredPlatformPct);
+  const creatorPct = 100 - rates.ticketPlatformFeePct;
   // Configured, not assumed — an admin who changes the fee must not leave
   // every quote on this screen disagreeing with the payout engine.
-  const platformPct = configuredPlatformPct;
+  const platformPct = rates.ticketPlatformFeePct;
+  const addonPlatformPct = rates.addonPlatformFeePct;
   const venueCompensationModel = form.watch('venueCompensationModel') || "revenue_share";
   const venueFixedFee = form.watch('venueFixedFee') || 0;
   const venuePerHeadAmount = form.watch('venuePerHeadAmount') || 0;
@@ -6253,7 +6264,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
   // Update a specific ticket SKU field
   // Booleans joined the SKU shape with the modular add-on toggle.
-  const updateTicketSku = (skuId: string, field: string, value: string | number | boolean) => {
+  const updateTicketSku = (skuId: string, field: string, value: string | number | boolean | any[]) => {
     const updated = ticketSkus.map((sku: any) => 
       sku.id === skuId ? { ...sku, [field]: value } : sku
     );
@@ -6432,7 +6443,9 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
         default: return 0;
       }
     })(),
-    ticketGross: venueShareGross,
+    ticketGross: totalRevenue,
+    addonGross: sharesAddOnSales ? addOnTotalRevenue : 0,
+    addonPlatformPct,
     paidTickets: chargeableCapacity,
     platformPct,
     roomNights: safeMultiply(totalRoomCount, Math.max(1, eventNightCount)),
@@ -6598,6 +6611,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     ticketGross: totalRevenue,
     paidTickets: chargeableCapacity,
     platformPct,
+    addonPlatformPct,
     venueDealModel: activeVenueDeal,
     venueDealValue: (() => {
       switch (activeVenueDeal) {
@@ -6646,7 +6660,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
     + (activeVenueDeal === 'revenue_share' || activeVenueDeal === 'commitment_plus_revenue_share'
       ? Number(activeRevenueSharePct || 0)
       : 0);
-  const ticketTakeExceedsGross = totalTicketTakePct >= 100;
+  const ticketTakeExceedsGross = hasPaidTicket && totalTicketTakePct >= 100;
   const venueDealSummaryLabel = venueDealContext === "external"
     ? "No venue commercial deal"
     : activeVenueDeal
@@ -7000,7 +7014,11 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                             </span>
                           </label>
 
-                          {isAddonEnabled(sku) && (
+                          {isAddonEnabled(sku) && (hasVenueAddonCatalog || Array.isArray(sku.addons) ? (
+                            <div className="mt-3"><TicketAddonChoicesEditor sku={sku} catalog={venueAddonCatalog} currency={currency}
+                              platformPct={platformPct} addonPlatformPct={addonPlatformPct} venueDealModel={activeVenueDeal}
+                              venueSharePct={activeRevenueSharePct} onChange={addons => updateTicketSku(sku.id, 'addons', addons)} /></div>
+                          ) : (
                             <div className="mt-3 space-y-3">
                               {/* Path A: the venue published its own prices, so
                                   pick one rather than inventing a number for
@@ -7205,7 +7223,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                 if (!addon) return null;
 
                                 const unitEconomics = calculateEventEconomics({
-                                  ticketGross: 0, paidTickets: 0, platformPct,
+                                  ticketGross: 0, paidTickets: 0, platformPct, addonPlatformPct,
                                   venueDealModel: activeVenueDeal,
                                   venueDealValue: sharesAddOnSales ? activeRevenueSharePct : 0,
                                   addOnVenueGross: addon.venueAmount,
@@ -7264,7 +7282,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                                 );
                               })()}
                             </div>
-                          )}
+                          ))}
                         </div>
 
                         {/* Deposit (only when MVG is ON and ticket is not free) */}
@@ -7553,7 +7571,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
             {/* Split grid: Platform (fixed) | Space | Creator */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <Label htmlFor="platform-pct-display">Platform Fee (%)</Label>
+                <Label htmlFor="platform-pct-display">Entry ticket fee (%)</Label>
                 <Input
                   id="platform-pct-display"
                   type="number"
@@ -7563,7 +7581,10 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
                   className="bg-gray-100 dark:bg-gray-800 cursor-not-allowed"
                   data-testid="input-platform-pct"
                 />
-                <p className="text-xs text-gray-500 mt-1">Fixed — set by platform</p>
+                <p className="text-xs text-gray-500 mt-1">Set by an admin for this event</p>
+                <Label className="mt-3 block" htmlFor="addon-platform-pct-display">Add-on fee (%)</Label>
+                <Input id="addon-platform-pct-display" value={addonPlatformPct} readOnly disabled className="bg-gray-100 dark:bg-gray-800" />
+                <p className="text-xs text-gray-500 mt-1">{addonPlatformPct === 0 ? 'No platform fee on add-on sales.' : 'Applied to add-on sales only.'}</p>
               </div>
               {/* ── The venue's deal, as a result ─────────────────────────
                   Point 40: this used to be the one place the venue's terms
@@ -7763,10 +7784,8 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
 
                 {shownEconomics.platformFee > 0 && (
                   <p className="text-xs text-gray-500" data-testid="text-platform-fee-base">
-                    Great's {platformPct}% fee is calculated on{' '}
-                    {sharesAddOnSales ? 'ticket and add-on sales' : 'ticket revenue and your add-on margin'}
-                    {shownEconomics.venueContribution > 0 ? ', plus the venue contribution' : ''}:
-                    {' '}{formatPriceByCurrency(shownEconomics.platformFeeBase, currency)}.
+                    Great's fee is {platformPct}% on entry revenue and {addonPlatformPct}% on add-on sales.
+                    {shownEconomics.venueContribution > 0 ? ' Venue contributions use the entry fee rate.' : ''}
                   </p>
                 )}
 
@@ -7856,7 +7875,7 @@ function PricingStep({ form, manualDealUnlocked = false, experienceId, goToStep 
               >
                 <strong className="block mb-1">This deal costs more than the event earns</strong>
                 The venue's {formatPriceByCurrency(venuePayoutCap.venueCost, currency)} plus the{' '}
-                {platformPct}% platform fee ({formatPriceByCurrency(venuePayoutCap.platformFee, currency)}){' '}
+                platform fees ({formatPriceByCurrency(venuePayoutCap.platformFee, currency)}){' '}
                 comes to {venuePayoutCap.totalTakePct}% of {formatPriceByCurrency(venueShareGross, currency)}{' '}
                 in sales, leaving you {formatPriceByCurrency(venuePayoutCap.creatorNet, currency)}{' '}
                 on these sales.

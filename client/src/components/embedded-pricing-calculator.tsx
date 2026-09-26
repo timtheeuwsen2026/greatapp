@@ -81,6 +81,7 @@ export default function EmbeddedPricingCalculator() {
     ticketGross,
     paidTickets: price > 0 ? tickets : 0,
     platformPct,
+    addonPlatformPct: 0,
     venueDealModel: activeDeal?.value ?? null,
     venueDealValue: dealValue ?? 0,
     // A rate per room per night needs rooms and nights, which this simplified
@@ -359,9 +360,7 @@ export default function EmbeddedPricingCalculator() {
               <div className="flex gap-2">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
                 <p>
-                  The {platformPct}% platform fee applies to{' '}
-                  {sharesAddOnSales ? 'ticket and add-on sales' : 'ticket sales and your add-on margin'},
-                  plus any commitment fee or sponsorship the venue pays you.
+                  Starting fees: {platformPct}% on entry and 0% on add-ons. An admin can set different rates for each event.
                 </p>
               </div>
               <div className="flex gap-2">

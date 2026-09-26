@@ -1,3 +1,5 @@
+import AddonChoicePicker from "@/components/AddonChoicePicker";
+import { getTicketAddons, parseAddonSelections, type AddonSelection, type BookingAddonItem } from "@shared/addonChoices";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import { getStripePublishableKey } from '@/lib/stripeKey';
@@ -42,6 +44,7 @@ type Experience = {
   mvgDeadline?: string;
   escrowEnabled?: boolean;
   currency?: string;
+  ticketSkus?: any[];
 };
 
 const formatCurrency = (amount: number | string | undefined | null, currency?: string | null) => {
@@ -95,6 +98,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
     addonUnitPrice?: number;
     addonQuantity?: number;
     addonTotal?: number;
+    addonItems?: BookingAddonItem[];
   } | null;
 }) => {
   const stripe = useStripe();
@@ -152,6 +156,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             ticketSkuId: paymentInfo?.ticketSkuId,
             ticketQuantity: paymentInfo?.ticketQuantity || 1,
             addonQuantity: paymentInfo?.addonQuantity || 0,
+            addonSelections: paymentInfo?.addonItems?.map(item => ({ id: item.id, quantity: item.quantity })),
             paymentType: paymentMode
           });
           
@@ -221,6 +226,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
             ticketSkuId: paymentInfo?.ticketSkuId,
             ticketQuantity: paymentInfo?.ticketQuantity || 1,
             addonQuantity: paymentInfo?.addonQuantity || 0,
+            addonSelections: paymentInfo?.addonItems?.map(item => ({ id: item.id, quantity: item.quantity })),
             paymentType: paymentMode
           });
           
@@ -397,6 +403,7 @@ export default function Checkout() {
     addonUnitPrice?: number;
     addonQuantity?: number;
     addonTotal?: number;
+    addonItems?: BookingAddonItem[];
   } | null>(null);
 
   // ── PWYW state ─────────────────────────────────────────────────────────
@@ -430,6 +437,8 @@ export default function Checkout() {
       : 0,
   );
 
+  const [addonSelections, setAddonSelections] = useState<AddonSelection[]>(() => parseAddonSelections(urlParams.get("addons")));
+
   const [paymentMode, setPaymentMode] = useState<'deposit' | 'full'>(initialPaymentMode || 'deposit');
 
   // A shared discount link. The token travels from the event page and is worth
@@ -453,6 +462,7 @@ export default function Checkout() {
     mode: 'deposit' | 'full',
     userPrice?: number,
     addonOverride?: number,
+    selectionsOverride?: AddonSelection[],
   ) => {
     if (!experience || !experienceId) return;
     const requestedAddons = addonOverride ?? addonQuantity;
@@ -470,6 +480,9 @@ export default function Checkout() {
         ticketSkuId: ticketSkuId || undefined,
         ticketQuantity,
         addonQuantity: requestedAddons,
+        addonSelections: Array.isArray(((experience.ticketSkus as any[]) || []).find((sku: any, index: number) =>
+          (sku.id || sku.sourceRoomId || `ticket-${index}`) === ticketSkuId || (!ticketSkuId && experience.ticketSkus?.length === 1))?.addons)
+          ? selectionsOverride ?? addonSelections : undefined,
         paymentMode: mode,
         promoterId: attribution.promoterId,
         referralCode: attribution.referralCode,
@@ -509,6 +522,7 @@ export default function Checkout() {
           addonUnitPrice: data.addonUnitPrice ?? 0,
           addonQuantity: data.addonQuantity ?? 0,
           addonTotal: data.addonTotal ?? 0,
+          addonItems: data.addonItems,
         });
         setClientSecret("");
         return;
@@ -542,6 +556,7 @@ export default function Checkout() {
         addonUnitPrice: data.addonUnitPrice ?? 0,
         addonQuantity: data.addonQuantity ?? 0,
         addonTotal: data.addonTotal ?? 0,
+        addonItems: data.addonItems,
       });
 
       if (data.hasDeposit === false && mode === 'deposit') {
@@ -567,7 +582,7 @@ export default function Checkout() {
     } finally {
       setPaymentIntentLoading(false);
     }
-  }, [experience, experienceId, ticketSkuId, ticketQuantity, addonQuantity, toast]);
+  }, [experience, experienceId, ticketSkuId, ticketQuantity, addonQuantity, addonSelections, toast]);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -762,13 +777,20 @@ export default function Checkout() {
     );
   }
 
+  const choiceTicket = ((experience.ticketSkus as any[]) || []).find((sku: any, index: number) =>
+    (sku.id || sku.sourceRoomId || `ticket-${index}`) === ticketSkuId || (!ticketSkuId && experience.ticketSkus?.length === 1));
+  const hasAddonChoices = Array.isArray(choiceTicket?.addons) && getTicketAddons(choiceTicket).length > 0;
+  const choices = hasAddonChoices ? <AddonChoicePicker sku={choiceTicket} quantity={ticketQuantity} currency={experience.currency || "eur"}
+    selections={addonSelections} disabled={paymentIntentLoading || freeRsvpSubmitting}
+    onChange={items => { setAddonSelections(items); createPaymentIntent(paymentMode, pwywSubmitted ? pwywPrice : undefined, undefined, items); }} /> : null;
+
   if (freeRsvpInfo) {
     // The ticket may still offer a paid extra. Without this the buyer would be
     // sent straight past it into a free RSVP, which is exactly how add-ons
     // ended up unsellable in the first place.
     const offeredAddonName = paymentInfo?.addonName;
     const offeredAddonPrice = Number(paymentInfo?.addonUnitPrice || 0);
-    const offersAddon = !!offeredAddonName && offeredAddonPrice > 0;
+    const offersAddon = hasAddonChoices || (!!offeredAddonName && offeredAddonPrice > 0);
     const rsvpQuantity = freeRsvpInfo.ticketQuantity || ticketQuantity || 1;
 
     return (
@@ -787,7 +809,8 @@ export default function Checkout() {
                   : "This ticket is €0.00, so Stripe checkout is bypassed entirely. Click below to confirm your RSVP and unlock the community chat."}
               </p>
 
-              {offersAddon && (
+              {hasAddonChoices && <div className="mb-6">{choices}</div>}
+              {offersAddon && !hasAddonChoices && (
                 <div
                   className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4 text-left"
                   data-testid="free-rsvp-addon-offer"
@@ -1080,6 +1103,7 @@ export default function Checkout() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
+                {choices}
                 <img 
                   src={normalizeImageUrl(experience.coverImageUrl) || "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&h=200"} 
                   alt={experience.title}
@@ -1145,7 +1169,12 @@ export default function Checkout() {
                   
                   {/* The add-on shows on its own line: a €0 RSVP with a €5.50
                       coffee must not read as a €5.50 ticket. */}
-                  {!!paymentInfo?.addonQuantity && paymentInfo.addonQuantity > 0 && (
+                  {!!paymentInfo?.addonItems?.length && paymentInfo.addonItems.map(item => (
+                    <div className="flex justify-between text-sm" key={item.id} data-testid={`checkout-addon-line-${item.id}`}>
+                      <span>{item.name} × {item.quantity}</span><span>{formatCurrency(item.total, experience.currency)}</span>
+                    </div>
+                  ))}
+                  {!paymentInfo?.addonItems?.length && !!paymentInfo?.addonQuantity && paymentInfo.addonQuantity > 0 && (
                     <div className="flex justify-between items-center" data-testid="summary-addon-line">
                       <span className="text-sm text-gray-600">
                         {paymentInfo.addonName || "Add-on"}

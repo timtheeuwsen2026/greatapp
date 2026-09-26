@@ -1,3 +1,4 @@
+import AdminEventFees from "@/components/AdminEventFees";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AdminCreatorApprovals from "@/components/AdminCreatorApprovals";
 import { apiRequest } from "@/lib/queryClient";
@@ -938,6 +939,7 @@ export default function AdminDashboard() {
                           >
                             {experience.manualDealUnlocked ? "Manual deal: on" : "Manual deal: off"}
                           </Button>
+                          <AdminEventFees event={experience} />
                           {experience.status !== "cancelled" && (
                             <Button
                               size="sm"

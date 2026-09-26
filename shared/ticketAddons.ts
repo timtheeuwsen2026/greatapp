@@ -15,6 +15,7 @@
  */
 
 export type TicketAddonSkuLike = {
+  addons?: Array<TicketAddonSkuLike & { id: string }> | null;
   pricingMode?: string | null;
   addonName?: string | null;
   addonPrice?: number | string | null;
@@ -139,6 +140,9 @@ export function isAddonEnabled(sku: TicketAddonSkuLike | null | undefined): bool
  */
 export function getTicketAddon(sku: TicketAddonSkuLike | null | undefined): TicketAddon | null {
   if (!isAddonEnabled(sku)) return null;
+  if (Array.isArray(sku?.addons)) {
+    return sku.addons.length ? getTicketAddon({ ...sku.addons[0], addonEnabled: true, addons: undefined }) : null;
+  }
 
   const venuePrice = toAmount(sku!.addonVenuePrice);
 

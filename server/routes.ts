@@ -1,3 +1,5 @@
+import { getTicketAddons, quoteAddonChoices, bookingAddonFields, addonMetadata, addonItemsFromMetadata, AddonSelectionError } from "@shared/addonChoices";
+import { eventFeeRates, feeSnapshotFromMetadata } from "@shared/platformFees";
 import { acceptedPartnerCommissionPct, partnerMemberDiscount, partnerShareUrl } from '@shared/partnerPromotion';
 import { venueInviteTerms, savedVenueInviteTerms } from '@shared/venueInviteTerms';
 import type { Express } from "express";
@@ -224,6 +226,7 @@ async function getAvailableTicketQuantity(
 async function getSoldAddonQuantity(
   experienceId: string,
   ticketSkuId: string | null,
+  addonId?: string,
 ): Promise<number> {
   if (!ticketSkuId) return 0;
 
@@ -231,7 +234,9 @@ async function getSoldAddonQuantity(
   return existingBookings.reduce((total, booking: any) => {
     if (!isActiveParticipantBooking(booking.status)) return total;
     if (booking.ticketSkuId !== ticketSkuId) return total;
-    const quantity = Number(booking.addonQuantity);
+    const quantity = addonId && Array.isArray(booking.addonItems) && booking.addonItems.length
+      ? booking.addonItems.filter((item: any) => item.id === addonId).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0)
+      : addonId && addonId !== 'legacy' ? 0 : Number(booking.addonQuantity);
     return total + (Number.isInteger(quantity) && quantity > 0 ? quantity : 0);
   }, 0);
 }
@@ -4061,6 +4066,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       errors.push(...validateExperienceVenueDeal({
         ...req.body,
+        ...eventFeeRates(),
         manualDealUnlocked: (existingDraft as any).manualDealUnlocked === true,
       }));
 
@@ -4844,7 +4850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Validation function for required fields - strict HTTPS validation
   const validateDraftForPublication = (
     data: any,
-    options: { allowPastStart?: boolean; manualDealUnlocked?: boolean } = {},
+    options: { allowPastStart?: boolean; manualDealUnlocked?: boolean; feeRates?: ReturnType<typeof eventFeeRates> } = {},
   ) => {
     const errors: string[] = [];
     
@@ -4953,6 +4959,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     errors.push(...validateExperienceVenueDeal({
       ...data,
+      ...(options.feeRates ?? eventFeeRates()),
       // Read from the stored row the caller resolved, never from the payload:
       // the unlock is an admin decision about this event, not a form field.
       manualDealUnlocked: options.manualDealUnlocked === true,
@@ -5311,6 +5318,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         && submittedStart.getTime() === new Date(existing.startDate).getTime();
       const validation = validateDraftForPublication(req.body, {
         allowPastStart: startDateUnchanged,
+        feeRates: eventFeeRates(existing),
         manualDealUnlocked: (existing as any).manualDealUnlocked === true,
       });
       if (!validation.isValid) {
@@ -5443,6 +5451,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     quantity?: unknown;
     /** Combi-Ticket add-ons the buyer opted into. Priced from the ticket, not from here. */
     addonQuantity?: unknown;
+    addonSelections?: unknown;
     /**
      * The shared discount link the buyer arrived through.
      *
@@ -5758,18 +5767,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // The add-on is priced off the ticket here too, so a booking request that
-      // claims a different add-on total than the PaymentIntent was created for
-      // cannot widen the gap — the amount check below compares against this.
-      const addon = getTicketAddon(selectedTicket);
-      const resolvedAddonQuantity = clampAddonQuantity(
-        input.addonQuantity,
-        ticketQuantity,
-        selectedTicket,
-        await getSoldAddonQuantity(experienceId, resolvedTicketSkuId),
-      );
-      const addonRecord = buildBookingAddonRecord(addon, resolvedAddonQuantity);
+      const addonOptions = getTicketAddons(selectedTicket);
+      const paidIntent = stripePaymentIntentId && !stripePaymentIntentId.startsWith('pi_sandbox_')
+        ? await stripe.paymentIntents.retrieve(stripePaymentIntentId) : null;
+      const purchasedAddons = paidIntent ? addonItemsFromMetadata(paidIntent.metadata) : null;
+      let addonItems;
+      try {
+        const sold = Object.fromEntries(await Promise.all(addonOptions.map(async option => [
+          option.id, await getSoldAddonQuantity(experienceId, resolvedTicketSkuId, option.id),
+        ])));
+        addonItems = purchasedAddons ?? quoteAddonChoices(selectedTicket, input.addonSelections, ticketQuantity, input.addonQuantity, sold);
+      } catch (error) {
+        if (error instanceof AddonSelectionError) return { status: error.status, body: { message: error.message } };
+        throw error;
+      }
+      const addonRecord = bookingAddonFields(addonItems);
+      const resolvedAddonQuantity = addonRecord.addonQuantity;
       const addonTotal = Number(addonRecord.addonTotal);
+      // A paid quote is immutable even if the organizer reprices a product while
+      // the buyer is completing payment. Ownership and charge are checked below.
+      if (purchasedAddons && paidIntent?.metadata.unitPrice !== undefined) {
+        unitPrice = Number(paidIntent.metadata.unitPrice);
+        discountPerTicket = Number(paidIntent.metadata.discountPerTicket || 0);
+        fullPrice = Math.round(unitPrice * ticketQuantity * 100) / 100;
+      }
       fullPrice = Math.round((fullPrice + addonTotal) * 100) / 100;
 
       if (fullPrice < 0) {
@@ -5813,6 +5834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount = 0;
       }
 
+      let bookingFeeRates = eventFeeRates(experience);
       let paymentIntentId = stripePaymentIntentId;
       let paymentReadyForNotifications = fullPrice === 0;
       let paymentInFlight = false;
@@ -5827,13 +5849,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           confirmation_method: "automatic",
           metadata: { 
             experienceId, 
+            ticketPlatformFeePct: String(bookingFeeRates.ticketPlatformFeePct),
+            addonPlatformFeePct: String(bookingFeeRates.addonPlatformFeePct),
             userId,
             isEscrow: (isEscrow || experience.escrowEnabled)?.toString() || "false",
             isDepositPayment: isDepositOnly.toString(),
             fullPrice: fullPrice.toString(),
             ticketSkuId: resolvedTicketSkuId || "",
             ticketQuantity: ticketQuantity.toString(),
-            addonName: addonRecord.addonName || "",
+            ...addonMetadata(addonItems),
+            unitPrice: String(unitPrice),
+            addonName: (addonRecord.addonName || "").slice(0, 450),
             addonUnitPrice: addonRecord.addonUnitPrice,
             addonQuantity: resolvedAddonQuantity.toString(),
             depositAmount: depositAmount.toString(),
@@ -5851,6 +5877,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           paymentReadyForNotifications = true;
         } else {
           let paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          bookingFeeRates = feeSnapshotFromMetadata(paymentIntent.metadata, Number(experience.platformPct ?? 15));
           const expectedAmount = Math.round((isDepositOnly ? depositAmount : fullPrice) * 100);
           // Must match the fallback used when the PaymentIntent was created in
           // /api/create-payment-intent, otherwise a currency-less experience
@@ -5981,6 +6008,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Add-on money is already inside `amount`; these columns record what
           // it was for, so it can be reported apart from ticket revenue.
           ...addonRecord,
+          ticketPlatformFeePct: String(bookingFeeRates.ticketPlatformFeePct),
+          addonPlatformFeePct: String(bookingFeeRates.addonPlatformFeePct),
           // Which shared link this booking came through, and what it took off.
           // An organiser who sent one link to their running club and another to
           // a sponsor needs to see which one people actually used.
@@ -6868,6 +6897,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * model is the manual one keeps rendering its terms, it simply cannot be
    * re-selected or countered into.
    */
+  app.patch("/api/admin/experiences/:id/platform-fees", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) return res.status(403).json({ message: "Admin access required" });
+      const adminId = resolveCurrentUserId(req);
+      if (!adminId) return res.status(401).json({ message: "Unauthorized" });
+      const { ticketPlatformFeePct, addonPlatformFeePct } = req.body || {};
+      const valid = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+        && value >= 0 && value <= 100 && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001;
+      if (!valid(ticketPlatformFeePct) || !valid(addonPlatformFeePct)) {
+        return res.status(400).json({ message: "Enter both fees as percentages from 0 to 100, with at most two decimals." });
+      }
+      const event = await storage.getExperience(req.params.id);
+      if (!event) return res.status(404).json({ message: "Event not found" });
+      const sharesRevenue = ['revenue_share', 'commitment_plus_revenue_share'].includes(event.venueCompensationModel || '');
+      const venuePct = sharesRevenue ? Number(event.venueRevenueSharePct || 0) : 0;
+      if (venuePct + Math.max(ticketPlatformFeePct, addonPlatformFeePct) > 100) {
+        return res.status(400).json({ message: `The venue already receives ${venuePct}%. Each platform fee must leave enough to honor that share.` });
+      }
+      const updated = await storage.setEventPlatformFees(event.id, ticketPlatformFeePct, addonPlatformFeePct, adminId);
+      res.json({ id: updated!.id, ...eventFeeRates(updated!) });
+    } catch (error) {
+      console.error('Unable to update event platform fees:', error);
+      res.status(500).json({ message: 'Unable to save platform fees' });
+    }
+  });
+
   app.patch("/api/admin/experiences/:id/manual-deal", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {
@@ -7869,30 +7924,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // they want, the event says what one costs. A ticket offering no add-on
       // clamps any requested quantity to zero.
       const addon = getTicketAddon(selectedTicket);
-      const soldAddons = addon
-        ? await getSoldAddonQuantity(experienceId, resolvedTicketSkuId)
-        : 0;
-      const resolvedAddonQuantity = clampAddonQuantity(
-        addonQuantity,
-        ticketQuantity,
-        selectedTicket,
-        soldAddons,
-      );
-      // Asked for an add-on that has since sold out: say so, rather than
-      // quietly charging for the ticket alone and leaving the buyer to discover
-      // the missing coffee at the counter.
-      if (Number(addonQuantity) > 0 && resolvedAddonQuantity === 0 && addon) {
-        return res.status(409).json({
-          message: `${addon.name} is sold out`,
-          addonSoldOut: true,
-        });
+      const addonOptions = getTicketAddons(selectedTicket);
+      const sold = Object.fromEntries(await Promise.all(addonOptions.map(async option => [
+        option.id, await getSoldAddonQuantity(experienceId, resolvedTicketSkuId, option.id),
+      ])));
+      let addonItems;
+      try {
+        addonItems = quoteAddonChoices(selectedTicket, req.body.addonSelections, ticketQuantity, addonQuantity, sold);
+      } catch (error) {
+        if (error instanceof AddonSelectionError) return res.status(error.status).json({ message: error.message });
+        throw error;
       }
-      const { addonTotal, fullPrice } = calculateBookingTotal({
-        unitPrice,
-        ticketQuantity,
-        addonUnitPrice: addon?.unitPrice,
-        addonQuantity: resolvedAddonQuantity,
-      });
+      const addonRecord = bookingAddonFields(addonItems);
+      const resolvedAddonQuantity = addonRecord.addonQuantity;
+      if (Number(addonQuantity) > 0 && resolvedAddonQuantity === 0 && addon && !req.body.addonSelections) {
+        return res.status(409).json({ message: `${addon.name} is sold out`, addonSoldOut: true });
+      }
+      const addonTotal = Number(addonRecord.addonTotal);
+      const fullPrice = Math.round((unitPrice * ticketQuantity + addonTotal) * 100) / 100;
 
       const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
@@ -7988,6 +8037,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         metadata: {
           experienceId,
           userId: buyerUserId || "",
+          ticketPlatformFeePct: String(eventFeeRates(experience).ticketPlatformFeePct),
+          addonPlatformFeePct: String(eventFeeRates(experience).addonPlatformFeePct),
           ticketSkuId: resolvedTicketSkuId || "",
           ticketName: ticketName || "",
           pricingMode: isPWYW ? "pwyw" : "fixed",
@@ -7998,7 +8049,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // and records the same discount this intent was created for.
           discountToken: String(req.body?.discountToken || ""),
           discountPerTicket: discountPerTicket.toString(),
-          addonName: addon?.name || "",
+          ...addonMetadata(addonItems),
+          addonName: (addonRecord.addonName || "").slice(0, 450),
           addonUnitPrice: (addon?.unitPrice ?? 0).toString(),
           addonQuantity: resolvedAddonQuantity.toString(),
           isMVGExperience: isMVGExperience?.toString() || "false",
@@ -8036,7 +8088,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         unitPrice,
         discountPerTicket,
         discountTotal: Math.round(discountPerTicket * ticketQuantity * 100) / 100,
-        addonName: addon?.name ?? null,
+        addonItems,
+        addonName: addonRecord.addonName ?? addon?.name ?? null,
         addonUnitPrice: addon?.unitPrice ?? 0,
         addonQuantity: resolvedAddonQuantity,
         addonTotal,

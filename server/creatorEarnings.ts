@@ -1,3 +1,4 @@
+import { bookingPlatformFeeCents as calculateBookingPlatformFee } from "@shared/platformFees";
 /**
  * One earnings calculation for every creator-facing money view.
  *
@@ -35,6 +36,9 @@ export type EarningsExperienceInput = {
 };
 
 export type EarningsBookingInput = {
+  ticketPlatformFeePct?: MoneyValue;
+  addonPlatformFeePct?: MoneyValue;
+  addonTotal?: MoneyValue;
   id?: string | null;
   status?: string | null;
   amount?: MoneyValue;
@@ -135,7 +139,7 @@ export function summarizeCreatorEarnings(
       ? calculateTicketDeductionCents(experience.venueFixedFee, booking.ticketQuantity)
       : 0;
 
-    const bookingPlatformFeeCents = Math.round(bookingGrossCents * (agreedPlatformPct / 100));
+    const bookingPlatformFeeCents = calculateBookingPlatformFee(booking, agreedPlatformPct);
     // The venue's cut and the platform's cut both come off the top; the creator
     // keeps the remainder. Never let rounding push a booking below zero.
     const bookingSpaceShareCents = Math.min(

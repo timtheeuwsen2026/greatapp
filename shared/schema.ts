@@ -421,6 +421,7 @@ export const experienceDrafts = pgTable("experience_drafts", {
         // a pricing mode of its own. `addonPrice` is what a participant pays and
         // is derived from the two below; it is kept for tickets saved before the
         // venue price and the organiser's margin were separated.
+        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonInventory?: number }>;
         addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
@@ -757,6 +758,7 @@ export const experiences = pgTable("experiences", {
         // a pricing mode of its own. `addonPrice` is what a participant pays and
         // is derived from the two below; it is kept for tickets saved before the
         // venue price and the organiser's margin were separated.
+        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonInventory?: number }>;
         addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
@@ -1019,6 +1021,12 @@ export const experiences = pgTable("experiences", {
     "15.00",
   ),
 
+  // Per-event rates, writable only through the admin fee endpoint.
+  ticketPlatformFeePct: decimal("ticket_platform_fee_pct", { precision: 5, scale: 2 }),
+  addonPlatformFeePct: decimal("addon_platform_fee_pct", { precision: 5, scale: 2 }).default("0.00"),
+  platformFeesUpdatedAt: timestamp("platform_fees_updated_at"),
+  platformFeesUpdatedBy: varchar("platform_fees_updated_by"),
+
   // Pillar B: Commercial venue terms (decoupled from platform fee)
   venueCompensationModel: varchar("venue_compensation_model").default("revenue_share"),
   venueFixedFee: decimal("venue_fixed_fee", { precision: 10, scale: 2 }).default("0.00"),
@@ -1162,6 +1170,9 @@ export const bookings = pgTable("bookings", {
   // of this RSVP, never a second ticket. Name and price are copied from the
   // ticket at purchase time so re-pricing the add-on later cannot restate what
   // an existing buyer agreed to pay. addonTotal is already inside `amount`.
+  ticketPlatformFeePct: decimal("ticket_platform_fee_pct", { precision: 5, scale: 2 }),
+  addonPlatformFeePct: decimal("addon_platform_fee_pct", { precision: 5, scale: 2 }),
+  addonItems: jsonb("addon_items").$type<Array<{ id: string; name: string; unitPrice: number; quantity: number; total: number; venueAmount: number }>>().default([]),
   addonName: varchar("addon_name"),
   addonUnitPrice: decimal("addon_unit_price", { precision: 10, scale: 2 }).default("0.00"),
   addonQuantity: integer("addon_quantity").notNull().default(0),
@@ -2928,6 +2939,12 @@ export const insertBookingSchema = createInsertSchema(bookings).omit({
   id: true,
   createdAt: true,
   bookingDate: true,
+}).extend({
+  addonItems: z.array(z.object({
+    id: z.string(), name: z.string(), unitPrice: z.number().finite().nonnegative(),
+    quantity: z.number().int().positive(), total: z.number().finite().nonnegative(),
+    venueAmount: z.number().finite().nonnegative(),
+  })).max(20).nullable().optional(),
 });
 
 // Revenue calculation schemas for real-time breakdown

@@ -8,7 +8,7 @@ import {
   formatBenchmarkHint,
   getBenchmarkOutlierNote,
 } from "@shared/dealBenchmarks";
-import { getTicketAddon } from "@shared/ticketAddons";
+import { getTicketAddons } from "@shared/addonChoices";
 import { getVenueDealOptions, type VenueDealOption } from "@shared/venueDealModels";
 
 /**
@@ -64,7 +64,7 @@ export function VenueDealEditor({
   const model = form.watch(modelField) || (isTarget ? "" : "revenue_share");
   const spaceType = form.watch("venueOpenSpaceType");
   const hasPaidAddons = (form.watch("ticketSkus") || []).some((sku: any) =>
-    (getTicketAddon(sku)?.unitPrice || 0) > 0);
+    getTicketAddons(sku).some(addon => addon.unitPrice > 0));
   const percentageDeal = model === "revenue_share" || model === "commitment_plus_revenue_share";
   const revenueLabel = !paidTicketsConfigured && hasPaidAddons
     ? "add-on sales" : "ticket and add-on sales";

@@ -1,3 +1,4 @@
+import { eventFeeRates, bookingPlatformFeeCents } from "@shared/platformFees";
 import { it, expect, vi } from 'vitest';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import { calculateVenueEarnings, getVenueDealTermsKey, formatVenueDealSummary } from '@shared/venueDealModels';
@@ -7,14 +8,14 @@ import { sumBookingTicketQuantity, calculateTicketDeductionCents } from '@shared
 // Execute the real payout functions with all storage, email and transfer
 // boundaries replaced. No server startup or payment credentials are involved.
 const source = 'server/payout-scheduler.ts';
-function harness(venueAccount: string | null = 'venue-account', model = 'revenue_share') {
+function harness(venueAccount: string | null = 'venue-account', model = 'revenue_share', feeOverrides = {}) {
   const experience = { id: 'coffee-event', title: 'Coffee run', creatorId: 'organizer',
     linkedVenueId: 'coffee-shop', venueCompensationModel: model, venueRevenueSharePct: 80,
     creatorPct: 85, currency: 'eur' };
   const storage = {
     getCreatorProfile: vi.fn(async () => ({ stripeAccountId: 'creator-account' })),
     getExperience: vi.fn(async () => experience),
-    getSplitRecipientsByExperience: vi.fn(async () => []),
+    getSplitRecipientsByExperience: vi.fn(async (): Promise<any[]> => []),
     getOtherActivePayoutForExperience: vi.fn(async () => null),
     updateScheduledPayout: vi.fn(async () => {}),
     getUser: vi.fn(async () => null),
@@ -27,12 +28,12 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
   const db = { select: () => ({ from: () => ({
     limit: async () => [{ platformFeePercentage: 15 }],
     where: async () => ++whereCount === 1
-      ? [{ status: 'fully_paid', amount: '7.75', totalPrice: '7.75', ticketQuantity: 1, addonTotal: '7.75' }]
+      ? [{ status: 'fully_paid', amount: '7.75', totalPrice: '7.75', ticketQuantity: 1, addonTotal: '7.75', ...feeOverrides }]
       : [],
   }) }) };
   const stripe = { transfers: { create: vi.fn(async () => ({ id: 'test-transfer' })) } };
   const execute = routeFunction('executeExperiencePayout', {
-    storage, db, stripe, buildDefaultRecipients, calculateSplitAmount,
+    storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumBookingTicketQuantity, calculateTicketDeductionCents,
     bookings: {}, platformSettings: {}, and: vi.fn(), eq: vi.fn(), inArray: vi.fn(),
@@ -85,4 +86,24 @@ it('includes the same add-on share on the venue ledger', async () => {
   expect(response.statusCode).toBe(200);
   expect(response.body.earned).toBe(6.2);
   expect(response.body.events[0]).toMatchObject({ paidAttendees: 0, attendees: 1, addOnRevenue: 7.75 });
+});
+
+it('pays the organizer the full 20% margin when the add-on fee is waived', async () => {
+  const { execute, stripe, storage } = harness('venue-account', 'revenue_share', { ticketPlatformFeePct: '15', addonPlatformFeePct: '0' });
+  await execute('coffee-event', 'waived-payout');
+  expect(stripe.transfers.create.mock.calls.map(([transfer]: any[]) => [transfer.destination, transfer.amount]))
+    .toEqual([['venue-account', 620], ['creator-account', 155]]);
+  expect(storage.updateScheduledPayout).toHaveBeenLastCalledWith('waived-payout', expect.objectContaining({ platformFeeAmountCents: 0 }));
+});
+
+it('gives a fee waiver to the organizer when the event has stored split recipients', async () => {
+  const { execute, stripe, storage } = harness('venue-account', 'revenue_share', { ticketPlatformFeePct: '15', addonPlatformFeePct: '0' });
+  storage.getSplitRecipientsByExperience.mockResolvedValue([
+    { recipientType: 'creator', stripeAccountId: 'creator-account', splitMode: 'percentage', splitValue: '5', isActive: true },
+    { recipientType: 'venue', stripeAccountId: 'venue-account', splitMode: 'percentage', splitValue: '80', isActive: true },
+    { recipientType: 'platform', splitMode: 'percentage', splitValue: '15', isActive: true },
+  ]);
+  await execute('coffee-event', 'stored-split-payout');
+  expect(stripe.transfers.create.mock.calls.map(([transfer]: any[]) => [transfer.destination, transfer.amount]))
+    .toEqual([['venue-account', 620], ['creator-account', 155]]);
 });

@@ -58,6 +58,8 @@ export type EventEconomicsInput = {
   paidTickets: number;
   /** Read from platform settings, never assumed. */
   platformPct: number;
+  /** Separate fee on gross add-on sales; omitted for legacy callers. */
+  addonPlatformPct?: number;
   /** The selected Venue Commercial Deal, or null when there is no venue deal. */
   venueDealModel: VenueDealModel | string | null;
   /** The deal's headline number: a percentage, a per-ticket amount, a fee. */
@@ -222,9 +224,15 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
 
   // Percentage deals use the full sale, as the payment engine does. Other
   // add-on arrangements keep their existing unit-cost/margin calculation.
-  const platformFeeBase = Math.max(0, round2(ticketGross
-    + (sharesAddOnSales ? addOnGross : addOnCreatorMargin) + venueContribution));
-  const platformFee = round2(platformFeeBase * (platformPct / 100));
+  const separateAddonFee = input.addonPlatformPct !== undefined;
+  const addonFeeBase = separateAddonFee || sharesAddOnSales ? addOnGross : addOnCreatorMargin;
+  const platformFeeBase = Math.max(0, round2(ticketGross + addonFeeBase + venueContribution));
+  const ticketPlatformFee = round2((ticketGross + venueContribution) * platformPct / 100);
+  const addonPlatformPct = separateAddonFee ? Math.max(0, finite(input.addonPlatformPct)) : platformPct;
+  const addonPlatformFee = round2(Math.max(0, addonFeeBase) * addonPlatformPct / 100);
+  const platformFee = separateAddonFee
+    ? round2(ticketPlatformFee + addonPlatformFee)
+    : round2(platformFeeBase * platformPct / 100);
 
   const lines: EconomicsLine[] = [];
 
@@ -238,11 +246,11 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
     });
   }
 
-  if (platformFee > 0) {
+  if ((separateAddonFee ? ticketPlatformFee : platformFee) > 0) {
     lines.push({
       key: "platform_fee",
-      label: `Platform Fee (${platformPct}%)`,
-      amount: -platformFee,
+      label: `${separateAddonFee ? "Platform Fee on Tickets" : "Platform Fee"} (${platformPct}%)`,
+      amount: -(separateAddonFee ? ticketPlatformFee : platformFee),
       kind: "fee",
       tier: "per_unit",
     });
@@ -289,6 +297,10 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       kind: "gross",
       tier: "addon",
     });
+  }
+  if (separateAddonFee && addOnGross > 0) {
+    lines.push({ key: "addon_platform_fee", label: `Platform Fee on Add-ons (${addonPlatformPct}%)`,
+      amount: -addonPlatformFee, kind: "fee", tier: "addon" });
   }
   if (addOnVenueRevenue > 0) {
     lines.push({

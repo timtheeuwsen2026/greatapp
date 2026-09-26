@@ -1,3 +1,4 @@
+import { eventFeeRates } from "@shared/platformFees";
 import { describe, expect, it, vi } from 'vitest';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import { venueInviteTerms } from '@shared/venueInviteTerms';
@@ -15,7 +16,7 @@ describe('live builder invitation updates', () => {
     });
     const notificationService = { sendExternalVenueInvitation: vi.fn(async () => {}) };
     const syncPartnersForExperience = vi.fn(async () => {});
-    const run = routeFunction('/api/experiences/:id/builder', {
+    const run = routeFunction('/api/experiences/:id/builder', { eventFeeRates,
       storage, createVenueInviteForExperience, notificationService, syncPartnersForExperience,
       resolveCurrentUserId: () => 'creator', checkIsAdmin: async () => false,
       validateDraftForPublication: () => ({ isValid: true }), buildExperienceFromBuilderPayload: (body: any) => body,

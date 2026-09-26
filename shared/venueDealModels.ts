@@ -535,6 +535,8 @@ type ExperienceVenueDealInput = {
   ticketSkus?: unknown;
   maxParticipants?: unknown;
   platformPct?: unknown;
+  ticketPlatformFeePct?: unknown;
+  addonPlatformFeePct?: unknown;
   /** The builder's legacy name for the same figure. */
   platformRevenuePercentage?: unknown;
   currency?: unknown;
@@ -587,11 +589,13 @@ function affordabilityErrors(
 
   // Two names for the platform's cut are in circulation; a missing one means no
   // platform fee is assumed, which can only ever under-report a breach.
-  const platformPct = Number(input.platformPct ?? input.platformRevenuePercentage);
+  const platformPct = Number(input.ticketPlatformFeePct ?? input.platformPct ?? input.platformRevenuePercentage);
   const check = checkVenuePayoutCap({
     model,
     value: Number(value) || 0,
-    ticketGross: saleGross,
+    ticketGross: summary.ticketGross,
+    addonGross: sharesAddons ? summary.addOnGross : 0,
+    addonPlatformPct: input.addonPlatformFeePct == null ? undefined : Number(input.addonPlatformFeePct),
     paidTickets: summary.paidCapacity,
     platformPct: Number.isFinite(platformPct) ? platformPct : 0,
     currencyDisplay: currencyDisplay(input.currency),
@@ -763,6 +767,8 @@ export type VenuePayoutCapInput = {
   value: number;
   /** Gross from paid tickets only — free tickets and add-on money excluded. */
   ticketGross: number;
+  addonGross?: number;
+  addonPlatformPct?: number;
   /** Paid tickets only. A per-head fee must not be charged for a free RSVP. */
   paidTickets: number;
   /** The platform's cut, read from settings rather than assumed. */
@@ -805,9 +811,12 @@ export type VenuePayoutCapResult = {
  */
 export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapResult {
   const normalized = normalizeVenueDealModel(input.model);
-  const gross = Number.isFinite(input.ticketGross) ? Math.max(0, input.ticketGross) : 0;
+  const ticketGross = Number.isFinite(input.ticketGross) ? Math.max(0, input.ticketGross) : 0;
+  const addonGross = Number.isFinite(input.addonGross) ? Math.max(0, input.addonGross!) : 0;
+  const gross = ticketGross + addonGross;
   const platformPct = Number.isFinite(input.platformPct) ? Math.max(0, input.platformPct) : 0;
-  const platformFee = round2(gross * (platformPct / 100));
+  const addonPct = Number.isFinite(input.addonPlatformPct) ? Math.max(0, input.addonPlatformPct!) : platformPct;
+  const platformFee = round2(ticketGross * platformPct / 100) + round2(addonGross * addonPct / 100);
 
   const earnings = normalized
     ? calculateVenueEarnings({
@@ -835,7 +844,7 @@ export function checkVenuePayoutCap(input: VenuePayoutCapInput): VenuePayoutCapR
     exceedsGross,
     message: exceedsGross
       ? `This deal pays out more than the event takes. The venue's ${money(venueCost)} `
-        + `plus the ${platformPct}% platform fee (${money(platformFee)}) comes to `
+        + `plus platform fees (${money(platformFee)}) comes to `
         + `${totalTakePct}% of ${money(gross)} in sales, leaving you `
         // Sponsorship and commitment income do not offset an unaffordable sales split.
         + `${money(creatorNet)} on these sales. `

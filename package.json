@@ -10,6 +10,7 @@
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "test": "vitest run",
+    "test:bookings-layout": "playwright test tests/browser/booking-layout.spec.mjs",
     "test:email": "vitest run server/__tests__/emailTemplates.test.ts server/__tests__/emailPreferenceTokens.test.ts server/__tests__/emailRules.test.ts server/__tests__/publicUrl.test.ts client/src/lib/utils.test.ts && node --test scripts/postgres-connection-config.test.js",
     "db:migrate:email": "node scripts/migrate-email-delivery.mjs",
     "db:push": "drizzle-kit push",
@@ -122,6 +123,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
     "@tailwindcss/typography": "^0.5.15",

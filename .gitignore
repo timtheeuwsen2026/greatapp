@@ -18,3 +18,7 @@ attached_assets/Screenshot*
 .dockerignore
 # Local Claude Code dev-server config
 .claude/
+
+# Browser regression test output
+test-results/
+playwright-report/

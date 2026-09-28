@@ -100,12 +100,20 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg" data-testid="dialog-booking-detail">
-        <DialogHeader>
+      <DialogContent
+        className="flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg flex-col gap-0 overflow-hidden rounded-lg p-0 supports-[height:100dvh]:max-h-[calc(100dvh-2rem)]"
+        aria-describedby={undefined}
+        data-testid="dialog-booking-detail"
+      >
+        <DialogHeader className="shrink-0 p-4 pr-12 text-left sm:p-6 sm:pr-12">
           <DialogTitle data-testid="text-detail-title">Booking Details</DialogTitle>
         </DialogHeader>
         
-        <div className="space-y-6">
+        {/* Scroll the details independently so the title and close button stay reachable. */}
+        <div
+          className="min-h-0 min-w-0 space-y-6 overflow-y-auto overscroll-contain px-4 pb-4 [overflow-wrap:anywhere] sm:px-6 sm:pb-6"
+          data-testid="booking-detail-scroll"
+        >
           {booking.experience?.coverImageUrl ? (
             <img 
               src={booking.experience.coverImageUrl} 
@@ -124,7 +132,7 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
               {booking.experience?.title || "Experience"}
             </h3>
             
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant={statusInfo.variant} data-testid="badge-detail-status">
                 {statusInfo.label}
               </Badge>
@@ -134,10 +142,10 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
             {booking.experience?.startDate && (
               <div className="flex items-center gap-2" data-testid="text-detail-dates">
-                <Calendar className="h-4 w-4 text-gray-500" />
+                <Calendar className="h-4 w-4 shrink-0 text-gray-500" />
                 <span>
                   {new Date(booking.experience.startDate).toLocaleDateString()}
                   {booking.experience.endDate && ` - ${new Date(booking.experience.endDate).toLocaleDateString()}`}
@@ -152,13 +160,14 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
                 <AddressLink
                   address={booking.experience.location}
                   name={booking.experience.venue}
-                  className="text-gray-700"
+                  className="min-w-0 text-gray-700 [&>span]:min-w-0"
                   data-testid="text-detail-location"
                 />
                 <LocationMap
                   address={booking.experience.location}
                   name={booking.experience.venue}
                   height={200}
+                  className="min-w-0 sm:col-span-2"
                 />
               </>
             )}
@@ -168,9 +177,9 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
             <h4 className="font-medium">Payment Summary</h4>
 
             {booking.ticketName && (
-              <div className="flex justify-between text-sm" data-testid="text-detail-ticket">
-                <span className="text-gray-600">Ticket</span>
-                <span className="font-medium">
+              <div className="flex justify-between gap-4 text-sm" data-testid="text-detail-ticket">
+                <span className="shrink-0 text-gray-600">Ticket</span>
+                <span className="min-w-0 text-right font-medium">
                   {booking.ticketName}
                   {booking.ticketQuantity && booking.ticketQuantity > 1 ? ` × ${booking.ticketQuantity}` : ''}
                 </span>
@@ -318,7 +327,7 @@ export default function TravelerBookings() {
       <Navigation />
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto">
-          <div className="flex items-center justify-between mb-8">
+          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="text-page-title">My Bookings</h1>
               <p className="text-gray-600">View your trip bookings and payment status</p>
@@ -362,23 +371,23 @@ export default function TravelerBookings() {
                     data-testid={`card-booking-${booking.id}`}
                   >
                     <CardContent className="p-0">
-                      <div className="flex">
+                      <div className="flex flex-col sm:flex-row">
                         {booking.experience?.coverImageUrl ? (
                           <img 
                             src={booking.experience.coverImageUrl} 
                             alt={booking.experience.title || "Experience"} 
-                            className="w-32 h-32 object-cover flex-shrink-0"
+                            className="h-40 w-full shrink-0 object-cover sm:h-32 sm:w-32"
                             data-testid={`img-booking-cover-${booking.id}`}
                           />
                         ) : (
-                          <div className="w-32 h-32 bg-gray-100 flex items-center justify-center flex-shrink-0">
+                          <div className="flex h-40 w-full shrink-0 items-center justify-center bg-gray-100 sm:h-32 sm:w-32">
                             <ImageIcon className="h-8 w-8 text-gray-400" />
                           </div>
                         )}
                         
-                        <div className="flex-1 p-4">
-                          <div className="flex items-start justify-between">
-                            <div>
+                        <div className="min-w-0 flex-1 p-4 [overflow-wrap:anywhere]">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
                               <h3 className="font-semibold text-lg" data-testid={`text-booking-title-${booking.id}`}>
                                 {booking.experience?.title || "Experience"}
                               </h3>
@@ -390,7 +399,7 @@ export default function TravelerBookings() {
                                 {statusInfo.label}
                               </Badge>
                             </div>
-                            <div className="text-right">
+                            <div className="shrink-0 sm:text-right">
                               <div className="flex items-center gap-1 text-sm text-gray-600" data-testid={`text-booking-deposit-${booking.id}`}>
                                 <CreditCard className="h-4 w-4" />
                                 <span>{paidLabel}: {formatCurrency(paidAmount, booking.experience?.currency)}</span>
@@ -409,6 +418,7 @@ export default function TravelerBookings() {
                               <AddressLink
                                 address={booking.experience.location}
                                 name={booking.experience.venue}
+                                className="min-w-0 [&>span]:min-w-0"
                                 data-testid={`text-booking-location-${booking.id}`}
                               />
                             )}

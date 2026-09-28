@@ -171,7 +171,7 @@ export default function Navigation() {
           </div>
 
           {/* Desktop nav */}
-          <div className="hidden md:flex items-center space-x-6">
+          <div className="hidden lg:flex items-center space-x-6">
             <button
               onClick={handleExploreTrips}
               className="text-gray-700 hover:text-primary transition-colors font-medium"
@@ -432,7 +432,7 @@ export default function Navigation() {
           </div>
 
           {/* Mobile hamburger */}
-          <div className="md:hidden flex items-center">
+          <div className="lg:hidden flex items-center">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="text-gray-700 hover:text-primary transition-colors"
@@ -445,7 +445,7 @@ export default function Navigation() {
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="md:hidden">
+        <div className="lg:hidden">
           <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3 bg-white border-t border-gray-100">
             <button
               onClick={handleExploreTrips}

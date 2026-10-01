@@ -584,7 +584,13 @@ function affordabilityErrors(
 
   const summary = summariseTicketRevenue(input.ticketSkus as any[], input.maxParticipants);
   const sharesAddons = model === "revenue_share" || model === "commitment_plus_revenue_share";
-  const saleGross = summary.ticketGross + (sharesAddons ? summary.addOnGross : 0);
+  // A product priced from the venue's own discount pays the venue that price
+  // and is charged the fee on the markup alone, so it can never cost more than
+  // it sells for and is not part of what a revenue share could overdraw.
+  const sharedAddOnGross = sharesAddons
+    ? Math.max(0, summary.addOnGross - summary.venuePricedAddOnVenueGross - summary.venuePricedAddOnCreatorGross)
+    : 0;
+  const saleGross = summary.ticketGross + sharedAddOnGross;
   if (saleGross <= 0) return [];
 
   // Two names for the platform's cut are in circulation; a missing one means no
@@ -594,7 +600,7 @@ function affordabilityErrors(
     model,
     value: Number(value) || 0,
     ticketGross: summary.ticketGross,
-    addonGross: sharesAddons ? summary.addOnGross : 0,
+    addonGross: sharedAddOnGross,
     addonPlatformPct: input.addonPlatformFeePct == null ? undefined : Number(input.addonPlatformFeePct),
     paidTickets: summary.paidCapacity,
     platformPct: Number.isFinite(platformPct) ? platformPct : 0,

@@ -135,6 +135,7 @@ import {
   validateExperienceDealTerms,
 } from "@shared/dealTermGuards";
 import { getTicketAddon, isAddonEnabled, normalizeAddonMarginMode } from "@shared/ticketAddons";
+import { discountedVenuePrice, normalizeAddonDiscountPct } from "@shared/venueAddonPricing";
 import {
   calculateEventEconomics,
   economicsAsFreeRsvp,
@@ -358,6 +359,9 @@ const eventBuilderSchema = z.object({
     addons: z.array(z.object({ id: z.string().min(1).max(128), addonName: z.string().min(1).max(120),
       addonVenuePrice: z.number().min(0), addonChargeAmount: z.number().min(0),
       addonGroupRate: z.number().min(0).optional(), addonInventory: z.number().int().min(0).optional(),
+      // The venue's discount and the organiser's markup: the two numbers the
+      // three amounts above are worked out from when the venue reprices.
+      addonDiscountPct: z.number().min(0).max(100).optional(), addonMarkup: z.number().min(0).optional(),
     })).max(20).optional(),
     addonEnabled: z.boolean().optional(),
     addonName: z.string().optional(),
@@ -371,8 +375,10 @@ const eventBuilderSchema = z.object({
     // under the old vocabulary still loads and still prices correctly.
     addonMargin: z.number().min(0).optional(),
     addonMarginMode: z.enum(["additive", "deduction"]).optional(),
-    /** What the venue charges the organiser — agreed per invite, never published. */
+    /** What the venue charges the organiser: its price less the discount below. */
     addonGroupRate: z.number().min(0).optional(),
+    /** The venue's discount off its own price, which the group rate follows. */
+    addonDiscountPct: z.number().min(0).max(100).optional(),
     /** What the participant is charged. The one number the organiser decides. */
     addonChargeAmount: z.number().min(0).optional(),
     addonInventory: z.number().min(0).optional(),
@@ -6265,13 +6271,26 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
   // Update a specific ticket SKU field
   // Booleans joined the SKU shape with the modular add-on toggle.
   const updateTicketSku = (skuId: string, field: string, value: string | number | boolean | any[]) => {
-    const updated = ticketSkus.map((sku: any) => 
+    // Read from the form, not from the render. Two updates in a row — two
+    // fields of one ticket, or two tickets repriced in the same pass — would
+    // otherwise both start from the tickets as they were drawn, and the second
+    // would undo the first.
+    const updated = (form.getValues('ticketSkus') || []).map((sku: any) =>
       sku.id === skuId ? { ...sku, [field]: value } : sku
     );
     form.setValue('ticketSkus', updated, { shouldDirty: true });
   };
 
-  const updateTicketFormat = (skuId: string, pricingMode: string) => {
+  // Several fields in one write, for where one number is derived from another.
+  const patchTicketSku = (skuId: string, patch: Record<string, unknown>) => {
+    form.setValue(
+      'ticketSkus',
+      (form.getValues('ticketSkus') || []).map((sku: any) => (sku.id === skuId ? { ...sku, ...patch } : sku)),
+      { shouldDirty: true },
+    );
+  };
+
+  const updateTicketFormat =(skuId: string, pricingMode: string) => {
     const updated = ticketSkus.map((sku: any) => {
       if (sku.id !== skuId) return sku;
       return pricingMode === 'free_rsvp'
@@ -6434,7 +6453,12 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
       }
     })(),
     ticketGross: totalRevenue,
-    addonGross: sharesAddOnSales ? addOnTotalRevenue : 0,
+    // Products priced from the venue's own discount are left out: the venue is
+    // paid its discounted price for them and the fee comes off the markup, so
+    // they cannot overdraw the event however large the revenue share is.
+    addonGross: sharesAddOnSales
+      ? Math.max(0, addOnTotalRevenue - revenueSummary.venuePricedAddOnVenueGross - revenueSummary.venuePricedAddOnCreatorGross)
+      : 0,
     addonPlatformPct,
     paidTickets: chargeableCapacity,
     platformPct,
@@ -6617,6 +6641,8 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
     commitmentFee: venueCommitmentFee,
     addOnVenueGross: addOnVenueRevenue,
     addOnCreatorGross: addOnCreatorMargin,
+    venuePricedAddOnVenueGross: revenueSummary.venuePricedAddOnVenueGross,
+    venuePricedAddOnCreatorGross: revenueSummary.venuePricedAddOnCreatorGross,
     // Conservative forecast: all sales attributed at the highest agreed rate.
     // A booking has one referrer; adding every partner's rate overstates costs.
     promoterCommissionPct: Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners)),
@@ -7128,52 +7154,82 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                               {/* ── What it costs, and what you charge ─────
                                   Three numbers, and only one of them is a
                                   decision. The venue price is what a
-                                  participant would pay at the bar; the group
-                                  rate is what the venue actually charges for a
-                                  booked group; the charge is what the
-                                  organiser sets. The margin is the difference,
-                                  and it is shown rather than entered — an
-                                  organiser used to enter a margin and a
-                                  direction for it to travel in and then work
-                                  backwards to what the participant would see.
-                                  Point 46. */}
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <div>
-                                  <Label htmlFor={`sku-addon-venue-price-${sku.id}`}>Venue price</Label>
-                                  <MoneyInput
-                                    id={`sku-addon-venue-price-${sku.id}`}
-                                    prefix={currencySymbol}
-                                    value={sku.addonVenuePrice ?? (sku.addonPrice ?? '')}
-                                    onValueChange={(amount) => updateTicketSku(sku.id, 'addonVenuePrice', amount ?? 0)}
-                                    placeholder="0.00"
-                                    disabled={!currency}
-                                    data-testid={`input-ticket-addon-venue-price-${index}`}
-                                  />
-                                  <p className="mt-1 text-xs text-gray-500">
-                                    What a participant would pay at the counter
-                                  </p>
-                                </div>
-                                {!sharesAddOnSales && <div>
-                                  <Label htmlFor={`sku-addon-group-rate-${sku.id}`}>
-                                    Group rate <span className="text-gray-400">(cost)</span>
-                                  </Label>
-                                  <MoneyInput
-                                    id={`sku-addon-group-rate-${sku.id}`}
-                                    prefix={currencySymbol}
-                                    value={sku.addonGroupRate ?? ''}
-                                    onValueChange={(amount) => updateTicketSku(sku.id, 'addonGroupRate', amount ?? 0)}
-                                    placeholder="Same as venue price"
-                                    disabled={!currency}
-                                    data-testid={`input-ticket-addon-group-rate-${index}`}
-                                  />
-                                  {/* Never pre-set on a venue's profile: it
-                                      depends on the size and the date, so it is
-                                      agreed per invite in the dealroom. */}
-                                  <p className="mt-1 text-xs text-gray-500">
-                                    What the venue charges you, agreed in the dealroom
-                                  </p>
-                                </div>}
-                              </div>
+                                  participant would pay at the bar; the
+                                  discount is what the venue takes off it for
+                                  this event; the charge is what the organiser
+                                  sets. The margin is the difference, and it is
+                                  shown rather than entered. Point 46.
+
+                                  The discount used to be a second amount, a
+                                  "group rate", which stayed where it was typed
+                                  when the venue price changed. As a percentage
+                                  the venue's cost is worked out from the venue
+                                  price every time either moves. This form is
+                                  only reached for a venue with no product list
+                                  of its own — one that has a list sets the
+                                  discount there itself. */}
+                              {(() => {
+                                const venuePrice = Number(sku.addonVenuePrice ?? sku.addonPrice) || 0;
+                                const agreedRate = Number(sku.addonGroupRate) || 0;
+                                // A group rate saved as an amount reads back
+                                // as the percentage it amounts to.
+                                const discountPct = sku.addonDiscountPct
+                                  ?? (agreedRate > 0 && agreedRate < venuePrice
+                                    ? Math.round((1 - agreedRate / venuePrice) * 10000) / 100
+                                    : '');
+                                const venueCost = agreedRate > 0 ? Math.min(agreedRate, venuePrice) : venuePrice;
+
+                                return (
+                                  <div className="grid gap-3 sm:grid-cols-2">
+                                    <div>
+                                      <Label htmlFor={`sku-addon-venue-price-${sku.id}`}>Venue price</Label>
+                                      <MoneyInput
+                                        id={`sku-addon-venue-price-${sku.id}`}
+                                        prefix={currencySymbol}
+                                        value={sku.addonVenuePrice ?? (sku.addonPrice ?? '')}
+                                        onValueChange={(amount) => {
+                                          const pct = normalizeAddonDiscountPct(sku.addonDiscountPct);
+                                          patchTicketSku(sku.id, {
+                                            addonVenuePrice: amount ?? 0,
+                                            ...(pct > 0 ? { addonGroupRate: discountedVenuePrice(amount, pct) } : {}),
+                                          });
+                                        }}
+                                        placeholder="0.00"
+                                        disabled={!currency}
+                                        data-testid={`input-ticket-addon-venue-price-${index}`}
+                                      />
+                                      <p className="mt-1 text-xs text-gray-500">
+                                        What a participant would pay at the counter
+                                      </p>
+                                    </div>
+                                    {!sharesAddOnSales && <div>
+                                      <Label htmlFor={`sku-addon-discount-${sku.id}`}>
+                                        Venue discount <span className="text-gray-400">(%)</span>
+                                      </Label>
+                                      <MoneyInput
+                                        id={`sku-addon-discount-${sku.id}`}
+                                        value={discountPct}
+                                        onValueChange={(value) => {
+                                          const pct = normalizeAddonDiscountPct(value);
+                                          patchTicketSku(sku.id, {
+                                            addonDiscountPct: pct,
+                                            // Zero reads as "same as the venue price".
+                                            addonGroupRate: pct > 0 ? discountedVenuePrice(venuePrice, pct) : 0,
+                                          });
+                                        }}
+                                        placeholder="0"
+                                        disabled={!currency}
+                                        data-testid={`input-ticket-addon-discount-${index}`}
+                                      />
+                                      <p className="mt-1 text-xs text-gray-500">
+                                        {venuePrice > 0
+                                          ? `Off the venue price for this event — the venue is paid ${formatPriceByCurrency(venueCost, currency)} per unit`
+                                          : 'Off the venue price for this event'}
+                                      </p>
+                                    </div>}
+                                  </div>
+                                );
+                              })()}
 
                               <div>
                                 <Label htmlFor={`sku-addon-charge-${sku.id}`}>
@@ -7600,7 +7656,9 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                 <p className="text-xs text-gray-500 mt-1">Set by an admin for this event</p>
                 <Label className="mt-3 block" htmlFor="addon-platform-pct-display">Add-on fee (%)</Label>
                 <Input id="addon-platform-pct-display" value={addonPlatformPct} readOnly disabled className="bg-gray-100 dark:bg-gray-800" />
-                <p className="text-xs text-gray-500 mt-1">{addonPlatformPct === 0 ? 'No platform fee on add-on sales.' : 'Applied to add-on sales only.'}</p>
+                <p className="text-xs text-gray-500 mt-1">{addonPlatformPct === 0
+                  ? 'No platform fee on add-on sales.'
+                  : "Charged on your markup only for products priced from the venue's discount — never on the venue's price. Charged on the whole sale for any other add-on."}</p>
               </div>
               {/* ── The venue's deal, as a result ─────────────────────────
                   Point 40: this used to be the one place the venue's terms
@@ -7800,7 +7858,9 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
 
                 {shownEconomics.platformFee > 0 && (
                   <p className="text-xs text-gray-500" data-testid="text-platform-fee-base">
-                    Great's fee is {platformPct}% on entry revenue and {addonPlatformPct}% on add-on sales.
+                    Great's fee is {platformPct}% on entry revenue and {addonPlatformPct}% on {revenueSummary.venuePricedAddOnVenueGross > 0 && revenueSummary.venuePricedAddOnVenueGross >= revenueSummary.addOnVenueGross - 0.005
+                      ? 'your add-on markup'
+                      : 'add-on sales'}.
                     {shownEconomics.venueContribution > 0 ? ' Venue contributions use the entry fee rate.' : ''}
                   </p>
                 )}

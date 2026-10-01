@@ -46,6 +46,22 @@ export type TicketAddonSkuLike = {
    */
   addonGroupRate?: number | string | null;
   /**
+   * The venue's discount off its counter price, as a percentage.
+   *
+   * Set by the venue on its own catalog, never by the organiser on its behalf.
+   * Where it is present the group rate above is not a number anybody typed: it
+   * is the counter price less this discount, recalculated whenever the venue
+   * changes either — see `venueAddonPricing.ts`.
+   */
+  addonDiscountPct?: number | string | null;
+  /**
+   * What the organiser adds on top of the venue's discounted price, per unit.
+   *
+   * A flat amount rather than a price, so the participant's price follows the
+   * venue's when the venue reprices instead of staying where it was typed.
+   */
+  addonMarkup?: number | string | null;
+  /**
    * What the participant is charged. One field, entered directly.
    *
    * The organiser used to enter a margin and a direction for it to travel in,

@@ -288,6 +288,9 @@ const venueProfileSchema = z.object({
         name: z.string(),
         description: z.string().optional(),
         venuePrice: z.coerce.number().min(0),
+        // Left out of this object it is stripped on submit, and the venue's
+        // discount saves as none at all.
+        discountPct: z.coerce.number().min(0).max(99).optional(),
         unit: z.string().optional(),
         groupDiscountNote: z.string().optional(),
         active: z.boolean().default(true),
@@ -1248,23 +1251,23 @@ export default function VenueProfileSetup() {
                         skips it gets asked for a price by hand on every event
                         that wants one.
 
-                        Name and your price, and nothing else. A group rate
-                        depends on the size and the date, so it is agreed per
-                        invite in the dealroom and is deliberately not askable
-                        here: a rate published on a profile is a rate a venue
-                        has promised to a group it has not seen. */}
+                        Name, retail price and a discount off it. The discount
+                        is a percentage and lives here, with the venue, rather
+                        than being an amount the organiser types on each event:
+                        it is the venue's number to set, and a percentage keeps
+                        up when the retail price changes. */}
                     <div className="space-y-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 dark:border-indigo-900 dark:bg-indigo-950/20">
                       <div>
                         <h4 className="text-md font-medium">Your products</h4>
                         <p className="text-sm text-muted-foreground">
                           Extras an organiser can offer alongside a ticket — a coffee, a lunch,
-                          equipment hire. Give <em>your</em> price for each. The organiser sets
-                          what participants are charged; you are paid the number you put here,
-                          and nobody quotes a price for your counter that you did not set.
+                          equipment hire. Give <em>your</em> retail price for each, and the
+                          discount you offer on it to people booking through an event. Nobody
+                          quotes a price for your counter that you did not set.
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          A group rate is not asked for here. It depends on the size and the
-                          date, so it is agreed per invite in the dealroom.
+                          Change either number later and every upcoming event offering that
+                          product is repriced to match. Bookings already made keep their price.
                         </p>
                       </div>
 

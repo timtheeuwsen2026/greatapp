@@ -421,7 +421,7 @@ export const experienceDrafts = pgTable("experience_drafts", {
         // a pricing mode of its own. `addonPrice` is what a participant pays and
         // is derived from the two below; it is kept for tickets saved before the
         // venue price and the organiser's margin were separated.
-        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonInventory?: number }>;
+        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonDiscountPct?: number; addonMarkup?: number; addonInventory?: number }>;
         addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
@@ -758,7 +758,7 @@ export const experiences = pgTable("experiences", {
         // a pricing mode of its own. `addonPrice` is what a participant pays and
         // is derived from the two below; it is kept for tickets saved before the
         // venue price and the organiser's margin were separated.
-        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonInventory?: number }>;
+        addons?: Array<{ id: string; addonName: string; addonVenuePrice: number; addonChargeAmount: number; addonGroupRate?: number; addonDiscountPct?: number; addonMarkup?: number; addonInventory?: number }>;
         addonEnabled?: boolean;
         addonName?: string;
         addonPrice?: number;
@@ -1741,8 +1741,10 @@ export const venues = pgTable("venues", {
   // states its prices once; every creator working with it picks from this list
   // instead of guessing.
   //
-  // `venuePrice` is the venue's own counter price. What a participant is shown
-  // is that price plus (or minus) the organiser's margin, decided per event.
+  // `venuePrice` is the venue's own counter price and `discountPct` is what the
+  // venue takes off it for someone buying with a ticket. What a participant is
+  // shown is the discounted price plus the organiser's markup, never above the
+  // counter price — see shared/venueAddonPricing.ts.
   addonCatalog: jsonb("addon_catalog")
     .$type<
       Array<{
@@ -1750,6 +1752,7 @@ export const venues = pgTable("venues", {
         name: string;
         description?: string;
         venuePrice: number;
+        discountPct?: number;
         /** "per person", "per group", "per night" — free text, shown as-is. */
         unit?: string;
         /** Optional standing offer, e.g. "10% off for groups over 20". */

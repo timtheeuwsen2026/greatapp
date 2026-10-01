@@ -1,3 +1,5 @@
+import { venuePricedAddonCents } from "@shared/addonChoices";
+
 export type PayoutEligibilityInput = {
   requireMinimumParticipants?: boolean | null;
   mvgEnabled?: boolean | null;
@@ -45,4 +47,29 @@ export function resolveBookingPayoutGrossCents(booking: BookingPayoutGrossInput)
 
 export function sumBookingPayoutGrossCents(bookings: BookingPayoutGrossInput[]): number {
   return bookings.reduce((sum, booking) => sum + resolveBookingPayoutGrossCents(booking), 0);
+}
+
+/**
+ * Add-on money priced from a venue's own discount, across an event's bookings.
+ *
+ * `venueCents` is the venue's discounted price for every unit sold, which it is
+ * paid whole whatever else the event's deal says; `grossCents` is what those
+ * units were sold for, which is therefore not shared out a second time as
+ * revenue. Scaled to what has actually been collected, the same way the payout
+ * gross is, so a deposit-only booking cannot reserve more than it has paid in.
+ */
+export function sumVenuePricedAddonCents(
+  bookings: Array<BookingPayoutGrossInput & { addonItems?: unknown }>,
+): { grossCents: number; venueCents: number } {
+  return bookings.reduce((sum, booking) => {
+    const priced = venuePricedAddonCents(booking.addonItems);
+    if (priced.gross <= 0) return sum;
+    const fullCents = Math.round((positiveMoney(booking.totalPrice) ?? positiveMoney(booking.amount) ?? 0) * 100);
+    const collectedCents = resolveBookingPayoutGrossCents(booking);
+    const scale = fullCents > 0 ? Math.min(1, collectedCents / fullCents) : 0;
+    return {
+      grossCents: sum.grossCents + Math.round(priced.gross * scale),
+      venueCents: sum.venueCents + Math.round(priced.venue * scale),
+    };
+  }, { grossCents: 0, venueCents: 0 });
 }

@@ -284,6 +284,7 @@ export interface IStorage {
   
   // Experience draft operations
   getExperienceDraftsByCreator(creatorId: string): Promise<ExperienceDraft[]>;
+  getExperienceDraftsByVenue(venueId: string): Promise<ExperienceDraft[]>;
   createExperienceDraft(draft: InsertExperienceDraft): Promise<ExperienceDraft>;
   updateExperienceDraft(id: string, creatorId: string, updates: Partial<InsertExperienceDraft>): Promise<ExperienceDraft>;
   deleteExperienceDraft(id: string, creatorId: string): Promise<void>;
@@ -3337,6 +3338,13 @@ export class DatabaseStorage implements IStorage {
       .from(experienceDrafts)
       .where(eq(experienceDrafts.creatorId, creatorId))
       .orderBy(desc(experienceDrafts.updatedAt));
+  }
+
+  async getExperienceDraftsByVenue(venueId: string): Promise<ExperienceDraft[]> {
+    return await db
+      .select()
+      .from(experienceDrafts)
+      .where(eq(experienceDrafts.selectedVenueId, venueId));
   }
 
   async createExperienceDraft(draft: InsertExperienceDraft): Promise<ExperienceDraft> {

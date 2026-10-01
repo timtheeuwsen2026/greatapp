@@ -38,8 +38,45 @@ it('lets an organizer offer multiple catalog products and a buyer choose both on
   const user = userEvent.setup(); render(<Fixture />);
   await user.click(screen.getByRole('checkbox', { name: 'Offer Latte + loaf' }));
   await user.click(screen.getByRole('checkbox', { name: 'Offer Matcha + loaf' }));
-  expect(screen.getAllByLabelText('Participant price').map(input => (input as HTMLInputElement).value)).toEqual(['7.45', '7.75']);
+  expect(screen.getByTestId('addon-participant-price-latte').textContent).toContain('7.45');
+  expect(screen.getByTestId('addon-participant-price-matcha').textContent).toContain('7.75');
   await user.click(screen.getByRole('checkbox', { name: 'Add Latte + loaf' }));
   await user.click(screen.getByRole('checkbox', { name: 'Add Matcha + loaf' }));
   expect(JSON.parse(screen.getByTestId('selected-items').textContent!)).toEqual([{ id: 'latte', quantity: 1 }, { id: 'matcha', quantity: 1 }]);
+});
+it('prices a product from the venue\'s retail price and discount, and lets the organizer add only a markup', async () => {
+  let saved: any[] = [];
+  function Fixture({ catalog }: { catalog: any[] }) {
+    const [addons, setAddons] = useState<any[]>(saved);
+    saved = addons;
+    return <TicketAddonChoicesEditor sku={{ id: 'rsvp', addonEnabled: true, addons }} catalog={catalog}
+      currency="eur" platformPct={15} addonPlatformPct={15} venueDealModel="revenue_share" venueSharePct={80} onChange={setAddons} />;
+  }
+  const user = userEvent.setup();
+  const { unmount } = render(<Fixture catalog={[{ id: 'coffee', name: 'Coffee', venuePrice: 6.5, discountPct: 20 }]} />);
+  await user.click(screen.getByRole('checkbox', { name: 'Offer Coffee' }));
+  expect(screen.getByTestId('addon-participant-price-coffee').textContent).toContain('5.20');
+  expect(screen.getByTestId('addon-venue-terms-coffee').textContent).toContain('20% event discount, set by the venue');
+  // The venue's cost is the venue's to set: the organizer is not asked for it.
+  expect(screen.queryByLabelText('Venue cost per item')).toBeNull();
+
+  await user.type(screen.getByLabelText('Your markup per item (optional)'), '.8');
+  expect(screen.getByTestId('addon-participant-price-coffee').textContent).toContain('6.00');
+  expect(saved[0]).toMatchObject({ addonVenuePrice: 6.5, addonDiscountPct: 20, addonGroupRate: 5.2, addonMarkup: 0.8, addonChargeAmount: 6 });
+
+  // Everything the organizer needs to see their upside, in one place: the
+  // venue keeps its discounted price whole even on an 80% revenue split, and
+  // Great's 15% comes out of the 0.80 markup, not out of the 6.00 sale.
+  const breakdown = screen.getByTestId('addon-breakdown-coffee').textContent!;
+  expect(breakdown).toContain("Venue's event discount (20%)");
+  expect(breakdown).toContain("Great's fee (15% of your markup)");
+  expect(screen.getByTestId('addon-venue-keeps-coffee').textContent).toContain('5.20');
+  expect(screen.getByTestId('addon-fee-coffee').textContent).toContain('0.12');
+  expect(screen.getByTestId('addon-you-keep-coffee').textContent).toContain('0.68');
+
+  // The venue raises its retail price: the event follows without being re-entered.
+  unmount();
+  render(<Fixture catalog={[{ id: 'coffee', name: 'Coffee', venuePrice: 7, discountPct: 20 }]} />);
+  await waitFor(() => expect(saved[0]).toMatchObject({ addonVenuePrice: 7, addonGroupRate: 5.6, addonChargeAmount: 6.4 }));
+  expect(screen.getByTestId('addon-participant-price-coffee').textContent).toContain('6.40');
 });

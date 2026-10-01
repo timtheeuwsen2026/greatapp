@@ -72,6 +72,17 @@ export type EventEconomicsInput = {
   addOnVenueGross?: number;
   /** The organiser's margin on add-ons across every seat offered one. */
   addOnCreatorGross?: number;
+  /**
+   * The part of the two figures above that comes from products priced from the
+   * venue's own discount — included in them, not in addition to them.
+   *
+   * Those sales divide one way under every deal: the venue keeps its
+   * discounted price whole, and the platform fee is charged on the organiser's
+   * markup alone. A revenue share does not apply to them, because the venue's
+   * discount is already the deal it agreed for that product.
+   */
+  venuePricedAddOnVenueGross?: number;
+  venuePricedAddOnCreatorGross?: number;
   /** Participant cashback, as a percentage of ticket revenue. */
   promoterCommissionPct?: number;
   /**
@@ -178,11 +189,21 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
   const addOnCreatorMargin = round2(finite(input.addOnCreatorGross));
   const addOnGross = Math.max(0, round2(addOnUnitCosts + addOnCreatorMargin));
   const sharesAddOnSales = model === "revenue_share" || model === "commitment_plus_revenue_share";
+
+  // Products priced from the venue's own discount, split out of the totals
+  // above. Never more than the totals they are part of.
+  const pricedVenue = Math.min(addOnUnitCosts, Math.max(0, round2(finite(input.venuePricedAddOnVenueGross))));
+  const pricedMarkup = Math.max(0, round2(finite(input.venuePricedAddOnCreatorGross)));
+  const otherUnitCosts = round2(addOnUnitCosts - pricedVenue);
+  const otherMargin = round2(addOnCreatorMargin - pricedMarkup);
+  const otherGross = Math.max(0, round2(otherUnitCosts + otherMargin));
+
   // A percentage deal replaces the unit-cost arrangement. Charging both would
-  // pay the venue twice for the same product.
-  const addOnVenueRevenue = sharesAddOnSales
-    ? round2(addOnGross * Math.max(0, finite(input.venueDealValue)) / 100)
-    : addOnUnitCosts;
+  // pay the venue twice for the same product. A product the venue discounted
+  // itself is paid at that discounted price whichever deal the event carries.
+  const addOnVenueRevenue = round2(pricedVenue + (sharesAddOnSales
+    ? otherGross * Math.max(0, finite(input.venueDealValue)) / 100
+    : otherUnitCosts));
 
   // ── Path 1: ticket revenue, distributed per the Venue Commercial Deal ────
   const venueTicketCost = venueTicketCostFor({
@@ -223,9 +244,12 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
   const partnerTicketCost = round2(partnerRows.reduce((total, share) => total + share.amount, 0));
 
   // Percentage deals use the full sale, as the payment engine does. Other
-  // add-on arrangements keep their existing unit-cost/margin calculation.
+  // add-on arrangements keep their existing unit-cost/margin calculation. On a
+  // product priced from the venue's discount the fee is charged on the markup
+  // and nothing else, so it can never come out of the venue's price.
   const separateAddonFee = input.addonPlatformPct !== undefined;
-  const addonFeeBase = separateAddonFee || sharesAddOnSales ? addOnGross : addOnCreatorMargin;
+  const addonFeeBase = round2(pricedMarkup
+    + (separateAddonFee || sharesAddOnSales ? otherGross : otherMargin));
   const platformFeeBase = Math.max(0, round2(ticketGross + addonFeeBase + venueContribution));
   const ticketPlatformFee = round2((ticketGross + venueContribution) * platformPct / 100);
   const addonPlatformPct = separateAddonFee ? Math.max(0, finite(input.addonPlatformPct)) : platformPct;
@@ -298,16 +322,22 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
       tier: "addon",
     });
   }
+  // Named for what they are where every add-on is the venue's own discounted
+  // product; a mix keeps the names of the arrangement the rest is under.
+  const allVenuePriced = pricedVenue > 0 && otherGross <= 0;
   if (separateAddonFee && addOnGross > 0) {
-    lines.push({ key: "addon_platform_fee", label: `Platform Fee on Add-ons (${addonPlatformPct}%)`,
+    lines.push({ key: "addon_platform_fee",
+      label: `${allVenuePriced ? "Platform Fee on Your Add-on Markup" : "Platform Fee on Add-ons"} (${addonPlatformPct}%)`,
       amount: -addonPlatformFee, kind: "fee", tier: "addon" });
   }
   if (addOnVenueRevenue > 0) {
     lines.push({
       key: "addon_venue_payout",
-      label: sharesAddOnSales
-        ? `Venue Share of Add-ons (${Math.max(0, finite(input.venueDealValue))}%)`
-        : "Venue Add-on Cost",
+      label: allVenuePriced
+        ? "Venue's Discounted Add-on Price"
+        : sharesAddOnSales
+          ? `Venue Share of Add-ons (${Math.max(0, finite(input.venueDealValue))}%)`
+          : "Venue Add-on Cost",
       amount: -addOnVenueRevenue,
       kind: "venue",
       tier: "addon",
@@ -374,6 +404,8 @@ export function economicsAtAttendance(
     paidTickets: Math.round(finite(input.paidTickets) * scale),
     addOnVenueGross: round2(finite(input.addOnVenueGross) * scale),
     addOnCreatorGross: round2(finite(input.addOnCreatorGross) * scale),
+    venuePricedAddOnVenueGross: round2(finite(input.venuePricedAddOnVenueGross) * scale),
+    venuePricedAddOnCreatorGross: round2(finite(input.venuePricedAddOnCreatorGross) * scale),
   });
 }
 

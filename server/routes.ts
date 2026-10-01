@@ -1,4 +1,4 @@
-import { getTicketAddons, quoteAddonChoices, bookingAddonFields, addonMetadata, addonItemsFromMetadata, AddonSelectionError } from "@shared/addonChoices";
+import { getTicketAddons, quoteAddonChoices, bookingAddonFields, addonMetadata, addonItemsFromMetadata, AddonSelectionError, venuePricedAddonCents } from "@shared/addonChoices";
 import { eventFeeRates, feeSnapshotFromMetadata } from "@shared/platformFees";
 import { acceptedPartnerCommissionPct, partnerMemberDiscount, partnerShareUrl } from '@shared/partnerPromotion';
 import { venueInviteTerms, savedVenueInviteTerms } from '@shared/venueInviteTerms';
@@ -79,6 +79,7 @@ import {
   clampAddonQuantity,
   getTicketAddon,
 } from "@shared/ticketAddons";
+import { normalizeAddonDiscountPct, syncSkuAddonsWithCatalog } from "@shared/venueAddonPricing";
 import { validateExperienceDealTerms } from "@shared/dealTermGuards";
 import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
 import {
@@ -10017,12 +10018,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name,
           description: String(entry?.description ?? "").trim() || undefined,
           venuePrice: Math.round(venuePrice * 100) / 100,
+          // Off the counter price, for anyone buying it with a ticket. Always
+          // written, so "no discount" is a zero the venue chose, not a gap.
+          discountPct: normalizeAddonDiscountPct(entry?.discountPct),
           unit: String(entry?.unit ?? "").trim() || undefined,
           groupDiscountNote: String(entry?.groupDiscountNote ?? "").trim() || undefined,
           active: entry?.active !== false,
         };
       })
       .filter(Boolean) as any[];
+  }
+
+  /**
+   * Carries a venue's new price or discount onto the events offering its
+   * products.
+   *
+   * A ticket stores the amounts checkout charges, so a catalog change that
+   * stopped at the venue's profile would leave every event selling at the old
+   * price. Events that have ended are left alone, and a booking already made
+   * keeps the price it was made at — that is copied onto the booking.
+   */
+  async function repriceAddonsFromVenueCatalog(venueId: string, catalog: unknown): Promise<void> {
+    const items = Array.isArray(catalog) ? catalog : [];
+    const now = Date.now();
+
+    const events = await storage.getExperiencesByVenueIds([venueId]);
+    for (const event of events) {
+      if (event.status === "cancelled") continue;
+      const ends = event.endDate ?? event.startDate;
+      if (ends && new Date(ends).getTime() < now) continue;
+      const { skus, changed } = syncSkuAddonsWithCatalog((event as any).ticketSkus, items);
+      if (changed) await storage.updateExperience(event.id, { ticketSkus: skus } as any);
+    }
+
+    const drafts = await storage.getExperienceDraftsByVenue(venueId);
+    for (const draft of drafts) {
+      const { skus, changed } = syncSkuAddonsWithCatalog((draft as any).ticketSkus, items);
+      if (changed) await storage.updateExperienceDraft(draft.id, draft.creatorId, { ticketSkus: skus } as any);
+    }
   }
 
   app.post("/api/venues", isAuthenticated, async (req: any, res) => {
@@ -10330,6 +10363,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('Updating venue with validated data, fields updated:', Object.keys(updateData).length);
       
       const updatedVenue = await storage.updateVenue(req.params.id, updateData);
+
+      // The venue's save has succeeded either way; a repricing failure is
+      // logged rather than reported as a failed profile update.
+      if (req.body.addonCatalog !== undefined) {
+        try {
+          await repriceAddonsFromVenueCatalog(req.params.id, updatedVenue.addonCatalog);
+        } catch (error) {
+          console.error("Error repricing add-ons from venue catalog:", error);
+        }
+      }
+
       res.json(updatedVenue);
     } catch (error) {
       console.error("Error updating venue:", error);
@@ -18804,7 +18848,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           (sum: number, booking: any) =>
             sum + Math.max(0, numberOrZero(booking.amount) - numberOrZero(booking.addonTotal)), 0);
         const sharesAddons = model === 'revenue_share' || model === 'commitment_plus_revenue_share';
-        const grossRevenue = ticketRevenue + (sharesAddons ? addOnRevenue : 0);
+        // Products priced from this venue's own discount pay it the discounted
+        // price whole, under any deal, so they are counted on their own and
+        // kept out of the revenue share — the same division the payout makes.
+        const venuePricedAddons = active.reduce((sum: { gross: number; venue: number }, booking: any) => {
+          const priced = venuePricedAddonCents(booking.addonItems);
+          return { gross: sum.gross + priced.gross / 100, venue: sum.venue + priced.venue / 100 };
+        }, { gross: 0, venue: 0 });
+        const grossRevenue = ticketRevenue
+          + (sharesAddons ? Math.max(0, addOnRevenue - venuePricedAddons.gross) : 0);
 
         // A per-head fee is charged for tickets that were actually sold, never
         // for a free RSVP that happens to be attending.
@@ -18847,11 +18899,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           dealSummary: formatVenueDealSummary(model, terms, row.currency || 'eur'),
           attendees,
           paidAttendees,
-          earned: Math.round(earned * 100) / 100,
+          earned: Math.round((earned + venuePricedAddons.venue) * 100) / 100,
           owed: Math.round(owed * 100) / 100,
           offPlatform,
           // Gross add-on sales, already included in percentage-deal earnings.
           addOnRevenue: Math.round(addOnRevenue * 100) / 100,
+          // Of `earned`, the venue's discounted price for its own products.
+          addOnEarned: Math.round(venuePricedAddons.venue * 100) / 100,
           // Sponsorship is only real once it has cleared Stripe.
           settled: model === 'venue_sponsored'
             ? contract?.sponsorshipPaymentStatus === 'paid'

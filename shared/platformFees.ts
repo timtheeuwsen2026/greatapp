@@ -1,3 +1,4 @@
+import { venuePricedAddonCents } from './addonChoices';
 type Money = string | number | null | undefined;
 export type EventFeeRates = { ticketPlatformFeePct: number; addonPlatformFeePct: number };
 export type FeeRateSource = {
@@ -19,19 +20,26 @@ export function platformFeeCents(ticketCents: number, addonCents: number, rates:
     + Math.round(Math.max(0, addonCents) * rates.addonPlatformFeePct / 100);
 }
 export function bookingPlatformFeeCents(booking: FeeRateSource & {
-  totalPrice?: Money; amount?: Money; addonTotal?: Money; isDepositOnly?: boolean | null; balancePaid?: boolean | null;
+  totalPrice?: Money; amount?: Money; addonTotal?: Money; addonItems?: unknown;
+  isDepositOnly?: boolean | null; balancePaid?: boolean | null;
 }, defaultTicketPct = 15, collectedOnly = false): number {
   const full = Math.max(0, Math.round(Number(booking.totalPrice ?? booking.amount ?? 0) * 100));
   const collected = collectedOnly && booking.isDepositOnly && !booking.balancePaid
     ? Math.min(full, Math.max(0, Math.round(Number(booking.amount || 0) * 100))) : full;
   const addon = Math.min(full, Math.max(0, Math.round(Number(booking.addonTotal || 0) * 100)));
   const collectedAddon = full > 0 ? Math.round(addon * collected / full) : 0;
+  // A product priced from the venue's discount is charged the fee on the
+  // organiser's markup only: the venue's discounted price is the deal the venue
+  // agreed to, and the fee never comes out of it. Every other add-on is charged
+  // on the whole sale, as it was when it was sold.
+  const venuePart = Math.min(addon, venuePricedAddonCents(booking.addonItems).venue);
+  const collectedFeeable = full > 0 ? Math.round((addon - venuePart) * collected / full) : 0;
   // Old payments predate separate rates. Their original gross fee stays intact.
   const rates = {
     ticketPlatformFeePct: feePercentage(booking.ticketPlatformFeePct, defaultTicketPct),
     addonPlatformFeePct: feePercentage(booking.addonPlatformFeePct, defaultTicketPct),
   };
-  return platformFeeCents(collected - collectedAddon, collectedAddon, rates);
+  return platformFeeCents(collected - collectedAddon, collectedFeeable, rates);
 }
 export function feeSnapshotFromMetadata(metadata: Record<string, string> = {}, legacyPct = 15): EventFeeRates {
   return {

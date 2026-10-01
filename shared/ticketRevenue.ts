@@ -80,6 +80,14 @@ export type TicketRevenueSummary = {
   addOnVenueGross: number;
   /** Of that, the organiser's flat margin — their earnings, not the venue's. */
   addOnCreatorGross: number;
+  /**
+   * The part of the two figures above that comes from products priced from the
+   * venue's own discount. Those divide differently — the venue keeps its
+   * discounted price whole and the platform fee is charged on the markup alone
+   * — so a calculator has to be able to tell them apart.
+   */
+  venuePricedAddOnVenueGross: number;
+  venuePricedAddOnCreatorGross: number;
   /** Seats offered an add-on at all. */
   addOnCapacity: number;
   /** True once any ticket is free — the case the old maths got wrong. */
@@ -93,6 +101,8 @@ const EMPTY: TicketRevenueSummary = {
   addOnGross: 0,
   addOnVenueGross: 0,
   addOnCreatorGross: 0,
+  venuePricedAddOnVenueGross: 0,
+  venuePricedAddOnCreatorGross: 0,
   addOnCapacity: 0,
   hasFreeTickets: false,
 };
@@ -115,6 +125,9 @@ export function summariseTicketRevenue(
     const addonGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.unitPrice, addon.capacity)), 0);
     const addonVenueGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.venueAmount, addon.capacity)), 0);
     const addonCreatorGross = addons.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.creatorAmount, addon.capacity)), 0);
+    const venuePriced = addons.filter(addon => addon.venuePriced);
+    const venuePricedVenueGross = venuePriced.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.venueAmount, addon.capacity)), 0);
+    const venuePricedCreatorGross = venuePriced.reduce((sum, addon) => safeAdd(sum, safeMultiply(addon.creatorAmount, addon.capacity)), 0);
 
     return {
       ticketGross: safeAdd(summary.ticketGross, safeMultiply(entryPrice, capacity)),
@@ -123,6 +136,8 @@ export function summariseTicketRevenue(
       addOnGross: safeAdd(summary.addOnGross, addonGross),
       addOnVenueGross: safeAdd(summary.addOnVenueGross, addonVenueGross),
       addOnCreatorGross: safeAdd(summary.addOnCreatorGross, addonCreatorGross),
+      venuePricedAddOnVenueGross: safeAdd(summary.venuePricedAddOnVenueGross, venuePricedVenueGross),
+      venuePricedAddOnCreatorGross: safeAdd(summary.venuePricedAddOnCreatorGross, venuePricedCreatorGross),
       addOnCapacity: summary.addOnCapacity + addons.reduce((sum, addon) => sum + addon.capacity, 0),
       hasFreeTickets: summary.hasFreeTickets || (capacity > 0 && entryPrice <= 0),
     };

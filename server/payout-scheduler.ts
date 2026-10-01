@@ -28,6 +28,7 @@ import {
   isExperiencePayoutEligible,
   resolvePayoutGrossCents,
   sumBookingPayoutGrossCents,
+  sumVenuePricedAddonCents,
 } from "./payoutRules";
 import {
   calculateTicketDeductionCents,
@@ -341,6 +342,36 @@ async function executeExperiencePayout(
     flatFeeReserveCents += amount;
   }
 
+  // ── Add-ons priced from the venue's own discount ──────────────────────────
+  // The venue is paid its discounted price for every unit sold, whole. It is
+  // reserved here the way a per-ticket deduction is — ahead of every
+  // percentage — so neither a revenue share nor the platform fee can come out
+  // of it. The fee on these sales was charged on the organiser's markup alone.
+  // A booking made before a venue could set a discount carries no such lines,
+  // reserves nothing, and is shared out exactly as it always was.
+  const VENUE_ADDONS_RECIPIENT = "venue-addons";
+  const venuePricedAddons = sumVenuePricedAddonCents(confirmedBookings);
+  if (venuePricedAddons.venueCents > 0) {
+    const venueAccount = await resolveVenuePayoutAccount(experience.linkedVenueId);
+    const addonRecipient: MinimalRecipient = {
+      id: VENUE_ADDONS_RECIPIENT,
+      recipientType: "venue",
+      stripeAccountId: venueAccount.stripeAccountId,
+      userId: venueAccount.userId,
+      splitMode: "flat_fee",
+      splitValue: (venuePricedAddons.venueCents / 100).toFixed(2),
+      isActive: true,
+    };
+    // First in line, so a venue with no payout account halts the run before
+    // anyone else has been paid rather than part-way through.
+    (effectiveRecipients as MinimalRecipient[]).unshift(addonRecipient);
+    flatFeeAmounts.set(addonRecipient, venuePricedAddons.venueCents);
+    flatFeeReserveCents += venuePricedAddons.venueCents;
+  }
+  // What the venue's revenue share is a share of. The sales above have already
+  // paid the venue its price for them; sharing them as well would pay it twice.
+  const venueShareBaseCents = Math.max(0, grossAmountCents - venuePricedAddons.grossCents);
+
   if (
     platformFeeAmountCents
     + promoterReserveCents
@@ -361,10 +392,16 @@ async function executeExperiencePayout(
   console.log(
     `[Payout Scheduler] Platform fee: ${platformFeeAmountCents / 100} ${currency.toUpperCase()}`
   );
-  if (flatFeeReserveCents > 0) {
+  if (flatFeeReserveCents - venuePricedAddons.venueCents > 0) {
     console.log(
-      `[Payout Scheduler] Ticket deductions: ${flatFeeReserveCents / 100} `
+      `[Payout Scheduler] Ticket deductions: ${(flatFeeReserveCents - venuePricedAddons.venueCents) / 100} `
       + `${currency.toUpperCase()} across ${ticketQuantity} ticket(s)`,
+    );
+  }
+  if (venuePricedAddons.venueCents > 0) {
+    console.log(
+      `[Payout Scheduler] Venue's discounted add-on price: ${venuePricedAddons.venueCents / 100} `
+      + `${currency.toUpperCase()} on ${venuePricedAddons.grossCents / 100} of add-on sales`,
     );
   }
 
@@ -383,7 +420,7 @@ async function executeExperiencePayout(
         ? remainingCents
         : calculateSplitAmount(
           recipient,
-          grossAmountCents,
+          recipient.recipientType === "venue" ? venueShareBaseCents : grossAmountCents,
           remainingCents,
         );
 
@@ -419,7 +456,9 @@ async function executeExperiencePayout(
         amount: transferAmountCents,
         currency,
         destination: recipient.stripeAccountId,
-        description: `${experience.title} — ${recipient.recipientType} payout`,
+        description: recipient.id === VENUE_ADDONS_RECIPIENT
+          ? `${experience.title} — venue add-on sales`
+          : `${experience.title} — ${recipient.recipientType} payout`,
         metadata: {
           experienceId,
           recipientType: recipient.recipientType,
@@ -430,7 +469,8 @@ async function executeExperiencePayout(
         idempotencyKey: `event-payout:${scheduledPayoutId}:recipient:${recipient.id || recipient.stripeAccountId}`,
       });
 
-      transferIds[recipient.recipientType] = transfer.id;
+      // Its own key, so it does not replace the venue's revenue-share transfer.
+      transferIds[recipient.id === VENUE_ADDONS_RECIPIENT ? "venue_addons" : recipient.recipientType] = transfer.id;
       if (isReservedFlatFee) {
         flatFeeReserveRemainingCents -= transferAmountCents;
       } else {

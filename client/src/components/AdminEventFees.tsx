@@ -55,7 +55,7 @@ export default function AdminEventFees({ event }: { event: FeeRateSource & { id:
             <div className="space-y-2">
               <Label htmlFor="admin-addon-fee">Add-on fee (%)</Label>
               <Input id="admin-addon-fee" type="number" min="0" max="100" step="0.01" required value={addon} onChange={e => setAddon(e.target.value)} />
-              <p className="text-xs text-muted-foreground">0% waives the fee on add-ons.</p>
+              <p className="text-xs text-muted-foreground">0% waives the fee on add-ons. On a product priced from the venue's discount it is charged on the organizer's markup only, never on the venue's price.</p>
             </div>
           </div>
           <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950">

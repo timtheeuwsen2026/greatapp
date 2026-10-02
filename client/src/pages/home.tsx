@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { compareHappeningEvents } from "@shared/homepageOrder";
+import { splitHomepageRows } from "@shared/homepageOrder";
 import { useLocation } from "wouter";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -238,26 +238,15 @@ export default function Home() {
   // the worst possible first impression for a visitor deciding whether anything
   // here actually happens.
   //
-  // "Happening now" is everything open for sign-up, whatever its MVG status,
-  // confirmed first, then strongest signups, with date as the tiebreaker.
-  const happeningNowExps = [...visibleExperiences]
-    .filter((e: any) => e.lifecycleStatus === 'forming' || e.lifecycleStatus === 'confirmed')
-    .sort(compareHappeningEvents);
-
+  // "Happening now" is everything still open for sign-up, whatever its MVG
+  // status, confirmed first, then strongest signups, with date as the
+  // tiebreaker. An event that has already taken place is not in it.
+  //
   // "Proven & popular" — what already filled up or already happened, ranked by
   // how many people came. This is the social proof that was missing entirely:
   // Good Soles' full runs had no homepage presence at all, so a first-time
   // visitor only ever saw events nobody had joined yet.
-  const provenExps = [...visibleExperiences]
-    .filter((e: any) => {
-      const joined = Number(e.currentParticipants || 0);
-      const capacity = Number(e.maxParticipants || 0);
-      const isPast = e.startDate ? new Date(e.startDate).getTime() < Date.now() : false;
-      const soldOut = capacity > 0 && joined >= capacity;
-      return joined > 0 && (isPast || soldOut || e.lifecycleStatus === 'completed');
-    })
-    .sort((a: any, b: any) =>
-      Number(b.currentParticipants || 0) - Number(a.currentParticipants || 0));
+  const { happening: happeningNowExps, proven: provenExps } = splitHomepageRows(visibleExperiences);
 
   // Human gap psychology — people help people, not percentages
   const getUrgencyLabel = (spotsNeeded: number) => {
@@ -592,8 +581,8 @@ export default function Home() {
                           ⚡ Happening now
                         </h2>
                         <p className="text-gray-500 dark:text-gray-400">
-                          Everything open for sign-up. The badge on each card tells you
-                          whether it's still forming or already confirmed.
+                          Upcoming and still open for sign-up. The badge on each card tells
+                          you whether it's still forming or already confirmed.
                         </p>
                       </div>
                       <div className="hidden sm:flex items-center gap-2 shrink-0">

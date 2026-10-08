@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
@@ -20,7 +20,10 @@ import {
   type CollabDealPreferenceId,
   type CollabSeekingTypeId,
 } from "@shared/collabIdeaOptions";
-import { Check, ImageIcon, Loader2, Mail, Upload } from "lucide-react";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import { Check, ImageIcon, Loader2, Mail, Pencil, Search, Upload } from "lucide-react";
 
 /**
  * Post a Collab Idea.
@@ -65,6 +68,15 @@ import { Check, ImageIcon, Loader2, Mail, Upload } from "lucide-react";
  */
 type CollabStep = 1 | 2 | 3;
 
+/**
+ * How a direct invite reaches somebody — the same three doors as the Event
+ * Builder's Add Partner. "Search on Great" had gone missing here, which left a
+ * poster who already knew a partner on the platform copying a link to them
+ * over Instagram.
+ */
+type InviteSource = "platform" | "link" | "email";
+type DirectoryPick = { id: string; name: string };
+
 const COLLAB_STEPS: Array<{ id: CollabStep; label: string }> = [
   { id: 1, label: "Idea & who" },
   { id: 2, label: "Details" },
@@ -105,6 +117,8 @@ export default function PostCollabIdeaModal({
   /** Per type: does the poster want the board, a direct invite, or both? */
   const [findMode, setFindMode] = useState<Record<string, { board: boolean; direct: boolean }>>({});
   const [inviteEmails, setInviteEmails] = useState<Record<string, string>>({});
+  const [inviteSource, setInviteSource] = useState<Record<string, InviteSource>>({});
+  const [invitePicks, setInvitePicks] = useState<Record<string, DirectoryPick | null>>({});
   const [ownCommunity, setOwnCommunity] = useState(false);
 
   const isEditing = !!editing?.id;
@@ -121,6 +135,8 @@ export default function PostCollabIdeaModal({
       setDealPreferences([]);
       setFindMode({});
       setInviteEmails({});
+      setInviteSource({});
+      setInvitePicks({});
       setOwnCommunity(false);
       return;
     }
@@ -148,6 +164,8 @@ export default function PostCollabIdeaModal({
     setOwnCommunity(!!editing.ownCommunityToken);
     setFindMode({});
     setInviteEmails({});
+    setInviteSource({});
+    setInvitePicks({});
   }, [open, editing?.id]);
 
   const set = (key: keyof typeof form) => (value: string) =>
@@ -175,6 +193,7 @@ export default function PostCollabIdeaModal({
   };
 
   const modeFor = (typeId: string) => findMode[typeId] || { board: true, direct: false };
+  const sourceFor = (typeId: string): InviteSource => inviteSource[typeId] || "platform";
   const setMode = (typeId: string, patch: Partial<{ board: boolean; direct: boolean }>) => {
     setFindMode((current) => ({ ...current, [typeId]: { ...modeFor(typeId), ...patch } }));
   };
@@ -201,10 +220,14 @@ export default function PostCollabIdeaModal({
     const results: Array<{ partnerType: string; inviteUrl: string; emailed: boolean }> = [];
     for (const typeId of seekingTypes) {
       if (!modeFor(typeId).direct) continue;
+      const source = sourceFor(typeId);
+      const pick = invitePicks[typeId];
       try {
         const response = await apiRequest("POST", `/api/collab/ideas/${ideaId}/invites`, {
           partnerType: typeId,
-          email: inviteEmails[typeId] || null,
+          email: source === "platform" ? null : (inviteEmails[typeId] || null),
+          partnerUserId: source === "platform" ? pick?.id || null : null,
+          partnerName: source === "platform" ? pick?.name || null : null,
         });
         const data = await response.json();
         results.push({ partnerType: typeId, inviteUrl: data.inviteUrl, emailed: !!data.emailed });
@@ -219,7 +242,8 @@ export default function PostCollabIdeaModal({
     mutationFn: async () => {
       if (isEditing) {
         const res = await apiRequest("PUT", `/api/collab/ideas/${editing.id}`, payload());
-        return { idea: await res.json(), invites: [] as any[], notified: 0 };
+        const idea = await res.json();
+        return { idea, invites: await sendDirectInvites(editing.id), notified: 0 };
       }
       const res = await apiRequest("POST", "/api/collab/ideas", payload());
       const data = await res.json();
@@ -234,7 +258,12 @@ export default function PostCollabIdeaModal({
       toast({
         title: isEditing ? "Changes saved" : "Idea posted",
         description: isEditing
-          ? "Anyone already interested keeps their place in the conversation."
+          ? [
+              "Anyone already interested keeps their place in the conversation.",
+              invites.length > 0
+                ? `${invites.length} direct ${invites.length === 1 ? "invite" : "invites"} sent — they're listed on the posting.`
+                : "",
+            ].filter(Boolean).join(" ")
           : [
               notified > 0
                 ? `${notified} matching ${notified === 1 ? "venue has" : "venues have"} been notified.`
@@ -266,9 +295,21 @@ export default function PostCollabIdeaModal({
   // location, capacity and period. A posting with none of those matches nobody
   // by construction, and then tells the poster to "widen the area" they never
   // entered. So the fields the filter needs are required.
+  // A direct invite with nobody to send it to would silently do nothing.
+  const inviteGaps = seekingTypes
+    .filter((typeId) => modeFor(typeId).direct)
+    .map((typeId) => {
+      const label = COLLAB_SEEKING_TYPES.find((entry) => entry.id === typeId)?.label.toLowerCase() || typeId;
+      if (sourceFor(typeId) === "platform" && !invitePicks[typeId]) return `who to invite as ${label}`;
+      if (sourceFor(typeId) === "email" && !(inviteEmails[typeId] || "").trim()) return `an email for ${label}`;
+      return null;
+    })
+    .filter(Boolean) as string[];
+
   const missing = [
     form.title.trim() === "" ? "a title" : null,
     seekingTypes.length === 0 ? "who you are looking for" : null,
+    ...inviteGaps,
     form.city.trim() === "" ? "an area" : null,
     !form.groupSizeMin && !form.groupSizeMax ? "a group size" : null,
     !form.estimatedStart && !form.estimatedEnd ? "an estimated period" : null,
@@ -280,6 +321,7 @@ export default function PostCollabIdeaModal({
     1: [
       form.title.trim() === "" ? "a title" : null,
       seekingTypes.length === 0 ? "who you are looking for" : null,
+      ...inviteGaps,
     ].filter(Boolean) as string[],
     2: [
       form.city.trim() === "" ? "an area" : null,
@@ -424,32 +466,19 @@ export default function PostCollabIdeaModal({
                     </div>
 
                     {mode.direct && (
-                      <div className="space-y-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
-                        <p className="text-xs text-gray-600 dark:text-gray-300">
-                          {isEditing
-                            ? "Invite links are created from the posting once saved."
-                            : "A shareable link is created when you post — paste it into a DM, WhatsApp or an email."}
-                        </p>
-                        <div>
-                          <Label htmlFor={`collab-invite-email-${typeId}`} className="text-xs">
-                            Email address{" "}
-                            <span className="font-normal text-gray-500">optional</span>
-                          </Label>
-                          <Input
-                            id={`collab-invite-email-${typeId}`}
-                            type="email"
-                            placeholder="Leave blank if you only have a handle"
-                            value={inviteEmails[typeId] || ""}
-                            onChange={(e) =>
-                              setInviteEmails((current) => ({ ...current, [typeId]: e.target.value }))}
-                            data-testid={`input-collab-invite-email-${typeId}`}
-                          />
-                          <p className="mt-1 flex items-center gap-1 text-xs text-gray-500">
-                            <Mail className="h-3 w-3" />
-                            Filled in, we email them the invite as well as giving you the link.
-                          </p>
-                        </div>
-                      </div>
+                      <CollabDirectInvite
+                        typeId={typeId}
+                        isEditing={isEditing}
+                        source={sourceFor(typeId)}
+                        onSourceChange={(source) =>
+                          setInviteSource((current) => ({ ...current, [typeId]: source }))}
+                        pick={invitePicks[typeId] || null}
+                        onPick={(pick) =>
+                          setInvitePicks((current) => ({ ...current, [typeId]: pick }))}
+                        email={inviteEmails[typeId] || ""}
+                        onEmailChange={(value) =>
+                          setInviteEmails((current) => ({ ...current, [typeId]: value }))}
+                      />
                     )}
                   </div>
                 );
@@ -706,5 +735,154 @@ export default function PostCollabIdeaModal({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One type's "Invite directly" block: search Great, share a link, or email. */
+function CollabDirectInvite({
+  typeId,
+  isEditing,
+  source,
+  onSourceChange,
+  pick,
+  onPick,
+  email,
+  onEmailChange,
+}: {
+  typeId: string;
+  isEditing: boolean;
+  source: InviteSource;
+  onSourceChange: (source: InviteSource) => void;
+  pick: DirectoryPick | null;
+  onPick: (pick: DirectoryPick | null) => void;
+  email: string;
+  onEmailChange: (value: string) => void;
+}) {
+  const directory = useQuery<Array<{ id: string; displayName: string; profilePhoto: string | null; label: string }>>({
+    queryKey: ["/api/collab/partner-directory", typeId],
+    // Explicit queryFn: the key carries a filter, and the default one would
+    // join it into the path. `apiRequest` also carries the bearer token.
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/collab/partner-directory?type=${encodeURIComponent(typeId)}`);
+      return response.json();
+    },
+    enabled: source === "platform",
+  });
+
+  return (
+    <div className="space-y-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+      <div className="flex flex-wrap gap-2">
+        <ChipToggle
+          label="Search on Great"
+          selected={source === "platform"}
+          onClick={() => onSourceChange("platform")}
+          testId={`chip-collab-invite-platform-${typeId}`}
+        />
+        <ChipToggle
+          label="Invite via link"
+          selected={source === "link"}
+          onClick={() => onSourceChange("link")}
+          testId={`chip-collab-invite-link-${typeId}`}
+        />
+        <ChipToggle
+          label="Email"
+          selected={source === "email"}
+          onClick={() => onSourceChange("email")}
+          testId={`chip-collab-invite-email-${typeId}`}
+        />
+      </div>
+
+      {source === "platform" ? (
+        pick ? (
+          <div
+            className="flex items-center justify-between gap-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/40"
+            data-testid={`collab-invite-selected-${typeId}`}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <Check className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
+              <span className="truncate text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                {pick.name}
+              </span>
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="shrink-0"
+              onClick={() => onPick(null)}
+              data-testid={`button-collab-invite-change-${typeId}`}
+            >
+              <Pencil className="mr-1.5 h-3.5 w-3.5" />
+              Change
+            </Button>
+          </div>
+        ) : (
+          <div className="rounded-lg border bg-white dark:bg-gray-950">
+            <Command>
+              <CommandInput placeholder="Search by name…" data-testid={`input-collab-invite-search-${typeId}`} />
+              <CommandList className="max-h-56">
+                <CommandEmpty>
+                  {directory.isLoading
+                    ? "Loading partners…"
+                    : "Nobody on Great matches that. Invite them by link or email instead."}
+                </CommandEmpty>
+                <CommandGroup>
+                  {(directory.data || []).map((candidate) => (
+                    <CommandItem
+                      key={`${candidate.id}:${candidate.displayName}`}
+                      value={`${candidate.displayName} ${candidate.id}`}
+                      onSelect={() => onPick({ id: candidate.id, name: candidate.displayName })}
+                      data-testid={`collab-invite-candidate-${candidate.id}`}
+                    >
+                      {candidate.profilePhoto ? (
+                        <img src={candidate.profilePhoto} alt="" className="mr-2 h-6 w-6 rounded-full object-cover" />
+                      ) : (
+                        <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
+                          {candidate.displayName.charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                      <span className="flex-1 truncate">{candidate.displayName}</span>
+                      <span className="ml-2 shrink-0 text-xs text-gray-400">{candidate.label}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+            <p className="border-t px-3 py-2 text-xs text-gray-500">
+              <Search className="mr-1 inline h-3 w-3" />
+              Names and photos only. We email them the invite at the address on their account.
+            </p>
+          </div>
+        )
+      ) : (
+        <>
+          <p className="text-xs text-gray-600 dark:text-gray-300">
+            {isEditing
+              ? "The link is created when you save, and listed on the posting."
+              : "A shareable link is created when you post — paste it into a DM, WhatsApp or an email."}
+          </p>
+          <div>
+            <Label htmlFor={`collab-invite-email-${typeId}`} className="text-xs">
+              Email address{" "}
+              {source === "link" && <span className="font-normal text-gray-500">optional</span>}
+            </Label>
+            <Input
+              id={`collab-invite-email-${typeId}`}
+              type="email"
+              placeholder={source === "email" ? "them@theirvenue.com" : "Leave blank if you only have a handle"}
+              value={email}
+              onChange={(e) => onEmailChange(e.target.value)}
+              data-testid={`input-collab-invite-email-${typeId}`}
+            />
+            <p className="mt-1 flex items-center gap-1 text-xs text-gray-500">
+              <Mail className="h-3 w-3" />
+              {source === "email"
+                ? "We send them the invite directly, and you still get the link to share."
+                : "Filled in, we email them the invite as well as giving you the link."}
+            </p>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

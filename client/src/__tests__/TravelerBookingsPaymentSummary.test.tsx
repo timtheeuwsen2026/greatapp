@@ -47,10 +47,13 @@ const paidBooking = {
   },
 };
 
+// "Held" means a card payment exists to hold, so the fixture carries its
+// PaymentIntent — a €0 RSVP on the same event is not holding anything.
 const heldMvgBooking = {
   ...paidBooking,
   id: 'bk-2',
   status: 'pending',
+  stripePaymentIntentId: 'pi_held_bk2',
   experience: { ...paidBooking.experience, requireMinimumParticipants: true, minimumParticipants: 10 },
 };
 

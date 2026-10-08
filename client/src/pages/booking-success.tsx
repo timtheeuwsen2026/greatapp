@@ -16,7 +16,8 @@ import { normalizeImageUrl } from "@/lib/utils";
 import { formatCapacityParticipantCount } from "@/lib/participantCounts";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, readableError } from "@/lib/queryClient";
+import { isBookingCancelled } from "@shared/bookingCancellation";
 import { getAttribution, clearAttribution } from "@/hooks/usePromoterAttribution";
 import ProfileCompletionPrompt from "@/components/ProfileCompletionPrompt";
 import { ensurePostCheckoutReferral } from "@/lib/postCheckoutReferral";
@@ -64,6 +65,8 @@ type Booking = {
   balanceDueDate: string | null;
   balancePaid: boolean;
   status: string;
+  cancelledAt?: string | null;
+  depositStatus?: string | null;
   stripePaymentIntentId: string;
   ticketSkuId: string | null;
   ticketName: string | null;
@@ -125,7 +128,9 @@ function BalancePaymentForm({ bookingId, amount, currency, onSuccess }: {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to confirm balance payment",
+        // apiRequest rejects with "<status>: <raw body>"; the attendee should
+        // see the server's sentence, not the JSON around it.
+        description: readableError(error, "Failed to confirm balance payment"),
         variant: "destructive",
       });
     },
@@ -236,13 +241,27 @@ export default function BookingSuccess() {
     retry: false,
   });
 
-  const booking: Booking | undefined = bookingDirect || (
-    myBookings && experienceId
-      ? myBookings
-          .filter((b: any) => b.experienceId === experienceId)
-          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
-      : undefined
-  );
+  // Without a booking id the page has to choose among this person's bookings
+  // for the event. Since attendees can cancel and book again, the newest row
+  // can be the one they cancelled while the new one is still being written —
+  // and picking it would show "no longer active" to someone who just paid and
+  // skip the recovery below. So: the booking this payment belongs to if there
+  // is one, else the newest live booking. A returning payment with no live
+  // booking yet is left to the recovery; only a plain visit falls back to the
+  // newest row, cancelled or not.
+  const booking: Booking | undefined = bookingDirect || (() => {
+    if (!myBookings || !experienceId) return undefined;
+    const forEvent = myBookings
+      .filter((b: any) => b.experienceId === experienceId)
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const forThisPayment = redirectPayment.paymentIntentId
+      ? forEvent.find((b: any) => b.stripePaymentIntentId === redirectPayment.paymentIntentId)
+      : undefined;
+    if (forThisPayment) return forThisPayment;
+    const live = forEvent.find((b: any) => !isBookingCancelled(b) && b.status !== 'refunded');
+    if (live) return live;
+    return redirectPayment.paymentIntentId ? undefined : forEvent[0];
+  })();
   const bookingLookupLoading = bookingId
     ? bookingDirectLoading
     : !!experienceId && myBookingsLoading;
@@ -324,7 +343,7 @@ export default function BookingSuccess() {
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Could not initiate balance payment",
+        description: readableError(error, "Could not initiate balance payment"),
         variant: "destructive",
       });
     }
@@ -338,10 +357,25 @@ export default function BookingSuccess() {
     queryClient.invalidateQueries({ queryKey: ["/api/bookings/my-bookings"] });
   };
 
-  const isCancelled =
-    booking?.status === 'cancelled' ||
-    experience?.status === 'cancelled' ||
-    experience?.lifecycleStatus === 'cancelled';
+  // The booking itself is over — cancelled by the attendee, refunded, or
+  // stamped cancelled — whatever the event is doing. It is the same rule the
+  // pay-balance endpoints apply, so this page never offers a balance they
+  // would refuse with a 409. A `failed` booking is not closed: a declined
+  // balance card can be retried with another one.
+  const bookingClosed = !!booking && (isBookingCancelled(booking) || booking.status === 'refunded');
+  const eventCalledOff = experience?.status === 'cancelled' || experience?.lifecycleStatus === 'cancelled';
+  const isCancelled = bookingClosed || eventCalledOff;
+
+  // An event is called off for more than one reason — the group missing its
+  // minimum, or an organiser or admin archiving it, which moves no money at
+  // all — and a deposit taken upfront is not something the failure run
+  // returns. So the page only says the group failed when it did, and only
+  // says money came back when the booking records that it did.
+  const groupFailed = (experience as any)?.mvgStatus === 'failed';
+  const bookingWasFree = !!booking
+    && parseFloat(String(booking.amount ?? "0")) <= 0
+    && !String(booking.stripePaymentIntentId || '').startsWith('pi_');
+  const paymentRecordedReturned = !!booking && booking.depositStatus === 'refunded';
 
   const participantProfileMissing = participantProfileStatus?.hasProfile === false;
 
@@ -467,7 +501,7 @@ export default function BookingSuccess() {
 
   const isDeposit = booking.isDepositOnly === true && !balanceJustPaid;
   const isFullyPaid = booking.balancePaid === true || booking.status === "fully_paid" || balanceJustPaid;
-  const hasOutstandingBalance = isDeposit && !isFullyPaid && parseFloat(booking.balanceAmount || "0") > 0;
+  const hasOutstandingBalance = isDeposit && !isFullyPaid && !bookingClosed && parseFloat(booking.balanceAmount || "0") > 0;
   const currency = experience.currency || 'EUR';
 
   if (isCancelled) {
@@ -479,20 +513,46 @@ export default function BookingSuccess() {
             <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full">
               <XCircle className="w-9 h-9 text-red-500" />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2" data-testid="cancelled-heading">
-                This experience was cancelled
-              </h1>
-              <p className="text-gray-600 max-w-lg mx-auto" data-testid="cancelled-message">
-                The minimum group size for <strong>{experience.title}</strong> was not reached by the deadline, so the experience has been cancelled and your payment has been released automatically.
-              </p>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 text-left space-y-2" data-testid="refund-info">
-              <p className="font-semibold text-blue-900">What happens with your money?</p>
-              <p className="text-sm text-blue-800">
-                Your held payment has been released back to your original payment method. Depending on your bank, this typically appears within <strong>3–5 business days</strong>. You were not charged anything.
-              </p>
-            </div>
+            {eventCalledOff ? (
+              <>
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900 mb-2" data-testid="cancelled-heading">
+                    This experience was cancelled
+                  </h1>
+                  <p className="text-gray-600 max-w-lg mx-auto" data-testid="cancelled-message">
+                    {groupFailed ? (
+                      <>The minimum group size for <strong>{experience.title}</strong> was not reached by the deadline, so the experience has been cancelled.</>
+                    ) : (
+                      <><strong>{experience.title}</strong> has been cancelled by the organiser.</>
+                    )}
+                  </p>
+                </div>
+                {!bookingWasFree && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 text-left space-y-2" data-testid="refund-info">
+                    <p className="font-semibold text-blue-900">What happens with your money?</p>
+                    <p className="text-sm text-blue-800">
+                      {paymentRecordedReturned ? (
+                        <>Your payment has been returned to your original payment method. Depending on your bank, it typically appears within <strong>3–5 business days</strong>.</>
+                      ) : (
+                        <>If you were charged for this booking, contact the organiser about a refund. My Bookings shows its current payment status.</>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </>
+            ) : (
+              // The event is still on; only this booking has ended. Nothing
+              // is said about the group, which this booking no longer
+              // decides, or about money the page does not know the fate of.
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900 mb-2" data-testid="cancelled-heading">
+                  This booking is no longer active
+                </h1>
+                <p className="text-gray-600 max-w-lg mx-auto" data-testid="cancelled-message">
+                  Your booking for <strong>{experience.title}</strong> has been cancelled, so there is no balance left to pay. My Bookings shows what happened to its payment.
+                </p>
+              </div>
+            )}
             <div className="space-y-3 pt-2">
               <Link href="/experiences">
                 <Button className="w-full bg-gray-900 hover:bg-gray-800 text-white">

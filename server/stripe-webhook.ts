@@ -261,6 +261,22 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     return;
   }
 
+  // A cancelled booking stays cancelled. The attendee may have cancelled while
+  // this confirmation was in flight, or an MVG failure may have closed it;
+  // either way, marking it fully_paid here would bring the place back to life
+  // and send a confirmation for something they no longer hold. `failed` is not
+  // in this list on purpose: a customer retrying a declined card on the same
+  // PaymentIntent is a genuine recovery. Money landing on a cancelled booking
+  // needs a human, so it is logged loudly rather than swallowed.
+  if (booking.cancelledAt || booking.status === "cancelled" || booking.status === "refunded") {
+    console.error(
+      `[Webhook] payment_intent.succeeded ${pi.id} arrived for booking ${booking.id}, which is ${booking.status}`
+      + `${booking.cancelledAt ? ` (cancelled ${new Date(booking.cancelledAt).toISOString()})` : ""}`
+      + ` — left as it is. Check whether this payment needs refunding.`,
+    );
+    return;
+  }
+
   const isBalancePayment = pi.metadata?.isBalancePayment === "true";
 
   if (isBalancePayment) {

@@ -30,7 +30,7 @@ import { registerOGRoutes } from "./og";
 import { resolvePartnerAccess, shouldAutoApproveCreator } from "@shared/partnerAccess";
 import { matchesStandingPreferences } from "@shared/collabSuggestions";
 import { dealRooms, dealRoomMessages, dealRoomReads } from "@shared/schema";
-import type { CreatorProfile } from "@shared/schema";
+import type { Booking, CreatorProfile, Experience } from "@shared/schema";
 import { 
   insertCommunityApplicationSchema, 
   insertParticipantProfileSchema, 
@@ -48,10 +48,10 @@ import {
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStorage";
 import { generateItinerary } from "./openai";
-import { calculateBookingCommission, lockCommissionsForExperience, voidCommissionsForExperience } from "./commissionService";
+import { calculateBookingCommission, lockCommissionsForExperience, updateCommissionStatus, voidCommissionsForExperience } from "./commissionService";
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
 import { scheduleExperiencePayout } from "./payout-scheduler";
-import { sumBookingPayoutGrossCents } from "./payoutRules";
+import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
 import {
   calculateTicketDeduction,
   normalizeTicketQuantity,
@@ -82,6 +82,23 @@ import {
 import { normalizeAddonDiscountPct, syncSkuAddonsWithCatalog } from "@shared/venueAddonPricing";
 import { validateExperienceDealTerms } from "@shared/dealTermGuards";
 import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
+import {
+  assessBookingCancellation,
+  bookingCancellationGate,
+  cancellationCurrency,
+  cancellationRefusalMessage,
+  decideIntentCancellation,
+  formatCancellationAmount,
+  GROUP_CONFIRMED_DURING_CANCEL_MESSAGE,
+  isBookingCancelled,
+  isCapturedPaymentRefundable,
+  isGroupBalanceHold,
+  isLiveStripeIntentId,
+  PAYMENT_PROCESSING_MESSAGE,
+  PAYOUT_COUNTED_BOOKING_STATUSES,
+  unreleasedHoldNotice,
+  type IntentCancellationAction,
+} from "@shared/bookingCancellation";
 import {
   discountAmountForUnitPrice,
   discountLinkUrl,
@@ -916,6 +933,13 @@ function parseCollabIdeaBody(body: any): { error?: string; values: Record<string
 }
 
 /** "Revenue split (tickets), Barter" — for an invite email's deal line. */
+const COLLAB_DIRECTORY_LABELS: Record<string, string> = {
+  venue: "Venue",
+  sponsor: "Sponsor",
+  community: "Community",
+  service_provider: "Service provider",
+};
+
 function describeCollabDealPreferences(idea: any): string {
   return describeDealPreferences(idea || {});
 }
@@ -6317,6 +6341,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
    */
   async function getEnrichedBookingsForUser(userId: string) {
     const userBookings = await storage.getBookingsByUser(userId);
+    // One query for the whole list: whether each event's payout has gone out
+    // decides whether its bookings can still be cancelled.
+    const payoutLockedEvents = await storage.getPayoutLockedExperienceIds(
+      userBookings.map((booking) => booking.experienceId),
+    );
+    const now = new Date();
 
     const enrichedBookings = await Promise.all(
       userBookings.map(async (booking) => {
@@ -6324,6 +6354,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const mvgProgress = await storage.getMVGProgress(booking.experienceId);
         return {
           ...booking,
+          // A preview from stored fields only — no Stripe call per row. The
+          // cancel endpoint decides the money from the live payment.
+          cancellation: assessBookingCancellation({
+            booking,
+            experience,
+            now,
+            payoutLocked: payoutLockedEvents.has(booking.experienceId),
+          }),
           experience: experience ? {
             id: experience.id,
             title: experience.title,
@@ -6340,6 +6378,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             requireMinimumParticipants: experience.requireMinimumParticipants,
             minimumParticipants: mvgProgress.minimum_participants,
             currentParticipants: mvgProgress.current_participants,
+            maxParticipants: experience.maxParticipants ?? null,
+            // The stored group state, not the live count: the cancel dialog
+            // has to say whether the group has formed, and a group that has
+            // formed stays formed when one person leaves.
+            mvgStatus: experience.mvgStatus ?? null,
+            status: experience.status ?? null,
             mvgMet: mvgProgress.mvg_met,
             lifecycleStatus: computeLifecycleStatus({
               status: experience.status || '',
@@ -6368,6 +6412,741 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user bookings:", error);
       res.status(500).json({ message: "Failed to fetch bookings" });
+    }
+  });
+
+  /**
+   * One Stripe call that failed while a cancelled booking's money was being
+   * handed back, classified by what its PaymentIntent was holding, because the
+   * four mean very different things to the attendee:
+   *
+   * - outstanding: money that was taken and has not gone back — a refund was
+   *   refused, or the intent's state could not be confirmed and so is assumed
+   *   to be money. Someone has to return it.
+   * - captured_meanwhile: a card hold the group-success run captured between
+   *   our read of it and our release of it. The group formed, so the payment
+   *   is final.
+   * - hold: an authorisation that could not be released. It was never
+   *   charged, lapses on its own, and no capture run touches a cancelled
+   *   booking.
+   * - inert: an intent that held nothing.
+   *
+   * `rereadFailed` marks a card hold whose release failed and which could not
+   * be read again afterwards, so its kind is a guess from the last read: the
+   * group run may have captured it in the meantime, and only a person looking
+   * at Stripe can say.
+   */
+  type CancelReturnFailure = {
+    intentId: string;
+    action: IntentCancellationAction;
+    kind: "outstanding" | "captured_meanwhile" | "hold" | "inert";
+    cents: number;
+    message: string;
+    rereadFailed?: boolean;
+  };
+
+  /**
+   * Hand back what a cancelled booking's PaymentIntents hold.
+   *
+   * Refunds go first, then card holds, then intents that hold nothing. Refunds
+   * are the calls most likely to be refused — a refund needs money on the
+   * platform account — and making them before any hold is released means a
+   * failure usually leaves nothing half-done.
+   *
+   * Every call is keyed to the booking, the intent, the action and this
+   * attempt's cancellation time. Within one attempt a replayed request is
+   * answered from Stripe's record of the first, so the money is never returned
+   * twice. A later attempt — after a failure put the booking back — gets a key
+   * of its own, because Stripe remembers an error against its key for a day
+   * and would otherwise answer every retry with the old failure. Returning the
+   * money twice across attempts is still impossible: a second full refund is
+   * refused as charge_already_refunded and a second cancel finds the intent
+   * already canceled, and both are read below as done.
+   *
+   * A failure before any money has gone back stops the run there, so the
+   * caller can put the booking back with nothing else touched. Before it
+   * stops, every card hold it never reached is read again: the group run
+   * could have captured one while this run was busy with the others, and
+   * putting the booking back as it was would then leave captured money behind
+   * a booking that still reads as forming. Once some money has gone back the
+   * cancellation stands whatever happens next, so the rest are still
+   * attempted — a hold left on the card of someone with no booking helps
+   * nobody — and every failure is collected.
+   *
+   * Throws when any call failed. The error carries `returnedBeforeFailure` —
+   * what was handed back, which intents finished, and every failure with what
+   * its intent was holding — so the caller never mistakes a half-finished
+   * return for one where nothing happened.
+   */
+  async function returnCancelledBookingPayment(
+    bookingId: string,
+    plans: Array<{ intent: Stripe.PaymentIntent; action: IntentCancellationAction }>,
+    attemptAt: number,
+  ): Promise<{
+    refundedCents: number;
+    releasedCents: number;
+    refunded: boolean;
+    released: boolean;
+    completedIntentIds: string[];
+  }> {
+    const result = {
+      refundedCents: 0,
+      releasedCents: 0,
+      refunded: false,
+      released: false,
+      completedIntentIds: [] as string[],
+    };
+    const failures: CancelReturnFailure[] = [];
+    const isHold = (intent: Stripe.PaymentIntent) => intent.status === "requires_capture";
+    const holdCents = (intent: Stripe.PaymentIntent) => intent.amount_capturable || intent.amount || 0;
+    const priority = ({ intent, action }: { intent: Stripe.PaymentIntent; action: IntentCancellationAction }) => (
+      action === "refund" ? 0 : isHold(intent) ? 1 : 2
+    );
+    const ordered = [...plans].sort((a, b) => priority(a) - priority(b));
+
+    const recordReleased = (intent: Stripe.PaymentIntent) => {
+      // Only an authorised intent was holding money. One still waiting for a
+      // card never took anything, so cancelling it returns nothing.
+      if (isHold(intent)) {
+        result.releasedCents += holdCents(intent);
+        result.released = true;
+      }
+    };
+
+    // A cancel that failed is asked about again rather than guessed from the
+    // error, whatever the error was. A refusal over the intent's state says
+    // it moved; a rate limit, a lock timeout or a dropped connection says
+    // nothing about it at all — the group run may have captured the hold
+    // (a lock timeout is often exactly that capture holding the intent), the
+    // customer may have finished paying, or the cancel may have gone through
+    // after all. The error's own copy of the intent is the fallback when
+    // Stripe cannot be reached.
+    const rereadAfterFailedRelease = async (
+      intent: Stripe.PaymentIntent,
+      error: any,
+    ): Promise<{ latest: Stripe.PaymentIntent | null; rereadFailed: boolean }> => {
+      try {
+        return { latest: await stripe.paymentIntents.retrieve(intent.id), rereadFailed: false };
+      } catch (retrieveError: any) {
+        console.error(
+          `[Booking cancel] Could not re-read ${intent.id} on booking ${bookingId} after cancelling it failed:`,
+          retrieveError?.message || retrieveError,
+        );
+        const embedded = error?.payment_intent || error?.raw?.payment_intent;
+        return {
+          latest: embedded && typeof embedded.status === "string" ? (embedded as Stripe.PaymentIntent) : null,
+          rereadFailed: true,
+        };
+      }
+    };
+
+    /** Null when the intent turns out to be canceled after all — done, not failed. */
+    const classifyFailure = async (
+      intent: Stripe.PaymentIntent,
+      action: IntentCancellationAction,
+      error: any,
+    ): Promise<CancelReturnFailure | null> => {
+      const message = String(error?.message || error);
+      if (action === "refund") {
+        return { intentId: intent.id, action, kind: "outstanding", cents: intent.amount_received || 0, message };
+      }
+
+      const { latest, rereadFailed } = await rereadAfterFailedRelease(intent, error);
+      const failure = (kind: CancelReturnFailure["kind"], cents: number): CancelReturnFailure => ({
+        intentId: intent.id, action, kind, cents, message, ...(rereadFailed ? { rereadFailed: true } : {}),
+      });
+
+      if (latest) {
+        switch (latest.status) {
+          case "canceled":
+            return null;
+          case "succeeded":
+            // A hold that is now captured was captured by the group run. A
+            // payment that completed while we were cancelling it is money
+            // taken on a booking being given up, which a person has to look at.
+            return isHold(intent)
+              ? failure("captured_meanwhile", latest.amount_received || holdCents(intent))
+              : failure("outstanding", latest.amount_received || intent.amount || 0);
+          case "requires_capture":
+            return failure("hold", holdCents(latest));
+          case "requires_payment_method":
+          case "requires_confirmation":
+          case "requires_action":
+            return failure("inert", 0);
+          default:
+            // Processing, or a state we do not know: it may be money, so it is
+            // treated as money until someone has checked.
+            return failure("outstanding", isHold(intent) ? holdCents(intent) : intent.amount || 0);
+        }
+      }
+
+      // Stripe could not be asked again. A refusal over the intent's state
+      // says it is no longer what we read, so it may be money, and is treated
+      // as money until someone has checked. Any other failure is read as the
+      // intent still being what we last saw — flagged, so the caller can have
+      // a person confirm it.
+      if (error?.code === "payment_intent_unexpected_state") {
+        return failure("outstanding", isHold(intent) ? holdCents(intent) : intent.amount || 0);
+      }
+      return isHold(intent) ? failure("hold", holdCents(intent)) : failure("inert", 0);
+    };
+
+    // The holds a stopped run never reached. Each is read again, because the
+    // group run may have captured it while the earlier calls were failing; a
+    // captured one is reported so the caller keeps the booking as the run
+    // would have left it instead of putting it back as forming. One that is
+    // still on hold, or was let go some other way, is left to the caller's
+    // usual put-back.
+    const rereadUntouchedHolds = async (
+      untouched: Array<{ intent: Stripe.PaymentIntent; action: IntentCancellationAction }>,
+    ): Promise<CancelReturnFailure[]> => {
+      const found: CancelReturnFailure[] = [];
+      for (const { intent, action } of untouched) {
+        if (action !== "cancel" || !isHold(intent)) continue;
+        try {
+          const latest = await stripe.paymentIntents.retrieve(intent.id);
+          if (latest.status === "succeeded") {
+            found.push({
+              intentId: intent.id,
+              action,
+              kind: "captured_meanwhile",
+              cents: latest.amount_received || holdCents(intent),
+              message: "Captured while this cancellation was in progress, before its release was attempted",
+            });
+          }
+        } catch (retrieveError: any) {
+          found.push({
+            intentId: intent.id,
+            action,
+            kind: "hold",
+            cents: holdCents(intent),
+            message: `Not released because an earlier call failed, and could not be read again: ${retrieveError?.message || retrieveError}`,
+            rereadFailed: true,
+          });
+        }
+      }
+      return found;
+    };
+
+    for (let index = 0; index < ordered.length; index++) {
+      const { intent, action } = ordered[index];
+      const idempotencyKey = `booking-cancel:${bookingId}:${intent.id}:${action}:${attemptAt}`;
+
+      try {
+        if (action === "refund") {
+          let refund: Stripe.Refund | null = null;
+          try {
+            refund = await stripe.refunds.create({
+              payment_intent: intent.id,
+              reason: "requested_by_customer",
+              metadata: { bookingId, source: "attendee_cancel" },
+            }, { idempotencyKey });
+          } catch (error: any) {
+            // Refunded already — by an earlier attempt, or by hand from the
+            // dashboard. The money is back either way.
+            if (error?.code !== "charge_already_refunded") throw error;
+          }
+          // Stripe can accept a refund request and hand back a refund that has
+          // already failed or been cancelled. That money is still with the
+          // platform, so it is a failure, not something to report as returned.
+          if (refund && (refund.status === "failed" || refund.status === "canceled")) {
+            throw new Error(`Refund ${refund.id} for ${intent.id} came back ${refund.status}`);
+          }
+          result.refundedCents += refund ? refund.amount || 0 : intent.amount_received || 0;
+          result.refunded = true;
+        } else if (action === "cancel") {
+          try {
+            await stripe.paymentIntents.cancel(
+              intent.id,
+              { cancellation_reason: "requested_by_customer" },
+              { idempotencyKey },
+            );
+          } catch (error: any) {
+            const canceledAlready = error?.code === "payment_intent_unexpected_state"
+              && (error?.payment_intent?.status === "canceled"
+                || error?.raw?.payment_intent?.status === "canceled"
+                || /status of canceled/i.test(String(error?.message || "")));
+            if (!canceledAlready) throw error;
+          }
+          recordReleased(intent);
+        }
+      } catch (error: any) {
+        const failure = await classifyFailure(intent, action, error);
+        if (failure === null) {
+          recordReleased(intent);
+          result.completedIntentIds.push(intent.id);
+          continue;
+        }
+        failures.push(failure);
+        // Nothing has gone back yet, so stop: the caller can still put the
+        // booking back exactly as it was — once it knows the group run has not
+        // captured a hold this run never got to.
+        if (!result.refunded && !result.released) {
+          failures.push(...await rereadUntouchedHolds(ordered.slice(index + 1)));
+          break;
+        }
+        continue;
+      }
+
+      result.completedIntentIds.push(intent.id);
+    }
+
+    if (failures.length > 0) {
+      throw Object.assign(new Error(failures.map((failure) => `${failure.intentId}: ${failure.message}`).join("; ")), {
+        returnedBeforeFailure: {
+          ...result,
+          completedIntentIds: [...result.completedIntentIds],
+          failures,
+        },
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Everything a cancellation changes besides the booking and the money.
+   *
+   * By the time this runs the attendee's place is gone and their money is on
+   * its way back, so no step here is allowed to turn that into an error for
+   * them. Each one is independent and logs its own failure.
+   */
+  async function settleCancelledBooking(opts: {
+    booking: Booking;
+    experience: Experience | undefined;
+    outcome: "cancelled" | "hold_released" | "refunded";
+    amountReturned: number;
+    currency: string;
+    /** Money Stripe would not return, left for the team to hand back. */
+    amountOutstanding?: number;
+    /** A card hold that could not be released, said in the receipt too. */
+    notice?: string | null;
+  }): Promise<void> {
+    const { booking, experience } = opts;
+
+    // A sale that no longer exists earns its promoter nothing. A commission
+    // already paid out is never reached here — the policy refuses those.
+    if (booking.commissionStatus === "estimated" || booking.commissionStatus === "locked") {
+      try {
+        await updateCommissionStatus(booking.id, "voided");
+      } catch (error: any) {
+        console.error(`[Booking cancel] Could not void commission for ${booking.id}:`, error?.message || error);
+      }
+    }
+
+    if (booking.discountLinkId) {
+      try {
+        await storage.releaseDiscountLinkRedemption(booking.discountLinkId);
+      } catch (error: any) {
+        console.error(`[Booking cancel] Could not release discount redemption for ${booking.id}:`, error?.message || error);
+      }
+    }
+
+    // The payout row stores the gross it was last scheduled with, and the run
+    // falls back to that stored figure when it finds no paid bookings — so a
+    // cancelled sale would still be paid out. Recomputed the same way the
+    // payment webhook schedules it. Only when this booking actually counted:
+    // an event paid for upfront keeps its preset figure, and a free RSVP
+    // leaving must not wipe it.
+    if (PAYOUT_COUNTED_BOOKING_STATUSES.has(String(booking.status)) && sumBookingPayoutGrossCents([booking]) > 0) {
+      try {
+        const payout = await storage.getScheduledPayoutByExperience(booking.experienceId);
+        if (payout?.status === "pending" && experience?.endDate && isExperiencePayoutEligible(experience)) {
+          const grossCents = sumBookingPayoutGrossCents(await storage.getPaidBookings(booking.experienceId));
+          await scheduleExperiencePayout(booking.experienceId, new Date(experience.endDate), grossCents);
+        }
+      } catch (error: any) {
+        console.error(`[Booking cancel] Could not refresh payout gross for ${booking.experienceId}:`, error?.message || error);
+      }
+    }
+
+    const amountLabel = formatCancellationAmount(opts.amountReturned, opts.currency);
+    const amountOutstandingLabel = opts.amountOutstanding && opts.amountOutstanding > 0
+      ? formatCancellationAmount(opts.amountOutstanding, opts.currency)
+      : null;
+    const eventName = experience?.title || "your event";
+    void (async () => {
+      const attendee = await storage.getUser(booking.userId);
+      const results = await Promise.allSettled([
+        attendee?.email
+          ? notificationService.sendBookingCancelledEmail({
+              to: attendee.email,
+              firstName: attendee.firstName,
+              eventName,
+              outcome: opts.outcome,
+              amountLabel,
+              amountOutstandingLabel,
+              notice: opts.notice ?? null,
+              bookingId: booking.id,
+            })
+          : Promise.resolve(null),
+        (async () => {
+          if (!experience?.creatorId) return null;
+          const organiser = await storage.getUser(experience.creatorId);
+          if (!organiser?.email) return null;
+          const attendeeName = attendee?.firstName
+            ? `${attendee.firstName}${attendee.lastName ? ` ${attendee.lastName[0]}.` : ""}`
+            : "An attendee";
+          return notificationService.sendBookingCancelledOrganiserEmail({
+            to: organiser.email,
+            organiserFirstName: organiser.firstName,
+            attendeeName,
+            eventName,
+            ticketQuantity: booking.ticketQuantity || 1,
+            outcome: opts.outcome,
+            amountLabel,
+            bookingId: booking.id,
+          });
+        })(),
+      ]);
+      results.forEach((result) => {
+        if (result.status === "rejected") {
+          console.error(`[Booking cancel] Email for ${booking.id} failed:`, result.reason);
+        }
+      });
+    })().catch((error: any) => {
+      console.error(`[Booking cancel] Emails for ${booking.id} failed:`, error?.message || error);
+    });
+
+    // Anyone watching the event page sees the seat free up. The lifecycle comes
+    // from the stored group state as well as the live count, so a group that
+    // has already formed is never shown as forming again because one person
+    // left.
+    if (experience) {
+      try {
+        const progress = await storage.getMVGProgress(experience.id);
+        const participants = await storage.getExperienceParticipantAvatars(experience.id);
+        const groupFormed = experience.mvgStatus === "met";
+        const minimum = progress.minimum_participants;
+        broadcastMVGUpdate({
+          trip_id: experience.id,
+          seats_taken: progress.current_participants,
+          funded_amount: parseFloat(experience.price || "0") * progress.current_participants,
+          funded_percent: groupFormed || minimum <= 0
+            ? 100
+            : Math.min(100, Math.round((progress.current_participants / minimum) * 10000) / 100),
+          participants,
+          mvg_met: groupFormed,
+          lifecycle_status: computeLifecycleStatus({
+            status: experience.status || "",
+            mvgStatus: experience.mvgStatus,
+            requireMinimumParticipants: experience.requireMinimumParticipants,
+            mvgMet: progress.mvg_met,
+          }),
+        });
+      } catch (error: any) {
+        console.error(`[Booking cancel] Could not broadcast seat update for ${experience.id}:`, error?.message || error);
+      }
+    }
+  }
+
+  /**
+   * An attendee cancelling their own booking.
+   *
+   * The policy lives in shared/bookingCancellation.ts. Everything that is not
+   * about money is checked from the database first. The money is then decided
+   * from the live PaymentIntents, never from the stored booking status, which
+   * does not reliably say what Stripe holds.
+   *
+   * Order matters. The booking is marked cancelled before any money moves, so
+   * a double-click finds nothing left to cancel, the refund webhook has
+   * nothing to flip, and the minimum-group capture run skips it. If Stripe
+   * then refuses before anything has gone back, the booking is put back
+   * exactly as it was and the attendee is told nothing changed — it is never
+   * reported as refunded when it was not. The one exception is a hold the
+   * group-success run captured while we were releasing it — found by reading
+   * every hold again after any failed release, not only after Stripe objects
+   * to its state: the group has formed, so the booking is kept as captured
+   * and confirmed and the attendee is told their payment is now final.
+   *
+   * A booking whose balance the group run has put on hold is refused before
+   * anything moves: the group formed and claimed it, even if the event row
+   * and the booking status have not caught up.
+   *
+   * If Stripe refuses part-way, after some money has already gone back, the
+   * cancellation stands and what the failed intent was holding decides the
+   * answer. Money taken and not returned is a 502 partial_return saying
+   * exactly what was returned and what is still owed. A card hold that would
+   * not release is not money owed — it lapses on its own — so the answer is
+   * the real outcome with a `notice` about the hold. An intent that held
+   * nothing is only logged. A successful answer always carries `notice`,
+   * null when there is nothing to add.
+   */
+  app.post("/api/bookings/:id/cancel", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const booking = await storage.getBooking(req.params.id);
+      if (!booking) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+      if (!userId || booking.userId !== userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+
+      const refuse = (code: string, message: string) => res.status(409).json({ message, code });
+
+      const experience = await storage.getExperience(booking.experienceId);
+      const lockedEvents = await storage.getPayoutLockedExperienceIds([booking.experienceId]);
+      const policyInput = {
+        booking,
+        experience,
+        now: new Date(),
+        payoutLocked: lockedEvents.has(booking.experienceId),
+      };
+
+      const gate = bookingCancellationGate(policyInput);
+      if (gate) return refuse(gate, cancellationRefusalMessage(gate));
+
+      const intentIds = Array.from(new Set(
+        [booking.stripePaymentIntentId, booking.balancePaymentIntentId]
+          .filter((id): id is string => isLiveStripeIntentId(id)),
+      ));
+
+      // Nothing on Stripe to ask: a free RSVP, a development sandbox payment,
+      // or a charge with no PaymentIntent to return it through. The stored
+      // fields are all there is, so the preview's answer is the answer.
+      if (intentIds.length === 0) {
+        const preview = assessBookingCancellation(policyInput);
+        if (!preview.allowed) {
+          const reason = preview.blockedReason || "paid_final";
+          return refuse(reason, cancellationRefusalMessage(reason));
+        }
+      }
+
+      const refundable = isCapturedPaymentRefundable(experience, booking);
+      const plans: Array<{ intent: Stripe.PaymentIntent; action: IntentCancellationAction }> = [];
+      try {
+        for (const id of intentIds) {
+          const intent = await stripe.paymentIntents.retrieve(id);
+          // How it was captured matters as much as whether: a hold we captured
+          // was captured because the group formed, so it is never refundable.
+          plans.push({ intent, action: decideIntentCancellation(intent.status, refundable, intent.capture_method) });
+        }
+      } catch (error: any) {
+        console.error(`[Booking cancel] Could not read payment for ${booking.id}:`, error?.message || error);
+        return res.status(502).json({
+          message: "We couldn't check your payment just now, so nothing has been changed. Please try again in a few minutes.",
+        });
+      }
+
+      // A balance the group run put on hold means the group formed and took
+      // this booking, whatever the rows say: the run does not stamp the
+      // deposit, the deposit's late confirmation can rewrite `confirmed` as
+      // `fully_paid`, and the event reads `pending` until the run has been
+      // through every booking. Asked first and of the whole booking, so
+      // neither the deposit nor the hold is handed back.
+      const groupHold = plans.find((plan) => isGroupBalanceHold(booking, plan.intent));
+      if (groupHold) {
+        console.log(
+          `[Booking cancel] Booking ${booking.id} was claimed by the group run (balance hold ${groupHold.intent.id}`
+          + ` is ${groupHold.intent.status}) — refusing; the payment is final.`,
+        );
+        return refuse("paid_final", cancellationRefusalMessage("paid_final"));
+      }
+
+      if (plans.some((plan) => plan.action === "processing")) {
+        return refuse("processing", PAYMENT_PROCESSING_MESSAGE);
+      }
+      if (plans.some((plan) => plan.action === "paid_final")) {
+        return refuse("paid_final", cancellationRefusalMessage("paid_final"));
+      }
+
+      const previous = { status: booking.status, cancelledAt: booking.cancelledAt ?? null };
+      const cancellation = await storage.cancelActiveBooking(booking.id, booking.experienceId, {
+        refundPlanned: plans.some((plan) => plan.action === "refund"),
+        holdReleasePlanned: plans.some((plan) => plan.action === "cancel" && plan.intent.status === "requires_capture"),
+      });
+      if (cancellation.refused !== null) {
+        // Asked again under the lock, the answer changed: someone else got
+        // here first (another tab, a double-click, the group failing at the
+        // same moment), the group formed while Stripe was being asked so the
+        // payment is now final, or the event was called off. Nothing moved.
+        return refuse(cancellation.refused, cancellationRefusalMessage(cancellation.refused));
+      }
+      const cancelled = cancellation.booking;
+      // Each attempt keys its Stripe calls by its own cancellation time, so a
+      // retry after a failure is a fresh request rather than a replayed error.
+      const attemptAt = cancelled.cancelledAt ? new Date(cancelled.cancelledAt).getTime() : Date.now();
+
+      const currency = plans[0]?.intent.currency
+        ? String(plans[0].intent.currency).toLowerCase()
+        : cancellationCurrency(experience);
+
+      let returned: Awaited<ReturnType<typeof returnCancelledBookingPayment>>;
+      let failures: CancelReturnFailure[] = [];
+      try {
+        returned = await returnCancelledBookingPayment(booking.id, plans, attemptAt);
+      } catch (error: any) {
+        const partial = error?.returnedBeforeFailure;
+        if (!partial || !(partial.refunded || partial.released)) {
+          const stopFailures = (partial?.failures as CancelReturnFailure[] | undefined) ?? [];
+          // A hold whose release failed and that Stripe would not show us
+          // again may have been captured by the group run in the meantime.
+          // Putting the booking back as it was is still the right answer for
+          // the attendee — nothing we did moved any money — but if the run
+          // did capture it, the booking now reads as forming with its money
+          // taken, so a person has to look.
+          for (const failure of stopFailures.filter((item) => item.rereadFailed)) {
+            console.error(
+              `[Booking cancel] CRITICAL: hold ${failure.intentId} on booking ${booking.id} could not be released`
+              + ` (${failure.message}) and could not be read again, so whether the group run captured it is unknown.`
+              + ` The booking is being kept as it was; check ${failure.intentId} on Stripe by hand.`,
+            );
+          }
+          const capturedMeanwhile = stopFailures.find((failure) => failure.kind === "captured_meanwhile");
+          if (capturedMeanwhile) {
+            // The group-success run captured the hold between our read of it
+            // and our release, and nothing else has moved. The run's own write
+            // was refused because the booking read as cancelled at that
+            // moment, so the booking is put back the way the run would have
+            // left it. The group formed, so the payment is final.
+            console.warn(
+              `[Booking cancel] ${capturedMeanwhile.intentId} on booking ${booking.id} was captured by the group run`
+              + ` while it was being released — keeping the booking as captured and confirmed.`,
+            );
+            try {
+              const restored = await storage.restoreGroupCapturedBooking(booking.id);
+              if (!restored) {
+                console.error(
+                  `[Booking cancel] CRITICAL: ${capturedMeanwhile.intentId} on booking ${booking.id} was captured by the group run,`
+                  + ` but the booking is no longer in the cancelled state this request wrote, so it was not restored. Check it by hand.`,
+                );
+              }
+            } catch (restoreError: any) {
+              console.error(
+                `[Booking cancel] CRITICAL: ${capturedMeanwhile.intentId} on booking ${booking.id} was captured by the group run,`
+                + ` and restoring the booking as confirmed failed:`,
+                restoreError?.message || restoreError,
+              );
+            }
+            return refuse("paid_final", GROUP_CONFIRMED_DURING_CANCEL_MESSAGE);
+          }
+
+          console.error(
+            `[Booking cancel] Stripe refused returning payment for ${booking.id} — restoring the booking:`,
+            error?.message || error,
+          );
+          try {
+            await storage.revertBookingCancellation(booking.id, previous);
+          } catch (revertError: any) {
+            console.error(
+              `[Booking cancel] CRITICAL: booking ${booking.id} is cancelled but its payment was not returned, and restoring it failed:`,
+              revertError?.message || revertError,
+            );
+          }
+          return res.status(502).json({
+            message: "We couldn't return your payment just now, so your booking has not been cancelled. Please try again in a few minutes.",
+          });
+        }
+
+        // Some of the money has already gone back. Restoring the booking now
+        // would leave a live place whose payment was partly returned, and the
+        // refund webhook would then mark it refunded — closing the door on a
+        // retry while the rest stayed with the platform. So the cancellation
+        // stands, and what each failed intent was holding decides what the
+        // attendee is told.
+        returned = partial;
+        failures = partial.failures || [];
+      }
+
+      // Money taken and not handed back — a refused refund, an intent whose
+      // state could not be confirmed, or a hold the group run captured after
+      // other money had already gone back. Someone has to return it.
+      const owed = failures.filter((failure) => failure.kind === "outstanding" || failure.kind === "captured_meanwhile");
+      // Holds that would not release. Never charged, they lapse on their own,
+      // and every capture run skips a cancelled booking, so nothing is owed —
+      // but the attendee will still see them on their statement for a while.
+      const unreleasedHolds = failures.filter((failure) => failure.kind === "hold");
+      const inert = failures.filter((failure) => failure.kind === "inert");
+      const sumCents = (list: CancelReturnFailure[]) => list.reduce((sum, failure) => sum + failure.cents, 0);
+
+      const outcome: "cancelled" | "hold_released" | "refunded" = returned.refunded
+        ? "refunded"
+        : returned.released ? "hold_released" : "cancelled";
+      const amountReturned = (returned.refundedCents + returned.releasedCents) / 100;
+      const amountOutstanding = sumCents(owed) / 100;
+      const notice = unreleasedHolds.length > 0
+        ? unreleasedHoldNotice(formatCancellationAmount(sumCents(unreleasedHolds) / 100, currency))
+        : null;
+      const returnedLabel = formatCancellationAmount(amountReturned, currency);
+
+      if (owed.length > 0) {
+        console.error(
+          `[Booking cancel] CRITICAL: booking ${booking.id} is cancelled and ${returnedLabel} was returned`
+          + ` (done: ${returned.completedIntentIds.join(", ") || "none"}), but ${formatCancellationAmount(amountOutstanding, currency)} was not —`
+          + owed.map((failure) => ` ${failure.intentId} (${failure.kind === "captured_meanwhile"
+            ? "captured by the group run while it was being released"
+            : `${failure.action} failed: ${failure.message}`})`).join(";")
+          + `. It is still with the platform and must be returned by hand.`,
+        );
+      }
+      for (const failure of unreleasedHolds) {
+        if (failure.rereadFailed) {
+          // Read as still on hold only because Stripe would not show it to us
+          // again; a group run that read the booking before it was cancelled
+          // could have captured it in the meantime.
+          console.error(
+            `[Booking cancel] CRITICAL: booking ${booking.id} is cancelled, but the hold of`
+            + ` ${formatCancellationAmount(failure.cents / 100, currency)} on ${failure.intentId} could not be released`
+            + ` (${failure.message}) and could not be read again. Check ${failure.intentId} on Stripe by hand:`
+            + ` if it was captured, the money must be returned.`,
+          );
+          continue;
+        }
+        console.warn(
+          `[Booking cancel] Booking ${booking.id} is cancelled, but the hold of ${formatCancellationAmount(failure.cents / 100, currency)}`
+          + ` on ${failure.intentId} could not be released: ${failure.message}. It lapses on its own within about 7 days,`
+          + ` and no capture run touches a cancelled booking.`,
+        );
+      }
+      for (const failure of inert) {
+        console.warn(
+          `[Booking cancel] Booking ${booking.id} is cancelled, but its unpaid PaymentIntent ${failure.intentId}`
+          + ` could not be cancelled: ${failure.message}. It held no money.`,
+        );
+      }
+
+      // Recorded as returned only when every intent that held money was
+      // returned. A refusal or a stuck hold leaves the deposit status as it
+      // was, so nothing reads this booking as settled while money or a hold
+      // is still out.
+      let finalBooking = cancelled;
+      if ((returned.refunded || returned.released) && owed.length === 0 && unreleasedHolds.length === 0) {
+        try {
+          finalBooking = await storage.updateBooking(booking.id, { depositStatus: "refunded" });
+        } catch (error: any) {
+          console.error(`[Booking cancel] Could not record returned deposit on ${booking.id}:`, error?.message || error);
+        }
+      }
+
+      await settleCancelledBooking({
+        booking,
+        experience,
+        outcome,
+        amountReturned,
+        currency,
+        ...(owed.length > 0 ? { amountOutstanding } : {}),
+        notice,
+      });
+
+      if (owed.length > 0) {
+        const outstandingLabel = formatCancellationAmount(amountOutstanding, currency);
+        return res.status(502).json({
+          code: "partial_return",
+          message: `Your booking is cancelled and ${returnedLabel} has been returned, but we couldn't return the remaining ${outstandingLabel} automatically. It has been flagged to our team, who will return it to you.`,
+          booking: finalBooking,
+          outcome,
+          amountReturned,
+          amountOutstanding,
+          currency,
+          notice,
+        });
+      }
+
+      res.json({ booking: finalBooking, outcome, amountReturned, currency, notice });
+    } catch (error) {
+      console.error("Error cancelling booking:", error);
+      res.status(500).json({ message: "Failed to cancel booking" });
     }
   });
 
@@ -6465,11 +7244,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (booking.userId !== userId) {
         return res.status(403).json({ message: "Not authorized" });
       }
-      
+
+      // A cancelled booking has no place left to pay the rest of. Taking the
+      // balance would charge someone for nothing and leave money no
+      // booking accounts for. A refunded one is the same: the group failed or
+      // the organiser handed the money back, and charging the balance on top
+      // would take money for a place that is gone. A declined balance card is
+      // different — it marks the booking `failed`, and paying again with
+      // another card is exactly what that attendee should be able to do.
+      if (isBookingCancelled(booking) || booking.status === "refunded") {
+        return res.status(409).json({ message: "This booking is no longer active, so there is no balance to pay." });
+      }
+
       if (booking.balancePaid) {
         return res.status(400).json({ message: "Balance has already been paid" });
       }
-      
+
       const balanceAmount = parseFloat(booking.balanceAmount?.toString() || "0");
       if (balanceAmount <= 0) {
         return res.status(400).json({ message: "No remaining balance to pay" });
@@ -6527,11 +7317,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (booking.userId !== userId) {
         return res.status(403).json({ message: "Not authorized" });
       }
-      
+
+      // Same rule as creating the intent: recording a balance against a
+      // cancelled or refunded booking would revive it as fully paid. A
+      // `failed` booking is let through, because by now the retried card has
+      // been charged and refusing here would leave that money recorded
+      // nowhere. Money that does land on a refunded booking is flagged by the
+      // payment webhook, which refuses to revive it too.
+      if (isBookingCancelled(booking) || booking.status === "refunded") {
+        return res.status(409).json({ message: "This booking is no longer active, so there is no balance to pay." });
+      }
+
       if (booking.balancePaid) {
         return res.status(400).json({ message: "Balance has already been paid" });
       }
-      
+
       if (!booking.isDepositOnly) {
         return res.status(400).json({ message: "This booking does not have an outstanding balance" });
       }
@@ -8264,14 +9064,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
           
+          // The list was read before the loop started. An attendee who has
+          // cancelled since may still have a hold on their card — a release
+          // can fail and leave it to lapse on its own — and capturing it now
+          // would take money for a place they gave up. The capture queries
+          // already leave cancelled bookings out; this closes the gap between
+          // reading the list and reaching this booking.
+          const current = await storage.getBooking(booking.id);
+          if (!current || current.cancelledAt || ["cancelled", "refunded", "failed"].includes(String(current.status))) {
+            captureLog.push({
+              bookingId: booking.id,
+              status: "skipped",
+              error: `Booking is no longer active (${current?.status ?? "missing"})`,
+            });
+            continue;
+          }
+
           // Call Stripe to capture the payment
           await stripe.paymentIntents.capture(booking.stripePaymentIntentId, {
             amount_to_capture: depositAmountCents,
           });
-          
-          // Update booking in database
-          await storage.markDepositAsCaptured(booking.id);
-          
+
+          // Update booking in database. Refused only when the booking was
+          // cancelled after the check above, with the capture already made:
+          // money taken for a place nobody holds, which a person must look at.
+          const marked = await storage.markDepositAsCaptured(booking.id);
+          if (!marked) {
+            console.error(`[CRITICAL] [MVG Capture] Captured ${booking.stripePaymentIntentId} for booking ${booking.id}, which was cancelled meanwhile - check whether it needs refunding`);
+            captureLog.push({ bookingId: booking.id, status: "failed", error: "Booking was cancelled while its deposit was being captured" });
+            continue;
+          }
+
           capturedCount++;
           captureLog.push({ bookingId: booking.id, status: "captured" });
           
@@ -8790,7 +9613,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
-  // Helper function to confirm MVG event and capture payments
+  // Helper function to confirm MVG event and capture payments.
+  //
+  // Every way this claims a booking for the formed group — capturing its
+  // hold, confirming a deposit, or putting the balance on hold — goes through
+  // confirmActiveBooking or updateBookingBalancePayment, and both leave the
+  // capture stamp. That stamp, not the status, is what keeps the attendee's
+  // own cancel from refunding a claimed booking: the payment webhook can
+  // rewrite `confirmed` as `fully_paid`, and the event reads `pending` until
+  // completeMVGSuccess gets past this loop.
   async function confirmMVGEvent(experienceId: string, bookings: any[]) {
     console.log(`Confirming MVG event ${experienceId} - processing ${bookings.length} bookings`);
     
@@ -8804,6 +9635,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     for (const booking of bookings) {
       if (booking.status === "pending" && booking.stripePaymentIntentId) {
         try {
+          // The list this run was handed can be minutes old by the time a
+          // booking's turn comes. An attendee who cancelled meanwhile has had
+          // their money handed back; confirming them, charging their saved
+          // card for the balance or capturing their hold would bring back a
+          // place they gave up and take money nobody accounts for.
+          const current = await storage.getBooking(booking.id);
+          if (!current || current.cancelledAt || ["cancelled", "refunded", "failed"].includes(String(current.status))) {
+            console.log(`MVG met: Booking ${booking.id} is no longer active (${current?.status ?? "missing"}) - skipping`);
+            continue;
+          }
+
           const paymentIntent = await stripe.paymentIntents.retrieve(booking.stripePaymentIntentId);
           
           // Check if this is a deposit payment or full payment
@@ -8829,10 +9671,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             
             // Check if balance payment intent already exists (idempotency)
-            const existingBooking = await storage.getBooking(booking.id);
-            if (existingBooking?.balancePaymentIntentId) {
-              console.log(`Balance payment intent already exists for booking ${booking.id}: ${existingBooking.balancePaymentIntentId}`);
-              await storage.updateBookingStatus(booking.id, "confirmed");
+            if (current.balancePaymentIntentId) {
+              console.log(`Balance payment intent already exists for booking ${booking.id}: ${current.balancePaymentIntentId}`);
+              await storage.confirmActiveBooking(booking.id);
               continue;
             }
             
@@ -8867,21 +9708,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             
             // Update booking with balance payment info
-            await storage.updateBookingBalancePayment(booking.id, balancePaymentIntent.id, balanceDueDate);
-              
+            const withBalance = await storage.updateBookingBalancePayment(booking.id, balancePaymentIntent.id, balanceDueDate);
+            if (!withBalance) {
+              // Cancelled while the balance hold was being made. The write was
+              // refused, so let the new hold go rather than leave it on the
+              // card of someone who no longer has a place.
+              console.warn(`MVG met: Booking ${booking.id} was cancelled while its balance was authorised - releasing ${balancePaymentIntent.id}`);
+              try {
+                await stripe.paymentIntents.cancel(balancePaymentIntent.id);
+              } catch (releaseError: any) {
+                console.error(`[CRITICAL] Could not release balance hold ${balancePaymentIntent.id} on cancelled booking ${booking.id} - REQUIRES MANUAL INTERVENTION:`, releaseError?.message || releaseError);
+              }
+              continue;
+            }
+
             console.log(`MVG met: Deposit confirmed for booking ${booking.id}, balance payment intent created: ${balancePaymentIntent.id}`);
           } else if (isDepositPayment && balanceAmount === 0) {
             // Deposit only, no balance
-            await storage.updateBookingStatus(booking.id, "confirmed");
+            await storage.confirmActiveBooking(booking.id);
             console.log(`MVG met: Deposit-only booking ${booking.id} confirmed`);
           } else if (paymentIntent.status === "requires_capture") {
             // Full payment authorized - capture it now
             await stripe.paymentIntents.capture(booking.stripePaymentIntentId);
-            await storage.updateBookingStatus(booking.id, "confirmed");
+            const confirmed = await storage.confirmActiveBooking(booking.id);
+            if (!confirmed) {
+              // The attendee cancelled between the check above and the capture,
+              // and the capture still went through. The booking stays as they
+              // left it; the money needs a person to look at it.
+              console.error(`[CRITICAL] MVG met: captured ${booking.stripePaymentIntentId} for booking ${booking.id}, which was cancelled meanwhile - check whether it needs refunding`);
+              continue;
+            }
             console.log(`MVG met: Captured full payment for booking ${booking.id}`);
           } else if (paymentIntent.status === "succeeded") {
             // Already captured (shouldn't happen but handle it)
-            await storage.updateBookingStatus(booking.id, "confirmed");
+            await storage.confirmActiveBooking(booking.id);
             console.log(`MVG met: Payment already captured for booking ${booking.id}`);
           }
         } catch (error) {
@@ -11417,7 +12277,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         href: "/venue-dashboard?tab=open-events",
         actionLabel: "Offer to Host",
       })),
-      ...flashDeals.map(({ deal, venue }: any) => ({
+      // A free date that has already gone is not an opportunity.
+      ...flashDeals.filter(({ deal }: any) => {
+        const lastDay = deal.endDate || deal.startDate;
+        return !lastDay || new Date(lastDay).getTime() >= Date.now() - 24 * 60 * 60 * 1000;
+      }).map(({ deal, venue }: any) => ({
         kind: "flash_deal",
         id: deal.id,
         tag: "venue free date",
@@ -11457,7 +12321,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       tag: "collab idea",
       title: idea.title,
       location: [idea.city, idea.region].filter(Boolean).join(", ") || null,
-      imageUrl: null,
+      imageUrl: idea.photoUrl || null,
       groupSize: Number(idea.groupSizeMax) || Number(idea.groupSizeMin) || null,
       dealLabel: idea.dealPreference || null,
       detail: [
@@ -11998,7 +12862,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: response.status,
           createdAt: response.createdAt,
         })),
-        invites,
+        // An invite to an account has no email on it to show, so it carries
+        // the account's name instead.
+        invites: await Promise.all(invites.map(async (invite) => {
+          if (!invite.invitedUserId) return invite;
+          const invitee = await storage.getUser(invite.invitedUserId).catch(() => undefined);
+          const invitedName = [invitee?.firstName, invitee?.lastName].filter(Boolean).join(" ") || null;
+          return { ...invite, invitedName };
+        })),
       });
     } catch (error) {
       console.error("Error loading collab idea:", error);
@@ -12085,11 +12956,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "That email address does not look right" });
       }
 
+      // Somebody picked from the directory. Their address is theirs: it is used
+      // to reach them and never stored on the invite, which the poster can read.
+      const partnerUserId = String(req.body?.partnerUserId || "").trim() || null;
+      const invitedUser = partnerUserId ? await storage.getUser(partnerUserId) : undefined;
+      if (partnerUserId && !invitedUser) {
+        return res.status(400).json({ message: "That partner is no longer on Great" });
+      }
+      if (partnerUserId === userId) {
+        return res.status(400).json({ message: "You can't invite yourself" });
+      }
+      const partnerName = invitedUser
+        ? String(req.body?.partnerName || "").trim() || invitedUser.firstName || null
+        : null;
+
       const invite = await storage.createCollabIdeaInvite({
         ideaId: idea.id,
         partnerType,
         token: generatePartnerToken(),
-        email,
+        email: invitedUser ? null : email,
+        invitedUserId: invitedUser?.id || null,
       });
 
       const inviteUrl = `${getAppBaseUrl(req)}/collab-invite/${invite.token}`;
@@ -12097,12 +12983,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // The link exists whether or not the email lands. A failed send must not
       // read to the poster as an invite that was never created.
       let emailed = false;
-      if (email) {
+      const sendTo = invitedUser ? invitedUser.email : email;
+      if (sendTo) {
         try {
           const poster = await storage.getUser(userId);
           await notificationService.sendExternalPartnerInviteEmail({
-            to: email,
-            partnerName: null,
+            to: sendTo,
+            partnerName,
             creatorName: poster?.firstName || null,
             eventName: idea.title,
             proposedTerms: describeCollabDealPreferences(idea),
@@ -12117,7 +13004,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.status(201).json({ invite: { ...invite, status: emailed ? "email_sent" : "link_generated" }, inviteUrl, emailed });
+      if (invitedUser && !emailed && invite.status !== "link_generated") {
+        await storage.updateCollabIdeaInvite(invite.id, { status: "link_generated" }).catch(() => undefined);
+      }
+
+      res.status(201).json({
+        invite: { ...invite, status: emailed ? "email_sent" : "link_generated" },
+        inviteUrl,
+        emailed,
+        partnerName,
+      });
     } catch (error) {
       console.error("Error creating collab invite:", error);
       res.status(500).json({ message: "Failed to create that invite" });
@@ -12191,6 +13087,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!idea) return res.status(404).json({ message: "The idea behind this invite is gone" });
       if (idea.posterId === userId) {
         return res.status(400).json({ message: "This is your own posting" });
+      }
+      // An invite addressed to a picked account is theirs alone; a forwarded
+      // link must not let somebody else step into the deal.
+      if (invite.invitedUserId && invite.invitedUserId !== userId) {
+        return res.status(403).json({ message: "This invite was sent to another account" });
       }
 
       await storage.updateCollabIdeaInvite(invite.id, { accepted: true, invitedUserId: userId });
@@ -12355,6 +13256,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       })));
     } catch (error) {
       console.error("Error loading partner directory:", error);
+      res.status(500).json({ message: "Failed to load partners" });
+    }
+  });
+
+  /**
+   * The directory a Collab Idea poster picks from — venues included, unlike
+   * the Event Builder's. Same rule: a name and a picture, never contact details.
+   */
+  app.get("/api/collab/partner-directory", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const type = String(req.query?.type || "").trim();
+      const directory = await storage.getCollabPartnerDirectory(type);
+      res.json(directory
+        .filter((row) => row.id !== userId)
+        .slice(0, 200)
+        .map((row) => ({ ...row, label: COLLAB_DIRECTORY_LABELS[row.kind] || "Partner" })));
+    } catch (error) {
+      console.error("Error loading collab partner directory:", error);
       res.status(500).json({ message: "Failed to load partners" });
     }
   });

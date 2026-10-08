@@ -215,33 +215,12 @@ export default function CollabOpportunities() {
                 </Card>
               ) : (
                 <>
+                  {/* Collab ideas first. They are what this page is for — real
+                      people asking for a partner — and sat underneath a row of
+                      events and venue dates where nobody could see them. */}
                   <section className="mb-10">
                     <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
-                      Ready to act on — from open events, flash deals and the experience pool
-                    </h2>
-
-                    {ready.length === 0 ? (
-                      <Card>
-                        <CardContent className="py-8 text-center text-gray-500 text-sm">
-                          Nothing open right now. New postings appear here as they are made.
-                        </CardContent>
-                      </Card>
-                    ) : (
-                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {ready.map((item) => (
-                          <CollabListingCard
-                            key={`${item.kind}-${item.id}`}
-                            listing={item}
-                            testId={`collab-ready-${item.id}`}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </section>
-
-                  <section>
-                    <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
-                      Still forming — just an idea, no date or partner locked in
+                      Collab ideas — people looking for partners right now
                     </h2>
 
                     {forming.length === 0 ? (
@@ -260,7 +239,6 @@ export default function CollabOpportunities() {
                                 ? { ...item, actionLabel: "Open" }
                                 : item
                             }
-                            muted
                             actionDisabled={registerInterest.isPending}
                             /* Your own posting has nothing to express interest
                                in — opening it is the action. */
@@ -273,6 +251,30 @@ export default function CollabOpportunities() {
                             onEdit={isMine(item) ? () => openEditor(item.id) : undefined}
                             onDelete={isMine(item) ? () => deleteIdea.mutate(item.id) : undefined}
                             testId={`collab-forming-${item.id}`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="mb-10">
+                    <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+                      Ready to act on — from open events, flash deals and the experience pool
+                    </h2>
+
+                    {ready.length === 0 ? (
+                      <Card>
+                        <CardContent className="py-8 text-center text-gray-500 text-sm">
+                          Nothing open right now. New postings appear here as they are made.
+                        </CardContent>
+                      </Card>
+                    ) : (
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        {ready.map((item) => (
+                          <CollabListingCard
+                            key={`${item.kind}-${item.id}`}
+                            listing={item}
+                            testId={`collab-ready-${item.id}`}
                           />
                         ))}
                       </div>

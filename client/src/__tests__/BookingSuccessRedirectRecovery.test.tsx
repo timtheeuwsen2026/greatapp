@@ -16,6 +16,12 @@ vi.mock('wouter', () => ({
   Link: ({ children, href }: any) => <a href={href}>{children}</a>,
 }));
 
+const toast = vi.hoisted(() => vi.fn());
+vi.mock('@/hooks/use-toast', () => ({
+  useToast: () => ({ toast, dismiss: vi.fn(), toasts: [] }),
+  toast,
+}));
+
 vi.mock('@/components/navigation', () => ({ default: () => <nav /> }));
 vi.mock('@/components/MVGProgressWidget', () => ({ default: () => <div /> }));
 vi.mock('@/components/participant-referral-perk-card', () => ({ default: () => <div /> }));
@@ -252,5 +258,202 @@ describe('Booking confirmation after a redirect payment', () => {
     await screen.findByTestId('confirmation-heading');
     await waitFor(() => expect(screen.queryByTestId('profile-prompt-dialog')).not.toBeInTheDocument());
     expect(screen.queryByTestId('profile-prompt-bar')).not.toBeInTheDocument();
+  });
+});
+
+// A deposit booking's page offered "Pay Remaining Balance" after the booking
+// had been cancelled or refunded. The pay-balance endpoints refuse those with a
+// 409, so every click ended in a toast reading `Error: 409: {"message":...}`.
+describe('Balance payment on a booking that is no longer active', () => {
+  const depositBooking = {
+    ...rebuiltBooking,
+    id: 'bk-2',
+    amount: '20.00',
+    totalPrice: '100.00',
+    isDepositOnly: true,
+    depositAmount: '20.00',
+    balanceAmount: '80.00',
+    balancePaid: false,
+    status: 'deposit_paid',
+    cancelledAt: null as string | null,
+  };
+  let booking: typeof depositBooking;
+  let createIntentCalls: number;
+
+  beforeEach(() => {
+    toast.mockClear();
+    createIntentCalls = 0;
+    booking = { ...depositBooking };
+    mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } };
+    window.history.replaceState({}, '', '/booking-success?experience=exp-1&booking=bk-2');
+
+    global.fetch = vi.fn(async (input: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/pay-balance/create-intent')) {
+        createIntentCalls += 1;
+        const body = JSON.stringify({ message: 'This booking is no longer active, so there is no balance to pay.' });
+        return { ok: false, status: 409, statusText: 'Conflict', text: async () => body, json: async () => JSON.parse(body) } as any;
+      }
+      if (url.includes('/api/bookings/bk-2')) {
+        return { ok: true, json: async () => booking } as any;
+      }
+      if (url.includes('/api/experiences/exp-1')) {
+        return { ok: true, json: async () => ({ ...experience, status: 'approved' }) } as any;
+      }
+      if (url.includes('/api/participant-profile/status')) {
+        return { ok: true, json: async () => ({ hasProfile: true }) } as any;
+      }
+      return { ok: true, json: async () => ({}) } as any;
+    }) as any;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ['refunded', { status: 'refunded' }],
+    ['cancelled', { status: 'cancelled', cancelledAt: new Date().toISOString() }],
+    ['stamped cancelled before its status caught up', { status: 'deposit_paid', cancelledAt: new Date().toISOString() }],
+  ])('does not offer the balance on a %s booking', async (_label, state) => {
+    booking = { ...depositBooking, ...state };
+
+    renderPage();
+
+    // Plain matchers: tsc does not see the jest-dom ones in this project.
+    expect((await screen.findByTestId('cancelled-heading')).textContent).toContain('This booking is no longer active');
+    expect(screen.getByTestId('cancelled-message').textContent).toContain('no balance left to pay');
+    expect(screen.queryByTestId('pay-balance-button')).toBeNull();
+    expect(screen.queryByTestId('balance-payment-section')).toBeNull();
+    expect(screen.queryByText(/Pay Remaining Balance/)).toBeNull();
+    // The event is still on, so nothing is said about a failed group.
+    expect(screen.queryByText(/minimum group size/)).toBeNull();
+  });
+
+  it('still offers the balance on a live deposit booking, and words a refusal as a sentence', async () => {
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await user.click(await screen.findByTestId('pay-balance-button'));
+
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(createIntentCalls).toBe(1);
+    const [{ description }] = toast.mock.calls.at(-1)!;
+    expect(description).toBe('This booking is no longer active, so there is no balance to pay.');
+    expect(description).not.toMatch(/409|\{/);
+  });
+});
+
+// Attendees can now cancel and book the same event again. Returning from a
+// redirect payment with no booking id, the newest row for the event can be the
+// cancelled one while the new booking is still being written — the page must
+// recover the new payment instead of announcing "no longer active".
+describe('Returning from a payment after cancelling an earlier booking', () => {
+  let finalizeCalls: number;
+
+  beforeEach(() => {
+    finalizeCalls = 0;
+    mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } };
+    window.history.replaceState(
+      {},
+      '',
+      '/booking-success?experience=exp-1&payment_intent=pi_new&payment_intent_client_secret=pi_new_secret&redirect_status=succeeded',
+    );
+    const oldCancelled = {
+      ...rebuiltBooking,
+      id: 'bk-old',
+      stripePaymentIntentId: 'pi_old',
+      status: 'cancelled',
+      cancelledAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+    const fresh = { ...rebuiltBooking, id: 'bk-new', stripePaymentIntentId: 'pi_new' };
+    let rebuilt = false;
+    global.fetch = vi.fn(async (input: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/api/bookings/finalize-payment')) {
+        finalizeCalls += 1;
+        rebuilt = true;
+        return { ok: true, json: async () => ({ booking: fresh }) } as any;
+      }
+      if (url.includes('/api/bookings/my-bookings')) {
+        return { ok: true, json: async () => (rebuilt ? [fresh, oldCancelled] : [oldCancelled]) } as any;
+      }
+      if (url.includes('/api/experiences/exp-1')) {
+        return { ok: true, json: async () => experience } as any;
+      }
+      if (url.includes('/api/participant-profile/status')) {
+        return { ok: true, json: async () => ({ hasProfile: true }) } as any;
+      }
+      return { ok: true, json: async () => ({}) } as any;
+    }) as any;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('recovers the new payment rather than showing the cancelled booking', async () => {
+    renderPage();
+
+    await waitFor(() => expect(finalizeCalls).toBe(1));
+    expect((await screen.findByTestId('confirmation-heading')).textContent).toContain('Booking Confirmed!');
+    expect(screen.queryByTestId('cancelled-heading')).toBeNull();
+  });
+});
+
+// "You were not charged anything" used to show for every called-off event. An
+// organiser or admin archiving an event moves no money, and a deposit taken
+// upfront is not returned by the group-failure run, so the page now says only
+// what the records show.
+describe('A called-off event', () => {
+  let booking: any;
+  let event: any;
+
+  beforeEach(() => {
+    mockAuth = { isAuthenticated: true, isLoading: false, user: { id: 'user-1' } };
+    window.history.replaceState({}, '', '/booking-success?experience=exp-1&booking=bk-3');
+    booking = { ...rebuiltBooking, id: 'bk-3' };
+    event = { ...experience, status: 'cancelled', lifecycleStatus: 'cancelled', mvgStatus: 'pending' };
+    global.fetch = vi.fn(async (input: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/api/bookings/bk-3')) return { ok: true, json: async () => booking } as any;
+      if (url.includes('/api/experiences/exp-1')) return { ok: true, json: async () => event } as any;
+      if (url.includes('/api/participant-profile/status')) return { ok: true, json: async () => ({ hasProfile: true }) } as any;
+      return { ok: true, json: async () => ({}) } as any;
+    }) as any;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not blame the group or promise a release when the organiser archived a paid event', async () => {
+    renderPage();
+
+    expect((await screen.findByTestId('cancelled-message')).textContent).toContain('cancelled by the organiser');
+    expect(screen.queryByText(/minimum group size/)).toBeNull();
+    expect(screen.queryByText(/not charged/)).toBeNull();
+    expect(screen.getByTestId('refund-info').textContent).toContain('contact the organiser');
+  });
+
+  it('says the group failed and the payment came back only when both are recorded', async () => {
+    event = { ...event, mvgStatus: 'failed' };
+    booking = { ...booking, depositStatus: 'refunded' };
+
+    renderPage();
+
+    expect((await screen.findByTestId('cancelled-message')).textContent).toContain('minimum group size');
+    expect(screen.getByTestId('refund-info').textContent).toContain('has been returned');
+  });
+
+  it('says nothing about money for a free RSVP', async () => {
+    booking = { ...booking, amount: '0.00', totalPrice: '0.00', stripePaymentIntentId: null };
+
+    renderPage();
+
+    await screen.findByTestId('cancelled-message');
+    expect(screen.queryByTestId('refund-info')).toBeNull();
   });
 });

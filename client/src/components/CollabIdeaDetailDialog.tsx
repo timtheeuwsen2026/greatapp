@@ -317,6 +317,7 @@ export default function CollabIdeaDetailDialog({
                                   : invite.status === "email_sent" ? "emailed"
                                   : invite.status}
                               </Badge>
+                              {invite.invitedName && <span className="text-gray-500">{invite.invitedName}</span>}
                               {invite.email && <span className="text-gray-500">{invite.email}</span>}
                             </div>
                             <CopyableLink

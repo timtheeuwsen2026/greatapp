@@ -178,19 +178,42 @@ async function processMVGSuccess(experienceId: string) {
   
   for (const booking of eligibleBookings) {
     try {
+      // The list above can be minutes old by the time a booking's turn comes.
+      // An attendee who cancelled meanwhile has had their hold released;
+      // capturing it would fail, and confirming it would bring the place back.
+      const current = await storage.getBooking(booking.id);
+      if (!current || current.cancelledAt || ['cancelled', 'refunded', 'failed'].includes(String(current.status))) {
+        console.log(`[MVG Scheduler] Booking ${booking.id} was cancelled before capture - skipping`);
+        continue;
+      }
+
+      let capturedNow = false;
       if (!booking.stripePaymentIntentId) {
         console.warn(`[MVG Scheduler] Booking ${booking.id} has no payment intent - marking as confirmed`);
       } else {
         try {
           await stripe.paymentIntents.capture(booking.stripePaymentIntentId);
+          capturedNow = true;
           console.log(`[MVG Scheduler] Stripe capture successful for booking ${booking.id}`);
         } catch (stripeError: any) {
           console.error(`[MVG Scheduler] Stripe capture failed for booking ${booking.id}: ${stripeError.message}`);
           stripeFailedCount++;
         }
       }
-      
-      await storage.markDepositAsCaptured(booking.id);
+
+      // Refused only for a booking cancelled after the check above. The
+      // attendee's own cancel puts a booking back as confirmed when it sees
+      // this capture land, but if its release had already failed for another
+      // reason, the money is now taken for a place nobody holds.
+      const marked = await storage.markDepositAsCaptured(booking.id);
+      if (!marked) {
+        if (capturedNow) {
+          console.error(`[CRITICAL] [MVG Scheduler] Captured ${booking.stripePaymentIntentId} for booking ${booking.id}, which was cancelled meanwhile - check whether it needs refunding`);
+        } else {
+          console.log(`[MVG Scheduler] Booking ${booking.id} was cancelled before it could be confirmed - skipping`);
+        }
+        continue;
+      }
       capturedCount++;
       console.log(`[MVG Scheduler] Marked booking ${booking.id} as captured in DB`);
       

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { QrCode, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiRequest } from "@/lib/queryClient";
 
 type TicketQrResponse = {
   bookingId: string;
@@ -34,9 +35,11 @@ export default function TicketQr({
 
   const { data, isLoading, isError } = useQuery<TicketQrResponse>({
     queryKey: ["/api/bookings", bookingId, "qr"],
+    // Through apiRequest for the Bearer token: the endpoint only answers the
+    // booking's owner, and a bare fetch carries no credentials, so every code
+    // came back refused and every attendee was told they had none.
     queryFn: async () => {
-      const res = await fetch(`/api/bookings/${bookingId}/qr`);
-      if (!res.ok) throw new Error("no code");
+      const res = await apiRequest("GET", `/api/bookings/${bookingId}/qr`);
       return res.json();
     },
     enabled: !!bookingId && revealed,
@@ -52,7 +55,12 @@ export default function TicketQr({
         variant="outline"
         size="sm"
         className={className}
-        onClick={() => setRevealed(true)}
+        onClick={(event) => {
+          // It sits inside the booking card, whose click opens the details
+          // dialog over the very code that was just asked for.
+          event.stopPropagation();
+          setRevealed(true);
+        }}
         data-testid={`button-show-ticket-qr-${bookingId}`}
       >
         <QrCode className="mr-2 h-4 w-4" />
@@ -79,7 +87,12 @@ export default function TicketQr({
   const addonPending = data.addonQuantity > 0 && !data.addonRedeemedAt;
 
   return (
-    <div className={`rounded-lg border bg-white p-4 text-center dark:bg-gray-900 ${className}`}>
+    <div
+      className={`rounded-lg border bg-white p-4 text-center dark:bg-gray-900 ${className}`}
+      // A tap on the code at the door should leave it on screen, not open the
+      // booking details on top of it.
+      onClick={(event) => event.stopPropagation()}
+    >
       <img
         src={data.qrDataUrl}
         alt="Your check-in code"

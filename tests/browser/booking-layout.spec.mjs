@@ -7,6 +7,10 @@ const booking = {
   balanceDueDate: '2027-04-01', totalPrice: '100.00',
   ticketName: `Weekend admission ${'LongTicketName'.repeat(8)}`, ticketQuantity: 2,
   createdAt: '2026-09-01',
+  cancellation: {
+    allowed: true, mode: 'money_back', amount: 25, currency: 'eur',
+    blockedReason: null, message: null,
+  },
   experience: {
     id: 'layout-event', title: `Weekend Adventure ${'LongEventName'.repeat(8)}`,
     coverImageUrl: null, startDate: '2027-04-10', endDate: '2027-04-12',
@@ -76,7 +80,7 @@ for (const [name, width, height] of [
     await page.mouse.wheel(0, 4000);
     const lastDetail = dialog.getByTestId('text-detail-booking-date');
     await expect(lastDetail).toBeInViewport({ ratio: 1 });
-    for (const id of ['text-detail-total', 'text-detail-due-date', 'mvg-status-indicator']) {
+    for (const id of ['text-detail-total', 'text-detail-due-date', 'mvg-status-indicator', 'button-cancel-booking']) {
       const detail = dialog.getByTestId(id);
       await detail.scrollIntoViewIfNeeded();
       await expect(detail).toBeInViewport({ ratio: 1 });

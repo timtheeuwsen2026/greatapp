@@ -128,6 +128,8 @@ import { randomBytes } from "crypto";
 import { eq, desc, and, or, sql, count, inArray, asc, not, isNull, isNotNull } from "drizzle-orm";
 import { normalizeCurrency } from "./impactLedger";
 import { getDepositSchedule, isSingleDayExperience } from "@shared/depositRules";
+import { hasExperiencePassed } from "@shared/eventLifecycle";
+import { lockedCancellationRefusal, type LockedCancellationRefusal } from "@shared/bookingCancellation";
 import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillmentRules";
 import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
 import { availableBookingQuantity, BookingCapacityError, withTicketCapacity } from "@shared/ticketAvailability";
@@ -223,6 +225,14 @@ export type PromoterProfileInput = {
   stripeVerificationStatus?: string | null;
 };
 
+/**
+ * What an attendee's cancellation write did. Either the booking it cancelled,
+ * or the reason it left everything as it was, so the endpoint can say why.
+ */
+export type CancelActiveBookingResult =
+  | { booking: Booking; refused: null }
+  | { booking: null; refused: LockedCancellationRefusal };
+
 export interface IStorage {
   // User operations (mandatory for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
@@ -306,9 +316,22 @@ export interface IStorage {
   getBookingsByExperience(experienceId: string): Promise<Booking[]>;
   updateBooking(id: string, updates: Partial<any>): Promise<Booking>;
   updateBookingStatus(id: string, status: string): Promise<Booking>;
-  updateBookingBalancePayment(id: string, balancePaymentIntentId: string, balanceDueDate: Date | null): Promise<Booking>;
+  updateBookingBalancePayment(id: string, balancePaymentIntentId: string, balanceDueDate: Date | null): Promise<Booking | undefined>;
   createDeposit(experienceId: string, userId: string, amount: number, paymentIntentId?: string): Promise<Booking>;
   deleteBooking(id: string): Promise<void>;
+  cancelActiveBooking(
+    bookingId: string,
+    experienceId: string,
+    options?: { refundPlanned?: boolean },
+  ): Promise<CancelActiveBookingResult>;
+  confirmActiveBooking(bookingId: string): Promise<Booking | undefined>;
+  revertBookingCancellation(
+    bookingId: string,
+    previous: { status: Booking["status"]; cancelledAt: Date | null },
+  ): Promise<Booking | undefined>;
+  restoreGroupCapturedBooking(bookingId: string): Promise<Booking | undefined>;
+  releaseDiscountLinkRedemption(discountLinkId: string): Promise<void>;
+  getPayoutLockedExperienceIds(experienceIds: string[]): Promise<Set<string>>;
   getExperienceParticipantAvatars(experienceId: string): Promise<Array<{
     avatarUrl: string | null;
     firstName: string | null;
@@ -947,17 +970,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getOpenVenueEvents(city?: string): Promise<Experience[]> {
-    // Returns published/approved experiences that are actively seeking a venue
-    // (venueStatus = "venue_pending"). Optionally filtered by city substring match.
+    // Live experiences still seeking a venue (venueStatus = "venue_pending").
+    // Optionally filtered by city substring match.
+    //
+    // venueStatus alone said nothing about whether the event was still on: a
+    // cancelled or long-finished event keeps "venue_pending" forever, so ten
+    // August demo events headed Collab Opportunities in October, above the
+    // real collab posts. Only an approved, un-archived event that has not yet
+    // taken place is still looking for anywhere to happen.
     const conditions = [
       eq((experiences as any).venueStatus, "venue_pending"),
+      inArray(experiences.status, ["published", "approved"] as any),
+      isNull((experiences as any).archivedAt),
     ];
     if (city && city.trim()) {
       conditions.push(
         sql`lower(${(experiences as any).location}) like ${'%' + city.trim().toLowerCase() + '%'}` as any
       );
     }
-    return await db.select().from(experiences).where(and(...conditions));
+    const rows = await db.select().from(experiences).where(and(...conditions));
+    const now = new Date();
+    return rows.filter((event) => !hasExperiencePassed(event as any, now));
   }
 
   // ── Venue Offers (Reverse Handshake) ────────────────────────────────────────
@@ -1529,15 +1562,206 @@ export class DatabaseStorage implements IStorage {
     await db.delete(bookings).where(eq(bookings.id, id));
   }
 
-  async updateBookingBalancePayment(id: string, balancePaymentIntentId: string, balanceDueDate: Date | null): Promise<Booking> {
+  /**
+   * An attendee's own cancellation, written before any money moves.
+   *
+   * Guarded so only one request can ever win: a double-click, or two tabs,
+   * finds nothing left to cancel and is told so instead of releasing or
+   * refunding twice. The event row is locked the same way createBooking locks
+   * it, so the freed seat and a booking racing for it are counted in one
+   * order. Marking the booking first also takes it out of every minimum-group
+   * capture and refund query, and turns the refund webhook into a no-op.
+   *
+   * The endpoint decided from rows it read before asking Stripe, and the event
+   * can move on in the meantime: a group-success run marks the event `met`
+   * only after it has captured every booking, and an organiser can call the
+   * event off. So the event and the booking are read again here, under the
+   * lock, and a planned refund goes ahead only if the group is still forming
+   * at this moment. Anything refused leaves the booking exactly as it was.
+   */
+  async cancelActiveBooking(
+    bookingId: string,
+    experienceId: string,
+    options: { refundPlanned?: boolean; holdReleasePlanned?: boolean } = {},
+  ): Promise<CancelActiveBookingResult> {
+    const refundPlanned = !!options.refundPlanned;
+    const holdReleasePlanned = !!options.holdReleasePlanned;
+    return db.transaction(async (tx) => {
+      const [event] = await tx
+        .select({
+          status: experiences.status,
+          archivedAt: experiences.archivedAt,
+          requireMinimumParticipants: experiences.requireMinimumParticipants,
+          mvgStatus: experiences.mvgStatus,
+        })
+        .from(experiences)
+        .where(eq(experiences.id, experienceId))
+        .for("update");
+      const [current] = await tx
+        .select({
+          status: bookings.status,
+          cancelledAt: bookings.cancelledAt,
+          depositCapturedAt: bookings.depositCapturedAt,
+        })
+        .from(bookings)
+        .where(eq(bookings.id, bookingId))
+        .for("update");
+
+      const refused = lockedCancellationRefusal({ booking: current, experience: event, refundPlanned, holdReleasePlanned });
+      if (refused) return { booking: null, refused };
+
+      // The same rule written into the update itself: a refund never lands on
+      // a booking the group has already claimed — by status, or by the
+      // capture stamp the group run leaves, which the webhook cannot overwrite.
+      const cancellableStatuses: Array<Booking["status"] & string> = refundPlanned
+        ? ["pending", "deposit_authorized", "deposit_paid", "fully_paid"]
+        : ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"];
+      const [cancelled] = await tx
+        .update(bookings)
+        .set({ status: "cancelled", cancelledAt: new Date() })
+        .where(and(
+          eq(bookings.id, bookingId),
+          isNull(bookings.cancelledAt),
+          inArray(bookings.status, cancellableStatuses),
+          ...(refundPlanned || holdReleasePlanned ? [isNull(bookings.depositCapturedAt)] : []),
+        ))
+        .returning();
+      return cancelled ? { booking: cancelled, refused: null } : { booking: null, refused: "inactive" };
+    });
+  }
+
+  /**
+   * Mark a booking confirmed only if it is still a live booking. The group
+   * success runs read their bookings first and write later; an attendee who
+   * cancels in between, or whose payment failed, must not be confirmed back
+   * into a place they no longer hold.
+   *
+   * Only the group-success run calls this, to claim a booking for the formed
+   * group, so it leaves the same capture stamp `markDepositAsCaptured` does.
+   * The status alone does not last: the payment's confirmation can arrive
+   * afterwards and rewrite `confirmed` as `fully_paid`, and the event reads
+   * `pending` until the run has finished — or for good, if it stops part-way.
+   * The stamp is what tells the attendee's cancel, its locked re-check and
+   * the bookings list that this money now belongs to the group. Nothing that
+   * captures or refunds money reads it except to skip a claimed booking.
+   */
+  async confirmActiveBooking(bookingId: string): Promise<Booking | undefined> {
+    const [confirmed] = await db
+      .update(bookings)
+      .set({
+        status: "confirmed",
+        depositStatus: "captured",
+        depositCapturedAt: new Date(),
+      })
+      .where(and(
+        eq(bookings.id, bookingId),
+        isNull(bookings.cancelledAt),
+        not(inArray(bookings.status, ["cancelled", "refunded", "failed"])),
+      ))
+      .returning();
+    return confirmed;
+  }
+
+  /**
+   * Put a booking back exactly as it was when its cancellation could not
+   * return the money. Only touches a row still in the cancelled state this
+   * request wrote, so it can never undo a cancellation made some other way.
+   */
+  async revertBookingCancellation(
+    bookingId: string,
+    previous: { status: Booking["status"]; cancelledAt: Date | null },
+  ): Promise<Booking | undefined> {
+    const [restored] = await db
+      .update(bookings)
+      .set({ status: previous.status, cancelledAt: previous.cancelledAt })
+      .where(and(eq(bookings.id, bookingId), eq(bookings.status, "cancelled")))
+      .returning();
+    return restored;
+  }
+
+  /**
+   * Put a booking back as captured and confirmed, because the group-success
+   * run captured its hold while the attendee's cancellation was releasing it.
+   *
+   * The run's own write was refused — the booking read as cancelled at that
+   * moment — so without this the money would be taken with no live booking
+   * behind it. This writes what the run would have written. Guarded the same
+   * way as `revertBookingCancellation`: only a row still in the cancelled
+   * state this request wrote is touched.
+   */
+  async restoreGroupCapturedBooking(bookingId: string): Promise<Booking | undefined> {
+    const [restored] = await db
+      .update(bookings)
+      .set({
+        status: "confirmed",
+        depositStatus: "captured",
+        depositCapturedAt: new Date(),
+        cancelledAt: null,
+      })
+      .where(and(eq(bookings.id, bookingId), eq(bookings.status, "cancelled")))
+      .returning();
+    return restored;
+  }
+
+  /**
+   * Give a cancelled booking's discount-link redemption back, so a capped link
+   * is not used up by someone who no longer holds a place. Floored at zero so
+   * a count that was never recorded cannot go negative.
+   */
+  async releaseDiscountLinkRedemption(discountLinkId: string): Promise<void> {
+    await db
+      .update(discountLinks)
+      .set({
+        redemptionCount: sql`GREATEST(${discountLinks.redemptionCount} - 1, 0)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(discountLinks.id, discountLinkId));
+  }
+
+  /**
+   * The events whose payout is being paid or has been paid. One query for a
+   * whole bookings list. Any row counts, because an event can carry more than
+   * one payout row.
+   */
+  async getPayoutLockedExperienceIds(experienceIds: string[]): Promise<Set<string>> {
+    const ids = Array.from(new Set(experienceIds.filter(Boolean)));
+    if (ids.length === 0) return new Set();
+    const rows = await db
+      .select({ experienceId: scheduledPayouts.experienceId })
+      .from(scheduledPayouts)
+      .where(and(
+        inArray(scheduledPayouts.experienceId, ids),
+        inArray(scheduledPayouts.status, ["processing", "completed"] as any),
+      ));
+    return new Set(rows.map((row) => row.experienceId));
+  }
+
+  async updateBookingBalancePayment(id: string, balancePaymentIntentId: string, balanceDueDate: Date | null): Promise<Booking | undefined> {
+    // Only the group-success run writes this, after creating the balance hold.
+    // A booking cancelled while that hold was being made stays cancelled, and
+    // the caller is told nothing was written so it can let the hold go.
+    //
+    // The hold claims the booking for the formed group, so it carries the
+    // same capture stamp as every other claim the run makes (see
+    // confirmActiveBooking): the deposit was taken at checkout, and its late
+    // confirmation can still rewrite `confirmed` as `fully_paid`. Nothing that
+    // captures a balance reads the stamp — the only capture of a balance hold
+    // is the admin capture endpoint, which goes by intent id — so stamping
+    // cannot stand in its way.
     const [booking] = await db
       .update(bookings)
-      .set({ 
+      .set({
         status: "confirmed",
+        depositStatus: "captured",
+        depositCapturedAt: new Date(),
         balancePaymentIntentId,
         balanceDueDate
       })
-      .where(eq(bookings.id, id))
+      .where(and(
+        eq(bookings.id, id),
+        isNull(bookings.cancelledAt),
+        not(inArray(bookings.status, ["cancelled", "refunded", "failed"])),
+      ))
       .returning();
     return booking;
   }
@@ -2021,14 +2245,17 @@ export class DatabaseStorage implements IStorage {
 
     let confirmedCount = 0;
     for (const booking of pendingBookings) {
-      await db
+      // Re-checked in the write itself: a booking cancelled after the list
+      // above was read must stay cancelled.
+      const [confirmed] = await db
         .update(bookings)
-        .set({ 
+        .set({
           status: "confirmed",
           depositStatus: "locked"
         })
-        .where(eq(bookings.id, booking.id));
-      confirmedCount++;
+        .where(and(eq(bookings.id, booking.id), eq(bookings.status, "pending"), isNull(bookings.cancelledAt)))
+        .returning({ id: bookings.id });
+      if (confirmed) confirmedCount++;
     }
 
     await db
@@ -2147,6 +2374,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async markDepositAsCaptured(bookingId: string): Promise<Booking> {
+    // The capture run reads its list first and writes later. An attendee who
+    // cancels in between has had their hold released, so the capture fails —
+    // and without this guard the booking was still marked confirmed, bringing
+    // a cancelled place back to life.
     const [updated] = await db
       .update(bookings)
       .set({
@@ -2154,7 +2385,11 @@ export class DatabaseStorage implements IStorage {
         depositStatus: 'captured',
         depositCapturedAt: new Date(),
       })
-      .where(eq(bookings.id, bookingId))
+      .where(and(
+        eq(bookings.id, bookingId),
+        isNull(bookings.cancelledAt),
+        not(inArray(bookings.status, ['cancelled', 'refunded'])),
+      ))
       .returning();
     return updated;
   }
@@ -5959,6 +6194,66 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  /**
+   * Accounts a Collab Idea poster can invite straight from the platform.
+   *
+   * Wider than the Event Builder's directory, which leaves venues out because
+   * an event has its own venue step. A Collab Idea has no such step — a venue
+   * is the thing most posts are looking for — so venues, sponsors and service
+   * providers are offered here as well. Each row is keyed by the owning user,
+   * because the invite goes to a person, and carries only a name and a picture.
+   */
+  async getCollabPartnerDirectory(type: string): Promise<Array<{
+    id: string;
+    displayName: string;
+    profilePhoto: string | null;
+    kind: string;
+  }>> {
+    const want = (kind: string) => type === kind || type === "other" || !type;
+
+    const [venueRows, sponsorRows, communityRows, providerRows] = await Promise.all([
+      want("venue")
+        ? db.select({ userId: venues.createdBy, displayName: venues.name, profilePhoto: venues.logoUrl })
+          .from(venues).where(eq(venues.approved, true)).limit(500)
+        : Promise.resolve([]),
+      want("sponsor")
+        ? db.select({ userId: sponsorProfiles.userId, displayName: sponsorProfiles.displayName, profilePhoto: sponsorProfiles.logoUrl })
+          .from(sponsorProfiles)
+          .where(and(eq(sponsorProfiles.completed, true), not(eq(sponsorProfiles.openToContact, false))))
+          .limit(500)
+        : Promise.resolve([]),
+      want("community")
+        ? db.select({ userId: creatorProfiles.userId, displayName: creatorProfiles.displayName, profilePhoto: creatorProfiles.profilePhoto })
+          .from(creatorProfiles).where(eq(creatorProfiles.completed, true)).limit(500)
+        : Promise.resolve([]),
+      want("service_provider")
+        ? db.select({ userId: serviceProviders.createdBy, displayName: serviceProviders.name, profilePhoto: serviceProviders.profileImageUrl })
+          .from(serviceProviders).where(eq(serviceProviders.approved, true)).limit(500)
+        : Promise.resolve([]),
+    ]);
+
+    // One venue owner with three spaces is three entries: they are picked by
+    // the space's name, which is how the poster knows them.
+    const rows: Array<{ id: string; displayName: string; profilePhoto: string | null; kind: string }> = [];
+    const seen = new Set<string>();
+    const add = (list: Array<{ userId: any; displayName: any; profilePhoto: any }>, kind: string) => {
+      for (const row of list) {
+        const id = row.userId as string;
+        const displayName = String(row.displayName || "").trim();
+        const key = `${id}:${displayName.toLowerCase()}`;
+        if (!id || !displayName || seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ id, displayName, profilePhoto: (row.profilePhoto as string) || null, kind });
+      }
+    };
+    add(venueRows, "venue");
+    add(sponsorRows, "sponsor");
+    add(communityRows, "community");
+    add(providerRows, "service_provider");
+
+    return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }
+
   // ── Collab Idea direct invites ──────────────────────────────────────────
   // Posting to the board waits to be discovered. These are the invites sent to
   // a partner the poster already has in mind — usually reachable only by an
@@ -5970,6 +6265,8 @@ export class DatabaseStorage implements IStorage {
     partnerType: string;
     token: string;
     email?: string | null;
+    /** A partner picked from the platform directory, addressed by account. */
+    invitedUserId?: string | null;
   }): Promise<CollabIdeaInvite> {
     const [created] = await db
       .insert(collabIdeaInvites)
@@ -5978,7 +6275,8 @@ export class DatabaseStorage implements IStorage {
         partnerType: input.partnerType,
         token: input.token,
         email: input.email || null,
-        status: input.email ? "email_sent" : "link_generated",
+        invitedUserId: input.invitedUserId || null,
+        status: input.email || input.invitedUserId ? "email_sent" : "link_generated",
       })
       .returning();
     return created;

@@ -1263,6 +1263,104 @@ The Great. Team
     console.log(`📧 [MVG FAILED] Sent ${emailsSent} emails, skipped ${emailsSkipped} (already sent)`);
   }
 
+  /**
+   * The attendee's receipt for cancelling their own booking.
+   *
+   * Says only what actually happened to their money: a refund and a released
+   * card hold read differently on a bank statement, and someone told "refunded"
+   * for a hold that simply disappears will go looking for money that was
+   * never taken.
+   */
+  async sendBookingCancelledEmail(opts: {
+    to: string;
+    firstName?: string | null;
+    eventName: string;
+    outcome: 'cancelled' | 'hold_released' | 'refunded';
+    amountLabel: string;
+    /**
+     * Part of the payment Stripe would not return automatically. Said in the
+     * receipt so the attendee has it in writing that the rest is still owed.
+     */
+    amountOutstandingLabel?: string | null;
+    /**
+     * A card hold that could not be released straight away. Not money owed —
+     * it lapses on its own — but worth having in writing for when it still
+     * shows on the statement.
+     */
+    notice?: string | null;
+    bookingId: string;
+  }): Promise<EmailSendResult> {
+    const moneyLine = opts.outcome === 'refunded'
+      ? `We've refunded ${opts.amountLabel} to the card you paid with. Refunds usually take 5-10 business days to show on your statement.`
+      : opts.outcome === 'hold_released'
+        ? `The ${opts.amountLabel} hold on your card has been released, so you will not be charged. Your bank may take 5-10 business days to remove it from your statement.`
+        : `Nothing was charged for this booking, so there is nothing to refund.`;
+    const outstandingLine = opts.amountOutstandingLabel
+      ? ` We couldn't return the remaining ${opts.amountOutstandingLabel} automatically. It has been flagged to our team, who will return it to you.`
+      : '';
+    const noticeLine = opts.notice ? ` ${opts.notice}` : '';
+    const subject = `Your booking for ${opts.eventName} is cancelled`;
+    const bodyText = `Hi ${opts.firstName || 'there'}, your booking for ${opts.eventName} has been cancelled. ${moneyLine}${outstandingLine}${noticeLine}`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      receiptRows: opts.outcome === 'cancelled'
+        ? undefined
+        : [{ label: opts.outcome === 'refunded' ? 'Refunded' : 'Hold released', value: opts.amountLabel }],
+      cta: { label: 'View My Bookings', href: `${APP_BASE_URL}/my-bookings` },
+      preheader: `Your booking for ${opts.eventName} has been cancelled.`,
+      growthFooterContext: 'none',
+    });
+    return sendEmailOnce({
+      eventKey: `booking_cancelled:${opts.bookingId}`,
+      emailType: 'booking_cancelled',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+  }
+
+  /**
+   * Tells the organiser a place has opened up. Short and factual — the
+   * organiser needs to know the seat is free and whether the money left with
+   * it, not why the attendee changed their mind.
+   */
+  async sendBookingCancelledOrganiserEmail(opts: {
+    to: string;
+    organiserFirstName?: string | null;
+    attendeeName: string;
+    eventName: string;
+    ticketQuantity: number;
+    outcome: 'cancelled' | 'hold_released' | 'refunded';
+    amountLabel: string;
+    bookingId: string;
+  }): Promise<EmailSendResult> {
+    const tickets = opts.ticketQuantity === 1 ? '1 ticket' : `${opts.ticketQuantity} tickets`;
+    const moneyLine = opts.outcome === 'refunded'
+      ? ` Their payment of ${opts.amountLabel} was refunded, so it is no longer part of this event's earnings.`
+      : opts.outcome === 'hold_released'
+        ? ` Their card hold of ${opts.amountLabel} was released; it had not been charged.`
+        : '';
+    const subject = `A booking for ${opts.eventName} was cancelled`;
+    const bodyText = `Hi ${opts.organiserFirstName || 'there'}, ${opts.attendeeName} has cancelled their booking for ${opts.eventName} (${tickets}), so ${opts.ticketQuantity === 1 ? 'that place is' : 'those places are'} free again.${moneyLine}`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Open Your Dashboard', href: creatorDashboardUrl() },
+      preheader: `${opts.attendeeName} cancelled a booking for ${opts.eventName}.`,
+      growthFooterContext: 'none',
+    });
+    return sendEmailOnce({
+      eventKey: `booking_cancelled_organiser:${opts.bookingId}`,
+      emailType: 'booking_cancelled_organiser',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+  }
+
   async sendDepositCreatedNotification(userId: string, experience: Experience, booking: Booking): Promise<void> {
     await this.sendBookingCreatedEmail(userId, experience, booking);
   }

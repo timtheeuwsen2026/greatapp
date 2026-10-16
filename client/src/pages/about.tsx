@@ -175,7 +175,7 @@ export default function About() {
                 size="lg" 
                 variant="outline"
                 className="border-2 border-white text-white hover:bg-white hover:text-primary"
-                onClick={() => setLocation('/journey-builder')}
+                onClick={() => setLocation('/create-experience')}
                 data-testid="button-create-experience"
               >
                 Create an Experience

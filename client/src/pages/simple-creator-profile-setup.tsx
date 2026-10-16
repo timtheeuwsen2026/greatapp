@@ -154,7 +154,7 @@ export default function SimpleCreatorProfileSetup() {
         title: "Creator profile complete",
         description: "You can now start building an experience.",
       });
-      setLocation("/event-builder");
+      setLocation("/create-experience");
     },
     onError: (error: Error) => {
       toast({

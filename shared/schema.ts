@@ -667,6 +667,14 @@ export const experienceDrafts = pgTable("experience_drafts", {
   softHoldEnabled: boolean("soft_hold_enabled").default(false),
   softHoldDurationHours: integer("soft_hold_duration_hours").default(48),
 
+  // The idea phase of Create experience. Present when the event started as an
+  // idea (a period instead of a date, the audience, the group-size range — the
+  // answers that have no column of their own); null for a draft started
+  // straight in the builder. Shape and checks live in @shared/conceptIdea.
+  // `any` for the reason `eventPartners` is: a precise `$type<>` on a jsonb
+  // column in a table this wide makes TypeScript abandon inference for it.
+  concept: jsonb("concept").$type<any>(),
+
   // Meta
   status: experienceStatusEnum("status").default("draft"),
   currentStep: integer("current_step").default(1),

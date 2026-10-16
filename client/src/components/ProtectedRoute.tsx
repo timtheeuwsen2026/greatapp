@@ -4,7 +4,8 @@ import AccessDenied from './AccessDenied';
 
 interface ProtectedRouteProps {
   children: ReactNode;
-  requiredRole: UserRole;
+  /** A specific role, or `'any'` for any signed-in account. */
+  requiredRole: UserRole | 'any';
   fallback?: ReactNode;
 }
 

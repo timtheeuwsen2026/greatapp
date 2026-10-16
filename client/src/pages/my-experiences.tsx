@@ -125,7 +125,7 @@ export default function MyExperiences() {
               <p className="text-gray-600">Manage the experiences you've created</p>
             </div>
             <Button asChild data-testid="button-create-experience">
-              <Link href="/journey-builder">
+              <Link href="/create-experience">
                 <Plus className="h-4 w-4 mr-2" />
                 Create New Experience
               </Link>
@@ -140,7 +140,7 @@ export default function MyExperiences() {
                 <p className="text-gray-600 mb-6">Ready to share your passion? Create your first transformative experience and start building your community.</p>
                 <div className="space-y-3">
                   <Button asChild size="lg" data-testid="button-journey-builder">
-                    <Link href="/journey-builder">
+                    <Link href="/create-experience">
                       <Plus className="h-4 w-4 mr-2" />
                       Create Your First Experience
                     </Link>
@@ -319,7 +319,7 @@ export default function MyExperiences() {
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Button asChild variant="outline" className="h-auto p-4 flex flex-col items-center gap-2" data-testid="button-new-experience">
-                  <Link href="/journey-builder">
+                  <Link href="/create-experience">
                     <Plus className="h-8 w-8" />
                     <span>Create New Experience</span>
                   </Link>

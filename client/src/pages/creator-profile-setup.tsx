@@ -164,7 +164,7 @@ export default function CreatorProfileSetup() {
         description: 'You can now create your first experience.',
       });
       queryClient.invalidateQueries({ queryKey: ['/api/creator-profile'] });
-      setLocation('/journey-builder');
+      setLocation('/create-experience');
     },
     onError: (error: Error) => {
       toast({

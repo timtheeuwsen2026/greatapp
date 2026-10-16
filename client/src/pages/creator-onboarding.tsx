@@ -220,7 +220,7 @@ export default function CreatorOnboarding() {
                 Conversational Profile Setup
               </SafeCreatorButton>
               <SafeCreatorButton
-                route="/journey-builder"
+                route="/create-experience"
                 fallbackRoute="/creator-dashboard"
                 size="lg"
                 className="bg-transparent border-2 border-white text-white hover:bg-white hover:text-primary"

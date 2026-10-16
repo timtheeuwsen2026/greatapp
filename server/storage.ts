@@ -1,4 +1,5 @@
 import { withoutEventFeeOverrides } from "@shared/platformFees";
+import { withSanitisedConcept } from "@shared/conceptIdea";
 import { connectPartnerPromotion } from './partnerPromotionStorage';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -3585,7 +3586,7 @@ export class DatabaseStorage implements IStorage {
   async createExperienceDraft(draft: InsertExperienceDraft): Promise<ExperienceDraft> {
     const [created] = await db
       .insert(experienceDrafts)
-      .values(withoutManualDealUnlock(draft))
+      .values(withSanitisedConcept(withoutManualDealUnlock(draft)))
       .returning();
     return created;
   }
@@ -3602,7 +3603,7 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(experienceDrafts)
       .set({
-        ...withoutManualDealUnlock(updates),
+        ...withSanitisedConcept(withoutManualDealUnlock(updates)),
         updatedAt: new Date(),
       })
       .where(and(

@@ -393,7 +393,7 @@ export default function Bookings() {
                   </Link>
                 </Button>
                 <Button asChild variant="outline" className="h-auto p-4 flex flex-col items-center gap-2" data-testid="button-create-experience">
-                  <Link href="/journey-builder">
+                  <Link href="/create-experience">
                     <Calendar className="h-8 w-8" />
                     <span>Create Experience</span>
                   </Link>

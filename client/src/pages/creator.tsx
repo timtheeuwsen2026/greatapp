@@ -121,7 +121,7 @@ export default function Creator() {
                     </p>
                     <Button 
                       size="lg" 
-                      onClick={() => setLocation('/journey-builder')}
+                      onClick={() => setLocation('/create-experience')}
                       className="bg-white text-purple-600 hover:bg-gray-100 text-lg px-8 py-3"
                       data-testid="button-create-event"
                     >
@@ -198,7 +198,7 @@ export default function Creator() {
           {/* Action Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <Card className="bg-white/70 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-shadow cursor-pointer" 
-                  onClick={() => setLocation('/journey-builder')}>
+                  onClick={() => setLocation('/create-experience')}>
               <CardHeader>
                 <div className="flex items-center space-x-3">
                   <div className="p-2 bg-purple-100 rounded-lg">

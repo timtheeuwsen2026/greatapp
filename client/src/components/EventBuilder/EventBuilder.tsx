@@ -79,6 +79,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { RolesEditor } from "@/components/RolesEditor";
 import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
+import { IdeaPeriodCard, IdeaSummaryCard } from "@/components/CreateFlow/IdeaSummaryCard";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
@@ -466,6 +467,10 @@ const eventBuilderSchema = z.object({
    * actual sales, so an optimistic guess costs the venue nothing there.
    */
   expectedAudienceSize: z.coerce.number().int().min(0).optional().nullable(),
+  // What the idea phase of Create experience recorded — read-only here, shown on
+  // the Basics and Dates steps and sent back untouched on every save. Checked
+  // properly by the server (`sanitiseConcept`), so the form only has to carry it.
+  concept: z.any().optional().nullable(),
   minimumParticipants: z.number().min(2, "Minimum participants must be at least 2").max(50, "Maximum 50 participants").default(6),
   mvgDeadlineDays: z.number().int().min(0).max(30).default(7),
   mvgDeadline: z.date().optional(),
@@ -2844,6 +2849,7 @@ function ChecklistItem({ label, completed }: { label: string; completed: boolean
 function BasicInfoStep({ form }: { form: any }) {
   return (
     <div className="space-y-6">
+      <IdeaSummaryCard concept={form.watch('concept')} />
       <div className="grid gap-6">
         {/* Title Field */}
         <FormField
@@ -3252,6 +3258,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
 
   return (
     <div className="space-y-8">
+      <IdeaPeriodCard concept={form.watch('concept')} startDate={startDate} />
       {/* Single Date Range Section */}
       <div className="space-y-6">
         <h3 className="text-lg font-semibold">{isSingleDayEvent ? "Event Date" : "Trip Dates"}</h3>

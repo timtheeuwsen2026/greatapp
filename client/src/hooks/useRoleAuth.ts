@@ -4,13 +4,19 @@ import { useToast } from '@/hooks/use-toast';
 
 export type UserRole = 'participant' | 'creator' | 'venue_provider' | 'service_provider' | 'admin' | 'promoter';
 
-export function useRoleAuth(requiredRole: UserRole) {
+/**
+ * `'any'` means "signed in, whatever the role". The role chosen at sign-up sets
+ * a starting home screen and profile fields; it does not decide who may create.
+ * Callers that need a specific role keep passing it.
+ */
+export function useRoleAuth(requiredRole: UserRole | 'any') {
   const { user, isAuthenticated, isLoading } = useAuth();
   const error = null as (Error & { message: string }) | null; // kept for backward compat
   const isError = false;
   const { toast } = useToast();
 
   const hasRequiredRole =
+    requiredRole === 'any' ||
     user?.role === requiredRole ||
     user?.role === 'admin';
   const isAuthorized = isAuthenticated && hasRequiredRole;

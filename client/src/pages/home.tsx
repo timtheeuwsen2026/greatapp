@@ -1011,7 +1011,7 @@ export default function Home() {
             <Button
               size="lg"
               className="bg-white text-primary hover:bg-gray-100 text-lg font-semibold px-10 py-6 h-auto"
-              onClick={() => setLocation('/journey-builder')}
+              onClick={() => setLocation('/create-experience')}
               data-testid="button-footer-start-trip"
               aria-label="Start creating an experience using the experience builder"
             >
@@ -1038,7 +1038,7 @@ export default function Home() {
                   <Button
                     variant="outline"
                     className="border-gray-600 text-gray-300 hover:bg-gray-800 hover:text-white"
-                    onClick={() => setLocation('/journey-builder')}
+                    onClick={() => setLocation('/create-experience')}
                     data-testid="button-footer-create"
                     aria-label="Create a new experience using the experience builder"
                   >
@@ -1062,7 +1062,7 @@ export default function Home() {
                 <ul className="space-y-2">
                   <li>
                     <button
-                      onClick={() => setLocation('/journey-builder')}
+                      onClick={() => setLocation('/create-experience')}
                       className="text-gray-400 hover:text-white transition-colors"
                       aria-label="Go to experience builder to create your event"
                     >

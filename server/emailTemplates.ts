@@ -93,10 +93,10 @@ const growthFooterPartials: Record<Exclude<GrowthFooterContext, "none" | "securi
       <div class="growth-footer">
         <p class="growth-title">Build something people can join</p>
         <p>Create an experience and let Great. help with discovery, bookings, and group momentum.</p>
-        <a href="${escapeHtml(`${appBaseUrl}/event-builder`)}">Create an experience</a>
+        <a href="${escapeHtml(`${appBaseUrl}/create-experience`)}">Create an experience</a>
       </div>
     `,
-    text: (appBaseUrl) => `Build something people can join\nCreate an experience and let Great. help with discovery, bookings, and group momentum.\nCreate an experience: ${appBaseUrl}/event-builder`,
+    text: (appBaseUrl) => `Build something people can join\nCreate an experience and let Great. help with discovery, bookings, and group momentum.\nCreate an experience: ${appBaseUrl}/create-experience`,
   },
   creator_venue: {
     html: (appBaseUrl, data) => `

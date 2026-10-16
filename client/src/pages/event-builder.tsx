@@ -86,12 +86,16 @@ export default function EventBuilderPage() {
   // Admins moderate other people's listings, so the creator-profile gate below
   // is not theirs to pass — they have no creator profile and never will.
   const isAdmin = (user as any)?.role === 'admin';
-  const shouldCheckCreatorProfile = (!!draftId || !!initialExperienceType) && !isAdmin;
+  // The creator profile is the Creator role's own onboarding. A venue, promoter
+  // or service provider building an event is checked by the partner gate below
+  // against what *they* completed, and has no creator profile to be sent to.
+  const isCreatorRole = (user as any)?.role === 'creator';
+  const shouldCheckCreatorProfile = (!!draftId || !!initialExperienceType) && !isAdmin && isCreatorRole;
 
   // Check for creator profile completion
-  const { data: creatorProfile, isLoading: profileLoading } = useQuery({ 
+  const { data: creatorProfile, isLoading: profileLoading } = useQuery({
     queryKey: ['/api/creator-profile'],
-    enabled: isAuthenticated && !isAdmin
+    enabled: isAuthenticated && isCreatorRole
   });
 
   useEffect(() => {
@@ -160,10 +164,12 @@ export default function EventBuilderPage() {
 
   if (!draftId && !initialExperienceType) {
     return (
-      <ProtectedRoute requiredRole="creator">
-        {/* A completed profile is not the same as an approved one. Without this,
-            switching an account's role to Creator was enough to read the whole
-            deal-type builder. */}
+      <ProtectedRoute requiredRole="any">
+        {/* Any signed-in account may start; the role picked at sign-up does not
+            decide who can create. What does decide it is the gate below: a
+            completed profile is not the same as an approved one, and without it
+            switching an account's role was enough to read the whole deal-type
+            builder. */}
         <PartnerToolingGate>
         <div className="min-h-screen bg-white">
           <Navigation />
@@ -245,7 +251,7 @@ export default function EventBuilderPage() {
   }
 
   return (
-    <ProtectedRoute requiredRole="creator">
+    <ProtectedRoute requiredRole="any">
       <PartnerToolingGate>
       <div className="min-h-screen bg-white">
         <Navigation />

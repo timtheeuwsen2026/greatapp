@@ -78,6 +78,7 @@ import MyExperiences from "@/pages/my-experiences";
 import UserDashboard from "@/pages/user-dashboard";
 import RoleSwitchTest from "@/pages/role-switch-test";
 import EventBuilderPage from "@/pages/event-builder";
+import CreateExperiencePage from "@/pages/create-experience";
 import ReservationsDashboard from "@/pages/reservations";
 import PublicVenuePage from "@/pages/public-venue-page";
 import PublicEventPage from "@/pages/public-event-page";
@@ -104,13 +105,18 @@ import Privacy from "@/pages/privacy";
 // Keep routed component types at module scope. Defining them inside Router makes
 // React remount the active page whenever Router rerenders (for example, when the
 // window regains focus after the native file picker closes).
+// Every legacy "create" URL (/journey-builder, /create-trip, …) is linked from a
+// dozen pages and emails. They all mean "start making an event", which now
+// begins in Create experience. An edit link keeps going to the builder: it is
+// about an event that already exists, not a new one.
 function RedirectToEventBuilder() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    setLocation('/event-builder');
+    const edit = new URLSearchParams(window.location.search).get('edit');
+    setLocation(edit ? `/event-builder?edit=${encodeURIComponent(edit)}` : '/create-experience');
   }, [setLocation]);
-  return <div className="flex items-center justify-center min-h-screen">Redirecting to Event Builder...</div>;
+  return <div className="flex items-center justify-center min-h-screen">Redirecting...</div>;
 }
 
 function RedirectToCreatorProfileSetup() {
@@ -239,8 +245,9 @@ function Router() {
       <Route path="/e/:slugOrId" component={PublicEventPage} />
       <Route path="/services" component={Services} />
       
+      {/* Create experience: the idea phase, then the builder. */}
+      <Route path="/create-experience" component={CreateExperiencePage} />
       {/* Event Builder Route */}
-      <Route path="/create-experience" component={EventBuilderPage} />
       <Route path="/event-builder/:draftId?" component={EventBuilderPage} />
       
       {/* Legacy routes - redirect to /event-builder */}

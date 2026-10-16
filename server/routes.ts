@@ -164,6 +164,7 @@ import {
 import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
+import { sanitiseConcept } from "@shared/conceptIdea";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -3680,6 +3681,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       parsedBody.greatPillars = normalizeGreatPillarsPayload(parsedBody.greatPillars);
       parsedBody.monetisationMode = "creator_led";
       parsedBody.ticketSkus = normalizeTicketSkus(parsedBody.ticketSkus);
+      // The idea phase's own answers. The column is free-form json, so what the
+      // client sent is rebuilt here rather than trusted.
+      if ('concept' in parsedBody) parsedBody.concept = sanitiseConcept(parsedBody.concept);
 
       // A trip's start and end are calendar days, not moments, so they are
       // anchored to the day whatever timezone the browser sent them from.
@@ -3720,7 +3724,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (updateData.ticketSkus !== undefined) {
         updateData.ticketSkus = normalizeTicketSkus(updateData.ticketSkus);
       }
-      
+      if ('concept' in updateData) updateData.concept = sanitiseConcept(updateData.concept);
+
       // Convert date strings to valid Date objects or null if invalid
       if (updateData.startDate !== undefined) {
         if (updateData.startDate === null || updateData.startDate === '') {
@@ -3833,6 +3838,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if ('selectedVenueId' in mapped) {
       mapped.selectedVenueId = data.selectedVenueId; // Keep as 'selectedVenueId' for drafts, will be mapped to 'linkedVenueId' on publish
     }
+    if ('concept' in mapped) mapped.concept = sanitiseConcept(mapped.concept);
     return mapped;
   };
 

@@ -318,7 +318,7 @@ export default function Experiences() {
                 </Button>
                 <Button 
                   variant="outline" 
-                  onClick={() => setLocation('/journey-builder')}
+                  onClick={() => setLocation('/create-experience')}
                   data-testid="button-create-experience"
                 >
                   Create Experience
@@ -662,7 +662,7 @@ export default function Experiences() {
                       </Button>
                       <Button 
                         variant="outline" 
-                        onClick={() => setLocation('/journey-builder')}
+                        onClick={() => setLocation('/create-experience')}
                         data-testid="button-create-your-own"
                       >
                         Create Your Own Experience
@@ -681,7 +681,7 @@ export default function Experiences() {
                   
                   <div className="space-y-4">
                     <Button 
-                      onClick={() => setLocation('/journey-builder')}
+                      onClick={() => setLocation('/create-experience')}
                       className="btn-gradient"
                       data-testid="button-create-first-experience"
                     >

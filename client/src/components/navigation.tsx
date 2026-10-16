@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Briefcase, Building2, Crown, GraduationCap, Handshake, LayoutGrid, LayoutDashboard, LogOut, Megaphone, Menu, MessageCircle, Plus, Shield, Ticket, TrendingUp, User, Users, Wrench, X } from "lucide-react";
-import CreateExperienceFork from "@/components/CreateExperienceFork";
 import { useAuth } from "@/hooks/useAuth";
 import { getAccessToken } from "@/lib/authToken";
 import { isAdminUser } from "@/lib/authUtils";
@@ -95,9 +94,6 @@ async function resolveRoleDestination(role: string): Promise<string> {
 
 export default function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // The single "Create experience" fork. Lives in the nav because the nav is
-  // the one entry point present on every page.
-  const [createForkOpen, setCreateForkOpen] = useState(false);
   const [switchingRole, setSwitchingRole] = useState<string | null>(null);
   const { user, isAuthenticated, isLoading } = useAuth();
   const [pathname, navigate] = useLocation();
@@ -186,12 +182,11 @@ export default function Navigation() {
               How It Works
             </Link>
 
-            {/* One entry point. "For Creators & Venues" described an
-                audience rather than an action, and it competed with the Collab
-                Idea modal and the Event Builder, each reachable by its own
-                shortcut elsewhere. This opens the fork; the fork decides which
-                of the two existing flows to open. A signed-out visitor is sent
-                to sign in first, because both destinations need an account. */}
+            {/* One entry point, one flow. "For Creators & Venues" described an
+                audience rather than an action. This opens Create experience,
+                which starts every event as an idea and hands it to the builder.
+                A signed-out visitor is sent to sign in first, because it needs
+                an account. */}
             <Button
               variant="outline"
               className="border-primary/30 bg-primary/5 text-primary hover:bg-primary hover:text-white font-semibold px-5 py-2 h-auto"
@@ -200,7 +195,7 @@ export default function Navigation() {
                   window.location.href = "/login?returnTo=/profile-setup";
                   return;
                 }
-                setCreateForkOpen(true);
+                navigate("/create-experience");
               }}
               data-testid="nav-create-experience"
             >
@@ -478,7 +473,7 @@ export default function Navigation() {
                     window.location.href = "/login?returnTo=/profile-setup";
                     return;
                   }
-                  setCreateForkOpen(true);
+                  navigate("/create-experience");
                 }}
                 data-testid="mobile-nav-create-experience"
               >
@@ -670,8 +665,6 @@ export default function Navigation() {
           </div>
         </div>
       )}
-
-      <CreateExperienceFork open={createForkOpen} onOpenChange={setCreateForkOpen} />
     </nav>
   );
 }

@@ -331,7 +331,7 @@ export interface IStorage {
     previous: { status: Booking["status"]; cancelledAt: Date | null },
   ): Promise<Booking | undefined>;
   restoreGroupCapturedBooking(bookingId: string): Promise<Booking | undefined>;
-  releaseDiscountLinkRedemption(discountLinkId: string): Promise<void>;
+  releaseDiscountLinkRedemption(discountLinkId: string, tickets?: number): Promise<void>;
   getPayoutLockedExperienceIds(experienceIds: string[]): Promise<Set<string>>;
   getExperienceParticipantAvatars(experienceId: string): Promise<Array<{
     avatarUrl: string | null;
@@ -1709,11 +1709,13 @@ export class DatabaseStorage implements IStorage {
    * is not used up by someone who no longer holds a place. Floored at zero so
    * a count that was never recorded cannot go negative.
    */
-  async releaseDiscountLinkRedemption(discountLinkId: string): Promise<void> {
+  async releaseDiscountLinkRedemption(discountLinkId: string, tickets = 1): Promise<void> {
     await db
       .update(discountLinks)
       .set({
-        redemptionCount: sql`GREATEST(${discountLinks.redemptionCount} - 1, 0)`,
+        // Redemptions count tickets (see the booking path), so a cancelled
+        // booking gives back as many places as it took.
+        redemptionCount: sql`GREATEST(${discountLinks.redemptionCount} - ${Math.max(1, tickets)}, 0)`,
         updatedAt: new Date(),
       })
       .where(eq(discountLinks.id, discountLinkId));

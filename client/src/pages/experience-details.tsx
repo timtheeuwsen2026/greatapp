@@ -36,6 +36,7 @@ import { apiRequest, authHeaders, queryClient } from "@/lib/queryClient";
 import { normalizeImageUrl } from "@/lib/utils";
 import { isMvgStillForming } from "@/lib/experienceAvailability";
 import { getTicketAddon } from "@shared/ticketAddons";
+import { discountBannerText } from "@shared/discountLinks";
 import { formatCapacityParticipantCount, formatMvgParticipantCount } from "@/lib/participantCounts";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { 
@@ -426,7 +427,13 @@ export default function ExperienceDetails() {
   // checkout. Someone who followed a friend's link and sees the ordinary price
   // with no explanation assumes the link was fake; someone told it has expired
   // can go back and ask for a new one.
-  const { data: discountInfo } = useQuery<{ ok: boolean; reason: string | null; summary?: string }>({
+  const { data: discountInfo } = useQuery<{
+    ok: boolean;
+    reason: string | null;
+    summary?: string;
+    discount?: { skuId?: string | null };
+    spotsLeft?: number | null;
+  }>({
     queryKey: ["/api/discount-links", discountToken],
     queryFn: async () => {
       const response = await fetch(`/api/discount-links/${encodeURIComponent(discountToken!)}`);
@@ -1467,7 +1474,15 @@ export default function ExperienceDetails() {
                       data-testid="notice-discount-link"
                     >
                       {discountInfo.ok
-                        ? `Your discount link is applied — ${discountInfo.summary || "a discount"} at checkout.`
+                        ? discountBannerText({
+                            summary: discountInfo.summary,
+                            skuId: discountInfo.discount?.skuId,
+                            ticketName: (experience?.ticketSkus as any[] | undefined)?.find(
+                              (ticket: any, index: number) =>
+                                (ticket.id || ticket.sourceRoomId || `ticket-${index}`) === discountInfo.discount?.skuId,
+                            )?.ticketName,
+                            spotsLeft: discountInfo.spotsLeft,
+                          })
                         : discountInfo.reason}
                     </div>
                   )}

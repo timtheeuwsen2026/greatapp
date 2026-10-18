@@ -89,6 +89,18 @@ export function discountedUnitPrice(
 }
 
 /**
+ * How many more tickets this link can discount, or null when it has no limit.
+ * Redemptions are counted in tickets, so this is a straight subtraction.
+ */
+export function discountSpotsLeft(
+  link: Pick<DiscountLinkRecord, "maxRedemptions" | "redemptionCount"> | null | undefined,
+): number | null {
+  const cap = Number(link?.maxRedemptions);
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  return Math.max(0, cap - toNumber(link?.redemptionCount));
+}
+
+/**
  * Can this link be used on this ticket, right now?
  *
  * Every refusal carries a reason a buyer can act on. "This link is no longer
@@ -100,6 +112,8 @@ export function resolveDiscountLink(input: {
   discounts: DiscountDefinition[] | null | undefined;
   /** Which ticket the buyer has selected, when they have selected one. */
   ticketSkuId?: string | null;
+  /** How many tickets they are buying, for a link with a limited number of places. */
+  ticketQuantity?: number;
   now?: Date;
 }): DiscountResolution {
   const refuse = (reason: string): DiscountResolution => ({ ok: false, reason, discount: null });
@@ -108,9 +122,20 @@ export function resolveDiscountLink(input: {
   if (!link) return refuse("This discount link is not valid.");
   if (link.active === false) return refuse("This discount link has been withdrawn.");
 
-  const cap = Number(link.maxRedemptions);
-  if (Number.isFinite(cap) && cap > 0 && toNumber(link.redemptionCount) >= cap) {
-    return refuse("This discount has been fully claimed.");
+  // A limit is a number of places, not a number of bookings: a link meant for
+  // five people must not hand out ten free tickets because one person bought
+  // them in a single go.
+  const left = discountSpotsLeft(link);
+  if (left !== null) {
+    if (left <= 0) return refuse("This discount has been fully claimed.");
+    const wanted = Math.max(1, Math.floor(toNumber(input.ticketQuantity) || 1));
+    if (wanted > left) {
+      return refuse(
+        left === 1
+          ? "Only 1 place is left on this discount link. Choose 1 ticket to use it."
+          : `Only ${left} places are left on this discount link. Choose up to ${left} tickets to use it.`,
+      );
+    }
   }
 
   const discount = (input.discounts || []).find((entry) => entry.id === link.discountId);
@@ -146,6 +171,53 @@ export function formatDiscount(
   return String(discount.type ?? "").toLowerCase() === "percentage"
     ? `${value}% off`
     : `${currencySymbol}${value.toFixed(2)} off`;
+}
+
+/**
+ * The sentence on the event page for a link that works.
+ *
+ * Says which ticket it is for. A link tied to one ticket type that is announced
+ * as simply "applied" sends a buyer who picks a different ticket to a checkout
+ * at the full price, with nothing to explain why.
+ */
+export function discountBannerText(input: {
+  summary?: string | null;
+  /** The ticket the discount is tied to; null or empty means every ticket. */
+  skuId?: string | null;
+  /** That ticket's name, when the page can find it. */
+  ticketName?: string | null;
+  spotsLeft?: number | null;
+}): string {
+  const what = input.summary || "a discount";
+  const scope = input.skuId
+    ? ` on ${input.ticketName ? `${input.ticketName} tickets` : "one ticket type only"}`
+    : "";
+  const places = typeof input.spotsLeft === "number"
+    ? ` ${input.spotsLeft === 1 ? "1 place is" : `${input.spotsLeft} places are`} left on this link.`
+    : "";
+  return `Your discount link is applied — ${what}${scope} at checkout.${places}`;
+}
+
+/**
+ * The deposit per ticket once a discount has been taken off.
+ *
+ * Two different questions. Whether the organiser set a sensible deposit is about
+ * the ticket's own price: a deposit above it is a setup mistake and is refused.
+ * What a discount then leaves behind only caps the deposit — a 100% link leaves
+ * nothing to put down, and that must not turn a free ticket into an error.
+ */
+export function depositAfterDiscount(input: {
+  fixedDepositPerTicket: number;
+  /** The ticket's price before any discount. */
+  listUnitPrice: number;
+  /** The ticket's price after the discount. */
+  discountedUnitPrice: number;
+}): { ok: true; perTicket: number } | { ok: false; message: string } {
+  const deposit = toNumber(input.fixedDepositPerTicket);
+  if (deposit > toNumber(input.listUnitPrice)) {
+    return { ok: false, message: "Ticket deposit cannot exceed the full ticket price" };
+  }
+  return { ok: true, perTicket: round2(Math.max(0, Math.min(deposit, toNumber(input.discountedUnitPrice)))) };
 }
 
 /** The full shareable URL for a token. */

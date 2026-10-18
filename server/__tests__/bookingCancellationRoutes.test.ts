@@ -1206,7 +1206,8 @@ describe("settleCancelledBooking", () => {
     await run({ booking: cancelledBooking, experience: formedEvent, outcome: "hold_released", amountReturned: 45, currency: "eur" });
 
     expect(deps.updateCommissionStatus).toHaveBeenCalledWith("booking-1", "voided");
-    expect(deps.storage.releaseDiscountLinkRedemption).toHaveBeenCalledWith("link-1");
+    // Gives back the places the booking took (it was for two tickets), not one use.
+    expect(deps.storage.releaseDiscountLinkRedemption).toHaveBeenCalledWith("link-1", 2);
     expect(deps.scheduleExperiencePayout).toHaveBeenCalledWith("event-1", new Date(FUTURE), 3000);
 
     // A group that has formed stays formed when one person leaves.

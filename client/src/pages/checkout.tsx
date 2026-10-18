@@ -446,6 +446,9 @@ export default function Checkout() {
   // off, and it is that answer the buyer is shown and charged.
   const discountToken = urlParams.get('discount') || null;
   const [discountTotal, setDiscountTotal] = useState(0);
+  // Why the link the buyer arrived with is taking nothing off, when it is not.
+  // Without it a refused link is silent: the price is simply the full one.
+  const [discountNotice, setDiscountNotice] = useState<string | null>(null);
 
   const { data: experience, isLoading: experienceLoading } = useQuery<Experience>({
     queryKey: ["/api/experiences", experienceId],
@@ -496,6 +499,7 @@ export default function Checkout() {
       // What the server actually allowed, not what the link claimed. A link the
       // server refused simply takes nothing off, and nothing is shown.
       setDiscountTotal(Number(data.discountTotal) || 0);
+      setDiscountNotice(typeof data.discountNotice === 'string' && data.discountNotice ? data.discountNotice : null);
       if (data.freeRsvp) {
         setFreeRsvpInfo({
           fullPrice: 0,
@@ -663,7 +667,11 @@ export default function Checkout() {
         shareToken: attribution.shareToken,
         ticketSkuId: freeRsvpInfo?.ticketSkuId,
         ticketQuantity: freeRsvpInfo?.ticketQuantity || ticketQuantity,
-        paymentType: 'full'
+        paymentType: 'full',
+        // A booking that is free because of a discount link has to name the
+        // link: the server prices this request on its own, and without the token
+        // it priced the ticket at the full amount while the buyer was told 100% off.
+        discountToken: discountToken || undefined,
       });
       const data = await response.json();
       clearAttribution();
@@ -699,6 +707,7 @@ export default function Checkout() {
     freeRsvpInfo?.ticketQuantity,
     freeRsvpSubmitting,
     ticketQuantity,
+    discountToken,
     toast,
   ]);
 
@@ -1190,6 +1199,16 @@ export default function Checkout() {
                       than the one on the event page reads as a mistake; this
                       says why it is lower, and it only ever shows a figure the
                       server actually applied. */}
+                  {discountNotice && discountTotal === 0 && (
+                    <p
+                      className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
+                      role="status"
+                      data-testid="notice-discount-refused"
+                    >
+                      Your discount link isn&apos;t applied: {discountNotice}
+                    </p>
+                  )}
+
                   {discountTotal > 0 && (
                     <div
                       className="flex justify-between items-center text-emerald-700 dark:text-emerald-300"

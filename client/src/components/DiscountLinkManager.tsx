@@ -159,7 +159,7 @@ export default function DiscountLinkManager({
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-normal text-muted-foreground">
-              Limit uses (optional)
+              Limit places (optional)
             </Label>
             <Input
               type="number"
@@ -169,6 +169,9 @@ export default function DiscountLinkManager({
               onChange={(event) => setCap(event.target.value)}
               data-testid={`input-discount-link-cap-${discountId}`}
             />
+            <p className="text-xs text-muted-foreground" data-testid={`hint-discount-link-cap-${discountId}`}>
+              Counts tickets, not bookings: 5 means 5 discounted tickets in total, however they are booked.
+            </p>
           </div>
         </div>
 
@@ -194,8 +197,9 @@ export default function DiscountLinkManager({
         </Badge>
         {link.label && <span className="text-xs text-muted-foreground">{link.label}</span>}
         <span className="text-xs text-muted-foreground">
-          Used {link.redemptionCount}
-          {link.maxRedemptions ? ` of ${link.maxRedemptions}` : " times"}
+          {link.maxRedemptions
+            ? `${link.redemptionCount} of ${link.maxRedemptions} places used`
+            : `${link.redemptionCount} ticket${link.redemptionCount === 1 ? "" : "s"} used`}
         </span>
       </div>
 

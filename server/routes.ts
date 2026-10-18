@@ -100,8 +100,10 @@ import {
   type IntentCancellationAction,
 } from "@shared/bookingCancellation";
 import {
+  depositAfterDiscount,
   discountAmountForUnitPrice,
   discountLinkUrl,
+  discountSpotsLeft,
   formatDiscount,
   resolveDiscountLink,
 } from "@shared/discountLinks";
@@ -165,6 +167,7 @@ import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
 import { sanitiseConcept } from "@shared/conceptIdea";
+import { redactPartnerSecrets } from "@shared/partnerPrivacy";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -1790,6 +1793,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const resolveCurrentUserId = (req: any): string | undefined => {
     return req.user?.claims?.sub || req.user?.id || (process.env.NODE_ENV === 'development' ? "45788955" : undefined);
   };
+
+  // Partner invite tokens, emails and account ids ride along on every
+  // experience row (the partner list is mirrored onto the event). Strip them
+  // from every API response for anyone but the event's organiser — once, here,
+  // rather than in each of the many routes that return experience rows. The
+  // signed-in id only: the development fallback must not make a stranger the owner.
+  app.use("/api", (req: any, res: any, next: any) => {
+    const json = res.json.bind(res);
+    res.json = (body: unknown) => json(redactPartnerSecrets(body, req.user?.claims?.sub || req.user?.id || null));
+    next();
+  });
 
   /**
    * Approve a creator the moment their profile is first complete — but only
@@ -5769,6 +5783,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // a payment that was actually correct.
       let discountLinkId: string | null = null;
       let discountPerTicket = 0;
+      // The ticket's own price, before any discount. The deposit rule below is
+      // about what the organiser set, not about what a link then took off.
+      const listUnitPrice = unitPrice;
       // Pay-what-you-want is excluded: the buyer already chose what to pay, and
       // discounting a price they set themselves is meaningless.
       if (selectedTicket?.pricingMode !== 'pwyw') {
@@ -5789,7 +5806,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           token,
           resolvedTicketSkuId,
           unitPrice,
+          ticketQuantity,
         );
+        // A link the buyer named that the server will not honour must not turn
+        // into a full-price booking they believed was discounted. Only here, where
+        // the client names the token itself (a free booking): with a PaymentIntent
+        // the intent already carries the answer.
+        if (!stripePaymentIntentId && input.discountToken && resolved.reason) {
+          return { status: 409, body: { message: resolved.reason, discountRefused: true } };
+        }
         discountLinkId = resolved.linkId;
         discountPerTicket = resolved.perTicket;
         if (discountPerTicket > 0) {
@@ -5827,21 +5852,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (fullPrice < 0) {
         return { status: 400, body: { message: "Unable to determine booking price for this experience" } };
       }
-      
+
+      // Checkout asked for a free booking — no PaymentIntent, amount 0 — but the
+      // server prices this ticket above zero. Creating the booking anyway made a
+      // full-price booking the buyer had been told was free. Say so instead.
+      if (!stripePaymentIntentId && Number(input.amount) === 0 && fullPrice > 0) {
+        return {
+          status: 409,
+          body: { message: "The price for this ticket has changed. Please reload checkout and try again." },
+        };
+      }
+
       const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
+
+      // What the organiser set must fit the ticket they priced; what a discount
+      // leaves behind then caps the deposit rather than refusing the booking.
+      const depositRule = depositAfterDiscount({ fixedDepositPerTicket, listUnitPrice, discountedUnitPrice: unitPrice });
+      if (!depositRule.ok) return { status: 400, body: { message: depositRule.message } };
+      const depositPerTicket = depositRule.perTicket;
       const depositSchedule = getDepositSchedule({
         experienceType: experience.experienceType,
         startDate: experience.startDate,
         endDate: experience.endDate,
         balanceDueDays: experience.balanceDueDays,
-        depositAmount: fixedDepositPerTicket,
+        depositAmount: depositPerTicket,
       });
-
-      if (fixedDepositPerTicket > unitPrice) {
-        return { status: 400, body: { message: "Ticket deposit cannot exceed the full ticket price" } };
-      }
 
       if (paymentType === 'full') {
         isDepositOnly = false;
@@ -5849,7 +5886,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         balanceAmount = 0;
       } else if (depositSchedule.available) {
         isDepositOnly = true;
-        depositAmount = Math.round(fixedDepositPerTicket * ticketQuantity * 100) / 100;
+        depositAmount = Math.round(depositPerTicket * ticketQuantity * 100) / 100;
         balanceAmount = fullPrice - depositAmount;
         balanceDueDate = depositSchedule.balanceDueDate;
       } else if (paymentType === 'deposit' && fixedDepositPerTicket > 0) {
@@ -6084,7 +6121,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (discountLinkId) {
         db.update(discountLinks)
           .set({
-            redemptionCount: sql`${discountLinks.redemptionCount} + 1`,
+            // Tickets, not bookings: a link limited to 5 means 5 places, and one
+            // booking of 10 must not be able to take them all in a single use.
+            redemptionCount: sql`${discountLinks.redemptionCount} + ${Math.max(1, ticketQuantity)}`,
             updatedAt: new Date(),
           })
           .where(eq(discountLinks.id, discountLinkId))
@@ -6742,7 +6781,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     if (booking.discountLinkId) {
       try {
-        await storage.releaseDiscountLinkRedemption(booking.discountLinkId);
+        await storage.releaseDiscountLinkRedemption(booking.discountLinkId, booking.ticketQuantity || 1);
       } catch (error: any) {
         console.error(`[Booking cancel] Could not release discount redemption for ${booking.id}:`, error?.message || error);
       }
@@ -8709,6 +8748,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Unable to determine payment amount for this experience" });
       }
 
+      const listUnitPrice = unitPrice;
+
       // A shared discount link, if the buyer arrived through one.
       //
       // Verified server-side against a live link row — the client saying
@@ -8720,6 +8761,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         req.body?.discountToken,
         resolvedTicketSkuId,
         unitPrice,
+        ticketQuantity,
       );
       const discountPerTicket = ticketDiscount.perTicket;
       if (discountPerTicket > 0) {
@@ -8753,9 +8795,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fixedDepositPerTicket = selectedTicket?.depositPerPerson
         ? parseFloat(selectedTicket.depositPerPerson)
         : (experience.depositAmount ? parseFloat(experience.depositAmount.toString()) : 0);
-      if (fixedDepositPerTicket > unitPrice) {
-        return res.status(400).json({ message: "Ticket deposit cannot exceed the full ticket price" });
-      }
+      // A discount can leave less than the deposit (a 100% link leaves nothing).
+      // That caps the deposit; it does not make the ticket unbookable.
+      const depositRule = depositAfterDiscount({ fixedDepositPerTicket, listUnitPrice, discountedUnitPrice: unitPrice });
+      if (!depositRule.ok) return res.status(400).json({ message: depositRule.message });
+      const depositPerTicket = depositRule.perTicket;
       // A per-ticket fixed deposit is the source of truth. Older builder payloads
       // did not always set the legacy experience-level depositEnabled flag.
       const depositSchedule = getDepositSchedule({
@@ -8763,7 +8807,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate: experience.startDate,
         endDate: experience.endDate,
         balanceDueDays: experience.balanceDueDays,
-        depositAmount: fixedDepositPerTicket,
+        depositAmount: depositPerTicket,
       });
       const hasDeposit = depositSchedule.available;
 
@@ -8786,8 +8830,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           balanceAmount: 0,
           fullPrice: 0,
           unitPrice: 0,
-          discountPerTicket: 0,
-          discountTotal: 0,
+          discountPerTicket,
+          discountTotal: Math.round(discountPerTicket * ticketQuantity * 100) / 100,
+          discountNotice: ticketDiscount.reason,
           ticketQuantity,
           ticketName,
           ticketSkuId: resolvedTicketSkuId,
@@ -8809,7 +8854,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let isDepositPayment = false;
 
       if (hasDeposit) {
-        depositAmount = Math.round(fixedDepositPerTicket * ticketQuantity * 100) / 100;
+        depositAmount = Math.round(depositPerTicket * ticketQuantity * 100) / 100;
         balanceAmount = fullPrice - depositAmount;
         if (paymentMode === 'full') {
           chargeAmount = fullPrice;
@@ -8895,6 +8940,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         unitPrice,
         discountPerTicket,
         discountTotal: Math.round(discountPerTicket * ticketQuantity * 100) / 100,
+        // Why a link the buyer arrived with is not taking anything off, in words
+        // they can act on. Null when there was no link or it worked.
+        discountNotice: ticketDiscount.reason,
         addonItems,
         addonName: addonRecord.addonName ?? addon?.name ?? null,
         addonUnitPrice: addon?.unitPrice ?? 0,
@@ -18189,6 +18237,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           skuId: resolution.discount!.skuId || null,
         },
         summary: formatDiscount(resolution.discount, dealCurrencySymbol(experience.currency)),
+        // Places left on a limited link, so the page can say "3 places left".
+        // A count, not the cap or who used it — those stay with the organiser.
+        spotsLeft: discountSpotsLeft(link as any),
       });
     } catch (error) {
       console.error("Error resolving discount link:", error);
@@ -18210,9 +18261,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     token: unknown,
     ticketSkuId: string | null,
     unitPrice: number,
-  ): Promise<{ linkId: string | null; perTicket: number }> {
+    ticketQuantity = 1,
+  ): Promise<{ linkId: string | null; perTicket: number; reason: string | null }> {
     const raw = String(token ?? "").trim();
-    if (!raw || !experience) return { linkId: null, perTicket: 0 };
+    if (!raw || !experience) return { linkId: null, perTicket: 0, reason: null };
 
     const [link] = await db
       .select()
@@ -18220,18 +18272,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .where(eq(discountLinks.token, raw))
       .limit(1);
 
-    if (!link || link.experienceId !== experience.id) return { linkId: null, perTicket: 0 };
+    if (!link || link.experienceId !== experience.id) {
+      return { linkId: null, perTicket: 0, reason: "This discount link is not valid for this event." };
+    }
 
     const resolution = resolveDiscountLink({
       link: link as any,
       discounts: await discountsForLink(experience, link),
       ticketSkuId,
+      ticketQuantity,
     });
-    if (!resolution.ok) return { linkId: null, perTicket: 0 };
+    if (!resolution.ok) return { linkId: null, perTicket: 0, reason: resolution.reason };
 
     return {
       linkId: link.id,
       perTicket: discountAmountForUnitPrice(resolution.discount, unitPrice),
+      reason: null,
     };
   }
 

@@ -6703,7 +6703,11 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
       validUntil: undefined,
       capacityCap: undefined,
       active: true,
-      skuId: ticketSkus.length > 0 ? ticketSkus[0].id : undefined
+      // Every ticket, until the organiser picks one. This used to default to the
+      // FIRST ticket, with the picker hidden for ordinary tickets — so a link
+      // quietly worked on one ticket type only, and a buyer on any other paid
+      // the full price with no explanation.
+      skuId: undefined
     };
     form.setValue('discounts', [...discounts, newDiscount], { shouldDirty: true });
   };
@@ -8352,6 +8356,36 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                       </div>
                       
                       <div className="grid grid-cols-2 gap-4">
+                        {priceSource.source !== 'rooms' && ticketSkus.length > 0 && (ticketSkus.length > 1 || discount.skuId) && (
+                          <div>
+                            <Label htmlFor={`discount-sku-${discount.id}`}>Applies to</Label>
+                            <Select
+                              value={discount.skuId || 'all'}
+                              onValueChange={(value) => updateDiscount(discount.id, 'skuId', value === 'all' ? undefined : value)}
+                            >
+                              <SelectTrigger id={`discount-sku-${discount.id}`} data-testid={`select-discount-ticket-${index}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="all">All tickets</SelectItem>
+                                {ticketSkus.map((ticket: any, ticketIndex: number) => {
+                                  const ticketId = ticket.id || ticket.sourceRoomId || `ticket-${ticketIndex}`;
+                                  return (
+                                    <SelectItem key={ticketId} value={ticketId}>
+                                      {ticket.ticketName || ticket.name || `Ticket ${ticketIndex + 1}`}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                            {discount.skuId && (
+                              <p className="mt-1 text-xs text-amber-700" data-testid={`hint-discount-one-ticket-${index}`}>
+                                Only this ticket gets the discount. Buyers of any other ticket pay the full price.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
                         {priceSource.source === 'rooms' && skus.length > 0 && (
                           <div>
                             <Label htmlFor={`discount-sku-${discount.id}`}>Apply to SKU (Optional)</Label>

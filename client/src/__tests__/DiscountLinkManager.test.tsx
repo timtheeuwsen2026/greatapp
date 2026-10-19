@@ -29,7 +29,7 @@ function renderManager(links: unknown[]) {
 }
 
 describe('the discount link limit', () => {
-  beforeEach(() => apiRequest.mockReset());
+  beforeEach(() => { apiRequest.mockReset(); });
 
   it('asks for places, and says they are counted in tickets', async () => {
     renderManager([]);

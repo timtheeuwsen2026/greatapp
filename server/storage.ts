@@ -6523,6 +6523,31 @@ export class DatabaseStorage implements IStorage {
     return new Map(rows.map(row => [row.code || '', Number(row.total) || 0]));
   }
 
+  /**
+   * Every booking made through one partner's link on one event, with the
+   * buyer's name — the "who did they bring" list. Failed payments included so
+   * the caller decides; shared/partnerPeople drops them.
+   */
+  async getPartnerReferralBookings(experienceId: string, refCode: string) {
+    if (!refCode) return [];
+    return db
+      .select({
+        id: bookings.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        ticketQuantity: bookings.ticketQuantity,
+        status: bookings.status,
+        attendanceStatus: bookings.attendanceStatus,
+        commissionAmount: bookings.commissionAmount,
+        commissionStatus: bookings.commissionStatus,
+        cancelledAt: bookings.cancelledAt,
+        createdAt: bookings.createdAt,
+      })
+      .from(bookings)
+      .leftJoin(users, eq(users.id, bookings.userId))
+      .where(and(eq(bookings.experienceId, experienceId), eq(bookings.referralCode, refCode)));
+  }
+
   async countPartnerJoinsByCode(refCodes: string[]): Promise<number> {
     if (!refCodes.length) return 0;
     const [row] = await db.select({ total: sql<number>`sum(coalesce(${bookings.ticketQuantity}, 1))` }).from(bookings)

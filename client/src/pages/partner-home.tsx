@@ -13,6 +13,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import CopyableLink from "@/components/CopyableLink";
+import PartnerPeople from "@/components/PartnerPeople";
 import { useAuth } from "@/hooks/useAuth";
 import {
   Handshake, Loader2, MessageSquare, Shield, Users,
@@ -346,6 +347,11 @@ export default function PartnerHome() {
                         This deal has no active member or commission tracking link.
                       </p>
                     )}
+
+                    {/* The same list the organiser sees, so both sides count the same people. */}
+                    <div className="mt-3">
+                      <PartnerPeople experienceId={event.eventId} partnerId={event.id} />
+                    </div>
 
                     <div className="mt-3 flex justify-end">
                       {event.dealType === 'commission_per_ticket' && (

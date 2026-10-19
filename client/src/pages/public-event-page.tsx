@@ -1,4 +1,4 @@
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useSearch, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,19 @@ import {
   formatCapacityParticipantCount,
   formatMvgParticipantCount,
 } from "@/lib/participantCounts";
+
+/**
+ * Where "Book Now" goes: the event's booking page, carrying everything the link
+ * arrived with — a partner's ?ref= and ?share=, a ?discount= — so the booking is
+ * credited to the partner and the discount still applies. Only the organiser's
+ * ?preview= stays behind; it means nothing on the booking page.
+ */
+export function bookingHrefFor(eventId: string, search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("preview");
+  const query = params.toString();
+  return `/experiences/${encodeURIComponent(eventId)}${query ? `?${query}` : ""}`;
+}
 
 interface PublicEventData {
   id: string;
@@ -142,11 +155,14 @@ interface PublicEventData {
 
 export default function PublicEventPage() {
   const [, params] = useRoute("/e/:slugOrId");
-  const [location] = useLocation();
+  // The query string, read from wouter's own search snapshot. This used to be
+  // split off `useLocation()`, which is the path alone — so ?preview= and the
+  // partner's ?ref= were never seen here at all.
+  const search = useSearch();
   const slugOrId = params?.slugOrId;
 
   // Extract preview token from URL query params
-  const searchParams = new URLSearchParams(location.split('?')[1] || '');
+  const searchParams = new URLSearchParams(search);
   const previewToken = searchParams.get('preview');
   const promoterRefCode = searchParams.get('ref');
 
@@ -538,12 +554,15 @@ export default function PublicEventPage() {
               </div>
 
               <div className="mt-8">
+                {/* This page is where a partner's share link lands, and the
+                    button used to do nothing at all. */}
                 <Button
+                  asChild
                   size="lg"
                   className="px-8 py-6 text-lg font-semibold"
                   data-testid="button-book-now"
                 >
-                  Book Now
+                  <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
                 </Button>
               </div>
             </div>
@@ -1106,23 +1125,17 @@ export default function PublicEventPage() {
               </div>
               
               <div className="flex flex-col sm:flex-row gap-3">
-                {event.mvg.enabled && event.mvg.current_signups < event.mvg.minimum_required ? (
-                  <Button 
-                    size="lg" 
-                    className="px-8 py-6 text-lg font-semibold"
-                    data-testid="button-join-waitlist"
-                  >
-                    Join Waitlist
-                  </Button>
-                ) : (
-                  <Button 
-                    size="lg" 
-                    className="px-8 py-6 text-lg font-semibold"
-                    data-testid="button-book-now-final"
-                  >
-                    Book Now
-                  </Button>
-                )}
+                {/* An event still forming its minimum group is booked like any
+                    other — the bookings are what form it. This said "Join
+                    Waitlist" and, like the button above, went nowhere. */}
+                <Button
+                  asChild
+                  size="lg"
+                  className="px-8 py-6 text-lg font-semibold"
+                  data-testid="button-book-now-final"
+                >
+                  <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
+                </Button>
               </div>
             </div>
           </CardContent>

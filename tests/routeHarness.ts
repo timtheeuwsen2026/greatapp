@@ -17,7 +17,8 @@ export function routeFunction(name: string, dependencies: Record<string, any>, m
   }
   visit(source);
   if (!target) throw new Error(`Missing route/function: ${name}`);
-  const js = ts.transpileModule(`const run = ${target.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  // An exported function reads "export async function …"; the keyword cannot follow "const run =".
+  const js = ts.transpileModule(`const run = ${target.getText(source).replace(/^export\s+(default\s+)?/, "")};`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   return new Function(...Object.keys(dependencies), `${js}; return run;`)(...Object.values(dependencies));
 }
 export function routeResponse() {

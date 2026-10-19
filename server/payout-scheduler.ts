@@ -35,6 +35,14 @@ import {
   sumBookingTicketQuantity,
 } from "@shared/ticketDeduction";
 import { resolveVenuePayoutAccount } from "./venuePayouts";
+import { createHash } from "node:crypto";
+
+/**
+ * Bookings that went through: the money an event pays out is theirs, and so are
+ * the partner commissions on it. Cancelled, refunded, failed and still-pending
+ * bookings are none of these.
+ */
+const PAYABLE_BOOKING_STATUSES = ["confirmed", "fully_paid", "deposit_paid"] as const;
 
 function formatPayoutAmount(cents: number, currency: string): string {
   return `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;
@@ -48,6 +56,7 @@ export function startPayoutScheduler(): void {
     console.log("[Payout Scheduler] Hourly check — looking for ready payouts…");
     await scheduleMissingPayouts();
     await processReadyPayouts();
+    await payHeldPartnerCommissions();
   });
 
   // Immediate startup check (covers restarts mid-window)
@@ -55,6 +64,7 @@ export function startPayoutScheduler(): void {
     console.log("[Payout Scheduler] Startup check…");
     await scheduleMissingPayouts();
     await processReadyPayouts();
+    await payHeldPartnerCommissions();
   });
 
   console.log("[Payout Scheduler] Started — runs every hour");
@@ -234,7 +244,7 @@ async function executeExperiencePayout(
     .where(
       and(
         eq(bookings.experienceId, experienceId),
-        inArray(bookings.status, ["confirmed", "fully_paid", "deposit_paid"])
+        inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES])
       )
     );
 
@@ -279,12 +289,27 @@ async function executeExperiencePayout(
   const currency = (experience.currency || "eur").toLowerCase();
   const transferIds: Record<string, string> = {};
 
+  // A partner's commission is earned when the event pays out, on the bookings
+  // that went through. Only the minimum-group path ever locked commissions, so
+  // on an event without a minimum group they stayed "estimated" forever and the
+  // partner was never paid. Locked here for every event that reaches its payout.
+  await db
+    .update(bookings)
+    .set({ commissionStatus: 'locked' })
+    .where(and(
+      eq(bookings.experienceId, experienceId),
+      eq(bookings.commissionStatus, 'estimated'),
+      inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
+    ));
+
   const lockedCommissionBookings = await db
     .select()
     .from(bookings)
     .where(and(
       eq(bookings.experienceId, experienceId),
       eq(bookings.commissionStatus, 'locked'),
+      // A booking cancelled or refunded after its commission was locked earns nothing.
+      inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
     ));
   const commissionsByPromoter = new Map<string, typeof lockedCommissionBookings>();
   for (const booking of lockedCommissionBookings) {
@@ -299,17 +324,20 @@ async function executeExperiencePayout(
       await storage.getPromoterProfile(promoterId),
     ] as const)),
   );
+  // A partner without a verified payout account used to defer the WHOLE event
+  // payout, a day at a time, for as long as they never connected one — the
+  // organiser, the venue and every other partner waited on them. Now only their
+  // own commission waits: it stays reserved below (so nobody else is paid it),
+  // their bookings stay "locked", and payHeldPartnerCommissions pays it the first
+  // hourly run after they connect.
   const unreadyPromoters = Array.from(promoterProfiles.entries())
     .filter(([, profile]) => !profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified')
     .map(([promoterId]) => promoterId);
   if (unreadyPromoters.length > 0) {
-    await storage.updateScheduledPayout(scheduledPayoutId, {
-      status: 'pending',
-      scheduledFor: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      errorMessage: `Waiting for verified Stripe accounts: ${unreadyPromoters.join(', ')}`,
-    });
-    console.warn(`[Payout Scheduler] Deferred ${experienceId}: promoter payout account not ready`);
-    return;
+    console.warn(
+      `[Payout Scheduler] ${experienceId}: holding commission for ${unreadyPromoters.length} partner(s) `
+      + `without a verified payout account; paying everyone else`,
+    );
   }
   const promoterReserveCents = lockedCommissionBookings.reduce(
     (sum, booking) => sum + Math.round(parseFloat(booking.commissionAmount || '0') * 100),
@@ -506,7 +534,8 @@ async function executeExperiencePayout(
   for (const [promoterId, promoterBookings] of Array.from(commissionsByPromoter.entries())) {
     const profile = promoterProfiles.get(promoterId);
     if (!profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified') {
-      console.warn(`[Payout Scheduler] Promoter ${promoterId} has locked commission but no verified Stripe account`);
+      // Held, not lost: still reserved above, still "locked", paid later.
+      transferIds[`held:promoter:${promoterId}`] = 'awaiting-verified-payout-account';
       continue;
     }
     const amount = promoterBookings.reduce(
@@ -562,6 +591,98 @@ async function executeExperiencePayout(
     `Platform: ${platformFeeAmountCents / 100}, ` +
     `Transfers: ${Object.keys(transferIds).join(", ")}`
   );
+}
+
+// ─── Partner commissions held for a missing payout account ───────────────────
+
+/**
+ * Pay the partner commissions an event payout held back because the partner had
+ * no verified payout account at the time.
+ *
+ * Their money never left the platform: the event payout reserved it and paid
+ * everyone else. So once the event's payout is completed and the partner has
+ * connected, the commission on their bookings that went through is sent in one
+ * transfer per event. The idempotency key is built from exactly those bookings,
+ * so a retry can never pay the same commission twice, and a booking cancelled in
+ * between simply drops out.
+ */
+export async function payHeldPartnerCommissions(): Promise<{ paid: number; waiting: number; failed: number }> {
+  const result = { paid: 0, waiting: 0, failed: 0 };
+  try {
+    const held = await db
+      .select()
+      .from(bookings)
+      .where(and(
+        eq(bookings.commissionStatus, 'locked'),
+        inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
+        sql`${bookings.promoterId} IS NOT NULL`,
+        sql`EXISTS (SELECT 1 FROM ${scheduledPayouts}
+                    WHERE ${scheduledPayouts.experienceId} = ${bookings.experienceId}
+                      AND ${scheduledPayouts.status} = 'completed')`,
+      ));
+
+    const groups = new Map<string, typeof held>();
+    for (const booking of held) {
+      const key = `${booking.experienceId}|${booking.promoterId}`;
+      groups.set(key, [...(groups.get(key) || []), booking]);
+    }
+
+    for (const [key, groupBookings] of Array.from(groups.entries())) {
+      const [experienceId, promoterId] = key.split('|');
+      try {
+        const amount = groupBookings.reduce(
+          (sum, booking) => sum + Math.round(parseFloat(booking.commissionAmount || '0') * 100),
+          0,
+        );
+        if (amount <= 0) continue;
+
+        const profile = await storage.getPromoterProfile(promoterId);
+        if (!profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified') {
+          result.waiting++;
+          continue;
+        }
+
+        const experience = await storage.getExperience(experienceId);
+        const currency = (experience?.currency || 'eur').toLowerCase();
+        const bookingIds = groupBookings.map(booking => booking.id).sort();
+        const fingerprint = createHash('sha256').update(bookingIds.join(',')).digest('hex').slice(0, 32);
+
+        const transfer = await stripe.transfers.create({
+          amount,
+          currency,
+          destination: profile.stripeAccountId,
+          description: `${experience?.title || 'Event'} - partner commission`,
+          metadata: { experienceId, recipientType: 'promoter', userId: promoterId, heldCommission: 'true' },
+        }, {
+          idempotencyKey: `held-commission:${experienceId}:${promoterId}:${fingerprint}`,
+        });
+
+        await db
+          .update(bookings)
+          .set({ commissionStatus: 'paid', commissionTransferId: transfer.id, commissionPaidAt: new Date() })
+          .where(inArray(bookings.id, bookingIds));
+
+        const promoter = await storage.getUser(promoterId);
+        if (promoter?.email) {
+          notificationService.sendPayoutInitiatedEmail({
+            to: promoter.email,
+            eventName: experience?.title || 'your event',
+            payoutAmount: formatPayoutAmount(amount, currency),
+            eventKey: `payout_initiated:held-commission:${experienceId}:${promoterId}:${fingerprint}`,
+          }).catch((error) => console.error('[Payout Scheduler] Held commission email failed:', error?.message || error));
+        }
+        result.paid++;
+        console.log(`[Payout Scheduler] Paid held commission ${amount / 100} ${currency.toUpperCase()} to ${promoterId} for ${experienceId}`);
+      } catch (err: any) {
+        // One partner's failed transfer must not stop the others; it is retried next hour.
+        result.failed++;
+        console.error(`[Payout Scheduler] Held commission for ${key} failed:`, err?.message || err);
+      }
+    }
+  } catch (err: any) {
+    console.error('[Payout Scheduler] Could not check held partner commissions:', err?.message || err);
+  }
+  return result;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

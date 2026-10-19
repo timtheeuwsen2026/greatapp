@@ -27,7 +27,7 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
   }, undefined, source);
   const calculateSplitAmount = routeFunction('calculateSplitAmount', {}, undefined, source);
   let whereCount = 0;
-  const db = { select: () => ({ from: () => ({
+  const db = { update: () => ({ set: () => ({ where: async () => {} }) }), select: () => ({ from: () => ({
     limit: async () => [{ platformFeePercentage: 15 }],
     where: async () => ++whereCount === 1
       ? paidBookings ?? [{ status: 'fully_paid', amount: '7.75', totalPrice: '7.75', ticketQuantity: 1, addonTotal: '7.75', ...feeOverrides }]
@@ -40,6 +40,7 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
     sumVenuePricedAddonCents, resolveVenuePayoutAccount,
     sumBookingTicketQuantity, calculateTicketDeductionCents,
     bookings: {}, platformSettings: {}, and: vi.fn(), eq: vi.fn(), inArray: vi.fn(),
+    PAYABLE_BOOKING_STATUSES: ['confirmed', 'fully_paid', 'deposit_paid'],
     notificationService: { sendPayoutInitiatedEmail: vi.fn() },
   }, undefined, source);
   return { execute, storage, stripe, buildDefaultRecipients, experience };

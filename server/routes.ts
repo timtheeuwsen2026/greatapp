@@ -168,6 +168,7 @@ import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
 import { sanitiseConcept } from "@shared/conceptIdea";
 import { redactPartnerSecrets } from "@shared/partnerPrivacy";
+import { partnerRowForViewer, summarisePartnerPeople } from "@shared/partnerPeople";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -13350,7 +13351,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const codes = rows.map((row) => row.refCode).filter(Boolean) as string[];
       const joins = await storage.countPartnerReferralJoins(experience.id, codes).catch(() => new Map());
 
-      res.json(await Promise.all(rows.map(async (row) => ({
+      // A partner on this event used to receive every other partner's row as
+      // stored — their email, account id and referral code included. The
+      // organiser sees everything; a partner sees their own row in full and
+      // only who the others are and what kind of deal they have.
+      res.json(await Promise.all(rows.map(async (row) => partnerRowForViewer({
         ...row,
         // The invite token is the credential behind a claim link, so only the
         // organiser (who has to send it) ever receives it.
@@ -13360,10 +13365,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         typeLabel: partnerTypeLabel(row.partnerType),
         termSummary: partnerTermSummary({ dealType: row.dealType, terms: row.terms || {} }),
         joined: joins.get(row.refCode || "") || 0,
-      }))));
+      }, row.partnerUserId === userId, isOrganizer))));
     } catch (error) {
       console.error("Error loading event partners:", error);
       res.status(500).json({ message: "Failed to load partners" });
+    }
+  });
+
+  /**
+   * Who one partner brought to an event, and what it has earned them.
+   *
+   * The organiser sees full names; the partner sees "Ana L." — the people are
+   * the organiser's customers, and the community needs to recognise its
+   * members, not be handed strangers' details. Nobody else sees it at all.
+   */
+  app.get("/api/experiences/:id/partners/:partnerId/people", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      const experience = await storage.getExperience(req.params.id);
+      if (!experience) return res.status(404).json({ message: "Event not found" });
+      const partner = await storage.getExperiencePartner(req.params.partnerId);
+      if (!partner || partner.experienceId !== experience.id) {
+        return res.status(404).json({ message: "Partner not found on this event" });
+      }
+
+      const isOrganizer = experience.creatorId === userId || (await checkIsAdmin(req));
+      const isThisPartner = !!userId && partner.partnerUserId === userId;
+      if (!isOrganizer && !isThisPartner) return res.status(403).json({ message: "Access denied" });
+
+      const rows = partner.refCode
+        ? await storage.getPartnerReferralBookings(experience.id, partner.refCode)
+        : [];
+      res.json({
+        partnerName: partner.partnerName,
+        currency: experience.currency || "eur",
+        payoutNote: "Paid after the event",
+        ...summarisePartnerPeople(rows as any, isOrganizer ? "organiser" : "partner"),
+      });
+    } catch (error) {
+      console.error("Error loading a partner's people:", error);
+      res.status(500).json({ message: "Failed to load who this partner brought" });
     }
   });
 

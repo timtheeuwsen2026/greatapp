@@ -169,6 +169,8 @@ import { toCalendarDate } from "@shared/calendarDates";
 import { sanitiseConcept } from "@shared/conceptIdea";
 import { redactPartnerSecrets } from "@shared/partnerPrivacy";
 import { partnerRowForViewer, summarisePartnerPeople } from "@shared/partnerPeople";
+import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
+import { venueDraftUpdate } from "./venueDraftSave";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -11255,7 +11257,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Validate using partial Zod schema (allows partial updates)
       const validationResult = extendedInsertVenueSchema.partial().safeParse(updatePayload);
-      
+
+      // A venue that is not listed yet saves whatever has been typed, exactly as
+      // the first save (POST) does. Rejecting it here threw away every later
+      // step of an unfinished listing: a blank description or address failed
+      // the full schema, the save returned 400 and nothing after the first save
+      // ever stuck. Completeness is checked on Submit for Review instead.
+      const savesAsDraft = existingVenue.status === 'draft' || existingVenue.status === 'rejected';
+      if (!validationResult.success && savesAsDraft) {
+        const draftData = venueDraftUpdate(updatePayload, validationResult.error.issues);
+        const updatedVenue = await storage.updateVenue(req.params.id, draftData as any);
+        if (req.body.addonCatalog !== undefined) {
+          try {
+            await repriceAddonsFromVenueCatalog(req.params.id, updatedVenue.addonCatalog);
+          } catch (error) {
+            console.error("Error repricing add-ons from venue catalog:", error);
+          }
+        }
+        return res.json(updatedVenue);
+      }
+
       if (!validationResult.success) {
         const errors = validationResult.error.issues.map(issue => {
           const path = issue.path.join('.');
@@ -11263,10 +11284,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         
         console.log('Venue update validation failed:', errors);
-        
+
         return res.status(400).json({
           success: false,
-          message: "Validation failed",
+          message: `Not saved: ${validationResult.error.issues.map((issue) => issue.message).join('; ')}`,
           errors,
           details: validationResult.error.issues
         });
@@ -11318,6 +11339,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if user is owner
       if (venue.createdBy !== userId) {
         return res.status(403).json({ message: "Only the venue owner can submit for review" });
+      }
+
+      const problems = venueSubmitProblems(venue);
+      if (problems.length > 0) {
+        return res.status(400).json({
+          message: `Almost there. Before submitting: ${problems.join(' ')}`,
+          errors: problems,
+        });
       }
 
       // Update status to pending and keep the venue unpublished until admin approval.

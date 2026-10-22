@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { z } from 'zod';
-import { apiRequest } from '@/lib/queryClient';
+import { apiRequest, readableError } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { getAccessToken } from '@/lib/authToken';
 import { SharedPhotoUpload, PhotoPreview } from '@/components/SharedPhotoUpload';
@@ -529,6 +529,9 @@ export default function VenueProfileSetup() {
     enabled: !!editVenueId,
   });
 
+  // Not listed yet: saves keep you in the wizard and Next saves as you go.
+  const isUnlistedDraft = !existingVenue || existingVenue.status === 'draft' || existingVenue.status === 'rejected';
+
   // Populate form when editing
   useEffect(() => {
     if (existingVenue) {
@@ -654,7 +657,9 @@ export default function VenueProfileSetup() {
       });
 
       if (editVenueId) {
-        setLocation('/venue-dashboard');
+        // Saving an unfinished listing keeps you where you were. Leaving the
+        // wizard mid-way made people think the rest was gone.
+        if (!isUnlistedDraft) setLocation('/venue-dashboard');
       } else {
         // Keep the user in the listing flow after the draft is created, on the
         // step they were already working on.
@@ -665,8 +670,8 @@ export default function VenueProfileSetup() {
     },
     onError: (error: Error) => {
       toast({
-        title: editVenueId ? 'Error updating venue' : 'Error creating venue',
-        description: error.message,
+        title: editVenueId ? 'Your changes were not saved' : 'Your venue was not saved',
+        description: readableError(error),
         variant: 'destructive',
       });
     },
@@ -691,17 +696,17 @@ export default function VenueProfileSetup() {
     },
     onError: (error: Error) => {
       toast({
-        title: 'Error submitting venue',
-        description: error.message,
+        title: 'Not submitted yet',
+        description: readableError(error),
         variant: 'destructive',
       });
     },
   });
 
-  const onSubmit = (data: VenueProfileForm) => {
+  // Convert decimal fields to strings and integer fields to numbers for backend compatibility
+  const cleanVenueForm = (data: VenueProfileForm) => {
     const isDaytimeVenue = data.venueType === 'daytime';
-    // Convert decimal fields to strings and integer fields to numbers for backend compatibility
-    const cleanedData = {
+    return {
       ...data,
       galleryImages: data.galleryImages?.filter((url: string) => url && url.trim()) || [],
       // Integer fields as numbers (capacity is required so always a number)
@@ -712,14 +717,85 @@ export default function VenueProfileSetup() {
       venueRoomTypes: isDaytimeVenue ? [] : data.venueRoomTypes,
       defaultItinerary: isDaytimeVenue ? [] : data.defaultItinerary,
     };
-    
-    profileMutation.mutate(cleanedData as unknown as VenueProfileForm);
+  };
+
+  const onSubmit = (data: VenueProfileForm) => {
+    profileMutation.mutate(cleanVenueForm(data) as unknown as VenueProfileForm);
+  };
+
+  // Where each field the review needs lives, so a refused submit can take the
+  // owner to it instead of naming a field on a step they cannot see.
+  const FIELD_STEP: Record<string, number> = {
+    name: 1, city: 1, description: 1, capacity: 1, venueType: 1,
+    coverImageUrl: 2, videoUrl: 2, galleryImages: 2,
+    location: 4, website: 4, instagram: 4,
+  };
+
+  const [savingForReview, setSavingForReview] = useState(false);
+
+  /**
+   * Submit for Review: check the form, save everything on it, then submit.
+   *
+   * Both Submit buttons used to skip a step. On an existing draft they only
+   * flipped its status, so whatever was typed since the last manual save was
+   * thrown away; on a new venue the bottom button only created a draft and
+   * never submitted it, so the venue sat invisible to the review team.
+   */
+  const saveAndSubmitForReview = async () => {
+    const isValid = await form.trigger();
+    if (!isValid) {
+      const errors = form.formState.errors as Record<string, { message?: string } | undefined>;
+      const fields = Object.keys(errors);
+      const firstStep = fields.map((field) => FIELD_STEP[field]).filter(Boolean).sort((a, b) => a - b)[0];
+      if (firstStep) setStep(firstStep);
+      toast({
+        title: 'A few things are missing',
+        description: fields.map((field) => errors[field]?.message).filter(Boolean).slice(0, 3).join(' ') ||
+          'Please complete the highlighted fields.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setSavingForReview(true);
+    try {
+      const cleaned = cleanVenueForm(form.getValues());
+      let venueId = editVenueId;
+      if (venueId) {
+        await apiRequest('PUT', `/api/venues/${venueId}`, cleaned);
+      } else {
+        const venue = await (await apiRequest('POST', '/api/venues', cleaned)).json();
+        venueId = venue.id as string;
+        window.history.replaceState({}, '', `/venues/new?edit=${venueId}`);
+        refreshVenueCaches(venue);
+      }
+      submitForReviewMutation.mutate(venueId);
+    } catch (error) {
+      toast({
+        title: 'Your venue was not saved',
+        description: readableError(error, 'Please try again.'),
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingForReview(false);
+    }
+  };
+
+  /** Next saves an existing draft quietly, so nothing typed is lost if the page closes. */
+  const autosaveDraft = () => {
+    if (!editVenueId || !isUnlistedDraft) return;
+    // No refetch afterwards: reloading the venue would reset the form under someone still typing.
+    apiRequest('PUT', `/api/venues/${editVenueId}`, cleanVenueForm(form.getValues()))
+      .catch((error) => {
+        toast({ title: 'Your last changes were not saved', description: readableError(error), variant: 'destructive' });
+      });
   };
 
   const handleNext = async () => {
     // 10 is Terms & Review, where Submit lives — Next has to carry them through
     // the new preference step (9) to reach it.
     if (step < 10) {
+      autosaveDraft();
       // Skip Rooms & Itinerary steps for daytime spaces
       let nextStep = step + 1;
       while (isDaytime && DAYTIME_SKIP_STEPS.includes(nextStep) && nextStep <= 10) {
@@ -824,24 +900,8 @@ export default function VenueProfileSetup() {
     }
   };
 
-  const handleSubmitForReview = async () => {
-    if (!editVenueId) {
-      // If no venue ID yet, save first
-      const isValid = await form.trigger();
-      if (!isValid) {
-        toast({
-          title: 'Validation Error',
-          description: 'Please fix all errors before submitting for review.',
-          variant: 'destructive',
-        });
-        return;
-      }
-      form.handleSubmit(onSubmit)();
-      return;
-    }
-
-    // Submit existing venue for review
-    submitForReviewMutation.mutate(editVenueId);
+  const handleSubmitForReview = () => {
+    void saveAndSubmitForReview();
   };
 
   const getStatusBadge = (status?: string) => {
@@ -2413,50 +2473,14 @@ export default function VenueProfileSetup() {
                     <Button
                       type="button"
                       className="w-full btn-gradient py-6 text-lg"
-                      disabled={!form.watch('termsConfirmed') || !form.watch('platformTermsAccepted') || submitForReviewMutation.isPending || profileMutation.isPending}
-                      onClick={async () => {
-                        if (editVenueId) {
-                          submitForReviewMutation.mutate(editVenueId);
-                        } else {
-                          try {
-                            const formData = form.getValues();
-                            const isDaytimeVenue = formData.venueType === 'daytime';
-                            
-                            const cleanedData = {
-                              ...formData,
-                              capacity: formData.capacity ? Number(formData.capacity) : null,
-                              venueRoles: isDaytimeVenue ? [] : formData.venueRoles,
-                              venueRoomTypes: isDaytimeVenue ? [] : formData.venueRoomTypes,
-                              defaultItinerary: isDaytimeVenue ? [] : formData.defaultItinerary,
-                            };
-                            
-                            const response = await apiRequest('POST', '/api/venues', cleanedData);
-                            const venue = await response.json();
-                            
-                            toast({
-                              title: 'Venue saved!',
-                              description: 'Now submitting for review...',
-                            });
-                            
-                            window.history.replaceState({}, '', `/venues/new?edit=${venue.id}`);
-                            refreshVenueCaches(venue);
-                            
-                            submitForReviewMutation.mutate(venue.id);
-                          } catch (error) {
-                            toast({
-                              title: 'Error saving venue',
-                              description: 'Please try again or save as draft first.',
-                              variant: 'destructive',
-                            });
-                          }
-                        }
-                      }}
+                      disabled={!form.watch('termsConfirmed') || !form.watch('platformTermsAccepted') || submitForReviewMutation.isPending || profileMutation.isPending || savingForReview}
+                      onClick={handleSubmitForReview}
                       data-testid="button-submit-for-review"
                     >
-                      {(submitForReviewMutation.isPending || profileMutation.isPending) ? (
+                      {(submitForReviewMutation.isPending || profileMutation.isPending || savingForReview) ? (
                         <>
                           <Clock className="h-5 w-5 mr-2 animate-spin" />
-                          {profileMutation.isPending ? 'Saving...' : 'Submitting...'}
+                          {profileMutation.isPending || savingForReview ? 'Saving...' : 'Submitting...'}
                         </>
                       ) : (
                         <>
@@ -2692,11 +2716,11 @@ export default function VenueProfileSetup() {
                               <Button
                                 type="button"
                                 onClick={handleSubmitForReview}
-                                disabled={profileMutation.isPending || submitForReviewMutation.isPending}
+                                disabled={profileMutation.isPending || submitForReviewMutation.isPending || savingForReview}
                                 data-testid="button-submit-for-review"
                                 aria-label="Submit venue for admin review"
                               >
-                                {submitForReviewMutation.isPending ? 'Submitting...' : 'Submit for Review'}
+                                {savingForReview ? 'Saving...' : submitForReviewMutation.isPending ? 'Submitting...' : 'Submit for Review'}
                                 <CheckCircle className="w-4 h-4 ml-2" />
                               </Button>
                             )

@@ -181,6 +181,23 @@ export default function Navigation() {
             <Link href="/how-it-works" className="text-gray-700 hover:text-primary transition-colors font-medium">
               How It Works
             </Link>
+            {/* In the bar, not only in the profile menu: communities could not
+                find where their partner link lives. */}
+            {isAuthenticated && partnerAccess?.hasAccess && (
+              <Link
+                href="/partner"
+                className="relative flex items-center gap-1.5 text-gray-700 hover:text-primary transition-colors font-medium"
+                data-testid="nav-partner-home"
+              >
+                <Handshake className="h-4 w-4" />
+                Partner Home
+                {!!partnerAccess.pendingCount && (
+                  <span className="rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-800">
+                    {partnerAccess.pendingCount}
+                  </span>
+                )}
+              </Link>
+            )}
 
             {/* One entry point, one flow. "For Creators & Venues" described an
                 audience rather than an action. This opens Create experience,
@@ -463,6 +480,22 @@ export default function Navigation() {
             >
               How It Works
             </Link>
+            {isAuthenticated && partnerAccess?.hasAccess && (
+              <Link
+                href="/partner"
+                className="flex items-center gap-1.5 px-3 py-2 text-gray-700 hover:text-primary transition-colors font-medium"
+                onClick={() => setMobileMenuOpen(false)}
+                data-testid="mobile-nav-partner-home"
+              >
+                <Handshake className="h-4 w-4" />
+                Partner Home
+                {!!partnerAccess.pendingCount && (
+                  <span className="rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-800">
+                    {partnerAccess.pendingCount}
+                  </span>
+                )}
+              </Link>
+            )}
 
             <div className="px-3 py-2">
               <Button

@@ -7,7 +7,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
-import { Calendar, Handshake, Loader2, MapPin } from "lucide-react";
+import { ArrowRight, Calendar, Handshake, Loader2, MapPin } from "lucide-react";
+import CopyableLink from "@/components/CopyableLink";
 
 /**
  * Claiming a Partners-step invite: great.app/invite/:token
@@ -43,6 +44,8 @@ export default function EventPartnerInvitePage() {
       dealLabel: string;
       termSummary: string;
       status: string;
+      /** The partner's own share link, sent only to the account that accepted. */
+      shareUrl?: string | null;
     };
     event: {
       id: string;
@@ -171,10 +174,33 @@ export default function EventPartnerInvitePage() {
             </div>
 
             {answered ? (
-              <p className="mt-5 text-sm text-gray-600" data-testid="text-invite-answered">
-                You've already {partner.status === "confirmed" ? "accepted" : "declined"} this
-                one. {partner.status === "confirmed" && "Your link is on Partner Home."}
-              </p>
+              <div className="mt-5 space-y-3" data-testid="text-invite-answered">
+                <p className="text-sm text-gray-600">
+                  You've already {partner.status === "confirmed" ? "accepted" : "declined"} this one.
+                </p>
+                {/* Someone who accepted and comes back here is looking for
+                    their link, so it is on this page, not one more click away. */}
+                {partner.status === "confirmed" && partner.shareUrl && (
+                  <div className="rounded-xl border border-indigo-100 bg-white p-4">
+                    <p className="text-sm font-semibold text-gray-900">Your link for this event</p>
+                    <p className="mb-2 text-xs text-gray-500">
+                      Share this one with your members. Only bookings through it count for you.
+                    </p>
+                    <CopyableLink url={partner.shareUrl} testId="invite-partner-share-link" />
+                  </div>
+                )}
+                {partner.status === "confirmed" && (
+                  <Button
+                    className="w-full"
+                    variant={partner.shareUrl ? "outline" : "default"}
+                    onClick={() => navigate(isAuthenticated ? "/partner" : `/login?returnTo=/invite/${token}`)}
+                    data-testid="button-open-partner-home"
+                  >
+                    {isAuthenticated ? "Open Partner Home" : "Sign in to see your link"}
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             ) : isAuthenticated ? (
               <div className="mt-5 flex gap-2">
                 <Button

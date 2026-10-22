@@ -31,6 +31,8 @@ describe('partner-specific deals', () => {
   it('combines attribution and member discount in one shareable link', () => {
     const url = new URL(partnerShareUrl('https://great.test', 'run-swim-run', 'club', 'private-share', 'member-token')!);
     expect(Object.fromEntries(url.searchParams)).toEqual({ ref: 'club', share: 'private-share', discount: 'member-token' });
+    // Straight to the full event page, not the short landing page in front of it.
+    expect(url.pathname).toBe('/experience/run-swim-run');
     expect(partnerShareUrl('https://great.test', 'event', 'club', null)).toBeNull();
   });
 });

@@ -125,3 +125,42 @@ describe('what a venue needs before review', () => {
       .toEqual(['Add how many people fit.']);
   });
 });
+
+describe('an admin approving a venue', () => {
+  function adminRoute(venue: Record<string, any>) {
+    const storage = {
+      getVenue: vi.fn(async () => venue),
+      approveVenue: vi.fn(async () => ({ ...venue, status: 'approved' })),
+      rejectVenue: vi.fn(),
+    };
+    const route = routeFunction('/api/admin/venues/:id', {
+      storage, venueSubmitProblems, checkIsAdmin: async () => true, stripVenuePricing: (v: any) => v,
+    }, 'patch');
+    return { route, storage };
+  }
+  const complete = { ...draftVenue, name: 'SAGA Coffee', city: 'Barcelona', description: 'd'.repeat(300), location: 'Carrer Villarroel 259, Barcelona', capacity: 69 };
+
+  it('approves a finished draft the owner could not submit', async () => {
+    const { route, storage } = adminRoute(complete);
+    const response = routeResponse();
+    await route({ params: { id: 'v1' }, body: { status: 'approved' } }, response);
+    expect(response.statusCode).toBe(200);
+    expect(storage.approveVenue).toHaveBeenCalledWith('v1');
+  });
+
+  it('will not approve an unfinished draft, and says what is missing', async () => {
+    const { route, storage } = adminRoute(draftVenue);
+    const response = routeResponse();
+    await route({ params: { id: 'v1' }, body: { status: 'approved' } }, response);
+    expect(response.statusCode).toBe(400);
+    expect(response.body.message).toContain('Add the city.');
+    expect(storage.approveVenue).not.toHaveBeenCalled();
+  });
+
+  it('approves a submitted venue as before', async () => {
+    const { route, storage } = adminRoute({ ...draftVenue, status: 'pending' });
+    const response = routeResponse();
+    await route({ params: { id: 'v1' }, body: { status: 'approved' } }, response);
+    expect(storage.approveVenue).toHaveBeenCalled();
+  });
+});

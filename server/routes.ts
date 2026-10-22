@@ -2884,9 +2884,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             : null;
           const mvgMet = mvgProgress?.mvg_met ?? item.experience.mvgStatus === 'met';
           const resolvedMvgStatus = mvgMet ? 'met' : (item.experience.mvgStatus || 'pending');
+          // An event partner (a community invited from the event's Partners
+          // step) gets the same link Partner Home shows: their deal's own code,
+          // and the member discount if the deal has one. The personal code below
+          // carried neither, so members paid full price and the booking did not
+          // count for the partner deal.
+          const eventPartner = item.referralAudience === 'official_partner' && item.promotionDealId && !acceptedDeal
+            ? await storage.getExperiencePartner(item.promotionDealId)
+            : null;
+          const partnerLink = eventPartner && eventPartner.partnerUserId === userId
+            ? await eventPartnerShareLink(eventPartner, item.experience, baseUrl)
+            : null;
           return {
             ...item,
-            referralLink: buildPromoterReferralLink(
+            referralLink: partnerLink || buildPromoterReferralLink(
               baseUrl,
               slugOrId,
               promoterCode,
@@ -13452,6 +13463,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const experience = await storage.getExperience(row.experienceId);
       const organizer = await storage.getUser(row.organizerId).catch(() => null);
 
+      // A partner who already accepted and opens the invite again is looking
+      // for their link, so it is handed to them here. Only to that partner's own
+      // account: the invite link itself may have been forwarded.
+      const viewerId = resolveCurrentUserId(req);
+      const shareUrl = row.status === 'confirmed' && viewerId && row.partnerUserId === viewerId
+        ? await eventPartnerShareLink(row, experience, getAppBaseUrl(req))
+        : null;
+
       res.json({
         partner: {
           id: row.id,
@@ -13462,6 +13481,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           dealLabel: partnerDealLabel(row.dealType),
           termSummary: partnerTermSummary({ dealType: row.dealType, terms: row.terms || {} }),
           status: row.status,
+          shareUrl,
         },
         event: experience
           ? {
@@ -17276,6 +17296,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const { status, reviewNotes } = req.body;
       if (status === 'approved') {
+        // An admin can approve a draft the owner could not get submitted, but
+        // only one that is actually finished.
+        const existing = await storage.getVenue(req.params.id);
+        if (existing?.status === 'draft') {
+          const problems = venueSubmitProblems(existing);
+          if (problems.length > 0) {
+            return res.status(400).json({ message: `This draft is not finished yet: ${problems.join(' ')}`, errors: problems });
+          }
+        }
         const venue = await storage.approveVenue(req.params.id);
         res.json(stripVenuePricing(venue));
       } else {

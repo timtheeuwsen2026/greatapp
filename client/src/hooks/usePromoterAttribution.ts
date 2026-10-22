@@ -62,7 +62,7 @@ export async function storeAttribution(refCode: string, shareToken?: string | nu
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ referralCode: refCode, shareToken: shareToken || undefined,
-        experienceId: window.location.pathname.match(/^\/(?:e|experiences)\/([^/]+)/)?.[1] }),
+        experienceId: window.location.pathname.match(/^\/(?:e|experiences?)\/([^/]+)/)?.[1] }),
       credentials: 'include'
     });
     

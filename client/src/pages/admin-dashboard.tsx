@@ -1,7 +1,7 @@
 import AdminEventFees from "@/components/AdminEventFees";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AdminCreatorApprovals from "@/components/AdminCreatorApprovals";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, readableError } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import Navigation from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -523,7 +523,7 @@ export default function AdminDashboard() {
     onError: (error) => {
       toast({
         title: "Update Failed",
-        description: "Failed to update venue status.",
+        description: readableError(error, "Failed to update venue status."),
         variant: "destructive",
       });
     },
@@ -1847,11 +1847,13 @@ export default function AdminDashboard() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-2 justify-end">
-                              {venue.status === 'pending' && (
+                              {/* A draft can be approved too: venues that could not get
+                                  their own submit through are finished here. */}
+                              {(venue.status === 'pending' || venue.status === 'draft') && (
                                 <>
                                   <Button
                                     size="sm"
-                                    onClick={() => updateVenueStatus.mutate({ 
+                                    onClick={() => updateVenueStatus.mutate({  
                                       id: venue.id, 
                                       status: 'approved', 
                                       notes: '',
@@ -1862,8 +1864,9 @@ export default function AdminDashboard() {
                                     data-testid={`button-approve-${venue.id}`}
                                   >
                                     <CheckCircle className="w-4 h-4 mr-1" />
-                                    Approve
+                                    {venue.status === 'draft' ? 'Approve draft' : 'Approve'}
                                   </Button>
+                                  {venue.status === 'pending' && (
                                   <Button
                                     size="sm"
                                     variant="destructive"
@@ -1879,6 +1882,7 @@ export default function AdminDashboard() {
                                     <XCircle className="w-4 h-4 mr-1" />
                                     Reject
                                   </Button>
+                                  )}
                                 </>
                               )}
                               {venue.status === 'approved' && venue.slug && (

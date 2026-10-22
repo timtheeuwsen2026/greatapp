@@ -2,7 +2,7 @@ import AddonChoicePicker from "@/components/AddonChoicePicker";
 import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
-import { useLocation, useRoute } from "wouter";
+import { useLocation, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
@@ -93,10 +93,10 @@ export default function ExperienceDetails() {
   const { isAuthenticated, user } = useAuth();
   const { toast } = useToast();
   const experienceId = singularParams?.id || pluralParams?.id;
-  const promoterRefCode = useMemo(
-    () => new URLSearchParams(currentLocation.split("?")[1] || "").get("ref"),
-    [currentLocation]
-  );
+  // wouter's location is the path alone, so the ?ref= a partner's link brings
+  // has to come from the query string.
+  const search = useSearch();
+  const promoterRefCode = useMemo(() => new URLSearchParams(search).get("ref"), [search]);
 
   // Connect to WebSocket for real-time MVG updates
   const { isConnected } = useRealtimeMVGUpdates(experienceId || '');

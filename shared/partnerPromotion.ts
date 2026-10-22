@@ -13,11 +13,17 @@ export function partnerMemberDiscount(row: any) {
   return { id: `partner:${row.id}`, title: `${row.partnerName} member discount`, type: 'percentage', value, active: true };
 }
 
+/**
+ * A partner's share link. It opens the full event page, with its photos,
+ * details and booking box, rather than the short /e/ landing page, which made
+ * a community's members click "Book Now" before they had seen the event.
+ * /experience/ also gets a proper WhatsApp and Instagram preview.
+ */
 export function partnerShareUrl(base: string, event: string, code: string | null, token: string | null, discount?: string | null) {
   if (!code || !token) return null;
   const params = new URLSearchParams({ ref: code, share: token });
   if (discount) params.set('discount', discount);
-  return `${base.replace(/\/$/, '')}/e/${encodeURIComponent(event)}?${params}`;
+  return `${base.replace(/\/$/, '')}/experience/${encodeURIComponent(event)}?${params}`;
 }
 
 /** A booking belongs to one referral link, so rates are alternatives, never added. */

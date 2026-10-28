@@ -52,6 +52,7 @@ import { AdminVenueCalendar } from "@/components/AdminVenueCalendar";
 import type { Venue, Experience, ServiceProvider } from "@shared/schema";
 import AdminTutorialVideos from "@/components/AdminTutorialVideos";
 import AdminFailedPayouts from "@/components/AdminFailedPayouts";
+import AdminDrafts from "@/components/AdminDrafts";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
@@ -769,6 +770,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="users">Users / Participants</TabsTrigger>
             <TabsTrigger value="creator-approvals">Creator Approvals</TabsTrigger>
             <TabsTrigger value="venues">Venues</TabsTrigger>
+            <TabsTrigger value="drafts" data-testid="tab-admin-drafts">Drafts</TabsTrigger>
             <TabsTrigger value="venue-offers">Venue Offers</TabsTrigger>
             <TabsTrigger value="venue-calendars">Venue Calendars</TabsTrigger>
             <TabsTrigger value="content">Content</TabsTrigger>
@@ -2028,6 +2030,10 @@ export default function AdminDashboard() {
           </TabsContent>
 
           {/* Copy and media that would otherwise need a deploy to change. */}
+          <TabsContent value="drafts" className="space-y-6">
+            <AdminDrafts />
+          </TabsContent>
+
           <TabsContent value="content" className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-semibold">Site Content</h2>

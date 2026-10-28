@@ -171,6 +171,7 @@ import { redactPartnerSecrets } from "@shared/partnerPrivacy";
 import { partnerRowForViewer, summarisePartnerPeople } from "@shared/partnerPeople";
 import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
 import { venueDraftUpdate } from "./venueDraftSave";
+import { adminDraftItems } from "./adminDrafts";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -3780,7 +3781,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      const draft = await storage.updateExperienceDraft(id, userId, sanitizeDraftNumerics(updateData));
+      // An admin finishing someone else's draft saves it as that draft's owner,
+      // so it stays theirs. Anyone else can only ever write their own drafts.
+      let ownerId = userId;
+      const existingDraft = await storage.getExperienceDraftById(id);
+      if (existingDraft && existingDraft.creatorId !== userId && await checkIsAdmin(req)) {
+        ownerId = existingDraft.creatorId;
+      }
+      const draft = await storage.updateExperienceDraft(id, ownerId, sanitizeDraftNumerics(updateData));
       res.json(draft);
     } catch (error: any) {
       console.error("Error updating experience draft:", error);
@@ -3829,11 +3837,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Draft not found" });
       }
       
-      // Verify ownership
-      if (draft.creatorId !== userId) {
+      // Verify ownership. An admin may open anyone's draft to finish it for them.
+      if (draft.creatorId !== userId && !(await checkIsAdmin(req))) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       res.json(draft);
     } catch (error) {
       console.error("Error fetching draft:", error);
@@ -5055,10 +5063,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Draft not found" });
       }
       
-      // Verify ownership
-      if (draft.creatorId !== userId) {
+      // Verify ownership. An admin may submit a finished draft for its owner;
+      // from here on everything is done as the owner, so the event, its
+      // partners and its venue contract are theirs, not the admin's.
+      if (draft.creatorId !== userId && !(await checkIsAdmin(req))) {
         return res.status(403).json({ message: "Access denied" });
       }
+      const ownerId = draft.creatorId;
 
       // Publish using the latest submitted form values, while preserving ownership.
       draft = { ...draft, ...req.body, creatorId: draft.creatorId };
@@ -5075,8 +5086,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const experienceData = buildExperienceFromBuilderPayload(draft, userId);
-      
+      const experienceData = buildExperienceFromBuilderPayload(draft, ownerId);
+
       // Create the published experience
       // The short link, derived from the title once and then fixed. Renaming
       // the event later must not break a link already on a poster.
@@ -5086,7 +5097,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await syncBuilderParticipantRoles(experience);
       // Partner rows, tokens and invite emails. Awaited so the response already
       // carries the tokens the organiser is about to copy links from.
-      await syncPartnersForExperience(experience, userId);
+      await syncPartnersForExperience(experience, ownerId);
       notifyCreatorEventSubmittedForReview(experience).catch((error) => {
         console.error("Failed to send event submitted email:", error);
       });
@@ -5099,7 +5110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         (async () => {
           const invite = await createVenueInviteForExperience({
             ...experience,
-            creatorId: userId,
+            creatorId: ownerId,
           });
           await notificationService.sendExternalVenueInvitation({
             ...experience,
@@ -5115,12 +5126,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           experienceData,
           experience.id,
           (draft as any).selectedVenueId,
-          userId
+          ownerId
         ));
       }
-      
+
       // Delete the draft since it's now published
-      await storage.deleteExperienceDraft(draftId, userId);
+      await storage.deleteExperienceDraft(draftId, ownerId);
       
       // Generate shareable link
       const shareableLink = `${getAppBaseUrl(req)}/experiences/${experience.id}`;
@@ -11347,8 +11358,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Venue not found" });
       }
 
-      // Check if user is owner
-      if (venue.createdBy !== userId) {
+      // Check if user is owner. An admin may submit it for them.
+      if (venue.createdBy !== userId && !(await checkIsAdmin(req))) {
         return res.status(403).json({ message: "Only the venue owner can submit for review" });
       }
 
@@ -17314,6 +17325,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating venue status:", error);
       res.status(500).json({ message: "Failed to update venue status" });
+    }
+  });
+
+  // Every unfinished listing, with its owner and what is missing (admin only).
+  app.get("/api/admin/drafts", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const rows = await storage.getAdminDrafts();
+      res.json(adminDraftItems(rows, (draft) => validateDraftForPublication(draft, {
+        manualDealUnlocked: (draft as any).manualDealUnlocked === true,
+      }).errors));
+    } catch (error) {
+      console.error("Error loading admin drafts:", error);
+      res.status(500).json({ message: "Failed to load drafts" });
     }
   });
 

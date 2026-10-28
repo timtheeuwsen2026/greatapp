@@ -3601,6 +3601,26 @@ export class DatabaseStorage implements IStorage {
     return draft;
   }
 
+  /**
+   * Every unfinished listing, for the admin Drafts tab: event drafts and venues
+   * still in draft, each with who owns it. Newest activity first.
+   */
+  async getAdminDrafts(): Promise<{ events: any[]; venues: any[] }> {
+    const owner = { ownerFirstName: users.firstName, ownerLastName: users.lastName, ownerEmail: users.email };
+    const events = await db
+      .select({ draft: experienceDrafts, ...owner })
+      .from(experienceDrafts)
+      .leftJoin(users, eq(users.id, experienceDrafts.creatorId))
+      .orderBy(desc(experienceDrafts.updatedAt));
+    const venueRows = await db
+      .select({ venue: venues, ...owner })
+      .from(venues)
+      .leftJoin(users, eq(users.id, venues.createdBy))
+      .where(eq(venues.status, 'draft'))
+      .orderBy(desc(venues.updatedAt));
+    return { events, venues: venueRows };
+  }
+
   async updateExperienceDraft(id: string, creatorId: string, updates: Partial<InsertExperienceDraft>): Promise<ExperienceDraft> {
     const [updated] = await db
       .update(experienceDrafts)

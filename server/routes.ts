@@ -9351,16 +9351,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Experience not found" });
       }
 
-      // Generate unique invite link with user reference
       const baseUrl = getAppBaseUrl(req);
-      // Prefer the slug: this is the link a creator pastes into a story, and
-      // a raw UUID is unreadable there. The id keeps working either way.
-      const inviteLink = `${baseUrl}/event/${publicExperienceSlugOrId(experience)}?ref=${userId}`;
-      
-      res.json({ 
+      // The full event page, the same one a partner's link and the share kit
+      // open. This used to hand out /event/<slug>, a leftover invite page with
+      // no photos, itinerary, partners or booking box — Good Soles pasted it
+      // into their WhatsApp community and every member landed on half a page.
+      // Prefer the slug: a raw UUID is unreadable in a story.
+      const eventUrl = `${baseUrl}/experience/${publicExperienceSlugOrId(experience)}`;
+
+      // The ?ref= used to be the sharer's user id, which nothing on the
+      // booking side ever recognised as a referral: attribution looks codes
+      // up by promoter code. A real code makes the link count. An organiser
+      // sharing their own event gets a plain link rather than a referral to
+      // themselves.
+      const isOrganiser = experience.creatorId === userId;
+      const referralCode = isOrganiser ? null : await storage.ensureUserReferralCode(userId);
+      const inviteLink = referralCode
+        ? `${eventUrl}?ref=${encodeURIComponent(referralCode)}`
+        : eventUrl;
+
+      res.json({
         inviteLink,
         experienceId,
         referrerId: userId,
+        referralCode,
         experienceTitle: experience.title
       });
     } catch (error: any) {

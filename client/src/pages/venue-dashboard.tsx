@@ -8,6 +8,7 @@ import MyOpenPostings from "@/components/MyOpenPostings";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import VenueSales from "@/components/VenueSales";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -947,7 +948,7 @@ function VenueDashboardContent() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="bookings">Bookings</TabsTrigger>
+            <TabsTrigger value="bookings" data-testid="tab-venue-sales">Sales</TabsTrigger>
             <TabsTrigger value="availability">Availability</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
@@ -1534,65 +1535,11 @@ function VenueDashboardContent() {
 
           <TabsContent value="bookings" className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold">Venue Bookings</h2>
+              <h2 className="text-xl font-semibold">Sales at your venue</h2>
             </div>
-
-            {bookingsLoading ? (
-              <div className="text-center py-8">
-                <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto" />
-              </div>
-            ) : bookings.length === 0 ? (
-              <Card>
-                <CardContent className="text-center py-12">
-                  <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No bookings yet</h3>
-                  <p className="text-gray-600 dark:text-gray-400">Bookings will appear here when experiences use your venue</p>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="space-y-4">
-                {bookings.map((booking: any) => (
-                  <Card key={booking.id}>
-                    <CardContent className="p-6">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="font-semibold">{booking.experience?.title}</h3>
-                            {getStatusBadge(booking.status)}
-                          </div>
-                          <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
-                            <div className="flex items-center gap-1">
-                              <Building className="w-4 h-4" />
-                              <span>{booking.venue?.name}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Calendar className="w-4 h-4" />
-                              <span>{new Date(booking.startDate).toLocaleDateString()} - {new Date(booking.endDate).toLocaleDateString()}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Users className="w-4 h-4" />
-                              <span>{booking.participants} participants</span>
-                            </div>
-                          </div>
-                          <p className="text-gray-600 dark:text-gray-400 text-sm">
-                            Revenue: ${booking.revenue || 0}
-                          </p>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setLocation(`/experiences/${booking.experienceId}`)}
-                          >
-                            View Experience
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
+            {/* Per event: who to expect, check-ins and add-ons to prepare, so a
+                venue no longer has to ask the organiser before the doors open. */}
+            <VenueSales />
           </TabsContent>
 
           <TabsContent value="availability" className="space-y-6">

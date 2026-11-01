@@ -172,6 +172,7 @@ import { partnerRowForViewer, summarisePartnerPeople } from "@shared/partnerPeop
 import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
 import { venueDraftUpdate } from "./venueDraftSave";
 import { adminDraftItems } from "./adminDrafts";
+import { summariseVenueSales } from "@shared/venueSales";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -18947,6 +18948,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) {
       console.error('Error fetching venue bookings:', err);
       res.status(500).json({ message: 'Failed to fetch venue bookings' });
+    }
+  });
+
+  // What has sold for each event at the caller's venues: headcount, check-ins
+  // and the add-ons to prepare. Venues used to ask the organiser for this.
+  app.get('/api/venue/sales', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const userVenues = await storage.getVenuesByCreator(userId);
+      if (!userVenues.length) return res.json([]);
+
+      const venueIds = userVenues.map((venue: any) => venue.id);
+      const venueNames = new Map(userVenues.map((venue: any) => [venue.id, venue.name]));
+      const events = await storage.getExperiencesByVenueIds(venueIds);
+      const bookings = await storage.getBookingsByVenueIds(venueIds);
+      res.json(summariseVenueSales(
+        events.map((event: any) => ({ ...event, venueName: venueNames.get(event.linkedVenueId) ?? null })),
+        bookings,
+      ));
+    } catch (err: any) {
+      console.error('Error fetching venue sales:', err);
+      res.status(500).json({ message: 'Failed to fetch venue sales' });
     }
   });
 

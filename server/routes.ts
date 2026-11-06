@@ -173,6 +173,8 @@ import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
 import { venueDraftUpdate } from "./venueDraftSave";
 import { adminDraftItems } from "./adminDrafts";
 import { summariseVenueSales } from "@shared/venueSales";
+import { paymentHeldUntilGroupMet } from "@shared/paymentHold";
+import { listPaymentDifferences, runPaymentCheck } from "./paymentCheck";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -6015,12 +6017,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
           }
 
-          // Settle non-MVG authorizations immediately. MVG payments remain
-          // authorized until the minimum group transition succeeds.
+          // Settle authorizations immediately unless the minimum group is still
+          // forming. A ticket bought after the group was reached is an ordinary sale;
+          // left as a hold it was never captured and expired.
           if (
             paymentIntent.status === 'requires_capture'
-            && !experience.requireMinimumParticipants
-            && !isEscrow
+            && !paymentHeldUntilGroupMet(experience, !!isEscrow)
           ) {
             paymentIntent = await stripe.paymentIntents.capture(paymentIntent.id);
           }
@@ -6084,7 +6086,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           balancePaid: !isDepositOnly, // True if full payment, false if deposit only
           status: !paymentReadyForNotifications
             ? "pending"
-            : (isEscrow || experience.requireMinimumParticipants
+            : (paymentHeldUntilGroupMet(experience, !!isEscrow)
               ? "pending"
               : (isDepositOnly ? "deposit_paid" : "fully_paid")),
           stripePaymentIntentId: paymentIntentId,
@@ -8709,7 +8711,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(409).json({ message: EVENT_HAS_PASSED_MESSAGE });
       }
 
-      const isMVGExperience = experience.requireMinimumParticipants;
+      // Held only while the group is still forming; once it is reached a ticket
+      // is charged like any other (see paymentHeldUntilGroupMet).
+      const isMVGExperience = paymentHeldUntilGroupMet(experience);
       const ticketSkus = experience.ticketSkus as any[] || [];
 
       let selectedTicket: any = null;
@@ -17344,6 +17348,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Every unfinished listing, with its owner and what is missing (admin only).
+  // Great vs Stripe: what the payment check found, and a button to run it now.
+  app.get("/api/admin/payment-differences", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const days = Math.min(400, Math.max(1, Number(req.query.days) || 30));
+      res.json(await listPaymentDifferences(days));
+    } catch (error) {
+      console.error("Error loading payment differences:", error);
+      res.status(500).json({ message: "Failed to load payment differences" });
+    }
+  });
+
+  app.post("/api/admin/payment-differences/run", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const summary = await runPaymentCheck({ lookbackDays: 35, resolveMissing: true });
+      if (!summary.ran) {
+        return res.status(409).json({ message: summary.reason || "The check did not run", summary });
+      }
+      res.json(summary);
+    } catch (error: any) {
+      console.error("Error running payment check:", error);
+      res.status(500).json({ message: error?.message || "The payment check failed" });
+    }
+  });
+
   app.get("/api/admin/drafts", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {

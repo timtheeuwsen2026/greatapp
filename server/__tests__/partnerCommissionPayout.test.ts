@@ -77,7 +77,7 @@ function payoutHarness(promoterProfile: any) {
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount, sumBookingTicketQuantity, calculateTicketDeductionCents,
-    bookings, platformSettings: {}, and, eq, inArray, PAYABLE_BOOKING_STATUSES: PAYABLE,
+    bookings, platformSettings: {}, and, eq, inArray, or: vi.fn(), isNull: vi.fn(), PAYABLE_BOOKING_STATUSES: PAYABLE,
     notificationService: { sendPayoutInitiatedEmail: vi.fn(async () => {}) },
     formatPayoutAmount: (cents: number, currency: string) => `${currency} ${(cents / 100).toFixed(2)}`,
   }, undefined, source);

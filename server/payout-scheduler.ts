@@ -21,7 +21,7 @@ import cron from "node-cron";
 import { stripe } from "./stripeClient";
 import { db } from "./db";
 import { experiences, bookings, platformSettings, scheduledPayouts } from "@shared/schema";
-import { eq, and, inArray, lt, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { notificationService } from "./notifications";
 import {
@@ -244,7 +244,9 @@ async function executeExperiencePayout(
     .where(
       and(
         eq(bookings.experienceId, experienceId),
-        inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES])
+        inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
+        // Paid with the test key: no money came in, so none goes out.
+        or(isNull(bookings.testPayment), eq(bookings.testPayment, false)),
       )
     );
 

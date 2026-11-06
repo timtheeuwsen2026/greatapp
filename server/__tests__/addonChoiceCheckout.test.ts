@@ -1,4 +1,5 @@
 import { it, expect, vi } from 'vitest';
+import { paymentHeldUntilGroupMet } from '@shared/paymentHold';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import * as choices from '@shared/addonChoices';
 import { getTicketAddon } from '@shared/ticketAddons';
@@ -11,7 +12,7 @@ function harness() {
     ticketSkus: [{ id: 'rsvp', pricingMode: 'free_rsvp', pricePerPerson: 0, addonEnabled: true,
       addons: [{ id: 'latte', addonName: 'Latte', addonVenuePrice: 7.45 }, { id: 'matcha', addonName: 'Matcha', addonVenuePrice: 7.75 }] }] };
   const create = vi.fn(async (_data: any) => ({ id: 'pi_quote', client_secret: 'pi_quote_secret' }));
-  const route = routeFunction('/api/create-payment-intent', { ...choices, getTicketAddon, eventFeeRates, depositAfterDiscount,
+  const route = routeFunction('/api/create-payment-intent', { paymentHeldUntilGroupMet, ...choices, getTicketAddon, eventFeeRates, depositAfterDiscount,
     stripe: { paymentIntents: { create } }, storage: { getExperience: async () => experience, getAcceptedVenueContractForExperience: async () => null },
     parseRequestedTicketQuantity: (v: unknown) => Number(v) || 1,
     hasExperiencePassed: () => false, getAvailableTicketQuantity: async () => 80,
@@ -55,7 +56,7 @@ it('finalizes the paid quote and frozen fees after prices and admin rates change
   const storage = { getBookingByPaymentIntent: async () => null, getExperience: async () => experience,
     getUser: async () => null, createBooking: vi.fn(async (data: any) => ({ id: 'booking', ...data })),
     getBookingsByExperience: async () => [], createExperienceMessage: async () => {} };
-  const finalize = routeFunction('createBookingForUser', { ...choices, eventFeeRates, feeSnapshotFromMetadata, depositAfterDiscount, storage,
+  const finalize = routeFunction('createBookingForUser', { paymentHeldUntilGroupMet, ...choices, eventFeeRates, feeSnapshotFromMetadata, depositAfterDiscount, storage,
     ensureBookingAccount: async (id: string) => id, parseRequestedTicketQuantity: () => 1,
     getAvailableTicketQuantity: async () => 80, getSoldAddonQuantity: async () => 0,
     resolveCheckoutDiscount: async () => ({ perTicket: 0, linkId: null, reason: null }),

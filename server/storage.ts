@@ -2413,6 +2413,8 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(bookings.experienceId, experienceId),
           inArray(bookings.status, ["confirmed", "fully_paid", "deposit_paid"] as any),
+          // Paid with the test key: no money came in, so none goes out.
+          or(isNull(bookings.testPayment), eq(bookings.testPayment, false)),
         )
       );
   }

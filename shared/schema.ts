@@ -1148,6 +1148,10 @@ export const bookings = pgTable("bookings", {
   commissionAmount: decimal("commission_amount", { precision: 10, scale: 2 }), // Calculated commission for promoter
   commissionCurrency: varchar("commission_currency", { length: 3 }), // Must match experience.currency
   commissionStatus: commissionStatusEnum("commission_status"), // estimated | locked | paid | voided
+  // Set by the Stripe check when live Stripe has no such payment (it was made
+  // with the test key). Such a booking brought in no money, so it is left out
+  // of payouts and money totals.
+  testPayment: boolean("test_payment").default(false),
   commissionTransferId: varchar("commission_transfer_id"),
   commissionPaidAt: timestamp("commission_paid_at"),
 
@@ -4576,3 +4580,34 @@ export type DealRoom = typeof dealRooms.$inferSelect;
 export type InsertDealRoom = typeof dealRooms.$inferInsert;
 export type DealRoomMessage = typeof dealRoomMessages.$inferSelect;
 export type InsertDealRoomMessage = typeof dealRoomMessages.$inferInsert;
+
+// Great vs Stripe: one row per difference the payment check found. A row the
+// check could fix itself is stored already resolved, so admins see what was
+// changed; the rest stay open until the next full check no longer finds them.
+export const paymentDifferences = pgTable(
+  "payment_differences",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    // The payment and the kind of problem; the same problem found again
+    // updates the same row instead of adding another.
+    differenceKey: varchar("difference_key", { length: 160 }).notNull().unique(),
+    kind: varchar("kind", { length: 40 }).notNull(),
+    bookingId: varchar("booking_id"),
+    experienceId: varchar("experience_id"),
+    stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+    greatStatus: varchar("great_status", { length: 30 }),
+    stripeStatus: varchar("stripe_status", { length: 40 }),
+    amountCents: integer("amount_cents").default(0).notNull(),
+    currency: varchar("currency", { length: 3 }),
+    note: text("note"),
+    autoFixed: boolean("auto_fixed").default(false).notNull(),
+    paymentCreatedAt: timestamp("payment_created_at"),
+    firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (table) => [index("payment_differences_open_idx").on(table.resolvedAt, table.lastSeenAt)],
+);
+
+export type PaymentDifference = typeof paymentDifferences.$inferSelect;
+export type InsertPaymentDifference = typeof paymentDifferences.$inferInsert;

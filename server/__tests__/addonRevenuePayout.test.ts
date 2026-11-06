@@ -39,7 +39,7 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount,
     sumBookingTicketQuantity, calculateTicketDeductionCents,
-    bookings: {}, platformSettings: {}, and: vi.fn(), eq: vi.fn(), inArray: vi.fn(),
+    bookings: {}, platformSettings: {}, and: vi.fn(), eq: vi.fn(), inArray: vi.fn(), or: vi.fn(), isNull: vi.fn(),
     PAYABLE_BOOKING_STATUSES: ['confirmed', 'fully_paid', 'deposit_paid'],
     notificationService: { sendPayoutInitiatedEmail: vi.fn() },
   }, undefined, source);

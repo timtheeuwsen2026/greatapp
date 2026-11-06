@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { paymentHeldUntilGroupMet } from '@shared/paymentHold';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import * as choices from '@shared/addonChoices';
 import { getTicketAddon } from '@shared/ticketAddons';
@@ -49,7 +50,7 @@ function resolverFor(
 function intentRoute(experience: any, resolveCheckoutDiscount: any, getDepositSchedule?: any) {
   const create = vi.fn(async (_data: any) => ({ id: 'pi_1', client_secret: 'pi_1_secret' }));
   const depositSchedule = getDepositSchedule ?? vi.fn(() => ({ available: false }));
-  const route = routeFunction('/api/create-payment-intent', {
+  const route = routeFunction('/api/create-payment-intent', { paymentHeldUntilGroupMet,
     ...choices, getTicketAddon, eventFeeRates, depositAfterDiscount,
     stripe: { paymentIntents: { create } },
     storage: { getExperience: async () => experience, getAcceptedVenueContractForExperience: async () => null },
@@ -196,7 +197,7 @@ function bookingFunction(experience: any, resolveCheckoutDiscount: any) {
     getPromoterExperienceByShareToken: async () => null, getEventPartnerTracking: async () => null,
     getUserBookings: async () => [], getConfirmedBookings: async () => [],
   };
-  const finalize = routeFunction('createBookingForUser', {
+  const finalize = routeFunction('createBookingForUser', { paymentHeldUntilGroupMet,
     ...choices, eventFeeRates, feeSnapshotFromMetadata, depositAfterDiscount, storage, stripe,
     ensureBookingAccount: async (id: string) => id, parseRequestedTicketQuantity: (v: unknown) => Number(v) || 1,
     getAvailableTicketQuantity: async () => 80, getSoldAddonQuantity: async () => 0,
@@ -268,5 +269,43 @@ describe('a booking made with no payment', () => {
     const { finalize } = bookingFunction(experience, resolver);
     await finalize('buyer', { ...base, ticketQuantity: 2, discountToken: 'tok' });
     expect(resolver).toHaveBeenCalledWith(expect.anything(), 'tok', 'sku-early', 20, 2);
+  });
+});
+
+// ── a minimum-group event ───────────────────────────────────────────────────
+// The live Stripe export showed tickets bought after the group was reached
+// left as card holds that nobody collected; they expired with the buyer
+// already at the event.
+
+describe('a ticket for a minimum-group event', () => {
+  const base = { experienceId: 'yoga', ticketSkuId: 'sku-early', ticketQuantity: 1, paymentType: 'full', amount: 20, stripePaymentIntentId: 'pi_hold' };
+  const heldIntent = {
+    id: 'pi_hold', status: 'requires_capture', amount: 2000, currency: 'eur',
+    metadata: { experienceId: 'yoga', userId: 'buyer', ticketSkuId: 'sku-early', ticketQuantity: '1' },
+  };
+
+  function book(mvgStatus: string) {
+    const experience = makeExperience({ requireMinimumParticipants: true, mvgStatus, mvgMin: 10 });
+    const setup = bookingFunction(experience, resolverFor(null));
+    setup.stripe.paymentIntents.retrieve.mockResolvedValue(heldIntent);
+    (setup.stripe.paymentIntents as any).capture = vi.fn(async () => ({ ...heldIntent, status: 'succeeded' }));
+    return setup;
+  }
+
+  it('is collected at once when the group has already been reached, and counts as paid', async () => {
+    const { finalize, createBooking, stripe } = book('met');
+    const result = await finalize('buyer', base);
+
+    expect(result.status).toBe(200);
+    expect((stripe.paymentIntents as any).capture).toHaveBeenCalledWith('pi_hold');
+    expect(createBooking).toHaveBeenCalledWith(expect.objectContaining({ status: 'fully_paid' }), expect.anything());
+  });
+
+  it('stays a hold while the group is still forming', async () => {
+    const { finalize, createBooking, stripe } = book('pending');
+    await finalize('buyer', base);
+
+    expect((stripe.paymentIntents as any).capture).not.toHaveBeenCalled();
+    expect(createBooking).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }), expect.anything());
   });
 });

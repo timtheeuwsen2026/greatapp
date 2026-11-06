@@ -31,6 +31,7 @@ import { resolveVenuePayoutAccount } from "./venuePayouts";
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
+import { updateCommissionStatus } from "./commissionService";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -211,7 +212,7 @@ async function rebuildMissingBooking(pi: Stripe.PaymentIntent, source: string): 
  * keeps this out of their way until the minimum is met. upsertScheduledPayout is
  * idempotent, so both paths touching the same experience is harmless.
  */
-async function ensurePayoutScheduled(experienceId: string | null | undefined): Promise<void> {
+export async function ensurePayoutScheduled(experienceId: string | null | undefined): Promise<void> {
   if (!experienceId) return;
 
   try {
@@ -370,8 +371,20 @@ async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
   const booking = await storage.getBookingByPaymentIntent(piId);
   if (!booking) return;
 
+  // A partial refund leaves the booking standing; the payment check lists it.
+  if (charge.amount_refunded < charge.amount_captured) {
+    console.log(`[Webhook] Charge ${charge.id} partly refunded - booking ${booking.id} unchanged`);
+    return;
+  }
+
   if (booking.status !== "refunded" && booking.status !== "cancelled") {
     await storage.updateBookingStatus(booking.id, "refunded");
+    // A refunded ticket earns nobody a commission, and the event's payout is
+    // re-totalled without it.
+    if (booking.commissionStatus === "estimated" || booking.commissionStatus === "locked") {
+      await updateCommissionStatus(booking.id, "voided");
+    }
+    await ensurePayoutScheduled(booking.experienceId);
     console.log(`[Webhook] Booking ${booking.id} marked refunded (charge ${charge.id})`);
   }
 }

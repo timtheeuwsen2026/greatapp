@@ -18,6 +18,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { stripe } from "./stripeClient";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
+import { runPaymentCheck } from "./paymentCheck";
 
 // How far back to look. Long enough to cover a weekend of nobody restarting
 // anything; short enough that the sweep stays a handful of list pages.
@@ -92,5 +93,19 @@ export function startPaymentReconciler(): void {
     );
   }, 15_000);
 
+  // Great vs Stripe. Every hour over the last three days, so a hold for an
+  // event that is on is collected long before it expires; once a day over the
+  // last 35 days, which also closes differences that have gone away. And once
+  // after boot, so a deploy puts right whatever is already wrong.
+  const check = (lookbackDays: number, resolveMissing: boolean) =>
+    runPaymentCheck({ lookbackDays, resolveMissing }).catch((error) =>
+      console.error("[Payment Check] Run failed:", error?.message),
+    );
+  cron.schedule("17 * * * *", () => { check(3, false); });
+  cron.schedule("40 3 * * *", () => { check(35, true); });
+  // The boot run reaches back to the first live payments (Jul 2026).
+  setTimeout(() => { check(150, true); }, 90_000);
+
   console.log("[Payment Reconciler] Started — sweeping for stranded payments every 10 minutes");
+  console.log("[Payment Check] Started — Great vs Stripe hourly (3 days) and daily (35 days)");
 }

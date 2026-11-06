@@ -30,6 +30,7 @@ const migrationUrls = [
   new URL("../migrations/20260926_event_fees_and_addon_choices.sql", import.meta.url),
   new URL("../migrations/20261014_concept_ideas.sql", import.meta.url),
   new URL("../migrations/20261105_payment_differences.sql", import.meta.url),
+  new URL("../migrations/20261106_test_accounts.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

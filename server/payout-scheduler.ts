@@ -716,7 +716,7 @@ function calculateSplitAmount(
  * the experience's own pct columns (creator_pct, venue_revenue_share_pct, etc).
  * This ensures backward compatibility with events created before the payment engine.
  */
-async function buildDefaultRecipients(
+export async function buildDefaultRecipients(
   experience: any,
   platformFeePct: number
 ): Promise<MinimalRecipient[]> {

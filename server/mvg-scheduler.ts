@@ -227,7 +227,8 @@ async function processMVGSuccess(experienceId: string) {
     throw new Error(`Cannot complete MVG success for ${experienceId}: event end date is missing`);
   }
 
-  const confirmedBookings = await storage.getConfirmedBookings(experienceId);
+  // Charged at checkout (`fully_paid`) counts as much as captured here.
+  const confirmedBookings = await storage.getPaidBookings(experienceId);
   const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
 
   // Schedule before leaving pending so a database failure remains retryable.
@@ -257,6 +258,36 @@ async function processMVGSuccess(experienceId: string) {
   });
 }
 
+/**
+ * Give a booking's money back: refund what was charged, release what is only
+ * held. Covers the deposit's balance payment too. Idempotency keys make a
+ * retried run refund nothing twice.
+ */
+export async function returnBookingMoney(booking: { id: string; stripePaymentIntentId: string | null; balancePaymentIntentId?: string | null }): Promise<void> {
+  const intentIds = [booking.stripePaymentIntentId, booking.balancePaymentIntentId]
+    .filter((id): id is string => !!id && id.startsWith('pi_'));
+  for (const intentId of intentIds) {
+    const intent = await stripe.paymentIntents.retrieve(intentId);
+    if (intent.status === 'requires_capture' || intent.status === 'requires_payment_method'
+      || intent.status === 'requires_confirmation' || intent.status === 'requires_action') {
+      await stripe.paymentIntents.cancel(intentId);
+    } else if (intent.status === 'succeeded') {
+      try {
+        await stripe.refunds.create(
+          { payment_intent: intentId, reason: 'requested_by_customer', metadata: { bookingId: booking.id, reason: 'minimum_group_not_reached' } },
+          { idempotencyKey: `mvg-failed-refund:${intentId}` },
+        );
+      } catch (error: any) {
+        // Refunded already (by an earlier run or by hand): the money is back.
+        if (error?.code !== 'charge_already_refunded') throw error;
+      }
+    } else if (intent.status === 'processing') {
+      throw new Error(`Payment ${intentId} is still processing - try again later`);
+    }
+    // canceled: nothing was taken.
+  }
+}
+
 async function processMVGFailure(experienceId: string, failureReason: string) {
   console.log(`[MVG Scheduler] Processing MVG FAILURE for experience ${experienceId}`);
   
@@ -276,13 +307,18 @@ async function processMVGFailure(experienceId: string, failureReason: string) {
         console.warn(`[MVG Scheduler] Booking ${booking.id} has no payment intent - marking as cancelled`);
       } else {
         try {
-          await stripe.paymentIntents.cancel(booking.stripePaymentIntentId);
-          console.log(`[MVG Scheduler] Stripe cancel successful for booking ${booking.id}`);
+          // Charged at checkout now, so most of these are refunds; an older
+          // booking may still be a hold, which is released instead.
+          await returnBookingMoney(booking);
+          console.log(`[MVG Scheduler] Money returned for booking ${booking.id}`);
           refundedBookings.push(booking);
         } catch (stripeError: any) {
-          console.error(`[MVG Scheduler] Stripe cancel failed for booking ${booking.id}: ${stripeError.message}`);
+          console.error(`[MVG Scheduler] Refund failed for booking ${booking.id}: ${stripeError.message}`);
           cancelledBookings.push(booking);
           stripeFailedCount++;
+          // Left as it is, so the next run tries again rather than marking a
+          // booking refunded whose money never went back.
+          continue;
         }
       }
       
@@ -336,6 +372,7 @@ export async function cleanupOrphanedPendingBookings(): Promise<void> {
       .select({
         bookingId: bookings.id,
         paymentIntentId: bookings.stripePaymentIntentId,
+        balancePaymentIntentId: bookings.balancePaymentIntentId,
         experienceId: bookings.experienceId,
       })
       .from(bookings)
@@ -344,7 +381,13 @@ export async function cleanupOrphanedPendingBookings(): Promise<void> {
         and(
           or(
             eq(bookings.status, 'pending'),
-            eq(bookings.status, 'deposit_authorized')
+            eq(bookings.status, 'deposit_authorized'),
+            // Charged at checkout: refunded here when the group failed and the
+            // failure run could not refund it (Stripe down, still processing).
+            and(
+              inArray(bookings.status, ['deposit_paid', 'fully_paid'] as any),
+              eq(experiences.mvgStatus, 'failed'),
+            ),
           ),
           eq(experiences.status, 'cancelled'),
           isNull(bookings.cancelledAt),
@@ -360,11 +403,12 @@ export async function cleanupOrphanedPendingBookings(): Promise<void> {
       try {
         if (row.paymentIntentId) {
           try {
-            await stripe.paymentIntents.cancel(row.paymentIntentId);
-            console.log(`[MVG Cleanup] Stripe cancel OK for booking ${row.bookingId}`);
+            await returnBookingMoney({ id: row.bookingId, stripePaymentIntentId: row.paymentIntentId, balancePaymentIntentId: row.balancePaymentIntentId });
+            console.log(`[MVG Cleanup] Money returned for booking ${row.bookingId}`);
           } catch (stripeErr: any) {
-            // Already cancelled or captured — log and continue to DB update
-            console.warn(`[MVG Cleanup] Stripe cancel skipped for ${row.bookingId}: ${stripeErr.message}`);
+            // Try again on the next run rather than mark it refunded.
+            console.warn(`[MVG Cleanup] Could not return money for ${row.bookingId}: ${stripeErr.message}`);
+            continue;
           }
         }
         await storage.markBookingAsRefunded(row.bookingId);

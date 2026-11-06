@@ -1,4 +1,5 @@
 import { venueInviteTerms } from '@shared/venueInviteTerms';
+import { groupPaymentPromise } from "@shared/groupCount";
 import sgMail from '@sendgrid/mail';
 import { createHash } from 'node:crypto';
 import { storage } from './storage';
@@ -767,6 +768,46 @@ class NotificationService {
     }
   }
 
+  /**
+   * A partner who is owed money for an event but has no Stripe account to be
+   * paid into. Sent once per event and person, at the first paid booking, so
+   * the account is ready long before the payout instead of halting it.
+   */
+  async sendPayoutSetupReminderEmail(opts: {
+    to: string;
+    firstName?: string | null;
+    eventName: string;
+    role: 'organiser' | 'venue' | 'partner';
+    setupPath: string;
+    eventKey: string;
+  }): Promise<void> {
+    const subject = `Set up your payouts for ${opts.eventName}`;
+    const what = opts.role === 'venue'
+      ? 'your share as the venue'
+      : opts.role === 'partner'
+        ? 'your commission for the people you brought'
+        : 'your earnings as the organiser';
+    const bodyText = `Hi ${opts.firstName || 'there'}, the first tickets for ${opts.eventName} have been sold. To receive ${what}, connect a Stripe account. It takes a few minutes, and your payout is sent there automatically after the event.`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText,
+      cta: { label: 'Set up payouts', href: `${APP_BASE_URL}${opts.setupPath}` },
+      preheader: `Connect Stripe to get paid for ${opts.eventName}.`,
+      growthFooterContext: 'none',
+    });
+    const result = await sendEmailOnce({
+      eventKey: opts.eventKey,
+      emailType: 'payout_setup_reminder',
+      to: opts.to,
+      subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send payout setup email');
+    }
+  }
+
   async sendPayoutInitiatedEmail(opts: {
     to: string;
     eventName: string;
@@ -999,14 +1040,18 @@ The Great. Team
 
       if (bookingDecision.kind === 'pre_mvg') {
         subject = `Spot reserved! We need ${remainingMvgSpots} more people to confirm ${experience.title}`;
-        const bodyText = `Hey ${user.firstName || 'there'}, you are officially on the roster for ${experience.title}! Because this is a community-powered experience, it only happens if we hit our minimum group size. Your spot is reserved, but we still need ${remainingMvgSpots} more people to lock it in. The system just announced your arrival in the Community Hub. Jump in, say hi, and introduce yourself to the squad!`;
+        const bodyText = `Hey ${user.firstName || 'there'}, you are officially on the roster for ${experience.title}! ${groupPaymentPromise((experience as any).mvgMin || experience.minimumParticipants, (experience as any).mvgDeadline)} We still need ${remainingMvgSpots} more people to lock it in. The system just announced your arrival in the Community Hub. Jump in, say hi, and introduce yourself to the squad!`;
         const email = renderBaseEmail({
           to: user.email,
           bodyText,
           receiptRows: [
             { label: 'Ticket Type', value: booking.ticketName || 'General Admission' },
-            { label: 'Deposit Paid Today', value: formatCurrency(booking.depositAmount) },
-            { label: 'Balance Due upon Confirmation', value: formatCurrency(booking.balanceAmount) },
+            ...(booking.isDepositOnly
+              ? [
+                { label: 'Deposit Paid Today', value: formatCurrency(booking.depositAmount) },
+                { label: 'Balance Due upon Confirmation', value: formatCurrency(booking.balanceAmount) },
+              ]
+              : [{ label: 'Paid Today', value: formatCurrency(booking.amount) }]),
           ],
           cta: { label: 'Introduce Yourself in the Hub', href: communityHubUrl() },
           preheader: `Your spot is reserved for ${experience.title}. Help unlock the group.`,

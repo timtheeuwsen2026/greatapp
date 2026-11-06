@@ -1,4 +1,5 @@
 import AddonChoicePicker from "@/components/AddonChoicePicker";
+import { groupPaymentPromise } from "@shared/groupCount";
 import { getTicketAddons, parseAddonSelections, type AddonSelection, type BookingAddonItem } from "@shared/addonChoices";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
@@ -328,7 +329,7 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
         <div className="text-xs text-center text-gray-600 dark:text-gray-400 space-y-1">
           <div className="flex items-center justify-center space-x-1">
             <Shield className="h-3 w-3 text-green-600" />
-            <span>Deposit charged now, balance due if minimum reached</span>
+            <span>{groupPaymentPromise(paymentInfo?.mvgMin ?? experience.minimumParticipants, paymentInfo?.mvgDeadline ?? experience.mvgDeadline)}</span>
           </div>
           <div>💳 Deposit: {formatCurrency(paymentInfo?.depositAmount || 0, experience.currency)} charged immediately</div>
           <div>💸 Full refund if minimum not met by deadline</div>
@@ -343,18 +344,10 @@ const CheckoutForm = ({ experience, paymentInfo, paymentMode }: {
       
       {isMVG && !isDeposit && (
         <div className="text-xs text-center text-gray-600 dark:text-gray-400 space-y-1">
-          <div className="flex items-center justify-center space-x-1">
+          <div className="flex items-center justify-center space-x-1" data-testid="text-group-payment-promise">
             <Shield className="h-3 w-3 text-green-600" />
-            <span>Payment held securely until minimum group size reached</span>
+            <span>{groupPaymentPromise(paymentInfo?.mvgMin ?? experience.minimumParticipants, paymentInfo?.mvgDeadline ?? experience.mvgDeadline)}</span>
           </div>
-          <div>💳 Full {formatCurrency(chargeAmount, experience.currency)} held until event confirms</div>
-          <div>💸 Automatic refund if minimum not met by deadline</div>
-          <div>✅ Charged only when event confirms</div>
-          {paymentInfo?.mvgMin && (
-            <div className="mt-2 font-medium">
-              Minimum group size: {paymentInfo.mvgMin} participants
-            </div>
-          )}
         </div>
       )}
       
@@ -1309,10 +1302,9 @@ export default function Checkout() {
                     <>
                       <div className="flex items-center mb-2">
                         <Shield className="h-3 w-3 mr-1 text-green-600" />
-                        <span className="text-green-700 font-medium">Escrow Protection Enabled</span>
+                        <span className="text-green-700 font-medium">Full refund if the group doesn't form</span>
                       </div>
-                      <p>• Payment held safely until event confirms</p>
-                      <p>• Automatic refund if minimum not reached</p>
+                      <p>• {groupPaymentPromise(experience.minimumParticipants, experience.mvgDeadline)}</p>
                       <p>• Secure payment processing with Stripe</p>
                     </>
                   ) : (

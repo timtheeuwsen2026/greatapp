@@ -1,4 +1,5 @@
 import { withoutEventFeeOverrides } from "@shared/platformFees";
+import { countsTowardsGroup, isPaidBooking } from "@shared/groupCount";
 import { withSanitisedConcept } from "@shared/conceptIdea";
 import { connectPartnerPromotion } from './partnerPromotionStorage';
 import { isDeepStrictEqual } from 'node:util';
@@ -2222,7 +2223,7 @@ export class DatabaseStorage implements IStorage {
     const allBookings = await this.getBookingsByExperience(experienceId);
     
     const confirmedAmount = allBookings
-      .filter(b => b.status === "confirmed")
+      .filter(isPaidBooking)
       .reduce((sum, b) => sum + Number(b.amount), 0);
     
     const pendingAmount = allBookings
@@ -2231,7 +2232,7 @@ export class DatabaseStorage implements IStorage {
     
     const totalFunded = confirmedAmount + pendingAmount;
     const totalSeats = sumBookingTicketQuantity(
-      allBookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+      allBookings.filter(countsTowardsGroup),
     );
     
     const price = Number(experience.price);
@@ -2444,7 +2445,11 @@ export class DatabaseStorage implements IStorage {
           eq(bookings.experienceId, experienceId),
           or(
             eq(bookings.status, 'deposit_authorized'),
-            eq(bookings.status, 'pending')
+            eq(bookings.status, 'pending'),
+            // Every paid booking is charged at checkout now, so a failed group
+            // has to refund these too.
+            eq(bookings.status, 'deposit_paid'),
+            eq(bookings.status, 'fully_paid'),
           ),
           isNull(bookings.depositCapturedAt),
           isNull(bookings.cancelledAt)

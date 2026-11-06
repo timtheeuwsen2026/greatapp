@@ -44,6 +44,9 @@ export const users = pgTable("users", {
     .primaryKey()
     .default(sql`gen_random_uuid()`),
   email: varchar("email").unique(),
+  // An account used to try the platform out (the owner's own, for one). Its
+  // bookings are marked test payments: left out of payouts and commissions.
+  testAccount: boolean("test_account").default(false),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),

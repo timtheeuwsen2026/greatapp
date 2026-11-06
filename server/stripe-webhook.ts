@@ -32,6 +32,7 @@ import { notificationService, formatPromotionDealSummary } from "./notifications
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { finalizeBookingFromPaymentIntent } from "./bookingFinalizer";
 import { updateCommissionStatus } from "./commissionService";
+import { remindPayoutAccountSetup } from "./payoutSetupReminders";
 
 // ─── Type helpers ────────────────────────────────────────────────────────────
 
@@ -288,6 +289,8 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent): Promise<v
     await storage.updateBookingStatus(booking.id, "fully_paid");
     console.log(`[Webhook] Full payment confirmed for booking ${booking.id}`);
     await sendBookingNotificationsAfterPayment(booking.id);
+    remindPayoutAccountSetup(booking.experienceId, booking).catch((error: any) =>
+      console.error("[Webhook] Failed to send payout setup reminders:", error?.message || error));
   }
 
   // Money for this event has landed, so the payout job has to exist. Re-running

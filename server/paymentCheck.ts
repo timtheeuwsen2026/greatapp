@@ -3,8 +3,9 @@
  *
  * Reads every booking with a Stripe payment in the look-back window, asks
  * Stripe what really happened to that payment, and applies the decision from
- * paymentReconciliation.ts: collect a hold the event is owed, release one left
- * on a cancelled booking, and bring the booking's status in line with Stripe.
+ * paymentReconciliation.ts: release a hold left on a cancelled booking, and
+ * bring the booking's status in line with Stripe. It never collects a hold:
+ * every paid booking is charged at checkout.
  * Every difference is written to `payment_differences` for the admin list,
  * the ones fixed here already marked resolved.
  *
@@ -17,7 +18,6 @@ import { and, eq, gte, inArray, isNotNull, isNull, lt, not, sql } from "drizzle-
 import { db } from "./db";
 import { bookings, experiences, paymentDifferences } from "@shared/schema";
 import { stripe as defaultStripe, stripeKeyMode, stripeSecretKey } from "./stripeClient";
-import { storage } from "./storage";
 import { ensurePayoutScheduled } from "./stripe-webhook";
 import {
   decidePaymentReconciliation,
@@ -65,25 +65,13 @@ async function applyDecision(
   stripe: Stripe,
 ): Promise<boolean> {
   switch (action) {
-    case "capture": {
-      await stripe.paymentIntents.capture(booking.stripePaymentIntentId);
-      const captured = await storage.markDepositAsCaptured(booking.id);
-      if (!captured) {
-        console.error(
-          `[CRITICAL] [Payment Check] Captured ${booking.stripePaymentIntentId} for booking ${booking.id}, which was cancelled meanwhile - check whether it needs refunding`,
-        );
-      }
-      await ensurePayoutScheduled(booking.experienceId);
-      return true;
-    }
     case "release":
       await stripe.paymentIntents.cancel(booking.stripePaymentIntentId);
       return true;
     case "mark_paid": {
-      const paidStatus = booking.requireMinimumParticipants ? "confirmed" : "fully_paid";
       const updated = await db
         .update(bookings)
-        .set({ status: paidStatus as any })
+        .set({ status: "fully_paid" as any })
         .where(and(
           eq(bookings.id, booking.id),
           inArray(bookings.status, ["pending", "deposit_authorized"] as any),

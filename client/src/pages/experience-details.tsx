@@ -1,7 +1,7 @@
 import AddonChoicePicker from "@/components/AddonChoicePicker";
 import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
-import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
+import { bookingClosedMessage, hasExperiencePassed } from "@shared/eventLifecycle";
 import { useLocation, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
@@ -577,7 +577,10 @@ export default function ExperienceDetails() {
   // The page stays: a past event is the organiser's track record and the thing
   // an attendee comes back to find. Only the transaction closes — and the
   // server refuses it too, so this is presentation, not the guard.
-  const eventHasPassed = hasExperiencePassed(experience);
+  // Closed when the event is over, or when a minimum group missed its deadline.
+  const salesClosedMessage = experience ? bookingClosedMessage(experience as any) : null;
+  const eventHasPassed = !!salesClosedMessage;
+  const eventIsOver = experience ? hasExperiencePassed(experience) : false;
 
   return (
     <div className="min-h-screen bg-white">
@@ -1460,7 +1463,7 @@ export default function ExperienceDetails() {
                       className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600"
                       data-testid="notice-event-has-passed"
                     >
-                      {EVENT_HAS_PASSED_MESSAGE}
+                      {salesClosedMessage}
                     </div>
                   )}
 
@@ -1636,7 +1639,7 @@ export default function ExperienceDetails() {
                                     data-testid={`ticket-availability-${index}`}
                                   >
                                     {eventHasPassed
-                                      ? 'Event ended'
+                                      ? (eventIsOver ? 'Event ended' : 'Sales closed')
                                       : isSoldOut
                                         ? 'Sold out'
                                         : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
@@ -1758,7 +1761,7 @@ export default function ExperienceDetails() {
                               <div className="mt-4">
                                 {isClosed ? (
                                   <Button className="w-full h-12 bg-gray-200 text-gray-500 rounded-lg font-medium" size="lg" disabled data-testid={`button-soldout-ticket-${index}`}>
-                                    {eventHasPassed ? "Event has ended" : "Sold Out"}
+                                    {eventHasPassed ? (eventIsOver ? "Event has ended" : "Sales closed") : "Sold Out"}
                                   </Button>
                                 ) : isAuthenticated ? (
                                   <Link href={withDiscount(checkoutHref)}>
@@ -1954,7 +1957,7 @@ export default function ExperienceDetails() {
                       className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-600"
                       data-testid="notice-event-has-passed-sidebar"
                     >
-                      {EVENT_HAS_PASSED_MESSAGE}
+                      {salesClosedMessage}
                     </div>
                   ) : isAuthenticated ? (
                     <>

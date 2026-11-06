@@ -49,7 +49,6 @@ export type ReconExperience = {
 
 export type ReconAction =
   | "none"
-  | "capture" // collect a hold for an event that is on
   | "release" // let go of a hold on a booking that is cancelled
   | "mark_paid" // Stripe has the money, Great still says pending
   | "mark_refunded" // Stripe gave it all back, Great still counts it
@@ -126,20 +125,14 @@ export function decidePaymentReconciliation(
           note: "Booking is cancelled but the card was still held. Hold released.",
         };
       }
-      if (!experience.requireMinimumParticipants) {
-        // Not a minimum-group event, so nothing here says when this hold was
-        // meant to be collected (older deposit flows hold on purpose). Show it.
-        return {
-          action: "none",
-          kind: "uncollected_hold",
-          note: `Card is held (€${euros(intent.amountCents)}) but not collected. Check this booking.`,
-        };
-      }
-      if (experience.mvgStatus !== "met") return { action: "none" };
+      // Every paid booking is charged at checkout now (Nov 2026), so a hold is
+      // left over from before that change, or from an older deposit flow that
+      // holds on purpose. Nothing is collected automatically; it is shown, so a
+      // person can capture or release it in Stripe before it expires.
       return {
-        action: "capture",
+        action: "none",
         kind: "uncollected_hold",
-        note: `Card was only held (€${euros(intent.amountCents)}) although the event is on. Collected.`,
+        note: `Card is held (€${euros(intent.amountCents)}) but not collected. It expires about 7 days after the booking.`,
       };
     }
 

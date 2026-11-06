@@ -81,7 +81,7 @@ import {
 } from "@shared/ticketAddons";
 import { normalizeAddonDiscountPct, syncSkuAddonsWithCatalog } from "@shared/venueAddonPricing";
 import { validateExperienceDealTerms } from "@shared/dealTermGuards";
-import { EVENT_HAS_PASSED_MESSAGE, hasExperiencePassed } from "@shared/eventLifecycle";
+import { EVENT_HAS_PASSED_MESSAGE, bookingClosedMessage, hasExperiencePassed } from "@shared/eventLifecycle";
 import {
   assessBookingCancellation,
   bookingCancellationGate,
@@ -173,8 +173,9 @@ import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
 import { venueDraftUpdate } from "./venueDraftSave";
 import { adminDraftItems } from "./adminDrafts";
 import { summariseVenueSales } from "@shared/venueSales";
-import { paymentHeldUntilGroupMet } from "@shared/paymentHold";
 import { listPaymentDifferences, runPaymentCheck } from "./paymentCheck";
+import { countsTowardsGroup, groupPaymentPromise } from "@shared/groupCount";
+import { remindPayoutAccountSetup } from "./payoutSetupReminders";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -5633,8 +5634,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // reconciler catching up) must still become a booking: refusing there
       // would leave money captured with nothing behind it, which is the failure
       // this whole path exists to prevent.
-      if (!stripePaymentIntentId && hasExperiencePassed(experience)) {
-        return { status: 409, body: { message: EVENT_HAS_PASSED_MESSAGE } };
+      if (!stripePaymentIntentId && bookingClosedMessage(experience)) {
+        return { status: 409, body: { message: bookingClosedMessage(experience) } };
       }
 
       // PROMOTER ATTRIBUTION - Priority order:
@@ -5941,7 +5942,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const paymentIntentData: any = {
           amount: Math.round(chargeAmount * 100), // Convert to cents
           currency: (experience.currency || "eur").toLowerCase(),
-          capture_method: "manual", // Hold payment until manually captured
+          // Charged at once; see the minimum-group note in create-payment-intent.
           confirmation_method: "automatic",
           metadata: { 
             experienceId, 
@@ -6017,13 +6018,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
           }
 
-          // Settle authorizations immediately unless the minimum group is still
-          // forming. A ticket bought after the group was reached is an ordinary sale;
-          // left as a hold it was never captured and expired.
-          if (
-            paymentIntent.status === 'requires_capture'
-            && !paymentHeldUntilGroupMet(experience, !!isEscrow)
-          ) {
+          // Every paid booking is charged at once, minimum-group events too: a
+          // card hold expires after about 7 days, long before most group deadlines,
+          // and the money was lost. If the group is not reached by the deadline,
+          // everyone is refunded. A hold only reaches here from a checkout opened
+          // before this change.
+          if (paymentIntent.status === 'requires_capture') {
             paymentIntent = await stripe.paymentIntents.capture(paymentIntent.id);
           }
           paymentReadyForNotifications = ['requires_capture', 'succeeded'].includes(paymentIntent.status);
@@ -6036,7 +6036,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let commissionCurrency: string | null = null;
       let commissionStatus: 'estimated' | 'locked' | 'paid' | 'voided' | null = null;
       
-      if (promoterId && fullPrice > 0) {
+      // A test account's bookings (the owner trying the checkout) earn nobody a
+      // commission and are left out of payouts.
+      const buyerIsTestAccount = !!(await storage.getUser(userId))?.testAccount;
+
+      if (promoterId && fullPrice > 0 && !buyerIsTestAccount) {
         // Commission is calculated on FULL PRICE, not deposit
         // DATA CONTRACT: Price comes from ticketSkus.pricePerPerson, currency from experience.currency
         const pricePerPerson = unitPrice;
@@ -6086,10 +6090,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           balancePaid: !isDepositOnly, // True if full payment, false if deposit only
           status: !paymentReadyForNotifications
             ? "pending"
-            : (paymentHeldUntilGroupMet(experience, !!isEscrow)
-              ? "pending"
-              : (isDepositOnly ? "deposit_paid" : "fully_paid")),
+            : (isDepositOnly ? "deposit_paid" : "fully_paid"),
           stripePaymentIntentId: paymentIntentId,
+          testPayment: buyerIsTestAccount,
           // Promoter attribution (null if no referral)
           promoterId,
           referralCode,
@@ -6173,7 +6176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       if (paymentReadyForNotifications && experience.requireMinimumParticipants && experience.mvgStatus === "pending") {
         const currentBookings = sumBookingTicketQuantity(
-          updatedBookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+          updatedBookings.filter(countsTowardsGroup),
         );
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
         
@@ -6203,6 +6206,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await sendBookingNotificationsAfterPayment(booking.id, {
           sendParticipant: mvgCheckResult?.action !== "mvg_confirmed",
         });
+        // Money is in: whoever is owed a share but cannot be paid yet is asked
+        // to connect Stripe now, not when the payout fails after the event.
+        if (Number(booking.amount) > 0) {
+          remindPayoutAccountSetup(experienceId, booking).catch((error: any) =>
+            console.error("Failed to send payout setup reminders:", error?.message || error));
+        }
       }
 
       // ── Mark referral click as converted ──────────────────────────────────
@@ -6252,10 +6261,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const mvgMin = experience.mvgMin || experience.minimumParticipants || 6;
         const currentCount = await storage.getBookingsByExperience(experienceId).then(bookings =>
           sumBookingTicketQuantity(
-            bookings.filter(b => b.status === "confirmed" || b.status === "pending"),
+            bookings.filter(countsTowardsGroup),
           )
         );
-        message = `Payment secured! We're at ${currentCount}/${mvgMin} participants. Your payment is held safely until we reach the minimum group size.`;
+        message = `Booked! We're at ${currentCount}/${mvgMin} participants. ${groupPaymentPromise(mvgMin, experience.mvgDeadline)}`;
       } else {
         message = "Booking confirmed successfully!";
       }
@@ -7507,10 +7516,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Validation 4: Experience must not have finished. Deposits close earlier
     // than walk-up bookings do — see the deposit schedule below — but the hard
     // floor is the same one every other money path uses.
-    if (hasExperiencePassed(experience)) {
+    if (bookingClosedMessage(experience)) {
       return res.status(409).json({
         success: false,
-        message: EVENT_HAS_PASSED_MESSAGE,
+        message: bookingClosedMessage(experience),
       });
     }
 
@@ -8179,7 +8188,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
           
           // Send MVG confirmed notifications to all participants
-          const mvgBookings = allBookings.filter(b => b.status === "confirmed" || b.status === "pending");
+          const mvgBookings = allBookings.filter(countsTowardsGroup);
           await notificationService.sendMVGConfirmedNotification(notificationExperience, mvgBookings);
           console.log(`[MVG Auto-Confirm] Trip ${experienceId} confirmed - notifications sent to ${mvgBookings.length} participants`);
         } catch (mvgError) {
@@ -8707,13 +8716,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Refuse before any money moves. This is the gate that matters: once a
       // PaymentIntent exists, the booking has to be allowed to complete.
-      if (hasExperiencePassed(experience)) {
-        return res.status(409).json({ message: EVENT_HAS_PASSED_MESSAGE });
+      // Also closed once a minimum group has missed its deadline.
+      if (bookingClosedMessage(experience)) {
+        return res.status(409).json({ message: bookingClosedMessage(experience) });
       }
-
-      // Held only while the group is still forming; once it is reached a ticket
-      // is charged like any other (see paymentHeldUntilGroupMet).
-      const isMVGExperience = paymentHeldUntilGroupMet(experience);
+      const isMVGExperience = experience.requireMinimumParticipants;
       const ticketSkus = experience.ticketSkus as any[] || [];
 
       let selectedTicket: any = null;
@@ -8950,12 +8957,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
       };
 
-      if (isMVGExperience && !hasDeposit) {
-        // manual capture holds the payment until MVG deadline; automatic_payment_methods
-        // (already set in base object) covers confirmation — confirmation_method must not
-        // be set alongside automatic_payment_methods or Stripe rejects the call.
-        paymentIntentData.capture_method = "manual";
-      } else if (isMVGExperience && hasDeposit) {
+      // Charged at once, minimum-group events too (no card holds): a hold
+      // expires after about 7 days, long before most group deadlines. If the
+      // group is not reached, the MVG scheduler refunds everyone.
+      if (isMVGExperience && hasDeposit) {
         paymentIntentData.setup_future_usage = "off_session";
       }
 
@@ -9693,7 +9698,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       throw new Error(`Cannot complete MVG success for ${experienceId}: event end date is missing`);
     }
 
-    const confirmedBookings = await storage.getConfirmedBookings(experienceId);
+    // Tickets are charged at checkout now (`fully_paid`), so the group's money
+    // is every paid booking, not only the ones this run confirmed.
+    const confirmedBookings = await storage.getPaidBookings(experienceId);
     const grossCents = sumBookingPayoutGrossCents(confirmedBookings);
 
     // Persist the payout while MVG is still pending so scheduling failures can be retried.
@@ -20882,6 +20889,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error retrying payout:", error);
       res.status(500).json({ message: "Failed to retry the payout" });
+    }
+  });
+
+  // Paid outside Stripe (a bank transfer to a venue without an account, say).
+  // The payout is closed as completed with who did it and why, so neither the
+  // hourly run nor a retry can ever pay the event a second time.
+  app.post('/api/admin/scheduled-payouts/:id/mark-paid-manually', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const note = String(req.body?.note ?? "").trim().slice(0, 500);
+      if (!note) {
+        return res.status(400).json({ message: "Say how it was paid (for example: bank transfer to the venue on 6 Nov)." });
+      }
+      const payout = await storage.getScheduledPayoutById(req.params.id);
+      if (!payout) return res.status(404).json({ message: "Payout not found" });
+      if (payout.status !== "failed" && payout.status !== "pending") {
+        return res.status(409).json({ message: `Only a failed or waiting payout can be marked paid — this one is ${payout.status}.` });
+      }
+      const admin = await storage.getUser(req.user.claims.sub);
+      const stamp = new Date();
+      const updated = await storage.updateScheduledPayout(payout.id, {
+        status: "completed",
+        processedAt: stamp,
+        errorMessage: `Paid manually: ${note} (marked by ${admin?.email || "admin"} on ${stamp.toISOString().slice(0, 10)})`,
+      } as any);
+      // The partners' commissions were part of what was paid.
+      await db
+        .update(bookings)
+        .set({ commissionStatus: "paid" })
+        .where(and(
+          eq(bookings.experienceId, payout.experienceId),
+          inArray(bookings.commissionStatus, ["estimated", "locked"] as any),
+          inArray(bookings.status, ["confirmed", "fully_paid", "deposit_paid"] as any),
+        ));
+      console.log(`[Payout Scheduler] Admin marked payout ${payout.id} for ${payout.experienceId} as paid manually`);
+      res.json({ payout: updated, message: "Marked as paid manually. Great will not pay this event again." });
+    } catch (error) {
+      console.error("Error marking payout paid manually:", error);
+      res.status(500).json({ message: "Failed to mark the payout as paid" });
     }
   });
 

@@ -16,18 +16,11 @@ const groupForming = { requireMinimumParticipants: true, mvgStatus: "pending" };
 const ordinary = { requireMinimumParticipants: false, mvgStatus: null };
 
 describe("Great vs Stripe for one booking", () => {
-  it("collects a held card once the group is reached", () => {
-    const decision = decidePaymentReconciliation(booking(), intent({ status: "requires_capture", receivedCents: 0 }), groupMet, now);
-    expect(decision).toMatchObject({ action: "capture", kind: "uncollected_hold" });
-  });
-
-  it("leaves the hold alone while the group is still forming", () => {
-    expect(decidePaymentReconciliation(booking(), intent({ status: "requires_capture" }), groupForming, now).action).toBe("none");
-  });
-
-  it("only reports a hold on an ordinary event, since nothing says when it was meant to be collected", () => {
-    expect(decidePaymentReconciliation(booking(), intent({ status: "requires_capture" }), ordinary, now))
-      .toMatchObject({ action: "none", kind: "uncollected_hold" });
+  it("never collects a hold: tickets are charged at checkout, so a hold is only reported", () => {
+    for (const experience of [groupMet, groupForming, ordinary]) {
+      expect(decidePaymentReconciliation(booking(), intent({ status: "requires_capture", receivedCents: 0 }), experience, now))
+        .toMatchObject({ action: "none", kind: "uncollected_hold" });
+    }
   });
 
   it("releases a hold left on a cancelled booking", () => {

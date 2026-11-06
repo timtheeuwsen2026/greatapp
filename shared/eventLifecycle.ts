@@ -62,3 +62,34 @@ export function hasExperiencePassed(
  */
 export const EVENT_HAS_PASSED_MESSAGE =
   "This event has already taken place, so it can no longer be booked.";
+
+/**
+ * Has a minimum-group event missed its deadline?
+ *
+ * Every ticket is charged at checkout and refunded if the group is not reached
+ * by the deadline. Selling after that moment would charge someone for an event
+ * that is already off, so sales close the moment the deadline passes without
+ * the group, before the scheduler has even marked the event failed.
+ */
+export type GroupDeadlineLike = {
+  requireMinimumParticipants?: boolean | null;
+  mvgStatus?: string | null;
+  mvgDeadline?: Date | string | number | null;
+};
+
+export function hasMissedGroupDeadline(experience: GroupDeadlineLike, now: Date = new Date()): boolean {
+  if (!experience?.requireMinimumParticipants || experience.mvgStatus === "met") return false;
+  if (experience.mvgStatus === "failed") return true;
+  const deadline = toDate(experience.mvgDeadline);
+  return !!deadline && now.getTime() > deadline.getTime();
+}
+
+export const GROUP_DEADLINE_MISSED_MESSAGE =
+  "Ticket sales are closed: the minimum group was not reached by the deadline. Everyone who booked gets a full refund.";
+
+/** Why this event can no longer be booked, or null while it can. */
+export function bookingClosedMessage(experience: EventDatesLike & GroupDeadlineLike, now: Date = new Date()): string | null {
+  if (hasExperiencePassed(experience, now)) return EVENT_HAS_PASSED_MESSAGE;
+  if (hasMissedGroupDeadline(experience, now)) return GROUP_DEADLINE_MISSED_MESSAGE;
+  return null;
+}

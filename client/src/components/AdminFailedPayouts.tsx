@@ -59,6 +59,25 @@ export default function AdminFailedPayouts() {
       toast({ title: "Could not re-queue", description: error.message, variant: "destructive" }),
   });
 
+  const markPaid = useMutation({
+    mutationFn: async ({ id, note }: { id: string; note: string }) => {
+      const response = await apiRequest("POST", `/api/admin/scheduled-payouts/${id}/mark-paid-manually`, { note });
+      return response.json();
+    },
+    onSuccess: (result: any) => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ["/api/creator/payouts"] });
+      toast({ title: "Marked as paid", description: result?.message || "Great will not pay this event again." });
+    },
+    onError: (error: Error) =>
+      toast({ title: "Not marked", description: error.message, variant: "destructive" }),
+  });
+
+  const askAndMarkPaid = (id: string) => {
+    const note = window.prompt("Paid outside Stripe? Say how and when (for example: bank transfer to the venue on 6 Nov). Great will then never pay this event's payout.");
+    if (note && note.trim()) markPaid.mutate({ id, note: note.trim() });
+  };
+
   const failed = payouts.filter((payout) => payout.status === "failed");
 
   return (
@@ -112,16 +131,27 @@ export default function AdminFailedPayouts() {
                     ? new Date(payout.processedAt).toLocaleString()
                     : "never"}
                 </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => retry.mutate(payout.id)}
-                  disabled={retry.isPending}
-                  data-testid={`button-retry-payout-${payout.id}`}
-                >
-                  <RefreshCw className="mr-1 h-4 w-4" />
-                  Re-queue
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => askAndMarkPaid(payout.id)}
+                    disabled={markPaid.isPending}
+                    data-testid={`button-mark-paid-manually-${payout.id}`}
+                  >
+                    Mark paid manually
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => retry.mutate(payout.id)}
+                    disabled={retry.isPending}
+                    data-testid={`button-retry-payout-${payout.id}`}
+                  >
+                    <RefreshCw className="mr-1 h-4 w-4" />
+                    Re-queue
+                  </Button>
+                </div>
               </div>
             </div>
           ))

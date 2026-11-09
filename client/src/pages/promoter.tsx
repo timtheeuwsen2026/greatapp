@@ -1,4 +1,5 @@
 import { useAuth } from "@/hooks/useAuth";
+import { commissionStage } from "@shared/payoutStage";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Rocket, AlertTriangle, DollarSign, TrendingUp, Users, Copy, Check, ExternalLink, Clock, CheckCircle, XCircle, Sparkles, Calendar, MapPin, RefreshCw, Send, Trophy, Handshake } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -141,17 +142,17 @@ function getMVGStatusBadge(mvgStatus: string | null, lifecycleStatus?: string) {
   }
 }
 
-function getCommissionStatusBadge(status: string | null) {
+function getCommissionStatusBadge(status: string | null, paidAt?: string | null) {
   switch (status) {
     case 'locked':
-      return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"><CheckCircle className="h-3 w-3 mr-1" />Locked</Badge>;
+      return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"><CheckCircle className="h-3 w-3 mr-1" />Secured</Badge>;
     case 'voided':
       return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"><XCircle className="h-3 w-3 mr-1" />Voided</Badge>;
     case 'paid':
-      return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100"><DollarSign className="h-3 w-3 mr-1" />Paid</Badge>;
+      return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100"><DollarSign className="h-3 w-3 mr-1" />{commissionStage('paid', paidAt)?.label ?? 'Paid'}</Badge>;
     case 'estimated':
     default:
-      return <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><Clock className="h-3 w-3 mr-1" />Estimated</Badge>;
+      return <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><Clock className="h-3 w-3 mr-1" />Coming</Badge>;
   }
 }
 
@@ -233,12 +234,12 @@ function EarningsSummaryCard({ data, isLoading, official }: { data: EarningsSumm
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 text-muted-foreground mb-1">
                   <Clock className="h-4 w-4 text-gray-500" />
-                  <span className="text-sm">Estimated</span>
+                  <span className="text-sm">Coming</span>
                 </div>
                 <p className="text-2xl font-bold text-gray-600 dark:text-gray-400">
                   {formatCurrency(currencyData.estimated, currencyData.currency)}
                 </p>
-                <p className="text-xs text-muted-foreground mt-1">Pending MVG outcome</p>
+                <p className="text-xs text-muted-foreground mt-1">Before the event, or while the group forms</p>
               </CardContent>
             </Card>
 
@@ -259,7 +260,7 @@ function EarningsSummaryCard({ data, isLoading, official }: { data: EarningsSumm
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 text-muted-foreground mb-1">
                   <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm">Locked</span>
+                  <span className="text-sm">Secured</span>
                 </div>
                 <p className="text-2xl font-bold text-green-600 dark:text-green-400">
                   {formatCurrency(currencyData.locked, currencyData.currency)}
@@ -734,7 +735,7 @@ function BookingsTableCard({ data, isLoading, official }: { data: PromoterBookin
                       ? formatCurrency(parseFloat(booking.commissionAmount), booking.commissionCurrency)
                       : '—'}
                   </TableCell>
-                  <TableCell>{getCommissionStatusBadge(booking.commissionStatus)}</TableCell>
+                  <TableCell>{getCommissionStatusBadge(booking.commissionStatus, (booking as any).commissionPaidAt)}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {new Date(booking.bookingDate).toLocaleDateString()}
                   </TableCell>
@@ -1374,7 +1375,7 @@ export default function PromoterDashboard() {
                   <Clock className="h-3 w-3 text-gray-500" />
                 </div>
                 <div>
-                  <span className="font-medium text-gray-700 dark:text-gray-300">Estimated</span>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">Coming</span>
                   <p className="text-muted-foreground text-xs">Booking received - {isOfficialDashboard ? "commission" : "cashback"} pending group confirmation.</p>
                 </div>
               </div>
@@ -1383,7 +1384,7 @@ export default function PromoterDashboard() {
                   <CheckCircle className="h-3 w-3 text-green-500" />
                 </div>
                 <div>
-                  <span className="font-medium text-green-700 dark:text-green-300">Locked</span>
+                  <span className="font-medium text-green-700 dark:text-green-300">Secured</span>
                   <p className="text-muted-foreground text-xs">Experience confirmed - your {isOfficialDashboard ? "commission" : "cashback"} is secured.</p>
                 </div>
               </div>

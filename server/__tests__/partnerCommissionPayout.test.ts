@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { routeFunction } from '../../tests/routeHarness';
 import { eventFeeRates, bookingPlatformFeeCents } from '@shared/platformFees';
-import { isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents, sumVenuePricedAddonCents } from '../payoutRules';
+import { isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents, sumVenuePricedAddonCents, createChargeAllocator } from '../payoutRules';
 import { sumBookingTicketQuantity, calculateTicketDeductionCents } from '@shared/ticketDeduction';
 
 /**
@@ -66,6 +66,7 @@ function payoutHarness(promoterProfile: any) {
     getSplitRecipientsByExperience: vi.fn(async (): Promise<any[]> => []),
     getOtherActivePayoutForExperience: vi.fn(async () => null),
     updateScheduledPayout: vi.fn(async () => {}),
+    getScheduledPayoutById: vi.fn(async () => undefined),
     getUser: vi.fn(async () => null),
     getPromoterProfile: vi.fn(async () => promoterProfile),
   };
@@ -74,6 +75,7 @@ function payoutHarness(promoterProfile: any) {
   const buildDefaultRecipients = routeFunction('buildDefaultRecipients', { storage, resolveVenuePayoutAccount }, undefined, source);
   const calculateSplitAmount = routeFunction('calculateSplitAmount', {}, undefined, source);
   const execute = routeFunction('executeExperiencePayout', {
+    createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount, sumBookingTicketQuantity, calculateTicketDeductionCents,

@@ -1,9 +1,9 @@
 import { eventFeeRates, bookingPlatformFeeCents } from "@shared/platformFees";
 /**
- * 7-Day Post-Event Payout Scheduler
+ * Post-Event Payout Scheduler (24 hours after the event)
  *
  * Timeline:
- *   Event ends → +7 calendar days → payout fires
+ *   Event ends → +24 hours → payout fires
  *
  * When MVG is met (or for standard events), the scheduler:
  *   1. Reads the event's split_recipients rows (ordered by priority)
@@ -29,6 +29,8 @@ import {
   resolvePayoutGrossCents,
   sumBookingPayoutGrossCents,
   sumVenuePricedAddonCents,
+  createChargeAllocator,
+  type ChargeSource,
 } from "./payoutRules";
 import {
   calculateTicketDeductionCents,
@@ -43,6 +45,9 @@ import { createHash } from "node:crypto";
  * bookings are none of these.
  */
 const PAYABLE_BOOKING_STATUSES = ["confirmed", "fully_paid", "deposit_paid"] as const;
+
+/** Hours after the event ends that its payout runs. */
+export const PAYOUT_DELAY_HOURS = 24;
 
 function formatPayoutAmount(cents: number, currency: string): string {
   return `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;
@@ -194,18 +199,83 @@ export async function processReadyPayouts(): Promise<{
   return results;
 }
 
+// ─── Admin "Pay now" ─────────────────────────────────────────────────────────
+
+/**
+ * Run one event's payout now instead of waiting for its date. Same run, same
+ * rules and the same no-double-pay guards as the hourly one; a failure is
+ * recorded on the payout with Stripe's own reason.
+ */
+export async function payScheduledPayoutNow(scheduledPayoutId: string): Promise<{ ok: boolean; message: string }> {
+  const payout = await storage.getScheduledPayoutById(scheduledPayoutId);
+  if (!payout) return { ok: false, message: "Payout not found" };
+  if (payout.status !== "pending" && payout.status !== "failed") {
+    return { ok: false, message: `Only a waiting or failed payout can be paid now — this one is ${payout.status}.` };
+  }
+  try {
+    await executeExperiencePayout(
+      payout.experienceId, payout.id, payout.totalGrossAmountCents ?? 0, payout.additionalGrossAmountCents ?? 0,
+    );
+    const after = await storage.getScheduledPayoutById(scheduledPayoutId);
+    return after?.status === "completed"
+      ? { ok: true, message: "Paid. Everyone with a connected Stripe account has been sent their share." }
+      : { ok: false, message: after?.errorMessage || `The payout is ${after?.status}.` };
+  } catch (err: any) {
+    await storage.updateScheduledPayout(scheduledPayoutId, {
+      status: "failed",
+      errorMessage: err.message,
+      processedAt: new Date(),
+    });
+    return { ok: false, message: err.message };
+  }
+}
+
 // ─── Per-experience payout execution ─────────────────────────────────────────
 
-async function executeExperiencePayout(
+/** One person's share of an event payout, as the plan (and Tim's per-event list) shows it. */
+export type PayoutPlanLine = {
+  key: string;
+  recipientType: string;
+  userId: string | null;
+  stripeAccountId: string | null;
+  amountCents: number;
+  accountReady: boolean;
+};
+
+export type PayoutPlan = {
+  experienceId: string;
+  title: string;
+  currency: string;
+  eligible: boolean;
+  reason: string | null;
+  grossCents: number;
+  platformFeeCents: number;
+  lines: PayoutPlanLine[];
+};
+
+/**
+ * Pay an event out, or with `dryRun` only work out who would get what.
+ *
+ * The dry run moves no money and writes nothing; it is the same arithmetic as
+ * the real run, so the admin per-event list can never disagree with what is
+ * actually paid. The real run links every transfer to the event's own Stripe
+ * charges (`source_transaction`), so it never needs money "available" on the
+ * platform balance, skips anyone already paid (by an earlier run or marked
+ * paid manually), and records each transfer as it goes.
+ */
+export async function executeExperiencePayout(
   experienceId: string,
   scheduledPayoutId: string,
   presetGrossCents = 0,
   additionalGrossCents = 0,
-): Promise<void> {
+  options: { dryRun?: boolean } = {},
+): Promise<PayoutPlan | void> {
+  const dryRun = !!options.dryRun;
+  const planLines: PayoutPlanLine[] = [];
   // The last line of defence against paying an event twice: two payout rows
   // for one event can both be due in the same run (a retry of one while the
   // other was queued, or a scheduling race). Whichever runs second stops here.
-  const sibling = await storage.getOtherActivePayoutForExperience(experienceId, scheduledPayoutId);
+  const sibling = dryRun ? null : await storage.getOtherActivePayoutForExperience(experienceId, scheduledPayoutId);
   if (sibling && (sibling.status === "completed" || sibling.status === "processing")) {
     await storage.updateScheduledPayout(scheduledPayoutId, {
       status: "failed",
@@ -219,13 +289,24 @@ async function executeExperiencePayout(
   }
 
   // Mark as processing to prevent double-execution
-  await storage.updateScheduledPayout(scheduledPayoutId, { status: "processing" });
+  if (!dryRun) await storage.updateScheduledPayout(scheduledPayoutId, { status: "processing" });
 
   const experience = await storage.getExperience(experienceId);
   if (!experience) throw new Error(`Experience ${experienceId} not found`);
+  const planOf = (eligible: boolean, reason: string | null, grossCents: number, platformFeeCents: number): PayoutPlan => ({
+    experienceId,
+    title: experience.title,
+    currency: (experience.currency || "eur").toLowerCase(),
+    eligible,
+    reason,
+    grossCents,
+    platformFeeCents,
+    lines: planLines,
+  });
 
   // Only pay out experiences where MVG was met (or non-MVG events that are published)
   if (!isExperiencePayoutEligible(experience)) {
+    if (dryRun) return planOf(false, "The minimum group was not reached", 0, 0);
     console.log(
       `[Payout Scheduler] Skipping ${experienceId}: mvgStatus=${experience.mvgStatus}`
     );
@@ -247,6 +328,8 @@ async function executeExperiencePayout(
         inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
         // Paid with the test key: no money came in, so none goes out.
         or(isNull(bookings.testPayment), eq(bookings.testPayment, false)),
+        // Disputed with the bank: not the event's money unless the dispute is won.
+        isNull(bookings.disputedAt),
       )
     );
 
@@ -262,6 +345,7 @@ async function executeExperiencePayout(
   );
 
   if (grossAmountCents === 0) {
+    if (dryRun) return planOf(true, null, 0, 0);
     console.log(`[Payout Scheduler] ${experienceId}: gross = 0, skipping`);
     await storage.updateScheduledPayout(scheduledPayoutId, {
       status: "completed",
@@ -295,21 +379,26 @@ async function executeExperiencePayout(
   // that went through. Only the minimum-group path ever locked commissions, so
   // on an event without a minimum group they stayed "estimated" forever and the
   // partner was never paid. Locked here for every event that reaches its payout.
-  await db
-    .update(bookings)
-    .set({ commissionStatus: 'locked' })
-    .where(and(
-      eq(bookings.experienceId, experienceId),
-      eq(bookings.commissionStatus, 'estimated'),
-      inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
-    ));
+  if (!dryRun) {
+    await db
+      .update(bookings)
+      .set({ commissionStatus: 'locked' })
+      .where(and(
+        eq(bookings.experienceId, experienceId),
+        eq(bookings.commissionStatus, 'estimated'),
+        inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
+      ));
+  }
 
   const lockedCommissionBookings = await db
     .select()
     .from(bookings)
     .where(and(
       eq(bookings.experienceId, experienceId),
-      eq(bookings.commissionStatus, 'locked'),
+      // A dry run locks nothing, so it reads the commissions the real run would lock.
+      dryRun
+        ? inArray(bookings.commissionStatus, ['estimated', 'locked'] as any)
+        : eq(bookings.commissionStatus, 'locked'),
       // A booking cancelled or refunded after its commission was locked earns nothing.
       inArray(bookings.status, [...PAYABLE_BOOKING_STATUSES]),
     ));
@@ -435,6 +524,18 @@ async function executeExperiencePayout(
     );
   }
 
+  // Transfers from an earlier attempt, and anyone marked paid manually, are
+  // kept and skipped; the charges are claimed in the same order every run.
+  const existingPayout = dryRun ? undefined : await storage.getScheduledPayoutById(scheduledPayoutId);
+  Object.assign(transferIds, Object.fromEntries(
+    Object.entries((existingPayout?.stripeTransferIds as Record<string, string> | null) || {})
+      .filter(([key]) => !key.startsWith("held:")),
+  ));
+  const takeFromCharges = createChargeAllocator(dryRun ? [] : await chargeSourcesFor(confirmedBookings));
+  const lineKeyOf = (recipient: MinimalRecipient) => recipient.id === VENUE_ADDONS_RECIPIENT
+    ? "venue_addons"
+    : recipient.id ? `${recipient.recipientType}:${recipient.id}` : recipient.recipientType;
+
   for (const recipient of effectiveRecipients) {
     if (!recipient.isActive) continue;
 
@@ -466,6 +567,30 @@ async function executeExperiencePayout(
     // not block the run, so this is checked before the account requirement below.
     if (transferAmountCents <= 0) continue;
 
+    const lineKey = lineKeyOf(recipient);
+    if (dryRun) {
+      planLines.push({
+        key: lineKey,
+        recipientType: recipient.id === VENUE_ADDONS_RECIPIENT ? "venue" : recipient.recipientType,
+        userId: recipient.userId,
+        stripeAccountId: recipient.stripeAccountId,
+        amountCents: transferAmountCents,
+        accountReady: !!recipient.stripeAccountId,
+      });
+      if (isReservedFlatFee) flatFeeReserveRemainingCents -= transferAmountCents;
+      else remainingCents -= transferAmountCents;
+      continue;
+    }
+
+    // Already paid by an earlier attempt, or paid outside Stripe by an admin.
+    if (transferIds[lineKey]) {
+      takeFromCharges(transferAmountCents);
+      if (isReservedFlatFee) flatFeeReserveRemainingCents -= transferAmountCents;
+      else remainingCents -= transferAmountCents;
+      console.log(`[Payout Scheduler] ${lineKey} already settled (${transferIds[lineKey]}) — skipped`);
+      continue;
+    }
+
     // Missing account used to be a console.warn and a `continue`, which meant the
     // recipient's share silently stayed in the platform balance while the payout
     // still reported "completed". Money going missing has to be loud: fail the
@@ -482,25 +607,46 @@ async function executeExperiencePayout(
     }
 
     try {
-      const transfer = await stripe.transfers.create({
-        amount: transferAmountCents,
-        currency,
-        destination: recipient.stripeAccountId,
-        description: recipient.id === VENUE_ADDONS_RECIPIENT
-          ? `${experience.title} — venue add-on sales`
-          : `${experience.title} — ${recipient.recipientType} payout`,
-        metadata: {
-          experienceId,
-          recipientType: recipient.recipientType,
-          userId: recipient.userId ?? "",
-          scheduledPayoutId,
-        },
-      }, {
-        idempotencyKey: `event-payout:${scheduledPayoutId}:recipient:${recipient.id || recipient.stripeAccountId}`,
-      });
+      // A transfer an earlier attempt made before failing is not made again,
+      // even after Stripe's 24-hour idempotency window has closed.
+      const sentBefore = await transferredForPayout(
+        recipient.stripeAccountId, scheduledPayoutId, recipient.recipientType, recipient.id === VENUE_ADDONS_RECIPIENT,
+      );
+      const parts = takeFromCharges(transferAmountCents);
+      const description = recipient.id === VENUE_ADDONS_RECIPIENT
+        ? `${experience.title} — venue add-on sales`
+        : `${experience.title} — ${recipient.recipientType} payout`;
+      const baseKey = `event-payout:${scheduledPayoutId}:recipient:${recipient.id || recipient.stripeAccountId}`;
+      const madeIds: string[] = [];
+      if (sentBefore >= transferAmountCents) {
+        madeIds.push("sent-earlier");
+      } else {
+        for (const part of parts) {
+          const made = await stripe.transfers.create({
+            amount: part.amountCents,
+            currency,
+            destination: recipient.stripeAccountId,
+            description,
+            ...(part.chargeId ? { source_transaction: part.chargeId } : {}),
+            metadata: {
+              experienceId,
+              recipientType: recipient.recipientType,
+              userId: recipient.userId ?? "",
+              scheduledPayoutId,
+              lineKey,
+            },
+          }, {
+            idempotencyKey: parts.length === 1 && !part.chargeId ? baseKey : `${baseKey}:${part.chargeId || "balance"}`,
+          });
+          madeIds.push(made.id);
+        }
+      }
+      const transfer = { id: madeIds.join(",") };
 
       // Its own key, so it does not replace the venue's revenue-share transfer.
-      transferIds[recipient.id === VENUE_ADDONS_RECIPIENT ? "venue_addons" : recipient.recipientType] = transfer.id;
+      transferIds[lineKey] = transfer.id;
+      // Recorded straight away: a later failure must not make a retry pay this again.
+      await storage.updateScheduledPayout(scheduledPayoutId, { stripeTransferIds: transferIds } as any);
       if (isReservedFlatFee) {
         flatFeeReserveRemainingCents -= transferAmountCents;
       } else {
@@ -535,6 +681,24 @@ async function executeExperiencePayout(
 
   for (const [promoterId, promoterBookings] of Array.from(commissionsByPromoter.entries())) {
     const profile = promoterProfiles.get(promoterId);
+    if (dryRun) {
+      const owed = promoterBookings.reduce(
+        (sum, booking) => sum + Math.round(parseFloat(booking.commissionAmount || '0') * 100),
+        0,
+      );
+      if (owed > 0) {
+        planLines.push({
+          key: `promoter:${promoterId}`,
+          recipientType: "promoter",
+          userId: promoterId,
+          stripeAccountId: profile?.stripeAccountId ?? null,
+          amountCents: owed,
+          accountReady: !!profile?.stripeAccountId && profile.stripeVerificationStatus === 'verified',
+        });
+      }
+      continue;
+    }
+    if (transferIds[`promoter:${promoterId}`]) continue;
     if (!profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified') {
       // Held, not lost: still reserved above, still "locked", paid later.
       transferIds[`held:promoter:${promoterId}`] = 'awaiting-verified-payout-account';
@@ -549,15 +713,29 @@ async function executeExperiencePayout(
       throw new Error(`Insufficient reserved payout balance for promoter ${promoterId}`);
     }
 
-    const transfer = await stripe.transfers.create({
-      amount,
-      currency,
-      destination: profile.stripeAccountId,
-      description: `${experience.title} - promoter commission`,
-      metadata: { experienceId, recipientType: 'promoter', userId: promoterId, scheduledPayoutId },
-    }, {
-      idempotencyKey: `event-payout:${scheduledPayoutId}:promoter:${promoterId}`,
-    });
+    const promoterParts = takeFromCharges(amount);
+    const promoterSentBefore = await transferredForPayout(profile.stripeAccountId, scheduledPayoutId, 'promoter', false);
+    const promoterIds: string[] = [];
+    if (promoterSentBefore >= amount) {
+      promoterIds.push('sent-earlier');
+    } else {
+      for (const part of promoterParts) {
+        const made = await stripe.transfers.create({
+          amount: part.amountCents,
+          currency,
+          destination: profile.stripeAccountId,
+          description: `${experience.title} - promoter commission`,
+          ...(part.chargeId ? { source_transaction: part.chargeId } : {}),
+          metadata: { experienceId, recipientType: 'promoter', userId: promoterId, scheduledPayoutId, lineKey: `promoter:${promoterId}` },
+        }, {
+          idempotencyKey: promoterParts.length === 1 && !part.chargeId
+            ? `event-payout:${scheduledPayoutId}:promoter:${promoterId}`
+            : `event-payout:${scheduledPayoutId}:promoter:${promoterId}:${part.chargeId || 'balance'}`,
+        });
+        promoterIds.push(made.id);
+      }
+    }
+    const transfer = { id: promoterIds.join(',') };
     await db
       .update(bookings)
       .set({
@@ -577,7 +755,10 @@ async function executeExperiencePayout(
     }
     promoterReserveRemainingCents -= amount;
     transferIds[`promoter:${promoterId}`] = transfer.id;
+    await storage.updateScheduledPayout(scheduledPayoutId, { stripeTransferIds: transferIds } as any);
   }
+
+  if (dryRun) return planOf(true, null, grossAmountCents, platformFeeAmountCents);
 
   await storage.updateScheduledPayout(scheduledPayoutId, {
     status: "completed",
@@ -685,6 +866,60 @@ export async function payHeldPartnerCommissions(): Promise<{ paid: number; waiti
     console.error('[Payout Scheduler] Could not check held partner commissions:', err?.message || err);
   }
   return result;
+}
+
+// ─── Stripe lookups for a payout ─────────────────────────────────────────────
+
+/**
+ * The charges that paid for these bookings, with what is left of each after
+ * refunds. A disputed charge is left out: its money may go back to the buyer.
+ */
+export async function chargeSourcesFor(
+  paidBookings: Array<{ stripePaymentIntentId?: string | null; balancePaymentIntentId?: string | null; balancePaid?: boolean | null }>,
+): Promise<ChargeSource[]> {
+  const found: Array<ChargeSource & { created: number }> = [];
+  const seen = new Set<string>();
+  for (const booking of paidBookings) {
+    const ids = [booking.stripePaymentIntentId, booking.balancePaid ? booking.balancePaymentIntentId : null]
+      .filter((id): id is string => !!id && id.startsWith("pi_") && !seen.has(id));
+    for (const id of ids) {
+      seen.add(id);
+      try {
+        const intent = await stripe.paymentIntents.retrieve(id, { expand: ["latest_charge"] });
+        const charge = intent.latest_charge && typeof intent.latest_charge === "object" ? intent.latest_charge as any : null;
+        if (!charge || charge.disputed || charge.status !== "succeeded") continue;
+        const available = (charge.amount_captured ?? charge.amount ?? 0) - (charge.amount_refunded ?? 0);
+        if (available > 0) found.push({ chargeId: charge.id, availableCents: available, created: charge.created ?? 0 });
+      } catch (error: any) {
+        console.warn(`[Payout Scheduler] Could not read payment ${id}: ${error?.message}`);
+      }
+    }
+  }
+  return found.sort((a, b) => a.created - b.created || a.chargeId.localeCompare(b.chargeId))
+    .map(({ chargeId, availableCents }) => ({ chargeId, availableCents }));
+}
+
+/** What this payout already sent to an account, read from Stripe itself. */
+export async function transferredForPayout(
+  destination: string,
+  scheduledPayoutId: string,
+  recipientType: string,
+  addonSales: boolean,
+): Promise<number> {
+  let total = 0;
+  try {
+    for await (const transfer of stripe.transfers.list({ destination, limit: 100 })) {
+      if (transfer.metadata?.scheduledPayoutId !== scheduledPayoutId) continue;
+      if (transfer.metadata?.recipientType !== recipientType) continue;
+      const isAddon = /add-on sales/.test(transfer.description || "");
+      if (isAddon !== addonSales) continue;
+      total += transfer.amount - (transfer.amount_reversed || 0);
+    }
+  } catch (error: any) {
+    // Unreadable: fall back on the idempotency key, as before.
+    console.warn(`[Payout Scheduler] Could not list transfers to ${destination}: ${error?.message}`);
+  }
+  return total;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -806,7 +1041,10 @@ export async function scheduleExperiencePayout(
   eventEndDate: Date,
   totalGrossCents: number
 ): Promise<void> {
-  const scheduledFor = new Date(eventEndDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+  // Paid 24 hours after the event (Tim, Nov 2026; it was 7 days). Each transfer
+  // is linked to the event's own charges, so it does not wait for the money to
+  // become "available" on the platform balance.
+  const scheduledFor = new Date(eventEndDate.getTime() + PAYOUT_DELAY_HOURS * 60 * 60 * 1000);
   await storage.upsertScheduledPayout(experienceId, scheduledFor, totalGrossCents);
   console.log(
     `[Payout Scheduler] Scheduled payout for experience ${experienceId} on ${scheduledFor.toISOString()}`

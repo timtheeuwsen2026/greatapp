@@ -2416,6 +2416,8 @@ export class DatabaseStorage implements IStorage {
           inArray(bookings.status, ["confirmed", "fully_paid", "deposit_paid"] as any),
           // Paid with the test key: no money came in, so none goes out.
           or(isNull(bookings.testPayment), eq(bookings.testPayment, false)),
+          // Disputed with the bank: not the event's money unless it is won.
+          isNull(bookings.disputedAt),
         )
       );
   }
@@ -6029,7 +6031,11 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(scheduledPayouts.status, "pending"),
-          sql`${scheduledPayouts.scheduledFor} <= ${now}`
+          // Due on its own date, or 24 hours after the event: rows written
+          // when payouts waited 7 days are not held to that any more.
+          sql`(${scheduledPayouts.scheduledFor} <= ${now} OR EXISTS (
+            SELECT 1 FROM ${experiences} WHERE ${experiences.id} = ${scheduledPayouts.experienceId}
+              AND ${experiences.endDate} + interval '24 hours' <= ${now}))`
         )
       );
     return rows.map(r => ({

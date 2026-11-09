@@ -17,7 +17,7 @@ function route(payout: any) {
   return { storage, db, run };
 }
 
-const request = (note: string) => ({ params: { id: "p1" }, body: { note }, user: { claims: { sub: "admin" } } });
+const request = (note: string, recipientKey?: string) => ({ params: { id: "p1" }, body: { note, recipientKey }, user: { claims: { sub: "admin" } } });
 
 describe("marking a payout paid manually", () => {
   it("closes a failed payout as completed, with how it was paid, and settles the commissions", async () => {
@@ -45,6 +45,25 @@ describe("marking a payout paid manually", () => {
     const { storage, run } = route({ id: "p1", experienceId: "e1", status: "completed" });
     const res = routeResponse();
     await run(request("Bank transfer"), res);
+    expect(res.statusCode).toBe(409);
+    expect(storage.updateScheduledPayout).not.toHaveBeenCalled();
+  });
+
+  it("settles one person paid outside Stripe and leaves the payout to pay everyone else", async () => {
+    const { storage, run } = route({ id: "p1", experienceId: "e1", status: "failed", stripeTransferIds: { creator: "tr_1" } });
+    const res = routeResponse();
+    await run(request("Bank transfer to the venue on 9 Nov", "venue"), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(storage.updateScheduledPayout).toHaveBeenCalledWith("p1", {
+      stripeTransferIds: { creator: "tr_1", venue: expect.stringMatching(/^manual: Bank transfer to the venue on 9 Nov/) },
+    });
+  });
+
+  it("does not settle a share twice", async () => {
+    const { storage, run } = route({ id: "p1", experienceId: "e1", status: "pending", stripeTransferIds: { venue: "tr_9" } });
+    const res = routeResponse();
+    await run(request("Bank transfer", "venue"), res);
     expect(res.statusCode).toBe(409);
     expect(storage.updateScheduledPayout).not.toHaveBeenCalled();
   });

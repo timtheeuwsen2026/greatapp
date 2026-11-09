@@ -73,3 +73,33 @@ export function sumVenuePricedAddonCents(
     };
   }, { grossCents: 0, venueCents: 0 });
 }
+
+/**
+ * Split what an event owes across the Stripe charges that paid for it.
+ *
+ * Each transfer is linked to one charge (`source_transaction`), so the money
+ * is taken from that payment itself, even while it is still incoming, and a
+ * payout never depends on the platform balance having enough "available". A
+ * share bigger than one charge is spread over several; anything the charges
+ * cannot cover (a booking paid outside Stripe) comes from the balance.
+ */
+export type ChargeSource = { chargeId: string; availableCents: number };
+export type ChargePart = { chargeId: string | null; amountCents: number };
+
+export function createChargeAllocator(sources: ChargeSource[]): (amountCents: number) => ChargePart[] {
+  const left = sources.filter((source) => source.availableCents > 0).map((source) => ({ ...source }));
+  return (amountCents: number) => {
+    const parts: ChargePart[] = [];
+    let need = Math.max(0, Math.round(amountCents));
+    for (const source of left) {
+      if (need <= 0) break;
+      if (source.availableCents <= 0) continue;
+      const take = Math.min(need, source.availableCents);
+      parts.push({ chargeId: source.chargeId, amountCents: take });
+      source.availableCents -= take;
+      need -= take;
+    }
+    if (need > 0) parts.push({ chargeId: null, amountCents: need });
+    return parts;
+  };
+}

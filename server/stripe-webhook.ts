@@ -136,6 +136,14 @@ export async function handleStripeWebhook(event: Stripe.Event, stripe: Stripe): 
       break;
     }
 
+    // ── Dispute decided: a won dispute gives the booking back to the event ─
+    case "charge.dispute.closed": {
+      const dispute = event.data.object as Stripe.Dispute;
+      console.log(`[Webhook] charge.dispute.closed ${dispute.id} status=${dispute.status}`);
+      await handleDisputeClosed(dispute);
+      break;
+    }
+
     // ── Stripe Connect: KYC / verification status change ─────────────────
     case "account.updated": {
       const account = event.data.object as Stripe.Account;
@@ -402,7 +410,31 @@ async function handleDisputeCreated(dispute: Stripe.Dispute): Promise<void> {
   console.error(
     `[Webhook] ⚠️  DISPUTE opened — charge: ${chargeId}, reason: ${dispute.reason}, amount: ${dispute.amount / 100}`
   );
-  // Future: create a DisputeRecord or notify admin via email/webhook.
+
+  // The money may go back to the buyer, so until the dispute is decided the
+  // booking is left out of the payout and earns nobody a commission; the
+  // event's payout is re-totalled without it.
+  const booking = await bookingForDispute(dispute);
+  if (!booking) return;
+  await db.update(bookings).set({ disputedAt: new Date() }).where(eq(bookings.id, booking.id));
+  if (booking.commissionStatus === "estimated" || booking.commissionStatus === "locked") {
+    await updateCommissionStatus(booking.id, "voided");
+  }
+  await ensurePayoutScheduled(booking.experienceId);
+}
+
+async function handleDisputeClosed(dispute: Stripe.Dispute): Promise<void> {
+  if (dispute.status !== "won") return; // lost: the money is gone, the booking stays out
+  const booking = await bookingForDispute(dispute);
+  if (!booking) return;
+  await db.update(bookings).set({ disputedAt: null }).where(eq(bookings.id, booking.id));
+  await ensurePayoutScheduled(booking.experienceId);
+  console.log(`[Webhook] Dispute won — booking ${booking.id} counts towards its payout again`);
+}
+
+async function bookingForDispute(dispute: Stripe.Dispute) {
+  const piId = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
+  return piId ? storage.getBookingByPaymentIntent(piId) : undefined;
 }
 
 /**

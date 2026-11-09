@@ -2,7 +2,7 @@ import { eventFeeRates, bookingPlatformFeeCents } from "@shared/platformFees";
 import { it, expect, vi } from 'vitest';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import { calculateVenueEarnings, getVenueDealTermsKey, formatVenueDealSummary } from '@shared/venueDealModels';
-import { isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents, sumVenuePricedAddonCents } from '../payoutRules';
+import { isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents, sumVenuePricedAddonCents, createChargeAllocator } from '../payoutRules';
 import { sumBookingTicketQuantity, calculateTicketDeductionCents } from '@shared/ticketDeduction';
 import { venuePricedAddonCents } from '@shared/addonChoices';
 
@@ -19,6 +19,7 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
     getSplitRecipientsByExperience: vi.fn(async (): Promise<any[]> => []),
     getOtherActivePayoutForExperience: vi.fn(async () => null),
     updateScheduledPayout: vi.fn(async () => {}),
+    getScheduledPayoutById: vi.fn(async () => undefined),
     getUser: vi.fn(async () => null),
   };
   const resolveVenuePayoutAccount = vi.fn(async () => ({ stripeAccountId: venueAccount, userId: 'venue-owner' }));
@@ -35,6 +36,7 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
   }) }) };
   const stripe = { transfers: { create: vi.fn(async (..._args: any[]) => ({ id: 'test-transfer' })) } };
   const execute = routeFunction('executeExperiencePayout', {
+    createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount,

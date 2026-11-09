@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
 import { summariseVenueSales } from '@shared/venueSales';
+import { eventPayoutStage } from '@shared/payoutStage';
 
 // A venue sees what sold for the events at its own venues, and nobody else's.
 
@@ -13,7 +14,7 @@ describe('the venue sales route', () => {
         : [])),
       getBookingsByVenueIds: vi.fn(async () => [{ experienceId: 'e1', status: 'fully_paid', ticketQuantity: 3 }]),
     };
-    return { storage, run: routeFunction('/api/venue/sales', { storage, summariseVenueSales }, 'get') };
+    return { storage, run: routeFunction('/api/venue/sales', { storage, summariseVenueSales, eventPayoutStage }, 'get') };
   }
 
   it('reports the events at the venue owner\'s own venues', async () => {

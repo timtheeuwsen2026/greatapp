@@ -109,6 +109,15 @@ export default function VenueSales() {
                 </div>
               </div>
 
+              {event.payout && (
+                <p
+                  className={`text-sm font-medium ${event.payout.stage === "paid" ? "text-emerald-700" : event.payout.stage === "secured" ? "text-indigo-700" : "text-gray-600"}`}
+                  data-testid={`venue-sales-payout-${event.experienceId}`}
+                >
+                  Your money: {event.payout.label}
+                </p>
+              )}
+
               {event.addons.length > 0 && (
                 <div className="rounded-lg border p-3" data-testid={`venue-sales-addons-${event.experienceId}`}>
                   <p className="mb-2 flex items-center gap-1 text-sm font-semibold text-gray-900 dark:text-white">

@@ -26,6 +26,11 @@ describe('the venue Sales tab', () => {
     expect(screen.getByTestId('venue-sales-addons-e1')).toHaveTextContent('Yours from add-ons (paid)');
   });
 
+  it('tells the venue where its money stands', async () => {
+    renderSales([sales({ payout: { stage: 'secured', date: '2026-11-02T07:00:00Z', label: 'Secured, paid out on 2 Nov' } })]);
+    expect(await screen.findByTestId('venue-sales-payout-e1')).toHaveTextContent('Your money: Secured, paid out on 2 Nov');
+  });
+
   it('says so when no event has used the venue yet', async () => {
     renderSales([]);
     expect(await screen.findByTestId('venue-sales-empty')).toBeInTheDocument();

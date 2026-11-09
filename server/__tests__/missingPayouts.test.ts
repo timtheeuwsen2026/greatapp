@@ -76,8 +76,8 @@ describe("scheduleMissingPayouts", () => {
     expect(await scheduleMissingPayouts(new Date("2026-09-21T09:00:00Z"))).toBe(1);
     expect(upserts).toHaveLength(1);
     expect(upserts[0].experienceId).toBe("paid-event");
-    // Seven days after the event, like every other path.
-    expect(upserts[0].scheduledFor.toISOString()).toBe("2026-09-27T07:00:00.000Z");
+    // 24 hours after the event, like every other path.
+    expect(upserts[0].scheduledFor.toISOString()).toBe("2026-09-21T07:00:00.000Z"); // 24 hours after the event (was 7 days)
     // Two €10 tickets, counted from fully_paid — not the zero that counting
     // only `confirmed` bookings produced.
     expect(upserts[0].grossCents).toBe(2000);

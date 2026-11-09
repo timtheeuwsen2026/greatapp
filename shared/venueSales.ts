@@ -55,6 +55,8 @@ export type VenueEventSales = {
   addons: VenueSalesAddon[];
   /** What the venue has earned from add-ons on paid bookings. */
   addonEarned: number;
+  /** Coming, secured or paid, with a date (added by the route from the payout). */
+  payout?: { stage: "coming" | "secured" | "paid"; date: string | null; label: string } | null;
 };
 
 const PAID = new Set(["confirmed", "fully_paid", "deposit_paid"]);

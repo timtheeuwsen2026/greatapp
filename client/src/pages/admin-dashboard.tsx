@@ -54,6 +54,7 @@ import AdminTutorialVideos from "@/components/AdminTutorialVideos";
 import AdminFailedPayouts from "@/components/AdminFailedPayouts";
 import AdminDrafts from "@/components/AdminDrafts";
 import AdminPaymentDifferences from "@/components/AdminPaymentDifferences";
+import AdminPayoutOverview from "@/components/AdminPayoutOverview";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
@@ -394,6 +395,22 @@ export default function AdminDashboard() {
         variant: "destructive",
       });
     },
+  });
+
+  // Calls the event off and refunds every buyer; archiving only hides it.
+  const cancelAndRefund = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const response = await apiRequest("POST", `/api/admin/experiences/${id}/cancel-and-refund`, { reason });
+      return response.json();
+    },
+    onSuccess: async (result: any) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/experiences"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/payout-overview"] }),
+      ]);
+      toast({ title: "Event cancelled", description: result?.message });
+    },
+    onError: (error: Error) => toast({ title: "Not cancelled", description: error.message, variant: "destructive" }),
   });
 
   const archiveExperience = useMutation({
@@ -944,6 +961,22 @@ export default function AdminDashboard() {
                             {experience.manualDealUnlocked ? "Manual deal: on" : "Manual deal: off"}
                           </Button>
                           <AdminEventFees event={experience} />
+                          {experience.status !== "cancelled" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-red-700"
+                              title="Cancel the event and refund every buyer"
+                              onClick={() => {
+                                const reason = window.prompt(`Cancel "${experience.title}" and refund every buyer? They are emailed. Give a reason:`);
+                                if (reason !== null) cancelAndRefund.mutate({ id: experience.id, reason });
+                              }}
+                              disabled={cancelAndRefund.isPending}
+                              data-testid={`button-cancel-refund-${experience.id}`}
+                            >
+                              Cancel &amp; refund
+                            </Button>
+                          )}
                           {experience.status !== "cancelled" && (
                             <Button
                               size="sm"
@@ -2037,6 +2070,7 @@ export default function AdminDashboard() {
           </TabsContent>
 
           <TabsContent value="payments" className="space-y-6">
+            <AdminPayoutOverview />
             <AdminPaymentDifferences />
           </TabsContent>
 

@@ -50,7 +50,7 @@ import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStora
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, updateCommissionStatus, voidCommissionsForExperience } from "./commissionService";
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
-import { scheduleExperiencePayout } from "./payout-scheduler";
+import { payScheduledPayoutNow, scheduleExperiencePayout } from "./payout-scheduler";
 import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
 import {
   calculateTicketDeduction,
@@ -176,6 +176,9 @@ import { summariseVenueSales } from "@shared/venueSales";
 import { listPaymentDifferences, runPaymentCheck } from "./paymentCheck";
 import { countsTowardsGroup, groupPaymentPromise } from "@shared/groupCount";
 import { remindPayoutAccountSetup } from "./payoutSetupReminders";
+import { buildPayoutOverview } from "./payoutOverview";
+import { cancelEventAndRefund } from "./eventCancellation";
+import { eventPayoutStage } from "@shared/payoutStage";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
 import {
   ensureIcalExportToken,
@@ -7748,6 +7751,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Call an event off and refund every buyer (archiving only hides it).
+  app.post("/api/admin/experiences/:id/cancel-and-refund", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const reason = String(req.body?.reason || "").trim().slice(0, 300) || "Cancelled by Great";
+      const result = await cancelEventAndRefund(req.params.id, reason);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      res.json({
+        ...result,
+        message: result.failed.length
+          ? `Cancelled. ${result.refunded} refunded, ${result.failed.length} could not be refunded yet and will be retried.`
+          : `Cancelled. ${result.refunded} buyer(s) refunded and emailed.`,
+      });
+    } catch (error: any) {
+      console.error("Error cancelling event:", error);
+      res.status(500).json({ message: error?.message || "Failed to cancel the event" });
+    }
+  });
+
   app.patch("/api/admin/experiences/:id/archive", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {
@@ -9864,7 +9888,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const failedRefundBookings: any[] = [];
     
     for (const booking of bookings) {
-      if ((booking.status === "pending" || booking.status === "confirmed") && booking.stripePaymentIntentId) {
+      // Every paid ticket is charged at checkout now, so `fully_paid` and
+      // `deposit_paid` bookings have to be refunded here too, not only holds.
+      if (countsTowardsGroup(booking) && booking.stripePaymentIntentId) {
         try {
           const paymentIntent = await stripe.paymentIntents.retrieve(booking.stripePaymentIntentId);
           const isDepositPayment = paymentIntent.metadata?.isDepositPayment === "true";
@@ -19004,10 +19030,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const venueNames = new Map(userVenues.map((venue: any) => [venue.id, venue.name]));
       const events = await storage.getExperiencesByVenueIds(venueIds);
       const bookings = await storage.getBookingsByVenueIds(venueIds);
-      res.json(summariseVenueSales(
+      const sales = summariseVenueSales(
         events.map((event: any) => ({ ...event, venueName: venueNames.get(event.linkedVenueId) ?? null })),
         bookings,
-      ));
+      );
+      // Where the venue's money for each event stands: coming, secured or paid.
+      const eventsById = new Map(events.map((event: any) => [event.id, event]));
+      const payouts = typeof storage.getAllScheduledPayouts === "function"
+        ? (await storage.getAllScheduledPayouts()).filter((row: any) => eventsById.has(row.experienceId))
+        : [];
+      res.json(sales.map((row: any) => {
+        if (row.timing === "cancelled") return { ...row, payout: null };
+        const event: any = eventsById.get(row.experienceId);
+        const payout: any = payouts.find((item: any) => item.experienceId === row.experienceId && item.status !== "cancelled");
+        return {
+          ...row,
+          payout: eventPayoutStage({
+            eventEnd: event?.endDate ?? event?.startDate,
+            requireMinimumParticipants: event?.requireMinimumParticipants,
+            mvgStatus: event?.mvgStatus,
+            payoutStatus: payout?.status,
+            scheduledFor: payout?.scheduledFor,
+            processedAt: payout?.processedAt,
+          }),
+        };
+      }));
     } catch (err: any) {
       console.error('Error fetching venue sales:', err);
       res.status(500).json({ message: 'Failed to fetch venue sales' });
@@ -20892,6 +20939,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // The money overview: Stripe balance, and per event who gets how much and
+  // whether they have a connected Stripe account. Moves no money.
+  app.get('/api/admin/payout-overview', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      res.json(await buildPayoutOverview());
+    } catch (error: any) {
+      console.error("Error building the payout overview:", error);
+      res.status(500).json({ message: error?.message || "Failed to load the payout overview" });
+    }
+  });
+
+  app.post('/api/admin/scheduled-payouts/:id/pay-now', isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const sibling = await storage.getOtherActivePayoutForExperience(
+        (await storage.getScheduledPayoutById(req.params.id))?.experienceId ?? "", req.params.id,
+      );
+      if (sibling && (sibling.status === "completed" || sibling.status === "processing")) {
+        return res.status(409).json({ message: `This event already has a payout that is ${sibling.status}. Paying this one too would pay it twice.` });
+      }
+      const result = await payScheduledPayoutNow(req.params.id);
+      res.status(result.ok ? 200 : 409).json(result);
+    } catch (error: any) {
+      console.error("Error paying out now:", error);
+      res.status(500).json({ message: error?.message || "Failed to pay out" });
+    }
+  });
+
   // Paid outside Stripe (a bank transfer to a venue without an account, say).
   // The payout is closed as completed with who did it and why, so neither the
   // hourly run nor a retry can ever pay the event a second time.
@@ -20901,20 +20981,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Admin access required" });
       }
       const note = String(req.body?.note ?? "").trim().slice(0, 500);
+      const recipientKey = typeof req.body?.recipientKey === "string" ? req.body.recipientKey.trim().slice(0, 120) : "";
       if (!note) {
         return res.status(400).json({ message: "Say how it was paid (for example: bank transfer to the venue on 6 Nov)." });
       }
       const payout = await storage.getScheduledPayoutById(req.params.id);
       if (!payout) return res.status(404).json({ message: "Payout not found" });
-      if (payout.status !== "failed" && payout.status !== "pending") {
+      if (payout.status !== "failed" && payout.status !== "pending" && !(recipientKey && payout.status === "completed")) {
         return res.status(409).json({ message: `Only a failed or waiting payout can be marked paid — this one is ${payout.status}.` });
       }
       const admin = await storage.getUser(req.user.claims.sub);
       const stamp = new Date();
+      const by = `(marked by ${admin?.email || "admin"} on ${stamp.toISOString().slice(0, 10)})`;
+
+      // One person paid outside Stripe: their share is recorded as settled, and
+      // the payout run skips it while it still pays everyone else.
+      if (recipientKey) {
+        const transferIds = { ...((payout.stripeTransferIds as Record<string, string> | null) || {}) };
+        if (transferIds[recipientKey]) {
+          return res.status(409).json({ message: "This share is already settled." });
+        }
+        transferIds[recipientKey] = `manual: ${note} ${by}`;
+        const updatedOne = await storage.updateScheduledPayout(payout.id, { stripeTransferIds: transferIds } as any);
+        if (recipientKey.startsWith("promoter:")) {
+          await db
+            .update(bookings)
+            .set({ commissionStatus: "paid", commissionPaidAt: stamp })
+            .where(and(
+              eq(bookings.experienceId, payout.experienceId),
+              eq(bookings.promoterId, recipientKey.slice("promoter:".length)),
+              inArray(bookings.commissionStatus, ["estimated", "locked"] as any),
+            ));
+        }
+        return res.json({ payout: updatedOne, message: "Marked as paid manually. The payout run will pay everyone else." });
+      }
+
       const updated = await storage.updateScheduledPayout(payout.id, {
         status: "completed",
         processedAt: stamp,
-        errorMessage: `Paid manually: ${note} (marked by ${admin?.email || "admin"} on ${stamp.toISOString().slice(0, 10)})`,
+        errorMessage: `Paid manually: ${note} ${by}`,
       } as any);
       // The partners' commissions were part of what was paid.
       await db

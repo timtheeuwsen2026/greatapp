@@ -1155,6 +1155,10 @@ export const bookings = pgTable("bookings", {
   // with the test key). Such a booking brought in no money, so it is left out
   // of payouts and money totals.
   testPayment: boolean("test_payment").default(false),
+  // The buyer disputed the payment with their bank. Until it is won the money
+  // is not the event's, so the booking is left out of the payout and earns no
+  // commission.
+  disputedAt: timestamp("disputed_at"),
   commissionTransferId: varchar("commission_transfer_id"),
   commissionPaidAt: timestamp("commission_paid_at"),
 

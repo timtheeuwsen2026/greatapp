@@ -1,4 +1,5 @@
 import { withoutEventFeeOverrides } from "@shared/platformFees";
+import { cityOfEvent, normalizeCityName } from "@shared/cities";
 import { countsTowardsGroup, isPaidBooking } from "@shared/groupCount";
 import { withSanitisedConcept } from "@shared/conceptIdea";
 import { connectPartnerPromotion } from './partnerPromotionStorage';
@@ -690,8 +691,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Experience operations
+  /**
+   * Every event has a city (66.24). The builder asks for it; any other way an
+   * event is made takes it from its venue, then from its address or title.
+   */
+  private async eventCity(fields: Partial<InsertExperience>): Promise<string | null> {
+    const chosen = normalizeCityName((fields as any).city);
+    if (chosen) return chosen;
+    const venue = fields.linkedVenueId ? await this.getVenue(fields.linkedVenueId).catch(() => undefined) : undefined;
+    return cityOfEvent({
+      location: fields.location ?? null,
+      manualVenueAddress: (fields as any).manualVenueAddress ?? null,
+      title: fields.title ?? null,
+      venueCity: (venue as any)?.city ?? null,
+    });
+  }
+
   async createExperience(experienceData: InsertExperience): Promise<Experience> {
-    const normalizedExperience = withTicketCapacity(withoutEventFeeOverrides(withoutManualDealUnlock(withoutSingleDayDeposits(experienceData))));
+    const city = await this.eventCity(experienceData);
+    const normalizedExperience = withTicketCapacity(withoutEventFeeOverrides(withoutManualDealUnlock(withoutSingleDayDeposits({ ...experienceData, city } as InsertExperience))));
     const [experience] = await db.insert(experiences).values([normalizedExperience]).returning();
     this.syncDirectPromotionDeals(experience.id).catch((err) =>
       console.error("Error syncing direct promotion deals:", err),
@@ -912,8 +930,16 @@ export class DatabaseStorage implements IStorage {
           ticketSkus: updates.ticketSkus ?? current.ticketSkus,
         })
       : updates;
+    // A city sent with the update is stored in its one spelling; an event that
+    // still has none (made before cities existed) gets one from its place.
+    const cityUpdate = (updates as any).city !== undefined
+      ? { city: normalizeCityName((updates as any).city) ?? current?.city ?? null }
+      : current && !current.city
+        ? { city: await this.eventCity({ ...current, ...updates } as any) }
+        : {};
     const updateData = {
       ...withoutEventFeeOverrides(withoutManualDealUnlock(normalizedUpdates)),
+      ...cityUpdate,
       ...(current ? { maxParticipants: withTicketCapacity({ ...current, ...normalizedUpdates }).maxParticipants } : {}),
       updatedAt: new Date(),
     } as any;
@@ -5473,7 +5499,7 @@ export class DatabaseStorage implements IStorage {
       currency: normalizeCurrency((contract.terms as any)?.currency || experience.currency),
       acceptedAt: contract.acceptedAt || contract.updatedAt,
       updatedAt: contract.updatedAt,
-      experience: { id: experience.id, title: experience.title },
+      experience: { id: experience.id, title: experience.title, city: experience.city },
       creator: creatorSummary(contract.creatorId),
       counterparty: {
         id: venue.id,
@@ -5506,7 +5532,7 @@ export class DatabaseStorage implements IStorage {
         currency: normalizeCurrency((offer.terms as any)?.currency || experience.currency),
         acceptedAt: offer.updatedAt || offer.createdAt,
         updatedAt: offer.updatedAt,
-        experience: { id: experience.id, title: experience.title },
+        experience: { id: experience.id, title: experience.title, city: experience.city },
         creator: creatorSummary(experience.creatorId),
         counterparty: {
           id: venue.id,
@@ -5560,7 +5586,7 @@ export class DatabaseStorage implements IStorage {
           currency: normalizeCurrency(invite.currency || experience.currency),
           acceptedAt: invite.respondedAt || invite.updatedAt || invite.createdAt,
           updatedAt: invite.updatedAt,
-          experience: { id: experience.id, title: experience.title },
+          experience: { id: experience.id, title: experience.title, city: experience.city },
           creator: creatorSummary(invite.creatorId),
           counterparty: {
             id: invite.claimedVenueId || null,
@@ -5599,7 +5625,7 @@ export class DatabaseStorage implements IStorage {
       currency: normalizeCurrency((deal.terms as any)?.currency || experience.currency),
       acceptedAt: deal.respondedAt || deal.paidAt || deal.updatedAt,
       updatedAt: deal.updatedAt,
-      experience: { id: experience.id, title: experience.title },
+      experience: { id: experience.id, title: experience.title, city: experience.city },
       creator: creatorSummary(deal.creatorId),
       counterparty: {
         id: partner?.id || null,
@@ -5639,7 +5665,7 @@ export class DatabaseStorage implements IStorage {
       currency: normalizeCurrency(booking.commissionCurrency || experience.currency),
       acceptedAt: booking.bookingDate || booking.createdAt,
       updatedAt: booking.createdAt,
-      experience: { id: experience.id, title: experience.title },
+      experience: { id: experience.id, title: experience.title, city: experience.city },
       creator: creatorSummary(experience.creatorId),
       counterparty: {
         id: participant.id,
@@ -5665,7 +5691,7 @@ export class DatabaseStorage implements IStorage {
       currency: normalizeCurrency(experience.currency),
       acceptedAt: payout.processedAt || payout.updatedAt || payout.createdAt,
       updatedAt: payout.updatedAt,
-      experience: { id: experience.id, title: experience.title },
+      experience: { id: experience.id, title: experience.title, city: experience.city },
       creator: creatorSummary(experience.creatorId),
       counterparty: {
         id: null,

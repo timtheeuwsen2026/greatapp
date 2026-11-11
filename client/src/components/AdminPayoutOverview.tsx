@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, readableError } from "@/lib/queryClient";
+import { useAdminCity } from "@/hooks/useAdminCity";
 import { Download, Send, Wallet } from "lucide-react";
 
 /**
@@ -99,7 +100,8 @@ export function overviewCsv(overview: PayoutOverview): string {
 export default function AdminPayoutOverview() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const queryKey = ["/api/admin/payout-overview"];
+  const adminCity = useAdminCity();
+  const queryKey = ["/api/admin/payout-overview", adminCity.query];
   const { data, isLoading } = useQuery<PayoutOverview>({ queryKey });
 
   const refresh = () => {

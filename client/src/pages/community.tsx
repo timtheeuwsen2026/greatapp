@@ -11,6 +11,19 @@ import type { ParticipantProfile } from "@shared/schema";
 import { useLocation } from "wouter";
 import timothyPhoto from "@assets/c7c9463b-b8d2-494b-abd9-de23ce88f553_1754564401842.jpg";
 import Navigation from "@/components/navigation";
+import { useCity } from "@/hooks/useCity";
+import { ALL_CITIES, detectLiveCity, inCity } from "@shared/cities";
+
+/**
+ * Community follows the chosen city (66.24). People and activity named for
+ * another city are left out; a place we cannot read as a city stays in, so
+ * nobody disappears because they typed their neighbourhood.
+ */
+function fitsCity(place: string | null | undefined, city: string): boolean {
+  if (city === ALL_CITIES) return true;
+  const named = detectLiveCity(place);
+  return !named || inCity(named.name, city);
+}
 
 interface CommunityMember {
   id: string;
@@ -113,15 +126,17 @@ export default function Community() {
     queryKey: ["/api/community/members"],
   });
 
-  const feed = activityData?.feed ?? [];
+  const { city: shownCity } = useCity();
+  const feed = (activityData?.feed ?? []).filter((item) => fitsCity(item.experienceLocation, shownCity));
   const stats = activityData?.stats ?? { totalParticipants: 0, confirmedEvents: 0, totalCountries: 0 };
 
   // Filter members by selected interest tag
+  const cityMembers = communityMembers.filter((m) => fitsCity(m.location, shownCity));
   const filteredCommunityMembers = activeTagFilter
-    ? communityMembers.filter((m) =>
+    ? cityMembers.filter((m) =>
         m.tags.some((t) => t.toLowerCase() === activeTagFilter.replace("#", "").toLowerCase())
       )
-    : communityMembers;
+    : cityMembers;
 
   const filteredProfiles = profiles.filter((profile) => {
     const matchesSearch =

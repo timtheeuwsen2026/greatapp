@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, readableError } from "@/lib/queryClient";
+import { useAdminCity } from "@/hooks/useAdminCity";
 import { RefreshCw, Scale } from "lucide-react";
 
 /**
@@ -87,7 +88,10 @@ export default function AdminPaymentDifferences() {
   const queryClient = useQueryClient();
   const [showFixed, setShowFixed] = useState(false);
 
-  const { data: rows = [], isLoading } = useQuery<PaymentDifference[]>({ queryKey: ["/api/admin/payment-differences"] });
+  const adminCity = useAdminCity();
+  const { data: rows = [], isLoading } = useQuery<PaymentDifference[]>({
+    queryKey: ["/api/admin/payment-differences", adminCity.query],
+  });
 
   const runCheck = useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/admin/payment-differences/run")).json(),

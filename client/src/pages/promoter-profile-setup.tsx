@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CityField } from "@/components/CityField";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Navigation from "@/components/navigation";
@@ -270,17 +271,13 @@ export default function PromoterProfileSetup() {
             />
 
             <div className="space-y-2">
-              <Label htmlFor="city">City *</Label>
-              <Input
-                id="city"
+              <CityField
                 value={form.city}
-                onChange={(event) => updateField("city", event.target.value)}
-                placeholder="Amsterdam"
-                data-testid="input-promoter-city"
+                onChange={(city) => updateField("city", city)}
+                required
+                help="Where your audience mostly is. Events in this city reach you first."
+                testId="input-promoter-city"
               />
-              <p className="text-xs text-muted-foreground">
-                Where your audience mostly is. Events near it reach you first.
-              </p>
             </div>
 
             <SingleChoiceField

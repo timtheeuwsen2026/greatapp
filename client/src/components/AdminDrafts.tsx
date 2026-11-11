@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, readableError } from "@/lib/queryClient";
+import { useAdminCity } from "@/hooks/useAdminCity";
 import { CheckCircle, ExternalLink, FileClock } from "lucide-react";
 
 /**
@@ -48,7 +49,10 @@ export default function AdminDrafts() {
   const queryClient = useQueryClient();
   const [showEmpty, setShowEmpty] = useState(false);
 
-  const { data: drafts = [], isLoading } = useQuery<AdminDraft[]>({ queryKey: ["/api/admin/drafts"] });
+  const adminCity = useAdminCity();
+  const { data: drafts = [], isLoading } = useQuery<AdminDraft[]>({
+    queryKey: ["/api/admin/drafts", adminCity.query],
+  });
 
   const approveVenue = useMutation({
     mutationFn: async (id: string) => apiRequest("PATCH", `/api/admin/venues/${id}`, { status: "approved" }),

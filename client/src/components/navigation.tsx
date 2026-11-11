@@ -16,6 +16,7 @@ import { isAdminUser } from "@/lib/authUtils";
 import { isPartnerRole } from "@shared/partnerAccess";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import BrandLogo from "@/components/BrandLogo";
+import { CityMenu } from "@/components/CityMenu";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -159,11 +160,13 @@ export default function Navigation() {
         <div className="flex justify-between h-16">
 
           {/* Logo */}
-          <div className="flex items-center">
+          <div className="flex items-center gap-3">
             <Link href="/" className="flex items-center space-x-2">
               <BrandLogo className="h-12 w-auto rounded-md" />
-              <span className="text-xl font-bold text-primary">experiences</span>
+              <span className="hidden sm:inline text-xl font-bold text-primary">experiences</span>
             </Link>
+            {/* The city the site is showing (66.24), next to the logo on every page. */}
+            <CityMenu />
           </div>
 
           {/* Desktop nav */}

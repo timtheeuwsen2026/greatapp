@@ -47,6 +47,8 @@ export const users = pgTable("users", {
   // An account used to try the platform out (the owner's own, for one). Its
   // bookings are marked test payments: left out of payouts and commissions.
   testAccount: boolean("test_account").default(false),
+  // The city this person chose to see (66.24). Empty until they choose.
+  preferredCity: varchar("preferred_city"),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
@@ -372,6 +374,8 @@ export const experienceDrafts = pgTable("experience_drafts", {
 
   // Step 5: Location & Venue
   location: varchar("location").default(""),
+  /** The city the event takes place in (66.24); see @shared/cities. */
+  city: varchar("city"),
   venue: varchar("venue").default(""),
   selectedVenueId: varchar("selected_venue_id"),
   // Venue type and manual venue fields
@@ -723,6 +727,11 @@ export const experiences = pgTable("experiences", {
   coverImageUrl: varchar("cover_image_url"),
   gallery: jsonb("gallery").$type<string[]>().default([]),
   location: varchar("location").notNull(),
+  /**
+   * The city the event takes place in (66.24): "Barcelona", "Amsterdam", or the
+   * place of a retreat elsewhere. Required for new events; see @shared/cities.
+   */
+  city: varchar("city"),
   venue: varchar("venue"),
   manualVenueName: varchar("manual_venue_name"),
   manualVenueAddress: varchar("manual_venue_address"),

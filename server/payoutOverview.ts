@@ -10,6 +10,7 @@
 import { stripe } from "./stripeClient";
 import { storage } from "./storage";
 import { executeExperiencePayout, type PayoutPlan } from "./payout-scheduler";
+import { cityOfEvent, inCity } from "@shared/cities";
 
 export type OverviewLine = {
   key: string;
@@ -60,7 +61,7 @@ function roleOf(key: string, recipientType?: string): OverviewLine["role"] {
   return ROLE[recipientType ?? ""] ?? ROLE[key.split(":")[0]] ?? "other";
 }
 
-export async function buildPayoutOverview(options: { includePaidDays?: number } = {}): Promise<PayoutOverview> {
+export async function buildPayoutOverview(options: { includePaidDays?: number; city?: string | null } = {}): Promise<PayoutOverview> {
   const includePaidSince = Date.now() - (options.includePaidDays ?? 30) * 24 * 60 * 60 * 1000;
   const overview: PayoutOverview = { balance: null, balanceError: null, owedCents: 0, events: [] };
 
@@ -102,6 +103,8 @@ export async function buildPayoutOverview(options: { includePaidDays?: number } 
     }
 
     const experience = await storage.getExperience(payout.experienceId);
+    // The admin city switch (66.24): only this city's events and their totals.
+    if (options.city && !inCity(cityOfEvent((experience ?? {}) as any), options.city)) continue;
     const organiser = experience?.creatorId ? await userOf(experience.creatorId) : null;
     const event: OverviewEvent = {
       payoutId: payout.id,

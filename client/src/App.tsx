@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import AuthPage from "@/pages/auth";
 import ResetPasswordPage from "@/pages/reset-password";
 import Home from "@/pages/home";
+import { LIVE_CITIES } from "@shared/cities";
 import ExperienceDetails from "@/pages/experience-details";
 import AdminDashboard from "@/pages/admin-dashboard";
 import CreatorDashboard from "@/pages/creator-dashboard";
@@ -157,6 +158,10 @@ function Router() {
       <Route path="/email-preferences" component={EmailPreferencesPage} />
       <Route path="/unsubscribe" component={UnsubscribePage} />
       <Route path="/" component={Home} />
+      {/* Each city has its own address (66.24): /amsterdam, /barcelona. */}
+      {LIVE_CITIES.map((city) => (
+        <Route key={city.slug} path={`/${city.slug}`} component={Home} />
+      ))}
 
       {/* Homepage CTA Routes - Redirects */}
       <Route path="/create-trip" component={RedirectToEventBuilder} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CityField } from "@/components/CityField";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -100,6 +101,7 @@ export default function PostCollabIdeaModal({
     title: "",
     audience: "",
     city: "",
+    region: "",
     venueCategory: "",
     groupSizeMin: "",
     groupSizeMax: "",
@@ -146,6 +148,7 @@ export default function PostCollabIdeaModal({
       title: editing.title || "",
       audience: editing.audience || "",
       city: editing.city || "",
+      region: editing.region || "",
       venueCategory: editing.venueCategory || "",
       groupSizeMin: editing.groupSizeMin ? String(editing.groupSizeMin) : "",
       groupSizeMax: editing.groupSizeMax ? String(editing.groupSizeMax) : "",
@@ -310,7 +313,7 @@ export default function PostCollabIdeaModal({
     form.title.trim() === "" ? "a title" : null,
     seekingTypes.length === 0 ? "who you are looking for" : null,
     ...inviteGaps,
-    form.city.trim() === "" ? "an area" : null,
+    form.city.trim() === "" ? "a city" : null,
     !form.groupSizeMin && !form.groupSizeMax ? "a group size" : null,
     !form.estimatedStart && !form.estimatedEnd ? "an estimated period" : null,
   ].filter(Boolean) as string[];
@@ -324,7 +327,7 @@ export default function PostCollabIdeaModal({
       ...inviteGaps,
     ].filter(Boolean) as string[],
     2: [
-      form.city.trim() === "" ? "an area" : null,
+      form.city.trim() === "" ? "a city" : null,
       !form.groupSizeMin && !form.groupSizeMax ? "a group size" : null,
       !form.estimatedStart && !form.estimatedEnd ? "an estimated period" : null,
     ].filter(Boolean) as string[],
@@ -489,15 +492,23 @@ export default function PostCollabIdeaModal({
           {/* ── Step 2: the details, asked once ─────────────────────────── */}
           {step === 2 && (
             <>
+              {/* City (66.24): required, it decides who sees this opportunity. */}
+              <CityField
+                value={form.city}
+                onChange={(city) => set("city")(city)}
+                required
+                help="Only venues, partners and organisers in this city see it."
+                testId="input-collab-city"
+              />
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="collab-city">Area</Label>
+                  <Label htmlFor="collab-region">Neighbourhood (optional)</Label>
                   <Input
-                    id="collab-city"
+                    id="collab-region"
                     placeholder="Barceloneta"
-                    value={form.city}
-                    onChange={(e) => set("city")(e.target.value)}
-                    data-testid="input-collab-city"
+                    value={form.region}
+                    onChange={(e) => set("region")(e.target.value)}
+                    data-testid="input-collab-region"
                   />
                 </div>
                 <div>

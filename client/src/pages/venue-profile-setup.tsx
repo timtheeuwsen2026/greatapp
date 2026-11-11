@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useMemo } from 'react';
+import { CityField } from "@/components/CityField";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1076,19 +1077,17 @@ export default function VenueProfileSetup() {
                       name="city"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>City *</FormLabel>
+                          {/* City (66.24): Barcelona or Amsterdam, or the place of a retreat venue. */}
                           <FormControl>
-                            <Input 
-                              placeholder="Ubud" 
-                              {...field} 
-                              maxLength={255}
-                              data-testid="input-city" 
+                            <CityField
+                              value={field.value}
+                              onChange={field.onChange}
+                              suggestFrom={[null, form.watch('location')]}
+                              required
+                              help="Events at your venue are shown in this city."
+                              testId="input-city"
                             />
                           </FormControl>
-                          <FormDescription className="flex justify-between">
-                            <span>City where your venue is located</span>
-                            <span className="text-xs">{field.value?.length || 0}/255</span>
-                          </FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}

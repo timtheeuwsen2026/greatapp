@@ -301,7 +301,7 @@ export async function listPaymentDifferences(sinceDays = 30): Promise<PaymentDif
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
   const result = await db.execute(sql`
     select d.id, d.kind, d.booking_id as "bookingId", d.experience_id as "experienceId",
-      e.title as "experienceTitle", u.email as "buyerEmail",
+      e.title as "experienceTitle", e.city as "experienceCity", u.email as "buyerEmail",
       d.stripe_payment_intent_id as "stripePaymentIntentId", d.great_status as "greatStatus",
       d.stripe_status as "stripeStatus", d.amount_cents as "amountCents", d.currency, d.note,
       d.auto_fixed as "autoFixed", d.payment_created_at as "paymentCreatedAt",

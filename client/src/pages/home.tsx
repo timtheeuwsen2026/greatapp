@@ -18,6 +18,9 @@ import { CountdownTimer } from "@/components/funding/CountdownTimer";
 import { ParticipantAvatars } from "@/components/funding/ParticipantAvatars";
 import { ExperienceParticipantSocialProof } from "@/components/ExperienceParticipantSocialProof";
 import { DiscoveryExperienceCard } from "@/components/DiscoveryExperienceCard";
+import { CityMenu } from "@/components/CityMenu";
+import { useCity } from "@/hooks/useCity";
+import { ALL_CITIES, cityOfEvent, cityPath, inCity, liveCityByName, liveCityBySlug } from "@shared/cities";
 import { TripCardSkeletonGrid } from "@/components/skeletons/TripCardSkeleton";
 import { ProgressiveImage } from "@/components/ProgressiveImage";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,7 +65,19 @@ const HOMEPAGE_QUICK_CATEGORIES = [
 ] as const;
 
 export default function Home() {
-  const [, setLocation] = useLocation();
+  const [currentPath, setLocation] = useLocation();
+  // Cities (66.24): /amsterdam and /barcelona open that city directly (the
+  // Instagram accounts link there); otherwise the visitor's chosen or guessed city.
+  const { city: savedCity, chosen: cityChosen, suggested: suggestedCity, setCity } = useCity();
+  const pathCity = liveCityBySlug(currentPath.replace(/^\//, "").split(/[/?#]/)[0]);
+  useEffect(() => {
+    if (pathCity && savedCity !== pathCity.name) setCity(pathCity.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathCity?.name]);
+  const shownCity = pathCity?.name ?? savedCity;
+  const cityName = shownCity === ALL_CITIES ? null : shownCity;
+  const [cityBannerClosed, setCityBannerClosed] = useState(false);
+  const showCityBanner = !pathCity && !cityChosen && !!suggestedCity && !cityBannerClosed;
   const { isAuthenticated, user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<string>("all");
   const [selectedTrip, setSelectedTrip] = useState<any | null>(null);
@@ -147,6 +162,8 @@ export default function Home() {
           id: trip.id,
           title: trip.title,
           location: trip.location,
+          city: trip.city,
+          manualVenueAddress: trip.manualVenueAddress,
           startDate: trip.startDate,
           endDate: trip.endDate,
           createdAt: trip.createdAt,
@@ -246,7 +263,28 @@ export default function Home() {
   // how many people came. This is the social proof that was missing entirely:
   // Good Soles' full runs had no homepage presence at all, so a first-time
   // visitor only ever saw events nobody had joined yet.
-  const { happening: happeningNowExps, proven: provenExps } = splitHomepageRows(visibleExperiences);
+  // One city at a time (66.24); the other cities get one row underneath.
+  const cityExperiences = cityName
+    ? visibleExperiences.filter((e: any) => inCity(cityOfEvent(e), cityName))
+    : visibleExperiences;
+  const otherCityExperiences = cityName
+    ? visibleExperiences.filter((e: any) => !inCity(cityOfEvent(e), cityName))
+    : [];
+  const { happening: happeningNowExps, proven: provenExps } = splitHomepageRows(cityExperiences);
+  const otherCityHappening = splitHomepageRows(otherCityExperiences).happening;
+  // The "See all" card points at the other live city with the most events.
+  const otherCityCounts = new Map<string, number>();
+  for (const e of otherCityHappening) {
+    const name = liveCityByName(cityOfEvent(e) ?? "")?.name;
+    if (name) otherCityCounts.set(name, (otherCityCounts.get(name) ?? 0) + 1);
+  }
+  const otherCityName = Array.from(otherCityCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const cityLabel = cityName ?? "all cities";
+  const openCity = (name: string) => {
+    setCity(name);
+    setLocation(cityPath(name));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // Human gap psychology — people help people, not percentages
   const getUrgencyLabel = (spotsNeeded: number) => {
@@ -549,6 +587,44 @@ export default function Home() {
       ) : (
         <div className="relative z-20 bg-white dark:bg-gray-900 pt-10 pb-8">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+            {/* First visit: the city guessed from the internet address (66.24, board C1). */}
+            {showCityBanner && suggestedCity && (
+              <div
+                className="flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 sm:flex-row sm:items-center sm:justify-between"
+                role="region"
+                aria-label="Your city"
+                data-testid="city-banner"
+              >
+                <div>
+                  <p className="text-lg font-semibold text-gray-900 dark:text-white">Looks like you are in {suggestedCity}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    We use your approximate location from your internet address. Nothing is stored until you choose.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="rounded-full"
+                    onClick={() => openCity(suggestedCity)}
+                    data-testid="button-city-banner-accept"
+                  >
+                    Show {suggestedCity}
+                  </Button>
+                  <CityMenu
+                    triggerLabel="Choose another city"
+                    onChosen={() => setCityBannerClosed(true)}
+                    className="border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white" data-testid="heading-city">
+                Experiences in {cityLabel}
+              </h2>
+              <p className="mt-1 text-gray-500 dark:text-gray-400">Join a squad, reserve your spot, and make it happen.</p>
+            </div>
+
             {visibleExperiences.length === 0 ? (
               /* Empty state */
               <div className="text-center py-12">
@@ -578,7 +654,7 @@ export default function Home() {
                     <div className="mb-5 flex items-start justify-between gap-4">
                       <div>
                         <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
-                          ⚡ Happening now
+                          ⚡ Happening now{cityName ? ` in ${cityName}` : ""}
                         </h2>
                         <p className="text-gray-500 dark:text-gray-400">
                           Upcoming and still open for sign-up. The badge on each card tells
@@ -667,6 +743,40 @@ export default function Home() {
                     current volume a full section would be mostly empty, which
                     would read as the feature being dead. Promote it once the
                     volume justifies one. */}
+                {/* Nothing in this city yet: say so instead of a blank page. */}
+                {happeningNowExps.length === 0 && provenExps.length === 0 && (
+                  <div className="rounded-2xl border border-dashed border-gray-300 p-8 text-center" data-testid="city-empty">
+                    <p className="text-lg font-semibold text-gray-900 dark:text-white">Nothing planned in {cityLabel} yet</p>
+                    <p className="mt-1 text-gray-500 dark:text-gray-400">Be the first: start an experience here, or look at another city below.</p>
+                    <Button className="mt-4" onClick={() => setLocation('/create-experience')} data-testid="button-city-empty-create">
+                      Create an experience
+                    </Button>
+                  </div>
+                )}
+
+                {/* Also in other cities (66.24, board C1). */}
+                {cityName && otherCityHappening.length > 0 && (
+                  <section id="other-cities-section" data-testid="other-cities-section">
+                    <div className="mb-5">
+                      <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1">Also in other cities</h2>
+                      <p className="text-gray-500 dark:text-gray-400">Tap a city to switch. Your choice is remembered.</p>
+                    </div>
+                    <div className="flex gap-5 overflow-x-auto pb-4 snap-x snap-mandatory scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+                      {otherCityHappening.slice(0, 2).map((experience: any) => renderDiscoveryCard(experience))}
+                      {otherCityName && (
+                        <button
+                          type="button"
+                          onClick={() => openCity(otherCityName)}
+                          className="flex w-[280px] flex-shrink-0 snap-start items-center justify-center rounded-xl border-2 border-dashed border-primary/30 p-6 text-lg font-semibold text-primary hover:bg-primary/5 sm:w-[320px]"
+                          data-testid="button-see-other-city"
+                        >
+                          See all {otherCityName} events ›
+                        </button>
+                      )}
+                    </div>
+                  </section>
+                )}
+
                 <CollabIdeasStrip />
               </>
             )}

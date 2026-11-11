@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useAdminCity } from "@/hooks/useAdminCity";
 import { Check, X } from "lucide-react";
 
 /**
@@ -39,8 +40,9 @@ export default function AdminCreatorApprovals() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const adminCity = useAdminCity();
   const { data: pending = [], isLoading, isError } = useQuery<PendingCreator[]>({
-    queryKey: ["/api/admin/creator-profiles/pending"],
+    queryKey: ["/api/admin/creator-profiles/pending", adminCity.query],
   });
 
   const { data: settings } = useQuery<{ creatorApprovalRequired?: boolean }>({

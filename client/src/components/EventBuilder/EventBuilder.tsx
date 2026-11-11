@@ -1,5 +1,7 @@
 import TicketAddonChoicesEditor from "./TicketAddonChoicesEditor";
 import { eventFeeRates } from "@shared/platformFees";
+import { CityField } from "@/components/CityField";
+import { detectLiveCity, normalizeCityName } from "@shared/cities";
 import { newExternalVenueFields } from '@shared/venueInviteTerms';
 import { maximumPartnerCommissionPct } from '@shared/partnerPromotion';
 import PartnerLinks from '@/components/PartnerLinks';
@@ -233,6 +235,8 @@ const eventBuilderSchema = z.object({
 
   // Step 4: Venue
   location: z.string().min(1, "Location is required").optional().or(z.literal('')),
+  // The city the event is in (66.24). Picked from the place, can be changed.
+  city: z.string().max(100).optional().nullable(),
   venueType: z.enum(["catalog", "outdoor", "manual", "virtual", "open"]).default("catalog"),
 
   // Open-to-Venue-Offers fields (reverse bidding)
@@ -755,6 +759,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       endTime: "",
       maxParticipants: collabPrefill?.maxParticipants ?? undefined,
       location: collabPrefill?.location || "",
+      city: normalizeCityName(detectLiveCity(collabPrefill?.location)?.name) ?? "",
       venueType: "catalog",
       venueOpenSpaceType: "",
       venueTargetDeal: "revenue_share",
@@ -1591,6 +1596,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
         // Venue/location fields
         location: formData.location || '',
+        city: formData.city || '',
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
@@ -1850,6 +1856,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     if (!data.location || data.location.trim() === '') {
       errors.push("Location is required");
     }
+
+    // Required: city (66.24), it decides where the event is shown
+    if (!data.city || String(data.city).trim() === '') {
+      errors.push("City is required");
+    }
     
     // Venue type specific validation - 5 distinct modes, no overlap
     const venueType = data.venueType || 'catalog';
@@ -2040,6 +2051,11 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     if (!data.location || data.location.trim() === '') {
       errors.push("Location is required");
     }
+
+    // Required: city (66.24), it decides where the event is shown
+    if (!data.city || String(data.city).trim() === '') {
+      errors.push("City is required");
+    }
     
     // Venue type specific validation - 5 distinct modes, no overlap
     const venueType = data.venueType || 'catalog';
@@ -2153,6 +2169,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
         // Venue/location fields
         location: formData.location || '',
+        city: formData.city || '',
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
@@ -3664,6 +3681,16 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
             <FormMessage />
           </FormItem>
         )}
+      />
+
+      {/* City (66.24): every event belongs to one city, which decides where it
+          is shown. Filled in from the place or venue; the organiser can change it. */}
+      <CityField
+        value={form.watch('city') ?? ''}
+        onChange={(city) => form.setValue('city', city, { shouldDirty: true })}
+        suggestFrom={[venues.find((venue) => venue.id === selectedVenueId)?.city, form.watch('location'), form.watch('manualVenueAddress')]}
+        required
+        testId="select-event-city"
       />
 
       {/* Venue Type Selection */}

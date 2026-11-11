@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CityField } from "@/components/CityField";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import Navigation from "@/components/navigation";
@@ -351,18 +352,13 @@ export default function SimpleCreatorProfileSetup() {
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="city">City *</Label>
-              <Input
-                id="city"
+              <CityField
                 value={form.city}
-                onChange={(event) => updateField("city", event.target.value)}
-                placeholder="Barcelona"
-                data-testid="input-creator-city"
+                onChange={(city) => updateField("city", city)}
+                required
+                help="Where you usually host. Each event still has its own city, so you can host in several."
+                testId="input-creator-city"
               />
-              <p className="text-xs text-muted-foreground">
-                Where you usually host. You can still work anywhere — this is the
-                starting point for matches, not a restriction.
-              </p>
             </div>
 
             <SingleChoiceField

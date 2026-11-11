@@ -55,6 +55,9 @@ import AdminFailedPayouts from "@/components/AdminFailedPayouts";
 import AdminDrafts from "@/components/AdminDrafts";
 import AdminPaymentDifferences from "@/components/AdminPaymentDifferences";
 import AdminPayoutOverview from "@/components/AdminPayoutOverview";
+import { CityMenu } from "@/components/CityMenu";
+import { useAdminCity } from "@/hooks/useAdminCity";
+import { LIVE_CITIES } from "@shared/cities";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
 
@@ -224,6 +227,7 @@ export default function AdminDashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const adminCity = useAdminCity();
   const [activeTab, setActiveTab] = useState("experiences");
   const [reviewNotes, setReviewNotes] = useState("");
   const [, setLocation] = useLocation();
@@ -278,10 +282,11 @@ export default function AdminDashboard() {
 
   // All experiences query (for full visibility)
   const { data: experienceResponse, isLoading: experiencesLoading } = useQuery<PaginatedExperiences>({
-    queryKey: ["/api/admin/experiences", experiencePage, experienceStatusFilter, searchTerm],
+    queryKey: ["/api/admin/experiences", experiencePage, experienceStatusFilter, searchTerm, adminCity.param],
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(experiencePage), pageSize: String(experiencePageSize), status: experienceStatusFilter });
       if (searchTerm.trim()) params.set("search", searchTerm.trim());
+      if (adminCity.param) params.set("city", adminCity.param);
       const response = await apiRequest("GET", `/api/admin/experiences?${params}`);
       return response.json();
     },
@@ -292,7 +297,7 @@ export default function AdminDashboard() {
   const experiencePagination = experienceResponse?.pagination;
   const experienceStats = experienceResponse?.stats;
 
-  useEffect(() => { setExperiencePage(1); }, [experienceStatusFilter, searchTerm]);
+  useEffect(() => { setExperiencePage(1); }, [experienceStatusFilter, searchTerm, adminCity.param]);
 
   // Community applications query
   const { data: applicationResponse, isLoading: applicationsLoading } = useQuery<PaginatedList<any>>({
@@ -304,8 +309,8 @@ export default function AdminDashboard() {
   const communityApplications = applicationResponse?.items ?? [];
 
   const { data: userResponse, isLoading: usersLoading } = useQuery<PaginatedList<AdminUserInventory>>({
-    queryKey: ["/api/admin/users", userPage, userRoleFilter, searchTerm],
-    queryFn: async () => (await apiRequest("GET", `/api/admin/users?page=${userPage}&pageSize=10&role=${userRoleFilter}&search=${encodeURIComponent(searchTerm)}`)).json(),
+    queryKey: ["/api/admin/users", userPage, userRoleFilter, searchTerm, adminCity.param],
+    queryFn: async () => (await apiRequest("GET", adminCity.withCity(`/api/admin/users?page=${userPage}&pageSize=10&role=${userRoleFilter}&search=${encodeURIComponent(searchTerm)}`))).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
@@ -313,8 +318,8 @@ export default function AdminDashboard() {
 
   // All venues query (not just pending)
   const { data: venueResponse, isLoading: venuesLoading } = useQuery<PaginatedList<VenueWithOwner> | VenueWithOwner[]>({
-    queryKey: ["/api/admin/venues", venuePage, venueStatusFilter, searchTerm],
-    queryFn: async () => (await apiRequest("GET", `/api/admin/venues?page=${venuePage}&pageSize=10&status=${venueStatusFilter}&search=${encodeURIComponent(searchTerm)}`)).json(),
+    queryKey: ["/api/admin/venues", venuePage, venueStatusFilter, searchTerm, adminCity.param],
+    queryFn: async () => (await apiRequest("GET", adminCity.withCity(`/api/admin/venues?page=${venuePage}&pageSize=10&status=${venueStatusFilter}&search=${encodeURIComponent(searchTerm)}`))).json(),
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
@@ -340,7 +345,7 @@ export default function AdminDashboard() {
     retry: false,
   });
   const pendingServices = serviceResponse?.items ?? [];
-  useEffect(() => { setApplicationPage(1); setVenuePage(1); setServicePage(1); setUserPage(1); }, [searchTerm]);
+  useEffect(() => { setApplicationPage(1); setVenuePage(1); setServicePage(1); setUserPage(1); }, [searchTerm, adminCity.param]);
   useEffect(() => { setVenuePage(1); }, [venueStatusFilter]);
   useEffect(() => { setUserPage(1); }, [userRoleFilter]);
 
@@ -352,7 +357,7 @@ export default function AdminDashboard() {
   });
 
   const { data: dealLedger = [], isLoading: dealLedgerLoading } = useQuery<AdminDealLedgerItem[]>({
-    queryKey: ["/api/admin/deal-ledger"],
+    queryKey: ["/api/admin/deal-ledger", adminCity.query],
     enabled: isAuthenticated && isAdminUser(user),
     retry: false,
   });
@@ -678,11 +683,29 @@ export default function AdminDashboard() {
       <Navigation />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Shield className="w-8 h-8 text-red-500" />
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <Shield className="w-8 h-8 text-red-500" />
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
+              </div>
+              <p className="text-gray-600 dark:text-gray-400">Manage platform operations, users, agreements, and transactions</p>
+            </div>
+            {/* City switch (66.24, board C2): every tab shows only this city. */}
+            <div className="flex items-center gap-2" data-testid="admin-city-switch">
+              <span className="text-sm font-medium text-gray-500">City</span>
+              <CityMenu />
+            </div>
           </div>
-          <p className="text-gray-600 dark:text-gray-400">Manage platform operations, users, agreements, and transactions</p>
+          {adminCity.param ? (
+            <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" data-testid="admin-city-note">
+              You are looking at {adminCity.param} only. Switch to All cities to see everything.
+            </p>
+          ) : (
+            <p className="mt-4 rounded-xl bg-gray-100 px-4 py-3 text-sm text-gray-700 dark:bg-gray-800 dark:text-gray-300" data-testid="admin-city-note">
+              You are looking at all cities.
+            </p>
+          )}
         </div>
 
         {/* Stats Cards */}
@@ -891,6 +914,7 @@ export default function AdminDashboard() {
                             })()}</span>
                             <span>Category: {experience.category}</span>
                             <span>Location: {experience.location}</span>
+                            <AdminEventCity experienceId={experience.id} city={(experience as any).city ?? null} />
                             {experience.minimumParticipants && experience.minimumParticipants > 0 && (
                               <>
                                 <span data-testid={`mvg-progress-text-${experience.id}`}>
@@ -2241,14 +2265,49 @@ function PageControls({ pagination, page, onPage }: { pagination?: { totalPages:
   return <div className="flex flex-wrap items-center justify-center gap-2 pt-4"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => onPage(page - 1)}>Previous</Button>{pages.map(value => <Button key={value} size="sm" variant={value === page ? "default" : "outline"} onClick={() => onPage(value)}>{value}</Button>)}<Button size="sm" variant="outline" disabled={page === pagination.totalPages} onClick={() => onPage(page + 1)}>Next</Button></div>;
 }
 
+/** The event's city, changeable by an admin in place (66.24). */
+function AdminEventCity({ experienceId, city }: { experienceId: string; city: string | null }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const save = useMutation({
+    mutationFn: async (next: string) => (await apiRequest("PATCH", `/api/admin/experiences/${experienceId}/city`, { city: next })).json(),
+    onSuccess: (_data, next) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/experiences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cities"] });
+      toast({ title: `City set to ${next}` });
+    },
+    onError: (error: any) => toast({ title: "Could not set the city", description: error?.message, variant: "destructive" }),
+  });
+  const options = Array.from(new Set([...LIVE_CITIES.map((live) => live.name), ...(city ? [city] : [])]));
+  return (
+    <label className="inline-flex items-center gap-1">
+      City:
+      <select
+        className="rounded border border-gray-300 bg-white px-1 py-0.5 text-xs dark:bg-gray-800"
+        value={city ?? ""}
+        disabled={save.isPending}
+        onChange={(event) => event.target.value && save.mutate(event.target.value)}
+        aria-label="City of this event"
+        data-testid={`select-admin-event-city-${experienceId}`}
+      >
+        {!city && <option value="">Not set</option>}
+        {options.map((name) => (
+          <option key={name} value={name}>{name}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function AdminVenueOffersTab() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [page, setPage] = useState(1);
 
+  const adminCity = useAdminCity();
   const { data: response, isLoading } = useQuery<PaginatedList<any>>({
-    queryKey: ["/api/admin/venue-offers", page],
-    queryFn: async () => (await apiRequest("GET", `/api/admin/venue-offers?page=${page}&pageSize=10`)).json(),
+    queryKey: ["/api/admin/venue-offers", page, adminCity.param],
+    queryFn: async () => (await apiRequest("GET", adminCity.withCity(`/api/admin/venue-offers?page=${page}&pageSize=10`))).json(),
   });
   const rows = Array.isArray(response?.items) ? response.items : [];
 

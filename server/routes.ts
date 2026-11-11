@@ -18,6 +18,9 @@ import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { availableBookingQuantity, BookingCapacityError, isActiveRegistration, ticketId, ticketRegistrationCounts, withTicketCapacity } from "@shared/ticketAvailability";
 import { db } from "./db";
+import { suggestedCityForIp } from "./visitorCity";
+import { adminCityFrom, onlyCity } from "./adminCity";
+import { ALL_CITIES, countEventsByCity, inCity, normalizeCityName } from "@shared/cities";
 import { discountLinks, bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks, creatorProfiles } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -911,7 +914,11 @@ function parseCollabIdeaBody(body: any): { error?: string; values: Record<string
   // The venue matcher filters on city and category. Where the poster answered
   // those inside the Venue block's own fields, read them from there rather than
   // asking for the same thing twice.
-  const city = String(body?.city || typeDetails.venue?.area || "").trim() || null;
+  // Cities (66.24): one spelling per city. "Raval" typed as the city is
+  // Barcelona, with Raval kept as the neighbourhood.
+  const typedCity = String(body?.city || typeDetails.venue?.area || "").trim() || null;
+  const city = normalizeCityName(typedCity);
+  const typedNeighbourhood = typedCity && city && typedCity.toLowerCase() !== city.toLowerCase() ? typedCity : null;
   const venueCategory = String(
     body?.venueCategory || typeDetails.venue?.kindOfSpace || "",
   ).trim() || null;
@@ -930,7 +937,7 @@ function parseCollabIdeaBody(body: any): { error?: string; values: Record<string
       dealPreference: dealPreferences.length ? describeDealPreferences({ dealPreferences }) : null,
       audience,
       city,
-      region: body?.region ? String(body.region) : null,
+      region: body?.region ? String(body.region) : typedNeighbourhood,
       venueCategory,
       groupSizeMin: Number.isFinite(Number(body?.groupSizeMin)) && Number(body.groupSizeMin) > 0
         ? Number(body.groupSizeMin)
@@ -1533,6 +1540,7 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       coverImageUrl,
       gallery: draft.gallery || [],
       location: draft.location || '',
+      city: (draft as any).city || null,
       venue: draft.venue,
       startDate,
       endDate,
@@ -2296,6 +2304,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Auth routes - get (or auto-create) user from database
+  // ── Cities (66.24) ─────────────────────────────────────────────────────────
+  // The city a visitor is offered first, from the country of their internet
+  // address. Looked up on this server; nothing is stored or sent elsewhere.
+  app.get("/api/city/suggest", (req, res) => {
+    res.set("Cache-Control", "private, no-store, max-age=0");
+    res.json(suggestedCityForIp(req.ip));
+  });
+
+  // The city menu: upcoming public events per city.
+  app.get("/api/cities", async (_req, res) => {
+    try {
+      const listed = (await storage.getExperiences({})).filter(isPublicExperienceListable);
+      res.json(countEventsByCity(listed as any[], (event) => !hasExperiencePassed(event)));
+    } catch (error) {
+      console.error("Error counting events per city:", error);
+      res.status(500).json({ message: "Could not count events per city" });
+    }
+  });
+
+  // A logged-in person's chosen city, so the choice follows them to any device.
+  app.put("/api/me/city", isAuthenticated, async (req: any, res) => {
+    try {
+      const raw = String(req.body?.city ?? "").trim();
+      const city = raw === ALL_CITIES ? ALL_CITIES : normalizeCityName(raw);
+      if (!city) return res.status(400).json({ message: "Choose a city" });
+      await db.update(users).set({ preferredCity: city } as any).where(eq(users.id, req.user.claims.sub));
+      res.json({ city });
+    } catch (error) {
+      console.error("Error saving chosen city:", error);
+      res.status(500).json({ message: "Could not save the city" });
+    }
+  });
+
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
       res.set('Cache-Control', 'private, no-store, max-age=0');
@@ -4991,6 +5032,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (startDate < now && !options.allowPastStart) {
         errors.push("Experience start date must be in the future");
       }
+    }
+
+    // Every event belongs to a city (66.24): it decides where the event is shown.
+    if (!String(data.city ?? "").trim()) {
+      errors.push("Please choose the city where your experience takes place");
     }
 
     const experienceType = data.type || "one-day";
@@ -7694,7 +7740,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const pageSize = Math.min(50, Math.max(5, Number.parseInt(String(req.query.pageSize || "10"), 10) || 10));
       const status = String(req.query.status || "all");
       const search = String(req.query.search || "").trim();
+      const city = adminCityFrom(req.query);
       const filters: any[] = [];
+      // Only the chosen city (66.24); the status counts follow it too.
+      const cityFilter = city ? sql`lower(${experiences.city}) = lower(${city})` : undefined;
+      if (cityFilter) filters.push(cityFilter);
       if (status === "pending") {
         filters.push(or(eq(experiences.status, "pending"), eq(experiences.status, "pending_approval")));
       } else if (status !== "all") {
@@ -7711,7 +7761,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [allExperiences, totalRows, statusRows] = await Promise.all([
         db.select().from(experiences).where(where).orderBy(desc(experiences.createdAt)).limit(pageSize).offset((page - 1) * pageSize),
         db.select({ count: sql<number>`count(*)::int` }).from(experiences).where(where),
-        db.select({ status: experiences.status, count: sql<number>`count(*)::int` }).from(experiences).groupBy(experiences.status),
+        db.select({ status: experiences.status, count: sql<number>`count(*)::int` }).from(experiences).where(cityFilter).groupBy(experiences.status),
       ]);
       // Enrich with MVG progress from single source of truth
       const enrichedExperiences = await Promise.all(
@@ -7752,7 +7802,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const ledger = await storage.getAdminDealLedger();
+      const ledger = onlyCity(await storage.getAdminDealLedger(), adminCityFrom(req.query), (entry: any) => entry.experience?.city);
       // A payout's fee and amounts come from the payout's own plan, so the
       // ledger and the Payments tab show the same numbers (66.10d / 66.11).
       // The fee used to be stored only once a payout had run, so a scheduled
@@ -11112,7 +11162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const venuePayload = {
         // Required (NOT NULL) columns — fall back so a partial draft can still save
         name: (typeof req.body.name === 'string' && req.body.name.trim()) || 'Untitled venue',
-        city: req.body.city || '',
+        city: normalizeCityName(req.body.city) || '',
         description: req.body.description || '',
         venueType: req.body.venueType || 'multi_day',
         capacity: req.body.capacity != null && req.body.capacity !== '' ? Number(req.body.capacity) : 0,
@@ -11249,7 +11299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updatePayload = {
         // Required fields (merge with existing if not provided)
         name: req.body.name ?? existingVenue.name,
-        city: req.body.city ?? existingVenue.city,
+        city: req.body.city !== undefined ? (normalizeCityName(req.body.city) || existingVenue.city) : existingVenue.city,
         description: req.body.description ?? existingVenue.description,
         venueType: req.body.venueType ?? existingVenue.venueType,
         capacity: req.body.capacity ?? existingVenue.capacity,
@@ -14827,7 +14877,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(creatorProfiles)
         .where(and(eq(creatorProfiles.completed, true), eq(creatorProfiles.approved, false)))
         .orderBy(desc(creatorProfiles.createdAt));
-      res.json(pending);
+      res.json(onlyCity(pending, adminCityFrom(req.query), (profile: any) => profile.city || profile.location));
     } catch (error) {
       console.error("Error listing pending creator profiles:", error);
       res.status(500).json({ message: "Failed to list pending creator profiles" });
@@ -17045,8 +17095,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { page, pageSize, offset } = paginationFrom(req.query);
       const userSearch = String(req.query.search || "").trim();
       const userRole = String(req.query.role || "all");
+      const userCity = adminCityFrom(req.query);
       const userFilters: any[] = [];
       if (userRole !== "all") userFilters.push(eq(users.role, userRole as any));
+      const userCityFilter = userCity
+        ? sql`(lower(${users.preferredCity}) = lower(${userCity})
+          OR EXISTS (SELECT 1 FROM creator_profiles cp WHERE cp.user_id = ${users.id} AND lower(cp.city) = lower(${userCity}))
+          OR EXISTS (SELECT 1 FROM promoter_profiles pp WHERE pp.user_id = ${users.id} AND lower(pp.city) = lower(${userCity}))
+          OR EXISTS (SELECT 1 FROM venues v WHERE v.created_by = ${users.id} AND lower(v.city) = lower(${userCity})))`
+        : undefined;
+      if (userCityFilter) userFilters.push(userCityFilter);
       if (userSearch) {
         userFilters.push(or(
           ilike(users.firstName, `%${userSearch}%`),
@@ -17105,7 +17163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           )`,
         }).from(users).where(userWhere).orderBy(desc(users.createdAt)).limit(pageSize).offset(offset),
         db.select({ count: sql<number>`count(*)::int` }).from(users).where(userWhere),
-        db.select({ role: users.role, count: sql<number>`count(*)::int` }).from(users).groupBy(users.role),
+        db.select({ role: users.role, count: sql<number>`count(*)::int` }).from(users).where(userCityFilter).groupBy(users.role),
       ]);
 
       const total = Number(totals[0]?.count || 0);
@@ -17133,7 +17191,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { page, pageSize, offset } = paginationFrom(req.query);
       const venueStatus = String(req.query.status || "all");
       const venueSearch = String(req.query.search || "").trim();
+      const venueCity = adminCityFrom(req.query);
+      const venueCityFilter = venueCity ? sql`lower(${venues.city}) = lower(${venueCity})` : undefined;
       const venueFilters: any[] = [];
+      if (venueCityFilter) venueFilters.push(venueCityFilter);
       if (venueStatus !== "all") venueFilters.push(eq(venues.status, venueStatus as any));
       if (venueSearch) venueFilters.push(or(
         ilike(venues.name, `%${venueSearch}%`),
@@ -17147,7 +17208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [items, totals, statuses] = await Promise.all([
         db.select({ venue: venues, ownerFirstName: users.firstName, ownerLastName: users.lastName, ownerEmail: users.email }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere).orderBy(desc(venues.createdAt)).limit(pageSize).offset(offset),
         db.select({ count: sql<number>`count(*)::int` }).from(venues).leftJoin(users, eq(venues.createdBy, users.id)).where(venueWhere),
-        db.select({ status: venues.status, count: sql<number>`count(*)::int` }).from(venues).groupBy(venues.status),
+        db.select({ status: venues.status, count: sql<number>`count(*)::int` }).from(venues).where(venueCityFilter).groupBy(venues.status),
       ]);
       const total = Number(totals[0]?.count || 0);
       const statusCounts = Object.fromEntries(statuses.map(row => [row.status || "unknown", Number(row.count)]));
@@ -17362,6 +17423,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Set an event's city by hand (66.24): for events made before cities, or put
+  // in the wrong one.
+  app.patch("/api/admin/experiences/:id/city", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const city = normalizeCityName(String(req.body?.city ?? ""));
+      if (!city) return res.status(400).json({ message: "Choose a city" });
+      const existing = await storage.getExperience(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Experience not found" });
+      const updated = await storage.updateExperience(req.params.id, { city } as any);
+      res.json({ id: updated.id, city: (updated as any).city });
+    } catch (error) {
+      console.error("Error setting the event city:", error);
+      res.status(500).json({ message: "Could not set the city" });
+    }
+  });
+
   app.patch("/api/admin/experiences/:id", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {
@@ -17424,7 +17504,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Admin access required" });
       }
       const days = Math.min(400, Math.max(1, Number(req.query.days) || 30));
-      res.json(await listPaymentDifferences(days));
+      // A payment Stripe has but no event matches stays in every city: someone has to look at it.
+      const differenceCity = adminCityFrom(req.query);
+      const differences = await listPaymentDifferences(days);
+      res.json(differenceCity
+        ? differences.filter((row: any) => !row.experienceId || inCity(row.experienceCity, differenceCity))
+        : differences);
     } catch (error) {
       console.error("Error loading payment differences:", error);
       res.status(500).json({ message: "Failed to load payment differences" });
@@ -17452,7 +17537,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const rows = await storage.getAdminDrafts();
+      const draftCity = adminCityFrom(req.query);
+      const allDrafts = await storage.getAdminDrafts();
+      const rows = {
+        events: onlyCity(allDrafts.events, draftCity, (row: any) => row.draft?.city),
+        venues: onlyCity(allDrafts.venues, draftCity, (row: any) => row.venue?.city),
+      };
       res.json(adminDraftItems(rows, (draft) => validateDraftForPublication(draft, {
         manualDealUnlocked: (draft as any).manualDealUnlocked === true,
       }).errors));
@@ -20425,10 +20515,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isAdmin = await checkIsAdmin(req);
       if (!isAdmin) return res.status(403).json({ message: 'Admin access required' });
       const { page, pageSize, offset } = paginationFrom(req.query);
-      const where = eq((venueOffers as any).status, "admin_review");
+      const offerCity = adminCityFrom(req.query);
+      const where = offerCity
+        ? and(eq((venueOffers as any).status, "admin_review"), sql`lower(${experiences.city}) = lower(${offerCity})`)
+        : eq((venueOffers as any).status, "admin_review");
       const [items, totals] = await Promise.all([
         db.select({ offer: venueOffers, venue: venues, experience: experiences }).from(venueOffers).leftJoin(venues, eq(venueOffers.venueId, venues.id)).leftJoin(experiences, eq(venueOffers.experienceId, experiences.id)).where(where).orderBy(desc((venueOffers as any).createdAt)).limit(pageSize).offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(venueOffers).where(where),
+        db.select({ count: sql<number>`count(*)::int` }).from(venueOffers).leftJoin(experiences, eq(venueOffers.experienceId, experiences.id)).where(where),
       ]);
       const total = Number(totals[0]?.count || 0);
       res.json({ items: items.map((row: any) => ({ ...row, venue: stripVenuePricing(row.venue) })), pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } });
@@ -21010,7 +21103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!(await checkIsAdmin(req))) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      res.json(await buildPayoutOverview());
+      res.json(await buildPayoutOverview({ city: adminCityFrom(req.query) }));
     } catch (error: any) {
       console.error("Error building the payout overview:", error);
       res.status(500).json({ message: error?.message || "Failed to load the payout overview" });

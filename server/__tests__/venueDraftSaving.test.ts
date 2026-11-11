@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { routeFunction, routeResponse } from '../../tests/routeHarness';
+import { normalizeCityName } from '@shared/cities';
 import { extendedInsertVenueSchema } from '@shared/schema';
 import { venueSubmitProblems } from '@shared/venueSubmitReadiness';
 import { venueDraftUpdate } from '../venueDraftSave';
@@ -22,6 +23,7 @@ function putRoute(existing: Record<string, any>) {
     storage, extendedInsertVenueSchema, venueDraftUpdate,
     checkIsAdmin: async () => false,
     repriceAddonsFromVenueCatalog: vi.fn(),
+    normalizeCityName,
   }, 'put');
   return { route, storage };
 }

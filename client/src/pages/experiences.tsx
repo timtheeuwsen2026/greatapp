@@ -8,6 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Search, MapPin, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { DiscoveryExperienceCard } from "@/components/DiscoveryExperienceCard";
+import { CityMenu } from "@/components/CityMenu";
+import { useCity } from "@/hooks/useCity";
+import { ALL_CITIES, cityOfEvent, inCity, liveCityByName } from "@shared/cities";
+
+/** A ?city= link naming a live city (or "all") switches the site's city; anything else filters the place. */
+function siteCityFromParam(value: string | null): string | null {
+  if (!value) return null;
+  if (value === ALL_CITIES) return ALL_CITIES;
+  return liveCityByName(value)?.name ?? null;
+}
 
 const pillars = [
   { id: "all", title: "All" },
@@ -37,7 +47,12 @@ const EXPERIENCES_PER_PAGE = 9;
 export default function Experiences() {
   const [, setLocation] = useLocation();
   const [searchQuery, setSearchQuery] = useState(() => new URLSearchParams(window.location.search).get("search") || "");
-  const [selectedCity, setSelectedCity] = useState(() => new URLSearchParams(window.location.search).get("city") || "");
+  // The city comes from the city button (66.24); this box narrows to a neighbourhood or place.
+  const { city: siteCity, setCity: setSiteCity } = useCity();
+  const [selectedCity, setSelectedCity] = useState(() => {
+    const param = new URLSearchParams(window.location.search).get("city");
+    return param && !siteCityFromParam(param) ? param : "";
+  });
   const [selectedPillar, setSelectedPillar] = useState(() => {
     const category = new URLSearchParams(window.location.search).get("category");
     return category && pillars.some((pillar) => pillar.id === category) ? category : "all";
@@ -86,7 +101,11 @@ export default function Experiences() {
       }
     }
 
-    if (cityParam) setSelectedCity(cityParam);
+    if (cityParam) {
+      const live = siteCityFromParam(cityParam);
+      if (live) setSiteCity(live);
+      else setSelectedCity(cityParam);
+    }
     
     // Log date parameters if present
     if (startDateParam || endDateParam) {
@@ -132,8 +151,9 @@ export default function Experiences() {
       : [];
     const fallbackPillars = legacyCategoryPillars[experience.category] || [];
     const matchesSearch = !query || searchableText.includes(query);
-    const matchesCity = !selectedCity
-      || String(experience.location || "").toLowerCase().includes(selectedCity.trim().toLowerCase());
+    const matchesSiteCity = inCity(cityOfEvent(experience), siteCity);
+    const matchesCity = matchesSiteCity && (!selectedCity
+      || String(experience.location || "").toLowerCase().includes(selectedCity.trim().toLowerCase()));
     const matchesPillar = selectedPillar === "all"
       || experiencePillars.includes(selectedPillar)
       || (experiencePillars.length === 0 && fallbackPillars.includes(selectedPillar));
@@ -474,11 +494,11 @@ export default function Experiences() {
             <div className="relative w-full">
               <MapPin className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
               <Input
-                placeholder="City (e.g. Barcelona)"
+                placeholder="Neighbourhood or place (e.g. Gràcia)"
                 value={selectedCity}
                 onChange={(event) => { setSelectedCity(event.target.value); setCurrentPage(1); }}
                 className="h-11 pl-10"
-                aria-label="Filter by city"
+                aria-label="Filter by neighbourhood or place"
                 data-testid="input-city-filter"
               />
             </div>
@@ -509,15 +529,17 @@ export default function Experiences() {
           {/* Enhanced Results count with better feedback */}
           <div className="mt-4 text-sm text-gray-600">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+                <CityMenu className="mr-2" />
                 <span className={filteredExperiences.length === 0 ? 'text-red-600 font-medium' : ''}>
                   {filteredExperiences.length} experience{filteredExperiences.length !== 1 ? 's' : ''} found
+                  {siteCity !== ALL_CITIES && <> in <strong className="text-gray-800">{siteCity}</strong></>}
                 </span>
                 {searchQuery && (
                   <span> for "<strong className="text-gray-800">{searchQuery}</strong>"</span>
                 )}
                 {selectedCity && (
-                  <span> in <strong className="text-gray-800">{selectedCity}</strong></span>
+                  <span> around <strong className="text-gray-800">{selectedCity}</strong></span>
                 )}
                 {selectedPillar !== "all" && (
                   <span> for <strong className="text-gray-800">{pillars.find(pillar => pillar.id === selectedPillar)?.title}</strong></span>
@@ -627,7 +649,8 @@ export default function Experiences() {
                   <h3 className="text-2xl font-semibold text-gray-900 mb-2">
                     No experiences found
                     {searchQuery && ` for "${searchQuery}"`}
-                    {selectedCity && ` in ${selectedCity}`}
+                    {siteCity !== ALL_CITIES && ` in ${siteCity}`}
+                    {selectedCity && ` around ${selectedCity}`}
                     {selectedPillar !== "all" && ` for ${pillars.find(pillar => pillar.id === selectedPillar)?.title}`}
                   </h3>
                   <div className="text-gray-600 mb-6 space-y-2">
@@ -639,6 +662,7 @@ export default function Experiences() {
                         <li>Selecting a different category</li>
                         <li>Checking for spelling errors</li>
                         <li>Browsing all categories</li>
+                        <li>Choosing another city, or All cities, with the city button</li>
                       </ul>
                     </div>
                   </div>

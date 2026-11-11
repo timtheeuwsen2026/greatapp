@@ -70,13 +70,33 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
+
+/**
+ * The address a query key stands for. The parts are joined with "/", and a
+ * plain object at the end becomes the query string, so
+ * ["/api/admin/drafts", { city: "Amsterdam" }] fetches
+ * /api/admin/drafts?city=Amsterdam while ["/api/admin/drafts"] still matches
+ * it when the list is refreshed.
+ */
+export function urlForQueryKey(queryKey: readonly unknown[]): string {
+  const last = queryKey[queryKey.length - 1];
+  const hasParams = !!last && typeof last === "object" && !Array.isArray(last);
+  const path = (hasParams ? queryKey.slice(0, -1) : queryKey).join("/");
+  if (!hasParams) return path;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(last as Record<string, unknown>)) {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
+}
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     try {
-      const res = await fetch(queryKey.join("/") as string, {
+      const res = await fetch(urlForQueryKey(queryKey), {
         headers: authHeaders(),
       });
 
@@ -89,7 +109,7 @@ export const getQueryFn: <T>(options: {
     } catch (error) {
       if (error instanceof TypeError) {
         console.error(
-          `Network error on GET ${queryKey.join("/")}:`,
+          `Network error on GET ${urlForQueryKey(queryKey)}:`,
           error.message,
         );
         throw new Error(

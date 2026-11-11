@@ -1,0 +1,8 @@
+declare module "geoip-country" {
+  interface GeoipCountryResult {
+    country: string;
+    name?: string;
+  }
+  const geoip: { lookup(ip: string): GeoipCountryResult | null };
+  export default geoip;
+}

@@ -23,3 +23,16 @@ export function suggestedCityForIp(ip: string | null | undefined): { city: strin
   const country = countryForIp(ip);
   return { city: liveCityForCountry(country)?.name ?? null, country };
 }
+
+/**
+ * The visitor's own address. Railway's edge sits in front of the app, so
+ * req.ip is the edge (it showed Singapore for a visitor in Pakistan). The
+ * edge passes the visitor on in X-Real-IP and as the first X-Forwarded-For
+ * entry. Someone could fake these, but all they would change is which city
+ * they are offered.
+ */
+export function visitorIp(req: { headers: Record<string, string | string[] | undefined>; ip?: string }): string | null {
+  const first = (value: string | string[] | undefined) =>
+    (Array.isArray(value) ? value[0] : value)?.split(",")[0]?.trim() || null;
+  return first(req.headers["x-real-ip"]) ?? first(req.headers["x-forwarded-for"]) ?? req.ip ?? null;
+}

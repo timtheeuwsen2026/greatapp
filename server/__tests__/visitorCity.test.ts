@@ -15,3 +15,12 @@ describe("visitor city", () => {
     expect(suggestedCityForIp(undefined)).toEqual({ city: null, country: null });
   });
 });
+
+describe("visitor address behind Railway's edge", () => {
+  it("reads the visitor, not the edge", async () => {
+    const { visitorIp } = await import("../visitorCity");
+    expect(visitorIp({ headers: { "x-real-ip": "145.131.0.1" }, ip: "10.0.0.1" })).toBe("145.131.0.1");
+    expect(visitorIp({ headers: { "x-forwarded-for": "88.26.0.1, 103.1.1.1" }, ip: "103.1.1.1" })).toBe("88.26.0.1");
+    expect(visitorIp({ headers: {}, ip: "8.8.8.8" })).toBe("8.8.8.8");
+  });
+});

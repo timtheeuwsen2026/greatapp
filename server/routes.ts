@@ -18,7 +18,7 @@ import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { availableBookingQuantity, BookingCapacityError, isActiveRegistration, ticketId, ticketRegistrationCounts, withTicketCapacity } from "@shared/ticketAvailability";
 import { db } from "./db";
-import { suggestedCityForIp } from "./visitorCity";
+import { suggestedCityForIp, visitorIp } from "./visitorCity";
 import { adminCityFrom, onlyCity } from "./adminCity";
 import { ALL_CITIES, countEventsByCity, inCity, normalizeCityName } from "@shared/cities";
 import { discountLinks, bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks, creatorProfiles } from "@shared/schema";
@@ -2309,7 +2309,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // address. Looked up on this server; nothing is stored or sent elsewhere.
   app.get("/api/city/suggest", (req, res) => {
     res.set("Cache-Control", "private, no-store, max-age=0");
-    res.json(suggestedCityForIp(req.ip));
+    res.json(suggestedCityForIp(visitorIp(req as any)));
   });
 
   // The city menu: upcoming public events per city.

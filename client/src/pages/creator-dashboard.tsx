@@ -344,7 +344,7 @@ function PayoutsConnectCard() {
       badge: <Badge className="bg-green-100 text-green-800">Connected &amp; ready</Badge>,
       icon: <CheckCircle className="w-6 h-6 text-green-600" />,
       title: "You're all set to receive payouts",
-      body: "Your Stripe account is verified and payouts are enabled. Earnings are paid out 7 days after each event ends.",
+      body: "Your Stripe account is verified and payouts are enabled. Earnings are paid out 24 hours after each event ends.",
       cta: "Open Stripe dashboard",
     },
   };
@@ -420,6 +420,8 @@ function CreatorDashboardContent() {
     scheduledFor: string | null;
     processedAt: string | null;
     grossCents: number;
+    /** The organiser's own part of the payout (not the event's gross). */
+    yourCents?: number;
     currency: string;
     failureReason: string | null;
   };
@@ -1084,17 +1086,21 @@ function CreatorDashboardContent() {
             <p className="text-2xl font-bold text-green-600" data-testid="ledger-my-share">
               {formatCurrency(ledger.myShare || 0, ledger.currency)}
             </p>
-            <p className="text-xs text-gray-500">After platform and venue splits</p>
+            <p className="text-xs text-gray-500">
+              After platform fee, venue{(ledger.partnerCommission || 0) > 0 ? ` and partner commission (${formatCurrency(ledger.partnerCommission, ledger.currency)})` : ''}
+            </p>
           </div>
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Platform Fees</p>
             <p className="text-2xl font-bold text-gray-600" data-testid="ledger-platform-fees">
               {formatCurrency(ledger.platformFees || 0, ledger.currency)}
             </p>
-            <p className="text-xs text-gray-500">{ledger.platformFeePct ?? 0}% platform fee</p>
+            <p className="text-xs text-gray-500">
+              {ledger.platformFeePct ?? 0}% of tickets{ledger.ticketSales ? ` (${formatCurrency(ledger.ticketSales, ledger.currency)})` : ''}
+            </p>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Space Share</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Venue share</p>
             <p className="text-2xl font-bold text-blue-600" data-testid="ledger-space-share">
               {formatCurrency(ledger.spaceShare || 0, ledger.currency)}
             </p>
@@ -2577,16 +2583,25 @@ function CreatorDashboardContent() {
                     </div>
 
                     <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Venue Share</span>
+                      <span>Venue share</span>
                       <span className="font-semibold text-red-600">
                         -{earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalSpaceShare || 0, earningsCurrency)}
                       </span>
                     </div>
 
+                    {(typedEarnings.summary?.totalPartnerCommission || 0) > 0 && (
+                      <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg" data-testid="breakdown-partner-commission">
+                        <span>Partner commission</span>
+                        <span className="font-semibold text-red-600">
+                          -{formatCurrency(typedEarnings.summary?.totalPartnerCommission || 0, earningsCurrency)}
+                        </span>
+                      </div>
+                    )}
+
                     <hr className="my-4" />
                     
                     <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
-                      <span className="font-semibold text-lg">Net Earnings</span>
+                      <span className="font-semibold text-lg">Your share</span>
                       <span className="text-2xl font-bold text-green-600">
                         {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
                       </span>
@@ -2603,15 +2618,15 @@ function CreatorDashboardContent() {
                 <CardContent>
                   <div className="space-y-4">
                     <div className="flex justify-between">
-                      <span>Completed Payouts</span>
+                      <span>Paid out</span>
                       <span className="font-semibold text-green-600">
-                        {typedEarnings.summary?.completedPayouts || 0}
+                        {creatorPayouts.filter((payout) => payout.status === 'completed').length}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Pending Payouts</span>
+                      <span>Coming up</span>
                       <span className="font-semibold text-yellow-600">
-                        {typedEarnings.summary?.pendingPayouts || 0}
+                        {creatorPayouts.filter((payout) => payout.status === 'pending' || payout.status === 'processing').length}
                       </span>
                     </div>
                     {/* The state this panel could not previously represent.
@@ -2628,7 +2643,7 @@ function CreatorDashboardContent() {
                     )}
                     <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
                       <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Payouts are released to your connected Stripe account 7 days after each event ends.
+                        Payouts are released to your connected Stripe account 24 hours after each event ends.
                       </p>
                     </div>
                   </div>
@@ -2642,7 +2657,7 @@ function CreatorDashboardContent() {
                 <CardHeader>
                   <CardTitle>Payouts by event</CardTitle>
                   <CardDescription>
-                    Released seven days after each event ends. Anything that did not go
+                    Your own share, released 24 hours after each event ends. Anything that did not go
                     through is listed here with the reason.
                   </CardDescription>
                 </CardHeader>
@@ -2663,7 +2678,7 @@ function CreatorDashboardContent() {
                         </span>
                         <div className="flex items-center gap-3">
                           <span className="text-sm text-muted-foreground">
-                            {formatPriceByCurrency((payout.grossCents || 0) / 100, (payout.currency || 'eur') as any)}
+                            {formatCurrency(((payout.yourCents ?? payout.grossCents) || 0) / 100, payout.currency || 'eur')}
                           </span>
                           <Badge
                             className={
@@ -2686,7 +2701,7 @@ function CreatorDashboardContent() {
                       </div>
                       {payout.status !== 'completed' && payout.scheduledFor && (
                         <p className="mt-1 text-xs text-muted-foreground">
-                          Due {new Date(payout.scheduledFor).toLocaleDateString()}
+                          Due {new Date(payout.scheduledFor).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' })}
                         </p>
                       )}
                       {payout.failureReason && (
@@ -2790,7 +2805,7 @@ function CreatorDashboardContent() {
                         <li>• Your share is what remains after the platform fee, minus any venue deal you agree to</li>
                         <li>• A promoter bounty (if you enable one) is deducted from your share, not the platform's</li>
                         <li>• Stripe payment processing fees are deducted from the gross amount</li>
-                        <li>• Payouts are released 7 days after each event ends</li>
+                        <li>• Payouts are released 24 hours after each event ends</li>
                       </ul>
                     </div>
 

@@ -305,7 +305,7 @@ export default function PartnerTutorial() {
               </p>
             </div>
             <div className="rounded-2xl bg-white dark:bg-gray-800 p-6 shadow-sm">
-              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Payouts land 7 days after the event</h3>
+              <h3 className="font-bold text-gray-900 dark:text-white mb-2">Payouts land 24 hours after the event</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Once the event has run, the platform's fee comes off first and every
                 agreed recipient — you, the venue, the promoter — is paid their share

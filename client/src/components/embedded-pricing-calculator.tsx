@@ -375,7 +375,7 @@ export default function EmbeddedPricingCalculator() {
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
                 <p>
                   Free RSVPs are attendance, not revenue — no venue deal is charged on
-                  them. Payouts land 7 days after the event.
+                  them. Payouts land 24 hours after the event.
                 </p>
               </div>
             </div>

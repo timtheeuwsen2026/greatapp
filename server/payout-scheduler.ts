@@ -37,6 +37,7 @@ import {
   sumBookingTicketQuantity,
 } from "@shared/ticketDeduction";
 import { resolveVenuePayoutAccount } from "./venuePayouts";
+import { resolvePartnerPayoutAccount } from "./partnerPayoutAccount";
 import { createHash } from "node:crypto";
 
 /**
@@ -50,7 +51,10 @@ const PAYABLE_BOOKING_STATUSES = ["confirmed", "fully_paid", "deposit_paid"] as 
 export const PAYOUT_DELAY_HOURS = 24;
 
 function formatPayoutAmount(cents: number, currency: string): string {
-  return `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;
+  // "€1.00", not "EUR 1.00" (point 66.26).
+  const symbols: Record<string, string> = { eur: "€", gbp: "£", usd: "$" };
+  const symbol = symbols[currency.toLowerCase()];
+  return symbol ? `${symbol}${(cents / 100).toFixed(2)}` : `${currency.toUpperCase()} ${(cents / 100).toFixed(2)}`;
 }
 
 // ─── Scheduler bootstrap ─────────────────────────────────────────────────────
@@ -62,6 +66,7 @@ export function startPayoutScheduler(): void {
     await scheduleMissingPayouts();
     await processReadyPayouts();
     await payHeldPartnerCommissions();
+    await payHeldRecipientShares();
   });
 
   // Immediate startup check (covers restarts mid-window)
@@ -209,8 +214,9 @@ export async function processReadyPayouts(): Promise<{
 export async function payScheduledPayoutNow(scheduledPayoutId: string): Promise<{ ok: boolean; message: string }> {
   const payout = await storage.getScheduledPayoutById(scheduledPayoutId);
   if (!payout) return { ok: false, message: "Payout not found" };
-  if (payout.status !== "pending" && payout.status !== "failed") {
-    return { ok: false, message: `Only a waiting or failed payout can be paid now — this one is ${payout.status}.` };
+  const holdsShares = Object.keys((payout.stripeTransferIds as Record<string, string>) || {}).some((key) => key.startsWith("held:"));
+  if (payout.status !== "pending" && payout.status !== "failed" && !(payout.status === "completed" && holdsShares)) {
+    return { ok: false, message: `Only a waiting, failed or partly paid payout can be paid now — this one is ${payout.status}.` };
   }
   try {
     await executeExperiencePayout(
@@ -412,7 +418,9 @@ export async function executeExperiencePayout(
   const promoterProfiles = new Map(
     await Promise.all(Array.from(commissionsByPromoter.keys()).map(async (promoterId) => [
       promoterId,
-      await storage.getPromoterProfile(promoterId),
+      // Read live from Stripe (66.27b): the cached status could stay "not
+      // connected" after the partner had finished, holding their commission.
+      await resolvePartnerPayoutAccount(promoterId, await storage.getPromoterProfile(promoterId)),
     ] as const)),
   );
   // A partner without a verified payout account used to defer the WHOLE event
@@ -469,7 +477,11 @@ export async function executeExperiencePayout(
   // A booking made before a venue could set a discount carries no such lines,
   // reserves nothing, and is shared out exactly as it always was.
   const VENUE_ADDONS_RECIPIENT = "venue-addons";
-  const venuePricedAddons = sumVenuePricedAddonCents(confirmedBookings);
+  // The venue is paid its own price for every add-on it hands out (point 56).
+  // Without a linked venue there is nobody to pay, and the add-on is the organiser's.
+  const venuePricedAddons = experience.linkedVenueId
+    ? sumVenuePricedAddonCents(confirmedBookings)
+    : { grossCents: 0, venueCents: 0 };
   if (venuePricedAddons.venueCents > 0) {
     const venueAccount = await resolveVenuePayoutAccount(experience.linkedVenueId);
     const addonRecipient: MinimalRecipient = {
@@ -531,10 +543,46 @@ export async function executeExperiencePayout(
     Object.entries((existingPayout?.stripeTransferIds as Record<string, string> | null) || {})
       .filter(([key]) => !key.startsWith("held:")),
   ));
-  const takeFromCharges = createChargeAllocator(dryRun ? [] : await chargeSourcesFor(confirmedBookings));
+  const chargeSources = dryRun ? [] : await chargeSourcesFor(confirmedBookings);
+  const takeFromCharges = createChargeAllocator(chargeSources);
+  const heldShares: string[] = [];
   const lineKeyOf = (recipient: MinimalRecipient) => recipient.id === VENUE_ADDONS_RECIPIENT
     ? "venue_addons"
     : recipient.id ? `${recipient.recipientType}:${recipient.id}` : recipient.recipientType;
+
+  // Safety check (Tim, 56.5), before any money moves: everything this run would
+  // pay out, held shares and partner commissions included, may not be more than
+  // what Stripe really collected for the event minus the platform fee. If it is,
+  // the run stops and the event shows under "Payouts needing attention".
+  if (!dryRun) {
+    let plannedCents = promoterReserveCents;
+    let left = remainingCents;
+    let flatLeft = flatFeeReserveRemainingCents;
+    for (const recipient of effectiveRecipients) {
+      if (!recipient.isActive || recipient.recipientType === "platform") continue;
+      const flat = flatFeeAmounts.has(recipient);
+      let amount = flat
+        ? flatFeeAmounts.get(recipient) ?? 0
+        : residualCreator.length === 1 && recipient === residualCreator[0]
+          ? left
+          : calculateSplitAmount(recipient, recipient.recipientType === "venue" ? venueShareBaseCents : grossAmountCents, left);
+      amount = Math.min(amount, Math.max(0, flat ? flatLeft : left));
+      if (amount <= 0) continue;
+      plannedCents += amount;
+      if (flat) flatLeft -= amount;
+      else left -= amount;
+    }
+    const collectedCents = chargeSources.length > 0
+      ? chargeSources.reduce((sum, source) => sum + source.availableCents, 0)
+      : grossAmountCents;
+    if (plannedCents > collectedCents - platformFeeAmountCents) {
+      throw new Error(
+        `Safety check: planned payouts ${formatPayoutAmount(plannedCents, currency)} are more than collected `
+        + `${formatPayoutAmount(collectedCents, currency)} minus fees ${formatPayoutAmount(platformFeeAmountCents, currency)}. `
+        + `Nothing was paid. Check the bookings and refunds of this event.`,
+      );
+    }
+  }
 
   for (const recipient of effectiveRecipients) {
     if (!recipient.isActive) continue;
@@ -591,19 +639,32 @@ export async function executeExperiencePayout(
       continue;
     }
 
-    // Missing account used to be a console.warn and a `continue`, which meant the
-    // recipient's share silently stayed in the platform balance while the payout
-    // still reported "completed". Money going missing has to be loud: fail the
-    // payout so it surfaces as failed and an admin can retry once the account is
-    // connected. Transfers already sent this run are protected by the idempotency
-    // keys below, so a retry never double-pays.
+    // No Stripe account: hold only this share and pay everyone else (Tim,
+    // 66.12). The share is kept out of everyone else's money, recorded as held
+    // (so it stays in "Still to pay" and the payout reads "Partly paid"), the
+    // person is asked to connect, and payHeldRecipientShares sends it the first
+    // hourly run after they have.
     if (!recipient.stripeAccountId) {
-      throw new Error(
-        `Recipient ${recipient.recipientType}`
-        + `${recipient.userId ? ` (${recipient.userId})` : ''}`
-        + ` is owed ${(transferAmountCents / 100).toFixed(2)} ${currency.toUpperCase()}`
-        + ` but has no connected Stripe account — payout halted so their share is not silently retained`
-      );
+      takeFromCharges(transferAmountCents);
+      if (isReservedFlatFee) flatFeeReserveRemainingCents -= transferAmountCents;
+      else remainingCents -= transferAmountCents;
+      transferIds[`held:${lineKey}`] = 'awaiting-payout-account';
+      heldShares.push(`${recipient.recipientType} ${formatPayoutAmount(transferAmountCents, currency)}`);
+      if (recipient.userId) {
+        const owedUser = await storage.getUser(recipient.userId);
+        if (owedUser?.email) {
+          notificationService.sendPayoutSetupReminderEmail?.({
+            to: owedUser.email,
+            firstName: owedUser.firstName,
+            eventName: experience.title,
+            role: recipient.recipientType === "venue" ? "venue" : recipient.recipientType === "creator" ? "organiser" : "partner",
+            setupPath: recipient.recipientType === "venue" ? "/venue-dashboard?tab=payouts" : "/creator-profile-setup",
+            eventKey: `payout_held:${scheduledPayoutId}:${lineKey}`,
+          })?.catch((error: any) => console.error('[Payout Scheduler] Held-share email failed:', error?.message || error));
+        }
+      }
+      console.warn(`[Payout Scheduler] ${experienceId}: ${lineKey} has no Stripe account — its share is held, everyone else is paid`);
+      continue;
     }
 
     try {
@@ -652,16 +713,31 @@ export async function executeExperiencePayout(
       } else {
         remainingCents -= transferAmountCents;
       }
-      if (recipient.userId) {
-        const user = await storage.getUser(recipient.userId);
-        if (user?.email) {
-          notificationService.sendPayoutInitiatedEmail({
-            to: user.email,
-            eventName: experience.title,
-            payoutAmount: formatPayoutAmount(transferAmountCents, currency),
-            eventKey: `payout_initiated:${scheduledPayoutId}:${recipient.id || recipient.stripeAccountId}`,
-          }).catch((error) => console.error('[Payout Scheduler] Payout email failed:', error?.message || error));
-        }
+      // Everyone who is paid gets the mail, the venue too (66.28c): a venue's
+      // split row may carry no user, so its owner is looked up from the venue.
+      const payee = await payoutEmailTarget(recipient.userId, recipient.recipientType, experience.linkedVenueId);
+      if (payee?.email) {
+        const isOrganiser = recipient.recipientType === "creator";
+        notificationService.sendPayoutInitiatedEmail({
+          to: payee.email,
+          eventName: experience.title,
+          payoutAmount: formatPayoutAmount(transferAmountCents, currency),
+          // The organiser sees how their share was reached (66.26).
+          breakdown: isOrganiser
+            ? [
+              `Sales ${formatPayoutAmount(grossAmountCents, currency)}`,
+              `Platform fee −${formatPayoutAmount(platformFeeAmountCents, currency)}`,
+              // The organiser is paid last, so whatever is left between the fee,
+              // the partners and their share went to the venue.
+              ...(grossAmountCents - platformFeeAmountCents - promoterReserveCents - transferAmountCents > 0
+                ? [`Venue −${formatPayoutAmount(grossAmountCents - platformFeeAmountCents - promoterReserveCents - transferAmountCents, currency)}`]
+                : []),
+              ...(promoterReserveCents > 0 ? [`Partner commission −${formatPayoutAmount(promoterReserveCents, currency)}`] : []),
+              `Your share ${formatPayoutAmount(transferAmountCents, currency)}`,
+            ]
+            : undefined,
+          eventKey: `payout_initiated:${scheduledPayoutId}:${recipient.id || recipient.stripeAccountId}`,
+        }).catch((error) => console.error('[Payout Scheduler] Payout email failed:', error?.message || error));
       }
 
       console.log(
@@ -760,13 +836,22 @@ export async function executeExperiencePayout(
 
   if (dryRun) return planOf(true, null, grossAmountCents, platformFeeAmountCents);
 
+  const heldPartners = Object.keys(transferIds).filter((key) => key.startsWith("held:promoter:")).length;
+  const heldNote = [
+    ...heldShares,
+    ...(heldPartners ? [`${heldPartners} partner commission${heldPartners === 1 ? "" : "s"}`] : []),
+  ];
   await storage.updateScheduledPayout(scheduledPayoutId, {
     status: "completed",
     totalGrossAmountCents: grossAmountCents,
     platformFeeAmountCents,
     stripeTransferIds: transferIds,
     processedAt: new Date(),
-  });
+    // Read by the admin and the ledger as "Partly paid".
+    errorMessage: heldNote.length
+      ? `Partly paid: held until they connect Stripe: ${heldNote.join(", ")}`
+      : null,
+  } as any);
 
   console.log(
     `[Payout Scheduler] ✓ Experience ${experienceId} payout complete. ` +
@@ -774,6 +859,47 @@ export async function executeExperiencePayout(
     `Platform: ${platformFeeAmountCents / 100}, ` +
     `Transfers: ${Object.keys(transferIds).join(", ")}`
   );
+}
+
+// ─── Shares held for a missing Stripe account ────────────────────────────────
+
+/**
+ * Pay an organiser's or venue's share that a payout held because they had no
+ * Stripe account, once they have connected one. The payout run is simply run
+ * again: everyone already paid is skipped, so only the held share goes out.
+ */
+export async function payHeldRecipientShares(): Promise<{ paid: number; waiting: number }> {
+  const result = { paid: 0, waiting: 0 };
+  try {
+    const rows = await db
+      .select()
+      .from(scheduledPayouts)
+      .where(and(
+        eq(scheduledPayouts.status, "completed"),
+        sql`EXISTS (SELECT 1 FROM jsonb_object_keys(COALESCE(${scheduledPayouts.stripeTransferIds}, '{}'::jsonb)) AS k
+                    WHERE k LIKE 'held:%' AND k NOT LIKE 'held:promoter:%')`,
+      ));
+    for (const row of rows) {
+      const plan = await executeExperiencePayout(
+        row.experienceId, row.id, row.totalGrossAmountCents ?? 0, row.additionalGrossAmountCents ?? 0, { dryRun: true },
+      ) as PayoutPlan;
+      const held = Object.keys((row.stripeTransferIds as Record<string, string>) || {})
+        .filter((key) => key.startsWith("held:") && !key.startsWith("held:promoter:"))
+        .map((key) => key.slice("held:".length));
+      const nowReady = plan.lines.some((line) => held.includes(line.key) && line.accountReady);
+      if (!nowReady) { result.waiting++; continue; }
+      try {
+        await executeExperiencePayout(row.experienceId, row.id, row.totalGrossAmountCents ?? 0, row.additionalGrossAmountCents ?? 0);
+        result.paid++;
+      } catch (err: any) {
+        console.error(`[Payout Scheduler] Held share for ${row.experienceId} failed:`, err?.message || err);
+        await storage.updateScheduledPayout(row.id, { status: "completed", errorMessage: `Held share could not be paid: ${err?.message}` } as any);
+      }
+    }
+  } catch (err: any) {
+    console.error('[Payout Scheduler] Could not check held shares:', err?.message || err);
+  }
+  return result;
 }
 
 // ─── Partner commissions held for a missing payout account ───────────────────
@@ -819,7 +945,7 @@ export async function payHeldPartnerCommissions(): Promise<{ paid: number; waiti
         );
         if (amount <= 0) continue;
 
-        const profile = await storage.getPromoterProfile(promoterId);
+        const profile = await resolvePartnerPayoutAccount(promoterId);
         if (!profile?.stripeAccountId || profile.stripeVerificationStatus !== 'verified') {
           result.waiting++;
           continue;
@@ -866,6 +992,24 @@ export async function payHeldPartnerCommissions(): Promise<{ paid: number; waiti
     console.error('[Payout Scheduler] Could not check held partner commissions:', err?.message || err);
   }
   return result;
+}
+
+// ─── Who the payout mail goes to ─────────────────────────────────────────────
+
+export async function payoutEmailTarget(
+  userId: string | null,
+  recipientType: string,
+  linkedVenueId: string | null | undefined,
+): Promise<{ email: string } | null> {
+  const user = userId ? await storage.getUser(userId) : undefined;
+  if (user?.email) return { email: user.email };
+  if (recipientType === "venue" && linkedVenueId) {
+    const venue: any = await storage.getVenue(linkedVenueId);
+    const owner = venue?.createdBy ? await storage.getUser(venue.createdBy) : undefined;
+    const email = owner?.email || venue?.contactEmail;
+    if (email) return { email };
+  }
+  return null;
 }
 
 // ─── Stripe lookups for a payout ─────────────────────────────────────────────

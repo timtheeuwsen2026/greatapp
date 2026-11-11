@@ -337,10 +337,11 @@ function formatTime(date: Date | string | null | undefined): string {
   });
 }
 
+// Every amount in euro, sign in front (Tim, Nov 2026: "Everything in euro,
+// nothing in $"). The platform sells in euro only for now.
 function formatCurrency(amount: string | number | null | undefined): string {
-  if (!amount) return '$0.00';
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return `$${num.toFixed(2)}`;
+  const num = typeof amount === 'string' ? parseFloat(amount) : Number(amount || 0);
+  return `€${(Number.isFinite(num) ? num : 0).toFixed(2)}`;
 }
 
 function communityHubUrl(): string {
@@ -814,9 +815,12 @@ class NotificationService {
     payoutAmount: string;
     stripeDashboardUrl?: string | null;
     eventKey?: string;
+    /** How the amount was reached, one line each (organiser only). */
+    breakdown?: string[];
   }): Promise<void> {
-    const subject = `Your payout for ${opts.eventName} is on its way!`;
-    const bodyText = `Your final payout of ${opts.payoutAmount} for ${opts.eventName} has been successfully initiated and is en route to your connected bank account.`;
+    const subject = `Your payout for ${opts.eventName} is on its way`;
+    const breakdown = opts.breakdown?.length ? ` (${opts.breakdown.join(", ")})` : "";
+    const bodyText = `Your payout of ${opts.payoutAmount} for ${opts.eventName} has been sent to your connected Stripe account${breakdown}. Stripe usually puts it in your bank account within 2 to 7 business days.`;
     const email = renderBaseEmail({
       to: opts.to,
       bodyText,
@@ -1236,7 +1240,7 @@ The Great. Team
           textContent = `
 Hi ${user.firstName || 'there'},
 
-⚠️ We encountered an issue processing your refund of ${formatCurrency(booking.depositAmount)}.
+⚠️ We encountered an issue processing your refund of ${formatCurrency(booking.amount)}.
 Our team has been notified and will process your refund manually within 3-5 business days.
 If you don't see your refund after 5 business days, please contact us.
 
@@ -1244,12 +1248,14 @@ The Great. Team
           `.trim();
         } else {
           subject = `Update on ${experience.title}: Minimum group not reached`;
-          const amountRefunded = wasRefunded ? booking.depositAmount : 0;
-          const bodyText = `Hey ${user.firstName || 'there'}, unfortunately, we didn't quite reach the minimum group size needed to make ${experience.title} happen this time. Your reservation has been canceled, and a full refund of ${formatCurrency(amountRefunded)} has been automatically processed back to your card. Don't worry—there are plenty of other incredible experiences forming right now!`;
+          // What the buyer paid. `depositAmount` is 0 on a ticket paid in full,
+          // which is how the mail came to say "$0.00" (66.15).
+          const amountRefunded = wasRefunded ? booking.amount : 0;
+          const bodyText = `Hey ${user.firstName || 'there'}, unfortunately, we didn't quite reach the minimum group size needed to make ${experience.title} happen this time. Your booking has been cancelled, and a full refund of ${formatCurrency(amountRefunded)} has been automatically sent back to your card. It usually shows on your statement within 5 to 10 business days. Don't worry, there are plenty of other events forming right now!`;
           const email = renderBaseEmail({
             to: user.email,
             bodyText,
-            cta: { label: 'Explore New Experiences', href: `${APP_BASE_URL}/experiences` },
+            cta: { label: 'Explore events', href: `${APP_BASE_URL}/experiences` },
             preheader: `${experience.title} did not reach its minimum group size.`,
             growthFooterContext: 'participant',
           });

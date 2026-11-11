@@ -17,7 +17,7 @@ const eur = (overrides: Record<string, any> = {}) => ({
 });
 
 describe("summarizeCreatorEarnings", () => {
-  it("counts committed bookings and leaves out cancelled, refunded and failed ones", () => {
+  it("counts only bookings Stripe has the money for, leaving out unfinished checkouts and cancelled, refunded and failed ones", () => {
     const { summary } = summarizeCreatorEarnings(
       [
         { status: "fully_paid", totalPrice: "10.00", amount: "10.00", ticketQuantity: 1, experience: eur() },
@@ -29,11 +29,58 @@ describe("summarizeCreatorEarnings", () => {
       { defaultPlatformFeePct: 15 },
     );
 
-    expect(summary.bookingsCount).toBe(2);
-    expect(summary.totalGross).toBe(20);
-    expect(summary.totalPlatformFees).toBe(3);
-    expect(summary.totalEarnings).toBe(17);
+    expect(summary.bookingsCount).toBe(1);
+    expect(summary.totalGross).toBe(10);
+    expect(summary.totalPlatformFees).toBe(1.5);
+    expect(summary.totalEarnings).toBe(8.5);
     expect(summary.currency).toBe("eur");
+  });
+
+  it("gives the organiser tickets minus fee plus the add-on margin, and the venue its add-on price (TEST 1)", () => {
+    const venue = eur({ linkedVenueId: "test-venue", venueCompensationModel: "venue_barter" });
+    const coffee = (quantity: number) => ({ id: "coffee", name: "Coffee", unitPrice: 1.25, quantity, total: 1.25 * quantity, venueAmount: 1 });
+    const booking = (extra: Record<string, unknown>) => ({
+      status: "fully_paid", ticketQuantity: 1, ticketPlatformFeePct: "15", addonPlatformFeePct: "0", experience: venue, ...extra,
+    });
+    const { summary } = summarizeCreatorEarnings(
+      [
+        booking({ totalPrice: "2.25", amount: "2.25", addonTotal: "1.25", addonItems: [coffee(1)] }),
+        booking({ totalPrice: "2.25", amount: "2.25", addonTotal: "1.25", addonItems: [coffee(1)] }),
+        booking({ totalPrice: "1.00", amount: "1.00" }),
+      ],
+      { defaultPlatformFeePct: 15 },
+    );
+    expect(summary.totalGross).toBe(5.5);
+    expect(summary.totalPlatformFees).toBe(0.45);
+    expect(summary.totalSpaceShare).toBe(2);
+    expect(summary.totalEarnings).toBe(3.05);
+    expect(summary.effectivePlatformFeePct).toBe(15);
+  });
+
+  it("takes the partner commission off the organiser's share (TEST 3)", () => {
+    const venue = eur({ linkedVenueId: "test-venue", venueCompensationModel: "fixed_fee", venueFixedFee: "0.50" });
+    const { summary } = summarizeCreatorEarnings(
+      [{
+        status: "fully_paid", totalPrice: "2.00", amount: "2.00", ticketQuantity: 1, ticketPlatformFeePct: "15",
+        commissionAmount: "0.20", commissionStatus: "locked", experience: venue,
+      }],
+      { defaultPlatformFeePct: 15 },
+    );
+    expect(summary.totalPlatformFees).toBe(0.3);
+    expect(summary.totalSpaceShare).toBe(0.5);
+    expect(summary.totalPartnerCommission).toBe(0.2);
+    expect(summary.totalEarnings).toBe(1);
+  });
+
+  it("leaves out test payments and disputed ones", () => {
+    const { summary } = summarizeCreatorEarnings(
+      [
+        { status: "fully_paid", totalPrice: "10.00", amount: "10.00", ticketQuantity: 1, testPayment: true, experience: eur() },
+        { status: "fully_paid", totalPrice: "10.00", amount: "10.00", ticketQuantity: 1, disputedAt: "2026-11-10", experience: eur() },
+      ],
+      { defaultPlatformFeePct: 15 },
+    );
+    expect(summary.bookingsCount).toBe(0);
   });
 
   it("reports the event currency rather than assuming dollars", () => {

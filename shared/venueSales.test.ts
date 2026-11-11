@@ -37,7 +37,7 @@ describe("sales at a venue", () => {
     const drink = { id: "a1", name: "1 drink (wine, beer, soda)", quantity: 1, venueAmount: 2, total: 3 };
     const [sales] = summariseVenueSales([event()], [
       booking({ addonItems: [drink] }),
-      booking({ addonItems: [{ ...drink, quantity: 2, venueAmount: 4 }] }),
+      booking({ addonItems: [{ ...drink, quantity: 2, total: 6 }] }), // venueAmount is per unit
       booking({ status: "pending", addonItems: [drink] }),
     ], now);
     expect(sales.addons).toEqual([{ name: "1 drink (wine, beer, soda)", quantity: 4, venueEarned: 6 }]);

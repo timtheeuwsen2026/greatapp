@@ -355,7 +355,7 @@ export function VenueDealEditor({
             data-testid="input-venue-deal-sponsorship"
           />
           <p className="mt-1 text-xs text-green-600">
-            The venue is charged this amount when they accept. You receive it 7 days after the event.
+            The venue is charged this amount when they accept. You receive it 24 hours after the event.
           </p>
         </div>
       )}

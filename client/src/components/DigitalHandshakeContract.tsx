@@ -59,7 +59,10 @@ export function DigitalHandshakeContract({
 
   const formatMoney = (value: unknown) => {
     const number = Number(value || 0);
-    return `${resolvedCurrency} ${Number.isFinite(number) ? number.toFixed(2) : "0.00"}`;
+    // "€2.50", sign in front (Tim: everything in euro, never "$" or "EUR 2.50").
+    const symbol = ({ EUR: "€", GBP: "£", USD: "$" } as Record<string, string>)[resolvedCurrency];
+    const amount = Number.isFinite(number) ? number.toFixed(2) : "0.00";
+    return symbol ? `${symbol}${amount}` : `${resolvedCurrency} ${amount}`;
   };
 
   const gross = Number(price || 0) * Number(maxParticipants || 0);
@@ -71,7 +74,8 @@ export function DigitalHandshakeContract({
   const venuePayoutPreview = (() => {
     switch (model) {
       case "fixed_fee":
-        return Number(terms.fixedFee || 0);
+        // Charged per ticket sold, so a full event pays it once per place (66.3).
+        return Number(terms.fixedFee || 0) * Number(maxParticipants || 0);
       case "per_head":
         return Number(terms.perHeadAmount || 0) * Number(maxParticipants || 0);
       case "per_room_night":
@@ -123,7 +127,7 @@ export function DigitalHandshakeContract({
       </div>
 
       <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-500 md:grid-cols-2">
-        {model === "fixed_fee" && <span>Flat Fee: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
+        {model === "fixed_fee" && <span>Per ticket: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
         {model === "per_head" && <span>Per Participant: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
         {model === "per_room_night" && (
           <span>

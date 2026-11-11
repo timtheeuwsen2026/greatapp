@@ -36,7 +36,9 @@ function harness(venueAccount: string | null = 'venue-account', model = 'revenue
   }) }) };
   const stripe = { transfers: { create: vi.fn(async (..._args: any[]) => ({ id: 'test-transfer' })) } };
   const execute = routeFunction('executeExperiencePayout', {
-    createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
+    resolvePartnerPayoutAccount: async (_id: string, profile?: any) => profile,
+    payoutEmailTarget: async () => null,
+    formatPayoutAmount: (cents: number) => `€${(cents / 100).toFixed(2)}`, createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount,
@@ -58,10 +60,17 @@ it('routes the 80% add-on share to the venue and leaves the organizer the remain
   }));
 });
 
-it('halts instead of silently retaining an owed venue share when its account is missing', async () => {
-  const { execute, stripe } = harness(null);
-  await expect(execute('coffee-event', 'payout')).rejects.toThrow('has no connected Stripe account');
-  expect(stripe.transfers.create).not.toHaveBeenCalled();
+it('holds only the venue share when the venue has no Stripe account, and pays the organiser (66.12)', async () => {
+  const { execute, stripe, storage } = harness(null);
+  await execute('coffee-event', 'payout');
+  // The organiser still gets only their own part; the venue's €6.20 is kept back, not given to anyone.
+  expect(stripe.transfers.create.mock.calls.map(([transfer]: any[]) => [transfer.destination, transfer.amount]))
+    .toEqual([['creator-account', 39]]);
+  expect(storage.updateScheduledPayout).toHaveBeenLastCalledWith('payout', expect.objectContaining({
+    status: 'completed',
+    stripeTransferIds: expect.objectContaining({ 'held:venue': 'awaiting-payout-account' }),
+    errorMessage: expect.stringMatching(/^Partly paid: held until they connect Stripe: venue €6\.20/),
+  }));
 });
 
 it('does not apply stale percentage terms after switching the venue to barter', async () => {
@@ -130,21 +139,35 @@ it('does not also take a revenue share out of a product the venue already discou
   expect(transfers.reduce((sum, [, amount]) => sum + amount, 0) + 173).toBe(1775);
 });
 
-it('halts rather than keep the venue\'s add-on money when the venue has no payout account', async () => {
-  const { execute, stripe } = harness(null, 'venue_barter', {}, [discountedCoffee]);
-  await expect(execute('coffee-event', 'payout')).rejects.toThrow('has no connected Stripe account');
-  expect(stripe.transfers.create).not.toHaveBeenCalled();
+it('holds the venue\'s add-on money for a venue without a payout account, never paying it to the organiser', async () => {
+  const { execute, storage } = harness(null, 'venue_barter', {}, [discountedCoffee]);
+  await execute('coffee-event', 'payout');
+  expect(storage.updateScheduledPayout).toHaveBeenLastCalledWith('payout', expect.objectContaining({
+    stripeTransferIds: expect.objectContaining({ 'held:venue_addons': 'awaiting-payout-account' }),
+  }));
 });
 
-it('leaves a booking made before venue discounts exactly as it was shared out', async () => {
-  // Same sale, no markup recorded on the line: the 80% split and the fee on
-  // the whole sale still apply, to the cent.
-  const legacy = { ...discountedCoffee, addonItems: [{ id: 'coffee', name: 'Coffee', unitPrice: 7.75, quantity: 1, total: 7.75, venueAmount: 7.75 }] };
-  const { execute, stripe, storage } = harness('venue-account', 'revenue_share', {}, [legacy]);
+it('pays the venue its own price for an add-on whatever the deal, and the organiser only the margin (point 56)', async () => {
+  // No catalog markup on the line, only the venue's price per unit: the venue is
+  // still paid that price whole, it is kept out of the revenue share, and no fee
+  // is taken from it. Here the venue's price is the whole €7.75.
+  const venueOnly = { ...discountedCoffee, addonItems: [{ id: 'coffee', name: 'Coffee', unitPrice: 7.75, quantity: 1, total: 7.75, venueAmount: 7.75 }] };
+  const { execute, stripe, storage } = harness('venue-account', 'revenue_share', {}, [venueOnly]);
   await execute('coffee-event', 'legacy-payout');
   expect(stripe.transfers.create.mock.calls.map(([transfer]: any[]) => [transfer.destination, transfer.amount]))
-    .toEqual([['venue-account', 620], ['creator-account', 39]]);
-  expect(storage.updateScheduledPayout).toHaveBeenLastCalledWith('legacy-payout', expect.objectContaining({ platformFeeAmountCents: 116 }));
+    .toEqual([['venue-account', 775]]);
+  expect(storage.updateScheduledPayout).toHaveBeenLastCalledWith('legacy-payout', expect.objectContaining({ platformFeeAmountCents: 0 }));
+});
+
+it('splits a coffee sold at €1.25 into €1.00 for the venue and €0.25 for the organiser (TEST 1)', async () => {
+  const coffee = { status: 'fully_paid', amount: '2.25', totalPrice: '2.25', ticketQuantity: 1, addonTotal: '1.25',
+    ticketPlatformFeePct: '15', addonPlatformFeePct: '0',
+    addonItems: [{ id: 'coffee', name: 'Coffee', unitPrice: 1.25, quantity: 1, total: 1.25, venueAmount: 1 }] };
+  const { execute, stripe } = harness('venue-account', 'venue_barter', {}, [coffee]);
+  await execute('coffee-event', 'test-1');
+  // Ticket €1.00 − 15% fee €0.15 + margin €0.25 = €1.10 for the organiser.
+  expect(stripe.transfers.create.mock.calls.map(([transfer]: any[]) => [transfer.destination, transfer.amount]))
+    .toEqual([['venue-account', 100], ['creator-account', 110]]);
 });
 
 it('pays the organizer the full 20% margin when the add-on fee is waived', async () => {

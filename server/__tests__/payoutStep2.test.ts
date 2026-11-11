@@ -38,7 +38,9 @@ function harness(opts: { charges?: any[]; existing?: Record<string, string>; ven
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount, sumBookingTicketQuantity, calculateTicketDeductionCents,
-    createChargeAllocator, chargeSourcesFor: async () => opts.charges ?? [], transferredForPayout: async () => 0,
+    resolvePartnerPayoutAccount: async (_id: string, profile?: any) => profile,
+    payoutEmailTarget: async () => null,
+    formatPayoutAmount: (cents: number) => `€${(cents / 100).toFixed(2)}`, createChargeAllocator, chargeSourcesFor: async () => opts.charges ?? [], transferredForPayout: async () => 0,
     bookings: {}, platformSettings: {}, and: vi.fn(), eq: vi.fn(), inArray: vi.fn(), or: vi.fn(), isNull: vi.fn(),
     PAYABLE_BOOKING_STATUSES: ['confirmed', 'fully_paid', 'deposit_paid'],
     notificationService: { sendPayoutInitiatedEmail: vi.fn() },
@@ -73,5 +75,14 @@ describe('Step 2 payouts', () => {
     expect(stripe.transfers.create).not.toHaveBeenCalled();
     expect(storage.updateScheduledPayout).not.toHaveBeenCalled();
     expect(dbUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the payout safety check (56.5)', () => {
+  it('blocks the run when it would pay out more than Stripe collected minus fees', async () => {
+    // Bookings say €7.75, but Stripe only has €2.00 left on the charges (refunds).
+    const { execute, stripe } = harness({ charges: [{ chargeId: 'ch_ticket', availableCents: 200 }] });
+    await expect(execute('coffee-event', 'payout')).rejects.toThrow(/^Safety check: planned payouts €6\.59 are more than collected €2\.00 minus fees €1\.16/);
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
   });
 });

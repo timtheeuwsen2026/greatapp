@@ -23,6 +23,7 @@ export type OverviewLine = {
   amountCents: number;
   stripeConnected: boolean;
   settled: string | null;
+  held?: boolean;
 };
 
 export type OverviewEvent = {
@@ -31,6 +32,9 @@ export type OverviewEvent = {
   title: string;
   currency: string;
   payoutStatus: string;
+  partlyPaid?: boolean;
+  isTest?: boolean;
+  duplicates?: number;
   scheduledFor: string | null;
   processedAt: string | null;
   errorMessage: string | null;
@@ -64,11 +68,18 @@ function day(value: string | null): string {
   return value ? new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
+function dayTime(value: string | null): string {
+  return value
+    ? new Date(value).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })
+    : "—";
+}
+
 function statusBadge(event: OverviewEvent) {
+  if (event.payoutStatus === "completed" && event.partlyPaid) return <Badge className="bg-amber-500">Partly paid, share held</Badge>;
   if (event.payoutStatus === "completed") return <Badge className="bg-emerald-600">Paid {day(event.processedAt)}</Badge>;
   if (event.payoutStatus === "failed") return <Badge variant="destructive">Failed</Badge>;
   if (event.payoutStatus === "processing") return <Badge variant="secondary">Paying…</Badge>;
-  return <Badge variant="secondary">Scheduled {day(event.scheduledFor)}</Badge>;
+  return <Badge variant="secondary">Scheduled {dayTime(event.scheduledFor)}</Badge>;
 }
 
 /** The list as a spreadsheet, for paying or checking by hand. */
@@ -155,7 +166,7 @@ export default function AdminPayoutOverview() {
                 <div className="text-lg font-semibold">{data.balance ? money(data.balance.availableCents) : "—"}</div>
               </div>
               <div className="rounded-lg border p-3">
-                <div className="text-xs text-gray-500">Incoming</div>
+                <div className="text-xs text-gray-500">Pending in Stripe</div>
                 <div className="text-lg font-semibold">{data.balance ? money(data.balance.incomingCents) : "—"}</div>
               </div>
               <div className="rounded-lg border p-3">
@@ -172,14 +183,17 @@ export default function AdminPayoutOverview() {
                 <div key={event.payoutId} className="rounded-lg border" data-testid={`payout-event-${event.payoutId}`}>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
                     <div className="min-w-0">
-                      <div className="font-medium text-gray-900 dark:text-white">{event.title}</div>
+                      <div className="font-medium text-gray-900 dark:text-white">
+                        {event.title}
+                        {event.isTest && <Badge variant="outline" className="ml-2">Test</Badge>}
+                      </div>
                       <div className="text-xs text-gray-500">
                         Sales {money(event.grossCents, event.currency)} · Great fee {money(event.platformFeeCents, event.currency)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {statusBadge(event)}
-                      {(event.payoutStatus === "pending" || event.payoutStatus === "failed") && event.owedCents > 0 && (
+                      {(event.payoutStatus === "pending" || event.payoutStatus === "failed" || event.partlyPaid) && event.owedCents > 0 && (
                         <Button
                           size="sm"
                           onClick={() => payNow.mutate(event.payoutId)}
@@ -191,7 +205,12 @@ export default function AdminPayoutOverview() {
                       )}
                     </div>
                   </div>
-                  {(event.planError || (event.payoutStatus === "failed" && event.errorMessage)) && (
+                  {(event.duplicates || 0) > 0 && (
+                    <p className="border-b bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                      This event has {event.duplicates} more payout row{event.duplicates === 1 ? "" : "s"} for the same payout. It is counted once here.
+                    </p>
+                  )}
+                  {(event.planError || ((event.payoutStatus === "failed" || event.partlyPaid) && event.errorMessage)) && (
                     <p className="border-b bg-red-50 p-3 text-xs text-red-800 dark:bg-red-950 dark:text-red-200">
                       {event.planError || event.errorMessage}
                     </p>
@@ -208,6 +227,8 @@ export default function AdminPayoutOverview() {
                           {line.amountCents > 0 && <span className="font-medium">{money(line.amountCents, event.currency)}</span>}
                           {line.settled ? (
                             <Badge className="bg-emerald-600">{line.settled.startsWith("manual:") ? "Paid manually" : "Paid"}</Badge>
+                          ) : line.held ? (
+                            <Badge className="bg-amber-500">Held: {line.stripeConnected ? "paid on the next run" : "no Stripe account"}</Badge>
                           ) : line.stripeConnected ? (
                             <Badge variant="secondary">Stripe connected</Badge>
                           ) : (

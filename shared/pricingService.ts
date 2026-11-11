@@ -72,7 +72,7 @@ export interface DiscountResult {
 // Currency configuration for formatting
 export const CURRENCY_CONFIG = {
   usd: { symbol: '$', decimals: 2, position: 'before' },
-  eur: { symbol: '€', decimals: 2, position: 'after' },
+  eur: { symbol: '€', decimals: 2, position: 'before' }, // "€2.00", sign in front (Tim, Nov 2026)
   gbp: { symbol: '£', decimals: 2, position: 'before' },
   cad: { symbol: 'C$', decimals: 2, position: 'before' },
   aud: { symbol: 'A$', decimals: 2, position: 'before' },
@@ -297,16 +297,18 @@ export function applyDiscounts(
  */
 export function formatPriceByCurrency(
   amount: number, 
-  currency: SupportedCurrency = 'usd'
+  currency: SupportedCurrency = 'eur'
 ): string {
   if (typeof amount !== 'number' || isNaN(amount) || !isFinite(amount)) {
     return formatPriceByCurrency(0, currency);
   }
 
-  const config = CURRENCY_CONFIG[currency];
+  // Codes arrive as "EUR" as often as "eur"; an unknown one used to fall back
+  // to dollars, which is how euro events showed "$2". The platform sells in
+  // euro (Tim, Nov 2026), so euro is the fallback.
+  const config = CURRENCY_CONFIG[String(currency || 'eur').toLowerCase() as SupportedCurrency];
   if (!config) {
-    // Fallback to USD for unsupported currencies
-    return formatPriceByCurrency(amount, 'usd');
+    return formatPriceByCurrency(amount, 'eur');
   }
 
   // Round to appropriate decimal places.

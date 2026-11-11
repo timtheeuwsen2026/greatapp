@@ -1,3 +1,4 @@
+import { venuePricedAddonCents } from "./addonChoices";
 /**
  * What has sold for the events at a venue, as the venue needs to see it.
  *
@@ -67,10 +68,12 @@ const cents = (value: number) => Math.round(value * 100) / 100;
 function bookingAddons(booking: VenueSalesBooking): Array<{ name: string; quantity: number; venueAmount: number }> {
   const items = Array.isArray(booking.addonItems) ? booking.addonItems : [];
   if (items.length > 0) {
+    // The venue's money for a line is its price per unit times the units,
+    // the same split the payout makes (venuePricedAddonCents).
     return items.map((item) => ({
       name: (item.name || "Add-on").trim(),
       quantity: Math.max(0, Number(item.quantity) || 0),
-      venueAmount: Number(item.venueAmount ?? item.total) || 0,
+      venueAmount: venuePricedAddonCents([item]).venue / 100,
     }));
   }
   // Older bookings kept one add-on in flat columns.

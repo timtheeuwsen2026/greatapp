@@ -20,6 +20,8 @@ export type OverviewLine = {
   stripeConnected: boolean;
   /** Settled already: a Stripe transfer id, "sent-earlier", or "manual: …". */
   settled: string | null;
+  /** Kept back because this person has no Stripe account yet. */
+  held?: boolean;
 };
 
 export type OverviewEvent = {
@@ -28,6 +30,12 @@ export type OverviewEvent = {
   title: string;
   currency: string;
   payoutStatus: string;
+  /** Paid out, but one or more shares are still held. */
+  partlyPaid: boolean;
+  /** An internal test event (organiser is a test account): not counted in the totals. */
+  isTest: boolean;
+  /** Other payout rows for the same event that were left out (66.13). */
+  duplicates: number;
   scheduledFor: string | null;
   processedAt: string | null;
   errorMessage: string | null;
@@ -39,16 +47,17 @@ export type OverviewEvent = {
 };
 
 export type PayoutOverview = {
+  /** `incomingCents` is Stripe's "pending" balance: payments not yet available. */
   balance: { currency: string; availableCents: number; incomingCents: number } | null;
   balanceError: string | null;
   owedCents: number;
   events: OverviewEvent[];
 };
 
-const ROLE: Record<string, OverviewLine["role"]> = { creator: "organiser", venue: "venue", promoter: "partner" };
+const ROLE: Record<string, OverviewLine["role"]> = { creator: "organiser", venue: "venue", venue_addons: "venue", promoter: "partner" };
 
-function plannedLines(plan: PayoutPlan, transferIds: Record<string, string>) {
-  return plan.lines.map((line) => ({ line, settled: transferIds[line.key] ?? null }));
+function roleOf(key: string, recipientType?: string): OverviewLine["role"] {
+  return ROLE[recipientType ?? ""] ?? ROLE[key.split(":")[0]] ?? "other";
 }
 
 export async function buildPayoutOverview(options: { includePaidDays?: number } = {}): Promise<PayoutOverview> {
@@ -71,19 +80,38 @@ export async function buildPayoutOverview(options: { includePaidDays?: number } 
     if (!userCache.has(id)) userCache.set(id, await storage.getUser(id));
     return userCache.get(id);
   };
+  const nameOf = (user: any, fallback: string) =>
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || fallback;
+
+  // One event is one payout. Bandido had two rows for the same payout, which
+  // counted its €5.10 twice in "Still to pay" (66.13). The newest row stands;
+  // the rest are counted as duplicates of it.
+  const seenOpen = new Map<string, OverviewEvent>();
 
   for (const payout of payouts) {
-    const open = payout.status === "pending" || payout.status === "failed" || payout.status === "processing";
-    const recentlyPaid = payout.status === "completed" && payout.processedAt && new Date(payout.processedAt).getTime() >= includePaidSince;
-    if (!open && !recentlyPaid) continue;
-
     const transferIds = (payout.stripeTransferIds || {}) as Record<string, string>;
+    const heldKeys = Object.keys(transferIds).filter((key) => key.startsWith("held:")).map((key) => key.slice("held:".length));
+    const open = payout.status === "pending" || payout.status === "failed" || payout.status === "processing";
+    const partlyPaid = payout.status === "completed" && heldKeys.length > 0;
+    const recentlyPaid = payout.status === "completed" && payout.processedAt && new Date(payout.processedAt).getTime() >= includePaidSince;
+    if (!open && !partlyPaid && !recentlyPaid) continue;
+
+    if (open) {
+      const first = seenOpen.get(payout.experienceId);
+      if (first) { first.duplicates += 1; continue; }
+    }
+
+    const experience = await storage.getExperience(payout.experienceId);
+    const organiser = experience?.creatorId ? await userOf(experience.creatorId) : null;
     const event: OverviewEvent = {
       payoutId: payout.id,
       experienceId: payout.experienceId,
       title: payout.experienceTitle,
       currency: (payout.currency || "eur").toLowerCase(),
       payoutStatus: payout.status,
+      partlyPaid,
+      isTest: !!organiser?.testAccount,
+      duplicates: 0,
       scheduledFor: payout.scheduledFor ? new Date(payout.scheduledFor).toISOString() : null,
       processedAt: payout.processedAt ? new Date(payout.processedAt).toISOString() : null,
       errorMessage: payout.errorMessage ?? null,
@@ -93,40 +121,9 @@ export async function buildPayoutOverview(options: { includePaidDays?: number } 
       owedCents: 0,
       planError: null,
     };
+    if (open) seenOpen.set(payout.experienceId, event);
 
-    if (open) {
-      try {
-        const plan = await executeExperiencePayout(
-          payout.experienceId, payout.id, payout.totalGrossAmountCents || 0, payout.additionalGrossAmountCents || 0,
-          { dryRun: true },
-        ) as PayoutPlan;
-        event.grossCents = plan.grossCents;
-        event.platformFeeCents = plan.platformFeeCents;
-        if (!plan.eligible) event.planError = plan.reason;
-        // A venue is known by its own name, not its owner's.
-        const experience = plan.lines.some((line) => line.recipientType === "venue")
-          ? await storage.getExperience(payout.experienceId) : undefined;
-        const venue = experience?.linkedVenueId ? await storage.getVenue(experience.linkedVenueId) : undefined;
-        for (const { line, settled } of plannedLines(plan, transferIds)) {
-          const user = await userOf(line.userId);
-          const person = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || line.userId || "Unknown";
-          event.lines.push({
-            key: line.key,
-            role: ROLE[line.recipientType] ?? "other",
-            name: line.recipientType === "venue" && venue?.name
-              ? `${venue.name}${line.key === "venue_addons" ? " (add-ons)" : ""}`
-              : person,
-            email: user?.email ?? null,
-            amountCents: line.amountCents,
-            stripeConnected: line.accountReady,
-            settled,
-          });
-          if (!settled) event.owedCents += line.amountCents;
-        }
-      } catch (error: any) {
-        event.planError = error?.message || "Could not work out this payout";
-      }
-    } else {
+    if (!open) {
       // Already paid out: what each person was sent, read from Stripe itself.
       for (const [key, value] of Object.entries(transferIds)) {
         if (key.startsWith("held:")) continue;
@@ -143,44 +140,52 @@ export async function buildPayoutOverview(options: { includePaidDays?: number } 
         }
         const user = await userOf(userId);
         event.lines.push({
-          key,
-          role: ROLE[key.split(":")[0]] ?? (key === "venue_addons" ? "venue" : "other"),
-          name: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || key,
-          email: user?.email ?? null,
-          amountCents,
-          stripeConnected: true,
-          settled: value,
+          key, role: roleOf(key), name: nameOf(user, key), email: user?.email ?? null,
+          amountCents, stripeConnected: true, settled: value,
         });
       }
-      // Partners whose commission the payout held back for a missing or
-      // unverified Stripe account: still owed, paid automatically once they
-      // connect (or mark them paid manually).
-      const heldPromoters = Object.keys(transferIds)
-        .filter((key) => key.startsWith("held:promoter:"))
-        .map((key) => key.slice("held:promoter:".length));
-      if (heldPromoters.length > 0) {
-        const eventBookings = await storage.getBookingsByExperience(payout.experienceId);
-        for (const promoterId of heldPromoters) {
-          const owed = eventBookings
-            .filter((booking: any) => booking.promoterId === promoterId && booking.commissionStatus === "locked"
-              && ["confirmed", "fully_paid", "deposit_paid"].includes(String(booking.status)))
-            .reduce((sum: number, booking: any) => sum + Math.round(Number(booking.commissionAmount || 0) * 100), 0);
-          if (owed <= 0) continue;
-          const user = await userOf(promoterId);
-          event.lines.push({
-            key: `promoter:${promoterId}`,
-            role: "partner",
-            name: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || promoterId,
-            email: user?.email ?? null,
-            amountCents: owed,
-            stripeConnected: false,
-            settled: null,
-          });
-          event.owedCents += owed;
+    }
+
+    // The plan says who is (still) owed what. For a waiting payout that is every
+    // line; for a paid one only the shares it held back, which stay in "Still to
+    // pay" until they are paid (66.28a: the partner's €0.20 had disappeared).
+    if (open || partlyPaid) {
+      try {
+        const plan = await executeExperiencePayout(
+          payout.experienceId, payout.id, payout.totalGrossAmountCents || 0, payout.additionalGrossAmountCents || 0,
+          { dryRun: true },
+        ) as PayoutPlan;
+        if (open) {
+          event.grossCents = plan.grossCents;
+          event.platformFeeCents = plan.platformFeeCents;
+          if (!plan.eligible) event.planError = plan.reason;
         }
+        const venue = experience?.linkedVenueId && plan.lines.some((line) => line.recipientType === "venue")
+          ? await storage.getVenue(experience.linkedVenueId) : undefined;
+        for (const line of plan.lines) {
+          const settled = transferIds[line.key] ?? null;
+          if (!open && settled) continue; // listed above with what Stripe sent
+          const user = await userOf(line.userId);
+          event.lines.push({
+            key: line.key,
+            role: roleOf(line.key, line.recipientType),
+            name: line.recipientType === "venue" && venue?.name
+              ? `${venue.name}${line.key === "venue_addons" ? " (add-ons)" : ""}`
+              : nameOf(user, line.userId || "Unknown"),
+            email: user?.email ?? null,
+            amountCents: line.amountCents,
+            stripeConnected: line.accountReady,
+            settled,
+            held: heldKeys.includes(line.key),
+          });
+          if (!settled) event.owedCents += line.amountCents;
+        }
+      } catch (error: any) {
+        event.planError = error?.message || "Could not work out this payout";
       }
     }
-    overview.owedCents += event.owedCents;
+
+    if (!event.isTest) overview.owedCents += event.owedCents;
     overview.events.push(event);
   }
   return overview;

@@ -50,7 +50,7 @@ import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStora
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, updateCommissionStatus, voidCommissionsForExperience } from "./commissionService";
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
-import { payScheduledPayoutNow, scheduleExperiencePayout } from "./payout-scheduler";
+import { executeExperiencePayout, payScheduledPayoutNow, scheduleExperiencePayout } from "./payout-scheduler";
 import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
 import {
   calculateTicketDeduction,
@@ -177,6 +177,7 @@ import { listPaymentDifferences, runPaymentCheck } from "./paymentCheck";
 import { countsTowardsGroup, groupPaymentPromise } from "@shared/groupCount";
 import { remindPayoutAccountSetup } from "./payoutSetupReminders";
 import { buildPayoutOverview } from "./payoutOverview";
+import { resolvePartnerPayoutAccount } from "./partnerPayoutAccount";
 import { cancelEventAndRefund } from "./eventCancellation";
 import { eventPayoutStage } from "@shared/payoutStage";
 import { isPublicExperienceListable } from "@shared/publicExperienceVisibility";
@@ -3009,7 +3010,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Promoter profile not found" });
       }
 
-      res.json(profile);
+      // Read live from Stripe, so a partner who finished Stripe is shown as
+      // connected, and one who did not is told what Stripe still needs (66.27b).
+      const payout = await resolvePartnerPayoutAccount(userId, profile).catch(() => null);
+      res.json({
+        ...profile,
+        stripeVerificationStatus: payout?.stripeVerificationStatus ?? profile.stripeVerificationStatus,
+        payoutReason: payout?.reason ?? null,
+      });
     } catch (error) {
       console.error("Error fetching promoter profile:", error);
       res.status(500).json({ message: "Failed to fetch promoter profile" });
@@ -7744,7 +7752,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await checkIsAdmin(req)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      res.json(await storage.getAdminDealLedger());
+      const ledger = await storage.getAdminDealLedger();
+      // A payout's fee and amounts come from the payout's own plan, so the
+      // ledger and the Payments tab show the same numbers (66.10d / 66.11).
+      // The fee used to be stored only once a payout had run, so a scheduled
+      // one read "€0.00 platform fee".
+      for (const entry of ledger as any[]) {
+        if (entry.contractType !== "payout") continue;
+        const row = await storage.getScheduledPayoutById(entry.id);
+        if (!row) continue;
+        const held = Object.keys((row.stripeTransferIds as Record<string, string> | null) || {}).some((key) => key.startsWith("held:"));
+        if (row.status === "completed" && held) entry.status = "partly_paid";
+        if (row.status === "pending" || row.status === "failed" || row.status === "processing") {
+          try {
+            const plan: any = await executeExperiencePayout(
+              row.experienceId, row.id, row.totalGrossAmountCents ?? 0, row.additionalGrossAmountCents ?? 0, { dryRun: true },
+            );
+            entry.terms = {
+              ...entry.terms,
+              totalGross: plan.grossCents / 100,
+              additionalGross: 0,
+              platformFee: plan.platformFeeCents / 100,
+              organiserShare: (plan.lines.find((line: any) => line.recipientType === "creator")?.amountCents ?? 0) / 100,
+            };
+          } catch {
+            // Shown as stored; the Payments tab explains why it cannot be worked out.
+          }
+        }
+      }
+      res.json(ledger);
     } catch (error) {
       console.error("Error fetching admin deal ledger:", error);
       res.status(500).json({ message: "Failed to fetch deal ledger" });
@@ -19077,33 +19113,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // The venue's own money, not the event's ticket sales (66.19b, 63.2):
+      // its ticket share, add-on price and per-ticket fee, on paid bookings only
+      // (cancelled and refunded ones are out), with the same arithmetic as the
+      // organiser's dashboard and the payout. Always euro.
       const venueIds = userVenues.map((venue: any) => venue.id);
-      const bookings = await storage.getBookingsByVenueIds(venueIds);
-      const now = new Date();
-      const thisMonth = now.getMonth();
-      const thisYear = now.getFullYear();
-      const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
-      const lastMonth = lastMonthDate.getMonth();
-      const lastMonthYear = lastMonthDate.getFullYear();
-      const getAmount = (booking: any) => parseFloat(booking.totalAmount || booking.totalPrice || '0') || 0;
+      const [bookings, events] = await Promise.all([
+        storage.getBookingsByVenueIds(venueIds),
+        storage.getExperiencesByVenueIds(venueIds),
+      ]);
+      const eventsById = new Map(events.map((event: any) => [event.id, event]));
+      const withEvent = bookings
+        .filter((booking: any) => eventsById.has(booking.experienceId))
+        .map((booking: any) => ({ ...booking, experience: eventsById.get(booking.experienceId) }));
+      const [settings] = await db.select().from(platformSettings).limit(1);
+      const defaultPlatformFeePct = parseFloat(settings?.platformFeePercentage?.toString() ?? String(FIXED_PLATFORM_FEE_PCT));
+      const venueShare = (rows: any[]) => summarizeCreatorEarnings(rows, { defaultPlatformFeePct }).summary;
 
-      const totalRevenue = bookings.reduce((sum: number, booking: any) => sum + getAmount(booking), 0);
-      const monthlyRevenue = bookings.reduce((sum: number, booking: any) => {
-        const date = new Date(booking.createdAt || booking.bookingDate || booking.startDate || 0);
-        return date.getMonth() === thisMonth && date.getFullYear() === thisYear ? sum + getAmount(booking) : sum;
-      }, 0);
-      const lastMonthRevenue = bookings.reduce((sum: number, booking: any) => {
-        const date = new Date(booking.createdAt || booking.bookingDate || booking.startDate || 0);
-        return date.getMonth() === lastMonth && date.getFullYear() === lastMonthYear ? sum + getAmount(booking) : sum;
-      }, 0);
+      const now = new Date();
+      const inMonth = (booking: any, monthsBack: number) => {
+        const date = new Date(booking.createdAt || booking.bookingDate || 0);
+        const target = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+        return date.getMonth() === target.getMonth() && date.getFullYear() === target.getFullYear();
+      };
+      const all = venueShare(withEvent);
+      const thisMonth = venueShare(withEvent.filter((booking: any) => inMonth(booking, 0)));
+      const lastMonth = venueShare(withEvent.filter((booking: any) => inMonth(booking, 1)));
+
+      // Occupancy over events that have taken place: places filled of places offered.
+      const paidStatuses = new Set(["confirmed", "fully_paid", "deposit_paid"]);
+      let filled = 0;
+      let offered = 0;
+      for (const event of events as any[]) {
+        const capacity = Number(event.maxParticipants || event.capacity || 0);
+        if (event.status === "cancelled" || capacity <= 0) continue;
+        offered += capacity;
+        filled += sumBookingTicketQuantity(withEvent.filter((booking: any) =>
+          booking.experienceId === event.id && paidStatuses.has(String(booking.status)) && !booking.cancelledAt));
+      }
 
       res.json({
-        totalRevenue: Math.round(totalRevenue * 100) / 100,
-        monthlyRevenue: Math.round(monthlyRevenue * 100) / 100,
-        lastMonthRevenue: Math.round(lastMonthRevenue * 100) / 100,
-        totalBookings: bookings.length,
-        occupancyRate: 0,
-        averageBookingValue: bookings.length ? Math.round((totalRevenue / bookings.length) * 100) / 100 : 0,
+        currency: "eur",
+        totalRevenue: all.totalSpaceShare,
+        monthlyRevenue: thisMonth.totalSpaceShare,
+        lastMonthRevenue: lastMonth.totalSpaceShare,
+        totalBookings: all.bookingsCount,
+        occupancyRate: offered > 0 ? Math.round((filled / offered) * 100) : 0,
+        averageBookingValue: all.bookingsCount ? Math.round((all.totalSpaceShare / all.bookingsCount) * 100) / 100 : 0,
         repeatBookings: 0,
       });
     } catch (err: any) {
@@ -20836,8 +20892,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const rows = await storage.getScheduledPayoutsForCreator(userId);
+      // The organiser's own part of each payout, from the same calculation as
+      // "Your share" (point 66.18c): not the event's gross sales.
+      const { byExperience } = await getCreatorEarningsBreakdown(userId);
+      const ownCents = new Map(byExperience.map((row: any) => [row.experienceId, row.netCents]));
 
-      res.json(rows.map((row: any) => ({
+      res.json(rows
+        // A cancelled event is never paid out, so it is not listed as one (66.18b).
+        .filter((row: any) => row.status !== "cancelled")
+        .map((row: any) => ({
         id: row.id,
         experienceId: row.experienceId,
         experienceTitle: row.experienceTitle,
@@ -20845,6 +20908,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         scheduledFor: row.scheduledFor,
         processedAt: row.processedAt,
         grossCents: (row.totalGrossAmountCents || 0) + (row.additionalGrossAmountCents || 0),
+        yourCents: ownCents.get(row.experienceId) ?? 0,
         currency: row.currency || "eur",
         // Never the raw Stripe string: it talks about the platform's balance
         // and its dashboard, neither of which is the organiser's to look at.
@@ -21002,7 +21066,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(409).json({ message: "This share is already settled." });
         }
         transferIds[recipientKey] = `manual: ${note} ${by}`;
-        const updatedOne = await storage.updateScheduledPayout(payout.id, { stripeTransferIds: transferIds } as any);
+        delete transferIds[`held:${recipientKey}`];
+        const stillHeld = Object.keys(transferIds).some((key) => key.startsWith("held:"));
+        const updatedOne = await storage.updateScheduledPayout(payout.id, {
+          stripeTransferIds: transferIds,
+          ...(payout.status === "completed" && !stillHeld ? { errorMessage: null } : {}),
+        } as any);
         if (recipientKey.startsWith("promoter:")) {
           await db
             .update(bookings)
@@ -21044,12 +21113,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         currency: summary.currency,
         totalSales: summary.totalGross,
+        ticketSales: summary.totalTicketSales,
         collected: summary.totalCollected,
         outstandingBalance: summary.outstandingBalance,
         myShare: summary.totalEarnings,
         platformFees: summary.totalPlatformFees,
         platformFeePct: summary.effectivePlatformFeePct,
         spaceShare: summary.totalSpaceShare,
+        partnerCommission: summary.totalPartnerCommission,
         bookingsCount: summary.bookingsCount,
       });
     } catch (err: any) {

@@ -151,6 +151,8 @@ function formatCurrency(amount: number | string | null | undefined, currency?: s
 
 function formatDealType(value: unknown): string {
   const normalized = typeof value === "string" && value.trim() ? value : "unknown";
+  // A venue's fixed fee is charged per ticket sold (66.10c, 66.3).
+  if (normalized === "fixed_fee") return "Per ticket";
   return normalized.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -192,7 +194,8 @@ function formatDealTerms(deal: AdminDealLedgerItem): string {
         ? `${formatCurrency(terms.amount, deal.currency)} deposit · ${formatCurrency(terms.totalPrice, deal.currency)} total`
         : `${formatCurrency(terms.amount, deal.currency)} booking payment`;
     case "scheduled_payout":
-      return `${formatCurrency(Number(terms.totalGross || 0) + Number(terms.additionalGross || 0), deal.currency)} gross · ${formatCurrency(terms.platformFee || 0, deal.currency)} platform fee`;
+      return `${formatCurrency(Number(terms.totalGross || 0) + Number(terms.additionalGross || 0), deal.currency)} gross · ${formatCurrency(terms.platformFee || 0, deal.currency)} platform fee`
+        + (terms.organiserShare !== undefined ? ` · organiser ${formatCurrency(terms.organiserShare, deal.currency)}` : "");
     default:
       return "Terms recorded";
   }

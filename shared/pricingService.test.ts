@@ -359,8 +359,8 @@ describe('formatPriceByCurrency', () => {
   });
 
   test('should format EUR correctly', () => {
-    expect(formatPriceByCurrency(1234.56, 'eur')).toBe('1,234.56 €');
-    expect(formatPriceByCurrency(0, 'eur')).toBe('0.00 €');
+    expect(formatPriceByCurrency(1234.56, 'eur')).toBe('€1,234.56');
+    expect(formatPriceByCurrency(0, 'eur')).toBe('€0.00');
   });
 
   test('should format JPY correctly (no decimals)', () => {
@@ -389,8 +389,12 @@ describe('formatPriceByCurrency', () => {
     expect(formatPriceByCurrency('invalid' as any, 'usd')).toBe('$0.00');
   });
 
-  test('should fallback to USD for unsupported currency', () => {
-    expect(formatPriceByCurrency(100, 'xyz' as SupportedCurrency)).toBe('$100.00');
+  test('falls back to euro for an unsupported currency (the platform sells in euro)', () => {
+    expect(formatPriceByCurrency(100, 'xyz' as SupportedCurrency)).toBe('€100.00');
+  });
+
+  test('reads an upper-case code, so EUR is never shown as dollars', () => {
+    expect(formatPriceByCurrency(2, 'EUR' as SupportedCurrency)).toBe('€2.00');
   });
 
   // A venue payout, a shortfall, a deduction: the pricing screens are full of
@@ -404,7 +408,7 @@ describe('formatPriceByCurrency', () => {
   });
 
   test('keeps the trailing symbol trailing on a negative', () => {
-    expect(formatPriceByCurrency(-1234.56, 'eur')).toBe('-1,234.56 €');
+    expect(formatPriceByCurrency(-1234.56, 'eur')).toBe('-€1,234.56');
     expect(formatPriceByCurrency(-99, 'sek')).toBe('-99.00 kr');
   });
 
@@ -419,8 +423,8 @@ describe('formatPriceByCurrency', () => {
     expect(formatPriceByCurrency(-0.4, 'jpy')).toBe('¥0');
   });
 
-  test('should use USD as default currency', () => {
-    expect(formatPriceByCurrency(100)).toBe('$100.00');
+  test('uses euro as the default currency', () => {
+    expect(formatPriceByCurrency(100)).toBe('€100.00');
   });
 
   test('should round to appropriate decimal places', () => {

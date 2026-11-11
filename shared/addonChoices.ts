@@ -24,17 +24,34 @@ export function getTicketAddons(sku: TicketAddonSkuLike | null | undefined): Add
   });
 }
 /**
- * The add-on money on a booking that was priced from a venue's discount, in
- * cents: what was charged, the venue's part of it and the organiser's markup.
- * The three always agree — `venue + markup === gross`.
+ * The add-on money on a booking, in cents: what was charged, the venue's part
+ * of it and the organiser's markup. The three always agree —
+ * `venue + markup === gross`.
+ *
+ * The venue is always paid its own price for what it hands out, whatever the
+ * deal (barter included), and the organiser keeps only the margin on top (Tim,
+ * point 56, Nov 2026). A line priced from the venue's catalog discount carries
+ * that margin as `markup`; any other line carries the venue's per-unit price
+ * as `venueAmount`. Only an event with a linked venue has anyone to pay, so
+ * callers apply this to such events only.
  */
 export function venuePricedAddonCents(addonItems: unknown): { gross: number; venue: number; markup: number } {
   const totals = { gross: 0, venue: 0, markup: 0 };
   if (!Array.isArray(addonItems)) return totals;
   for (const item of addonItems) {
-    if (!item || !isSet(item.markup) || !Number.isFinite(Number(item.markup))) continue;
+    if (!item) continue;
     const gross = Math.max(0, Math.round(Number(item.total) * 100));
-    const markup = Math.min(gross, Math.max(0, Math.round(Number(item.markup) * (Number(item.quantity) || 0) * 100)));
+    if (!Number.isFinite(gross) || gross <= 0) continue;
+    const quantity = Number(item.quantity) || 0;
+    let markup: number;
+    if (isSet(item.markup) && Number.isFinite(Number(item.markup))) {
+      markup = Math.min(gross, Math.max(0, Math.round(Number(item.markup) * quantity * 100)));
+    } else if (Number.isFinite(Number(item.venueAmount)) && Number(item.venueAmount) > 0) {
+      const venue = Math.min(gross, Math.round(Number(item.venueAmount) * quantity * 100));
+      markup = gross - venue;
+    } else {
+      continue;
+    }
     totals.gross += gross; totals.markup += markup; totals.venue += gross - markup;
   }
   return totals;

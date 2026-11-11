@@ -23,7 +23,7 @@ describe("DigitalHandshakeContract", () => {
     expect(content).toContain("Revenue Split (%)");
     expect(content).toContain("Revenue Share: 20%");
     expect(content).toContain("Platform: 15%");
-    expect(content).toContain("Est. venue payout if full: EUR 800.00");
+    expect(content).toContain("Est. venue payout if full: €800.00");
   });
 
   it("names a legacy contract using the shared vocabulary", () => {
@@ -59,10 +59,10 @@ describe("DigitalHandshakeContract", () => {
 
     const content = screen.getByTestId("digital-handshake-contract").textContent || "";
     expect(content).toContain("Per Room / Per Night");
-    expect(content).toContain("Per Room / Night: EUR 120.00");
+    expect(content).toContain("Per Room / Night: €120.00");
   });
 
-  it("shows the creator's requested fixed euro amount", () => {
+  it("charges the venue fee per ticket, so a full event pays it once per place", () => {
     render(
       <DigitalHandshakeContract
         contract={{
@@ -76,8 +76,8 @@ describe("DigitalHandshakeContract", () => {
     );
 
     const content = screen.getByTestId("digital-handshake-contract").textContent || "";
-    expect(content).toContain("Flat Fee: EUR 500.00");
-    expect(content).toContain("Est. venue payout if full: EUR 500.00");
+    expect(content).toContain("Per ticket: €500.00");
+    expect(content).toContain("Est. venue payout if full: €15000.00"); // €500 per ticket × 30 places
   });
 
   it("prices Per Room / Per Night from the creator's rate, rooms and nights", () => {
@@ -102,12 +102,12 @@ describe("DigitalHandshakeContract", () => {
     );
 
     const content = screen.getByTestId("digital-handshake-contract").textContent || "";
-    expect(content).toContain("Per Room / Night: EUR 200.00");
+    expect(content).toContain("Per Room / Night: €200.00");
     expect(content).toContain("Rooms requested");
     expect(content).toContain("Nights held");
-    // 4 rooms x EUR 200 x 7 nights
-    expect(content).toContain("Est. venue payout if full: EUR 5600.00");
+    // 4 rooms x €200 x 7 nights
+    expect(content).toContain("Est. venue payout if full: €5600.00");
     expect(content).toContain("(4 rooms × 7 nights)");
-    expect(content).not.toContain("EUR 0.00");
+    expect(content).not.toContain("€0.00");
   });
 });

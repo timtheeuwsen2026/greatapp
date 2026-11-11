@@ -186,12 +186,13 @@ describe("the division of a sale priced from the venue's discount", () => {
     expect(addonItemsFromMetadata(addonMetadata([line]))).toEqual([line]);
   });
 
-  it("records no markup on an add-on the organiser priced by hand", () => {
+  it("pays the venue its own price on an add-on the organiser priced by hand too (point 56)", () => {
     const byHand = { id: "rsvp", addonEnabled: true,
       addons: [{ id: "latte", addonName: "Latte", addonVenuePrice: 7.45, addonGroupRate: 6, addonChargeAmount: 7 }] };
     const [line] = quoteAddonChoices(byHand, [{ id: "latte", quantity: 1 }], 1);
     expect(line.markup).toBeUndefined();
-    expect(venuePricedAddonCents([line])).toEqual({ gross: 0, venue: 0, markup: 0 });
+    // No catalog markup, but the venue's price is on the line: €6 to the venue, €1 margin to the organiser.
+    expect(venuePricedAddonCents([line])).toEqual({ gross: 700, venue: 600, markup: 100 });
     // Nor on the single add-on typed into a ticket for a venue with no list:
     // the platform has no venue account to pay a discounted price to.
     const typed = { addonEnabled: true, addonName: "Coffee", addonVenuePrice: 5, addonDiscountPct: 20, addonGroupRate: 4, addonChargeAmount: 5 };

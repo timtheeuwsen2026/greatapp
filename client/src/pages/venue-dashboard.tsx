@@ -60,6 +60,9 @@ import {
 } from "@shared/venueDealModels";
 import { isSingleDayExperience } from "@shared/depositRules";
 
+// Every amount in euro, sign in front (Tim, Nov 2026).
+const euro = (value: unknown) => `€${(Number(value) || 0).toFixed(2)}`;
+
 type VenueOfferForm = {
   venueId: string;
   model: string;
@@ -301,7 +304,7 @@ const VENUE_PAYOUT_VIEW: Record<VenueConnectStatus["status"], {
     badgeClass: "bg-green-100 text-green-800",
     badgeLabel: "Connected & ready",
     title: "This space is ready to receive payouts",
-    body: "Stripe is verified and payouts are enabled. Earnings are released 7 days after each event ends.",
+    body: "Stripe is verified and payouts are enabled. Earnings are released 24 hours after each event ends.",
     cta: "Open Stripe dashboard",
   },
 };
@@ -837,7 +840,9 @@ function VenueDashboardContent() {
               which are not the venue's money and were shown here by mistake. */}
           <Card>
             <CardContent className="p-5">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">You've earned</p>
+              {/* "Expected" until the payout has gone out (66.6, 66.19g): the
+                  amount includes events that have not happened yet. */}
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Your share (expected)</p>
               <p className="text-2xl font-bold text-green-600" data-testid="venue-ledger-earned">
                 {formatVenueMoney(ledger.earned, ledger.currency)}
               </p>
@@ -1587,22 +1592,22 @@ function VenueDashboardContent() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Revenue Overview</CardTitle>
-                  <CardDescription>Your venue earnings</CardDescription>
+                  <CardTitle>Your money</CardTitle>
+                  <CardDescription>Your own share: ticket share, add-ons and per-ticket fees, on paid bookings only</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
                     <div className="flex justify-between">
                       <span>This Month</span>
-                      <span className="font-semibold">${analytics.monthlyRevenue || 0}</span>
+                      <span className="font-semibold">{euro(analytics.monthlyRevenue)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Last Month</span>
-                      <span className="font-semibold">${analytics.lastMonthRevenue || 0}</span>
+                      <span className="font-semibold">{euro(analytics.lastMonthRevenue)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Total Revenue</span>
-                      <span className="font-semibold">${analytics.totalRevenue || 0}</span>
+                      <span>Total</span>
+                      <span className="font-semibold">{euro(analytics.totalRevenue)}</span>
                     </div>
                   </div>
                 </CardContent>
@@ -1624,8 +1629,8 @@ function VenueDashboardContent() {
                       <span className="font-semibold">{analytics.occupancyRate || 0}%</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Average Booking Value</span>
-                      <span className="font-semibold">${analytics.averageBookingValue || 0}</span>
+                      <span>Your share per booking</span>
+                      <span className="font-semibold">{euro(analytics.averageBookingValue)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Repeat Bookings</span>
@@ -1738,12 +1743,12 @@ function VenueDashboardContent() {
 
             {offerForm.model === "venue_sponsored" && (
               <p className="text-xs text-gray-500">
-                You will be charged this amount via Stripe when the creator accepts. It reaches them 7 days after the event.
+                You will be charged this amount via Stripe when the creator accepts. It reaches them 24 hours after the event.
               </p>
             )}
             {offerForm.model === "upfront_rental" && (
               <p className="text-xs text-gray-500">
-                The creator is charged this rental fee the moment they accept. You receive it 7 days after the event.
+                The creator is charged this rental fee the moment they accept. You receive it 24 hours after the event.
               </p>
             )}
 

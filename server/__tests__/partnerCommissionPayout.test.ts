@@ -75,7 +75,8 @@ function payoutHarness(promoterProfile: any) {
   const buildDefaultRecipients = routeFunction('buildDefaultRecipients', { storage, resolveVenuePayoutAccount }, undefined, source);
   const calculateSplitAmount = routeFunction('calculateSplitAmount', {}, undefined, source);
   const execute = routeFunction('executeExperiencePayout', {
-    createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
+    resolvePartnerPayoutAccount: async (_id: string, profile?: any) => profile,
+    payoutEmailTarget: async () => null, createChargeAllocator, chargeSourcesFor: async () => [], transferredForPayout: async () => 0,
     storage, db, stripe, buildDefaultRecipients, calculateSplitAmount, eventFeeRates, bookingPlatformFeeCents,
     isExperiencePayoutEligible, resolvePayoutGrossCents, sumBookingPayoutGrossCents,
     sumVenuePricedAddonCents, resolveVenuePayoutAccount, sumBookingTicketQuantity, calculateTicketDeductionCents,
@@ -150,6 +151,7 @@ function heldHarness(held: any[], profiles: Record<string, any>, failFor?: strin
   const sendPayoutInitiatedEmail = vi.fn(async () => {});
   const run = routeFunction('payHeldPartnerCommissions', {
     db, storage, stripe, createHash, bookings, scheduledPayouts: {}, and, eq, inArray,
+    resolvePartnerPayoutAccount: async (id: string) => profiles[id] ?? null,
     sql: (..._parts: any[]) => ({ sql: true }), PAYABLE_BOOKING_STATUSES: PAYABLE,
     notificationService: { sendPayoutInitiatedEmail },
     formatPayoutAmount: (cents: number, currency: string) => `${currency} ${(cents / 100).toFixed(2)}`,

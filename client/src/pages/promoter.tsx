@@ -616,31 +616,25 @@ function PromotedExperienceItem({
 
         <div className="grid grid-cols-1 gap-3 mb-4 sm:grid-cols-3">
           <div className="rounded-xl border bg-slate-50/70 p-3">
-            <p className="text-xs text-muted-foreground mb-1">
-              Estimated {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
-            </p>
+            <p className="text-xs text-muted-foreground mb-1">Coming</p>
             <p className="font-bold text-lg text-slate-700 dark:text-slate-200">
               {formatCurrency(item.estimatedCommission, item.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">Pending experience confirmation</p>
+            <p className="text-xs text-muted-foreground">Before the event, or while the group forms</p>
           </div>
           <div className="rounded-xl border bg-green-50/70 p-3">
-            <p className="text-xs text-muted-foreground mb-1">
-              Locked {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
-            </p>
+            <p className="text-xs text-muted-foreground mb-1">Secured</p>
             <p className="font-bold text-lg text-green-600 dark:text-green-400">
               {formatCurrency(item.lockedCommission, item.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">Confirmed and secured</p>
+            <p className="text-xs text-muted-foreground">Paid 24 hours after the event</p>
           </div>
           <div className="rounded-xl border bg-blue-50/70 p-3">
-            <p className="text-xs text-muted-foreground mb-1">
-              Paid {item.referralAudience === "official_partner" ? "Commission" : "Cashback"}
-            </p>
+            <p className="text-xs text-muted-foreground mb-1">Paid out</p>
             <p className="font-bold text-lg text-blue-600 dark:text-blue-400">
               {formatCurrency(item.paidCommission, item.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">Transferred via Stripe</p>
+            <p className="text-xs text-muted-foreground">Sent to your Stripe account</p>
           </div>
         </div>
 
@@ -867,7 +861,7 @@ function RecruitmentStatsSection({
 
         <Card className="border-green-100 dark:border-green-900/40 bg-gradient-to-br from-green-50 to-white dark:from-green-950/30 dark:to-gray-900 text-center" data-testid="stat-trip-credits">
           <CardContent className="pt-5 pb-4">
-            <div className="text-2xl mb-1">Earned</div>
+            <div className="text-2xl mb-1">Commission</div>
             <div className="mb-1 space-y-1 text-green-600 dark:text-green-400">
               {creditEntries.length > 0 ? creditEntries.map(([currency, amount]) => (
                 <p key={currency} className="text-2xl font-black" data-testid={`earned-${currency.toLowerCase()}`}>
@@ -882,7 +876,7 @@ function RecruitmentStatsSection({
             <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">
               {official ? "Commission" : "Cashback"}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">Paid out to your Stripe account</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Coming, secured and paid together. Paid out 24 hours after each event.</p>
           </CardContent>
         </Card>
       </div>
@@ -1401,6 +1395,11 @@ export default function PromoterDashboard() {
             <p className="mt-3 text-xs text-muted-foreground">
               Locked earnings are routed to your connected Stripe account on the next scheduled payout.
             </p>
+            {promoterProfile?.stripeVerificationStatus !== 'verified' && (promoterProfile as any)?.payoutReason && (
+              <p className="mt-3 text-sm font-medium text-amber-700 dark:text-amber-300" data-testid="text-partner-payout-reason">
+                Waiting for your Stripe connection: {(promoterProfile as any).payoutReason}
+              </p>
+            )}
             {promoterProfile?.stripeVerificationStatus !== 'verified' && (
               <Button
                 type="button"
@@ -1411,7 +1410,9 @@ export default function PromoterDashboard() {
                 onClick={() => stripeConnectMutation.mutate()}
               >
                 <DollarSign className="mr-2 h-4 w-4" />
-                {stripeConnectMutation.isPending ? 'Opening Stripe...' : 'Connect Stripe for Payouts'}
+                {stripeConnectMutation.isPending
+                  ? 'Opening Stripe...'
+                  : (promoterProfile as any)?.stripeAccountId ? 'Finish Stripe setup' : 'Connect Stripe for Payouts'}
               </Button>
             )}
           </CardContent>

@@ -1,3 +1,4 @@
+import { eventTimeZone, formatInZone } from "@shared/eventTime";
 import { savedVenueInviteTerms } from '@shared/venueInviteTerms';
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import type { TicketRegistrationCount } from "@shared/ticketAvailability";
@@ -1713,7 +1714,7 @@ function CreatorDashboardContent() {
                             </span>
                             {experience.mvgDeadline && (
                               <span className="block mt-1" data-testid={`mvg-deadline-${experience.id}`}>
-                                Deadline: {new Date(experience.mvgDeadline).toLocaleDateString()}
+                                Deadline: {formatInZone(experience.mvgDeadline, eventTimeZone(experience as any))}
                               </span>
                             )}
                             {experience.mvgDeadlineDays && !experience.mvgDeadline && experience.startDate && (

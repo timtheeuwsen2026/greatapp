@@ -4,7 +4,8 @@ import {
   hasExperiencePassed,
 } from "./eventLifecycle";
 
-const at = (iso: string) => new Date(iso);
+// Times are Barcelona wall-clock times: an event closes in its own city time (66.21).
+const at = (iso: string) => new Date(iso + (Number(iso.slice(5, 7)) >= 4 && Number(iso.slice(5, 7)) <= 10 ? "+02:00" : "+01:00"));
 
 describe("hasExperiencePassed", () => {
   it("is false during the event's own final day", () => {

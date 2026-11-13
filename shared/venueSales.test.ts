@@ -61,8 +61,12 @@ describe("sales at a venue", () => {
     ]);
   });
 
-  it("keeps an event upcoming on its own day", () => {
-    const [sales] = summariseVenueSales([event({ startDate: "2026-10-30T07:00:00Z" })], [], now);
-    expect(sales.timing).toBe("upcoming");
+  it("is upcoming until its start time, happening until its end, then past (66.21)", () => {
+    const evening = event({ startDate: "2026-10-30T12:00:00Z", startTime: "19:00", endTime: "21:00", city: "Barcelona" } as any);
+    const at = (iso: string) => summariseVenueSales([evening], [], new Date(iso))[0];
+    expect(at("2026-10-30T18:59:00+01:00").timing).toBe("upcoming");
+    expect(at("2026-10-30T19:30:00+01:00").timing).toBe("happening");
+    expect(at("2026-10-30T21:01:00+01:00").timing).toBe("past");
+    expect(at("2026-10-30T18:59:00+01:00").when).toBe("Fri 30 Oct 2026, 19:00 – 21:00");
   });
 });

@@ -74,7 +74,7 @@ export async function processMVGDeadlines(): Promise<{
         .update(experiences)
         .set({
           mvgDeadline: calculateMvgDeadline(
-            experience.startDate,
+            experience as any,
             DEFAULT_MVG_DEADLINE_DAYS,
           ),
           updatedAt: now,

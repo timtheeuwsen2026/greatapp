@@ -1,3 +1,4 @@
+import { formatEventStart } from "@shared/eventTime";
 import { Calendar, MapPin, MessageCircle } from "lucide-react";
 import { cityOfEvent } from "@shared/cities";
 import { useLocation } from "wouter";
@@ -196,7 +197,7 @@ export function DiscoveryExperienceCard({
         {experience.startDate && (
           <div className="mb-3 flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
             <Calendar className="h-4 w-4 flex-shrink-0" />
-            <span>{new Date(experience.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+            <span data-testid={`card-start-${experience.id}`}>{formatEventStart(experience, { year: false })}</span>
           </div>
         )}
 

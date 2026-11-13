@@ -24,7 +24,7 @@ describe("what a buyer is told about a minimum group", () => {
   it("uses Tim's wording with the group size and deadline", async () => {
     const { groupPaymentPromise } = await import("./groupCount");
     expect(groupPaymentPromise(10, "2026-11-20T22:59:00Z")).toBe(
-      "You pay now. This event goes ahead once at least 10 people have booked by 20 November 2026. If it doesn't, you'll automatically get a full refund.",
+      "You pay now. This event goes ahead once at least 10 people have booked by 20 Nov 2026, 23:59. If it doesn't, you'll automatically get a full refund.",
     );
   });
 });

@@ -11,17 +11,14 @@
  * to. What closes is the transaction, and it closes on the server: hiding the
  * button leaves `POST /api/bookings` open to anyone with the event id.
  *
- * "Passed" means the end of the last day, not the start time. A day event
- * running 19:00–23:00 is still joinable at 19:30, and a three-day trip is
- * joinable on day two; both close at midnight after the final day. That is the
- * same boundary the platform's date fields already use — they carry a day, and
- * a booking made on the day itself is a legitimate walk-up.
+ * Tim's rule (66.21): ticket sales close at the start time, in the event's
+ * own city time. After the start the event is "Happening now", after its end
+ * time "Ended". Before, sales ran until midnight after the last day, in the
+ * server's time zone, so TEST 3 (00:00) was still sold at 12:00.
  */
+import { eventEndsAt, eventStartsAt, type EventTimeLike } from "./eventTime";
 
-export type EventDatesLike = {
-  startDate?: Date | string | number | null;
-  endDate?: Date | string | number | null;
-};
+export type EventDatesLike = EventTimeLike;
 
 function toDate(value: Date | string | number | null | undefined): Date | null {
   if (value === null || value === undefined || value === "") return null;
@@ -30,20 +27,16 @@ function toDate(value: Date | string | number | null | undefined): Date | null {
 }
 
 /**
- * The moment after which the event is over: midnight at the end of its last
- * day, in the server's timezone. Null when the event carries no usable date,
- * which must never be read as "has passed" — an undated draft is not a
- * finished event.
+ * The moment after which the event is over: its end time in its own city, or
+ * the end of its last day when it has none. Null when the event carries no
+ * usable date, which must never be read as "has passed": an undated draft is
+ * not a finished event.
  */
 export function experienceClosesAt(experience: EventDatesLike): Date | null {
-  const end = toDate(experience?.endDate) || toDate(experience?.startDate);
-  if (!end) return null;
-
-  const closing = new Date(end);
-  closing.setHours(23, 59, 59, 999);
-  return closing;
+  return eventEndsAt(experience);
 }
 
+/** Has the event ended? */
 export function hasExperiencePassed(
   experience: EventDatesLike,
   now: Date = new Date(),
@@ -52,6 +45,19 @@ export function hasExperiencePassed(
   if (!closesAt) return false;
   return now.getTime() > closesAt.getTime();
 }
+
+/** Has the event started? From then on tickets and add-ons are no longer sold. */
+export function hasExperienceStarted(
+  experience: EventDatesLike,
+  now: Date = new Date(),
+): boolean {
+  const startsAt = eventStartsAt(experience);
+  if (!startsAt) return false;
+  return now.getTime() >= startsAt.getTime();
+}
+
+export const EVENT_HAS_STARTED_MESSAGE =
+  "Ticket sales closed when this event started.";
 
 /**
  * The message shown wherever booking is refused for this reason.
@@ -90,6 +96,7 @@ export const GROUP_DEADLINE_MISSED_MESSAGE =
 /** Why this event can no longer be booked, or null while it can. */
 export function bookingClosedMessage(experience: EventDatesLike & GroupDeadlineLike, now: Date = new Date()): string | null {
   if (hasExperiencePassed(experience, now)) return EVENT_HAS_PASSED_MESSAGE;
+  if (hasExperienceStarted(experience, now)) return EVENT_HAS_STARTED_MESSAGE;
   if (hasMissedGroupDeadline(experience, now)) return GROUP_DEADLINE_MISSED_MESSAGE;
   return null;
 }

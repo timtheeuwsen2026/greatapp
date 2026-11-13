@@ -433,7 +433,7 @@ const DRAFT_NUMERIC_FIELDS = [
   "venueTargetDealValue",
   // integers
   "maxParticipants", "manualVenueCapacity", "standingCapacity", "seatedCapacity",
-  "roomCapacity", "totalRooms", "mvgMinimumSize", "mvgDeadlineDays", "balanceDueDays",
+  "roomCapacity", "totalRooms", "mvgMinimumSize", "mvgDeadlineDays", "mvgDeadlineHours", "balanceDueDays",
   "softHoldDurationHours", "currentStep", "promotionMilestoneAttendeeTarget",
   "promotionMilestoneRewardTickets", "participantReferralMilestoneAttendeeTarget",
   // Sent as "" while the field is still blank, which PostgreSQL rejects for an
@@ -1432,10 +1432,17 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       ? draft.mvgEnabled
       : ((draft as any).requireMinimumParticipants !== undefined ? (draft as any).requireMinimumParticipants : true);
       
-    // A zero-day setting stays open through the end of the event's start date.
+    // The deadline counts back from the start time in the event's city (66.21):
+    // hours when the builder sets them, otherwise days of 24 hours. 0 = the start.
     const mvgDeadlineDays = normalizeMvgDeadlineDays(draft.mvgDeadlineDays);
-    const mvgDeadline = resolvedMvgEnabled
-      ? calculateMvgDeadline(startDate, mvgDeadlineDays)
+    const mvgDeadline = resolvedMvgEnabled && startDate
+      ? calculateMvgDeadline({
+          startDate,
+          startTime: isSingleDayEvent ? (draft as any).startTime || null : null,
+          city: (draft as any).city || null,
+          location: draft.location || null,
+          title: draft.title || null,
+        }, mvgDeadlineDays, (draft as any).mvgDeadlineHours)
       : null;
     
     // Check if this is a demo event for placeholder image fallback
@@ -6508,6 +6515,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             coverImageUrl: experience.coverImageUrl,
             startDate: experience.startDate,
             endDate: experience.endDate,
+            // The real start and end in the city's time are worked out from these (66.21).
+            startTime: experience.startTime ?? null,
+            endTime: experience.endTime ?? null,
+            city: (experience as any).city ?? null,
             location: experience.location,
             venue: experience.venue,
             price: experience.price,

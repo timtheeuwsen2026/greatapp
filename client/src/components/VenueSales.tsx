@@ -21,6 +21,7 @@ function eventDate(value: string | null): string {
 
 const TIMING_BADGE: Record<VenueEventSales["timing"], { label: string; className: string }> = {
   upcoming: { label: "Upcoming", className: "bg-emerald-100 text-emerald-800" },
+  happening: { label: "Happening now", className: "bg-amber-100 text-amber-900" },
   past: { label: "Past", className: "bg-gray-100 text-gray-700" },
   cancelled: { label: "Cancelled", className: "bg-gray-100 text-gray-500" },
 };
@@ -78,7 +79,7 @@ export default function VenueSales() {
                   </div>
                   <p className="mt-1 flex items-center gap-1 text-sm text-gray-500">
                     <Calendar className="h-4 w-4" />
-                    {eventDate(event.startDate)}
+                    {event.when || eventDate(event.startDate)}
                     {event.venueName && <span> · {event.venueName}</span>}
                   </p>
                 </div>

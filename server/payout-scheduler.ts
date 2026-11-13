@@ -1,3 +1,4 @@
+import { payoutDueAt } from "@shared/eventTime";
 import { eventFeeRates, bookingPlatformFeeCents } from "@shared/platformFees";
 /**
  * Post-Event Payout Scheduler (24 hours after the event)
@@ -1178,7 +1179,7 @@ export async function buildDefaultRecipients(
 
 /**
  * Called by the MVG scheduler (or instantly on non-MVG events going live)
- * to register the 7-day payout job.
+ * to register the payout job: 24 hours after the event ends.
  */
 export async function scheduleExperiencePayout(
   experienceId: string,
@@ -1188,7 +1189,17 @@ export async function scheduleExperiencePayout(
   // Paid 24 hours after the event (Tim, Nov 2026; it was 7 days). Each transfer
   // is linked to the event's own charges, so it does not wait for the money to
   // become "available" on the platform balance.
-  const scheduledFor = new Date(eventEndDate.getTime() + PAYOUT_DELAY_HOURS * 60 * 60 * 1000);
+  // Counted from the event's real end time in its own city (66.21, 66.26). It
+  // used to count from the stored date (07:00 UTC), so TEST 3, which ended at
+  // 01:00 Barcelona time, was paid at 13:00 instead of 01:00 the next night.
+  let experience: any;
+  try {
+    experience = await storage.getExperience(experienceId);
+  } catch {
+    experience = undefined;
+  }
+  const scheduledFor = (experience && payoutDueAt(experience as any))
+    || new Date(eventEndDate.getTime() + PAYOUT_DELAY_HOURS * 60 * 60 * 1000);
   await storage.upsertScheduledPayout(experienceId, scheduledFor, totalGrossCents);
   console.log(
     `[Payout Scheduler] Scheduled payout for experience ${experienceId} on ${scheduledFor.toISOString()}`

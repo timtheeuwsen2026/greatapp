@@ -10,25 +10,35 @@ describe("MVG deadline rules", () => {
     expect(normalizeMvgDeadlineDays(0)).toBe(0);
   });
 
-  it("keeps a zero-day deadline active through the end of the start day", () => {
-    const deadline = calculateMvgDeadline("2026-07-17T00:00:00.000Z", 0);
+  // 66.21: the deadline counts back from the start time, in Barcelona time.
+  const test2 = { city: "Barcelona", startDate: "2026-11-11T07:00:00.000Z", startTime: "18:00" };
 
-    expect(deadline.toISOString()).toBe("2026-07-17T23:59:59.999Z");
+  it("puts a zero deadline at the start time, when sales close", () => {
+    const deadline = calculateMvgDeadline(test2, 0);
+
+    expect(deadline.toISOString()).toBe("2026-11-11T17:00:00.000Z");
     expect(isMvgDeadlineDue({
       requireMinimumParticipants: true,
       mvgStatus: "pending",
       mvgDeadline: deadline,
-    }, new Date("2026-07-17T12:00:00.000Z"))).toBe(false);
+    }, new Date("2026-11-11T16:59:00.000Z"))).toBe(false);
     expect(isMvgDeadlineDue({
       requireMinimumParticipants: true,
       mvgStatus: "pending",
       mvgDeadline: deadline,
-    }, new Date("2026-07-18T00:00:00.000Z"))).toBe(true);
+    }, new Date("2026-11-11T17:00:00.000Z"))).toBe(true);
   });
 
-  it("subtracts the configured number of calendar days", () => {
-    expect(calculateMvgDeadline("2026-07-20T00:00:00.000Z", 3).toISOString())
-      .toBe("2026-07-17T23:59:59.999Z");
+  it("counts days as 24 hours before the start", () => {
+    expect(calculateMvgDeadline(test2, 2).toISOString()).toBe("2026-11-09T17:00:00.000Z");
+  });
+
+  it("takes hours over days, so a test event can close a few hours ahead", () => {
+    expect(calculateMvgDeadline(test2, 7, 3).toISOString()).toBe("2026-11-11T14:00:00.000Z");
+  });
+
+  it("counts from the start of the day when an event has no start time", () => {
+    expect(calculateMvgDeadline("2026-07-20T12:00:00.000Z", 3).toISOString()).toBe("2026-07-16T22:00:00.000Z");
   });
 
   it("does not reprocess resolved MVG events", () => {

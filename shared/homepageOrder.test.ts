@@ -38,11 +38,12 @@ it("keeps the top row to events that can still be joined, and puts finished ones
   expect(happening.filter(event => proven.includes(event))).toEqual([]);
 });
 
-it("keeps an event in the top row until the end of its last day", () => {
-  const today = [{ id: "tonight", lifecycleStatus: "confirmed", currentParticipants: 12, startDate: "2026-10-02T07:00:00", endDate: "2026-10-02T09:00:00" }];
-  expect(splitHomepageRows(today, now).happening.map(event => event.id)).toEqual(["tonight"]);
-  expect(splitHomepageRows(today, new Date("2026-10-03T00:30:00")).happening).toEqual([]);
-  expect(splitHomepageRows(today, new Date("2026-10-03T00:30:00")).proven.map(event => event.id)).toEqual(["tonight"]);
+it("keeps an event in the top row until it starts, and shows it as proof once it has ended", () => {
+  // Ticket sales close at the start time, in Barcelona time (66.21).
+  const today = [{ id: "tonight", lifecycleStatus: "confirmed", currentParticipants: 12, startDate: "2026-10-02T12:00:00Z", endDate: "2026-10-02T12:00:00Z", startTime: "19:00", endTime: "21:00" }];
+  expect(splitHomepageRows(today, new Date("2026-10-02T18:00:00+02:00")).happening.map(event => event.id)).toEqual(["tonight"]);
+  expect(splitHomepageRows(today, new Date("2026-10-02T19:30:00+02:00")).happening).toEqual([]);
+  expect(splitHomepageRows(today, new Date("2026-10-02T21:30:00+02:00")).proven.map(event => event.id)).toEqual(["tonight"]);
 });
 
 it("shows an upcoming sold-out event as proof as well, and never an undated one as finished", () => {

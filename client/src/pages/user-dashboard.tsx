@@ -1,3 +1,4 @@
+import { eventPhase, eventStartsAt, formatEventWhen } from "@shared/eventTime";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -68,20 +69,21 @@ function UserDashboardContent() {
     (b) => ACTIVE_STATUSES.has(b.status) && b.experience,
   );
 
+  // From the event's real start and end in its own city (66.21): TEST 3,
+  // which ended at 01:00, was still listed as upcoming at noon.
   const upcomingBookings = activeBookings
-    .filter(
-      (b) => b.experience.startDate && new Date(b.experience.startDate) > now,
-    )
+    .filter((b) => {
+      const phase = eventPhase(b.experience, now);
+      return phase === "upcoming" || phase === "happening";
+    })
     .sort(
       (a, b) =>
-        new Date(a.experience.startDate).getTime() -
-        new Date(b.experience.startDate).getTime(),
+        (eventStartsAt(a.experience)?.getTime() ?? 0) -
+        (eventStartsAt(b.experience)?.getTime() ?? 0),
     );
 
   const pastBookings = activeBookings
-    .filter(
-      (b) => b.experience.endDate && new Date(b.experience.endDate) <= now,
-    )
+    .filter((b) => eventPhase(b.experience, now) === "ended")
     .sort(
       (a, b) =>
         new Date(b.experience.endDate).getTime() -
@@ -224,7 +226,7 @@ function UserDashboardContent() {
                                   {exp.title}
                                 </h3>
                                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">
-                                  {formatDateRange(exp.startDate, exp.endDate)}
+                                  {(formatEventWhen(exp) || "Date TBD")}
                                   {(exp.location || exp.venue) && (
                                     <> • {exp.location || exp.venue}</>
                                   )}
@@ -278,7 +280,7 @@ function UserDashboardContent() {
                                   {exp.title}
                                 </h3>
                                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">
-                                  {formatDateRange(exp.startDate, exp.endDate)}
+                                  {(formatEventWhen(exp) || "Date TBD")}
                                   {(exp.location || exp.venue) && (
                                     <> • {exp.location || exp.venue}</>
                                   )}
@@ -382,7 +384,7 @@ function UserDashboardContent() {
                           </div>
                           {role.description && <p className="mt-3 text-sm text-gray-500">{role.description}</p>}
                           <div className="mt-4 space-y-1 text-xs text-gray-500">
-                            <p>{formatDateRange(experience.startDate, experience.endDate)}</p>
+                            <p>{(formatEventWhen(experience) || "Date TBD")}</p>
                             {experience.location && <p>{experience.location}</p>}
                             {assignment.appliedAt && <p>Applied {new Date(assignment.appliedAt).toLocaleDateString()}</p>}
                           </div>

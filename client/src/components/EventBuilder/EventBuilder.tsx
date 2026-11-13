@@ -1,7 +1,8 @@
 import TicketAddonChoicesEditor from "./TicketAddonChoicesEditor";
 import { eventFeeRates } from "@shared/platformFees";
 import { CityField } from "@/components/CityField";
-import { detectLiveCity, normalizeCityName } from "@shared/cities";
+import { cityOfEvent, detectLiveCity, normalizeCityName } from "@shared/cities";
+import { eventTimeZone, formatInZone, groupDeadlineAt } from "@shared/eventTime";
 import { newExternalVenueFields } from '@shared/venueInviteTerms';
 import { maximumPartnerCommissionPct } from '@shared/partnerPromotion';
 import PartnerLinks from '@/components/PartnerLinks';
@@ -477,6 +478,8 @@ const eventBuilderSchema = z.object({
   concept: z.any().optional().nullable(),
   minimumParticipants: z.number().min(2, "Minimum participants must be at least 2").max(50, "Maximum 50 participants").default(6),
   mvgDeadlineDays: z.number().int().min(0).max(30).default(7),
+  // Hours before the start time (66.21). Empty on older drafts: then days x 24.
+  mvgDeadlineHours: z.number().int().min(0).max(720).optional().nullable(),
   mvgDeadline: z.date().optional(),
 
   // Soft-Hold Reservation Settings
@@ -1593,6 +1596,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
         mvgDeadlineDays: formData.mvgDeadlineDays,
+        mvgDeadlineHours: formData.mvgDeadlineHours ?? (Number.isFinite(formData.mvgDeadlineDays) ? formData.mvgDeadlineDays * 24 : 168),
 
         // Venue/location fields
         location: formData.location || '',
@@ -2166,6 +2170,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         endTime: formData.endTime || '',
         mvgDeadline: formData.mvgDeadline,
         mvgDeadlineDays: formData.mvgDeadlineDays,
+        mvgDeadlineHours: formData.mvgDeadlineHours ?? (Number.isFinite(formData.mvgDeadlineDays) ? formData.mvgDeadlineDays * 24 : 168),
 
         // Venue/location fields
         location: formData.location || '',
@@ -3569,6 +3574,70 @@ function VenueStepWrapper({ form, editingExperienceId }: { form: any; editingExp
     <VenueStepErrorBoundary onRetry={() => setRetryKey(k => k + 1)} key={retryKey}>
       <VenueStep form={form} editingExperienceId={editingExperienceId} />
     </VenueStepErrorBoundary>
+  );
+}
+
+/**
+ * When the minimum group must be reached (66.21, 64.2): a number of hours
+ * before the start, shown as the date and time it works out to in the event's
+ * city. The check runs every 15 minutes.
+ */
+const MVG_DEADLINE_CHOICES: Array<{ hours: number; label: string }> = [
+  { hours: 0, label: "At the start time" },
+  { hours: 1, label: "1 hour before" },
+  { hours: 2, label: "2 hours before" },
+  { hours: 3, label: "3 hours before" },
+  { hours: 6, label: "6 hours before" },
+  { hours: 12, label: "12 hours before" },
+  { hours: 24, label: "1 day before" },
+  { hours: 48, label: "2 days before" },
+  { hours: 72, label: "3 days before" },
+  { hours: 168, label: "7 days before" },
+  { hours: 336, label: "14 days before" },
+];
+
+function MvgDeadlineField({ form }: { form: any }) {
+  const storedHours = form.watch('mvgDeadlineHours');
+  const days = form.watch('mvgDeadlineDays');
+  const hours = Number.isFinite(storedHours) && storedHours !== null
+    ? Number(storedHours)
+    : (Number.isFinite(days) ? Number(days) * 24 : 168);
+  const timing = {
+    startDate: form.watch('startDate'),
+    startTime: form.watch('type') === 'one-day' ? form.watch('startTime') : null,
+    city: form.watch('city'),
+    location: form.watch('location'),
+  };
+  const deadline = groupDeadlineAt(timing, hours);
+  const choices = MVG_DEADLINE_CHOICES.some((choice) => choice.hours === hours)
+    ? MVG_DEADLINE_CHOICES
+    : [...MVG_DEADLINE_CHOICES, { hours, label: `${hours} hours before` }].sort((a, b) => a.hours - b.hours);
+  return (
+    <div>
+      <Label htmlFor="mvg-deadline-hours">Deadline</Label>
+      <select
+        id="mvg-deadline-hours"
+        className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        value={hours}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          form.setValue('mvgDeadlineHours', next, { shouldDirty: true });
+          form.setValue('mvgDeadlineDays', Math.min(30, Math.floor(next / 24)), { shouldDirty: true });
+          const at = groupDeadlineAt(timing, next);
+          if (at) form.setValue('mvgDeadline', at, { shouldDirty: true });
+        }}
+        data-testid="input-mvg-deadline-hours"
+      >
+        {choices.map((choice) => (
+          <option key={choice.hours} value={choice.hours}>{choice.label}</option>
+        ))}
+      </select>
+      <p className="text-xs text-gray-500 mt-1" data-testid="text-mvg-deadline-at">
+        {deadline
+          ? `Deadline: ${formatInZone(deadline, eventTimeZone(timing))} (${cityOfEvent(timing as any) ?? "Barcelona"} time). If the minimum is not reached by then, everyone is refunded automatically, within 15 minutes.`
+          : "Pick the date and start time first; the deadline is counted back from the start."}
+      </p>
+    </div>
   );
 }
 
@@ -8092,33 +8161,7 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                         </p>
                       )}
                     </div>
-                    <div>
-                      <Label htmlFor="mvg-deadline-days">Deadline (Days Before Start)</Label>
-                      <Input
-                        id="mvg-deadline-days"
-                        type="number"
-                        min="0"
-                        max="30"
-                        placeholder="7"
-                        value={form.watch('mvgDeadlineDays')}
-                        onChange={(e) => {
-                          const parsedDays = Number.parseInt(e.target.value, 10);
-                          const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 7;
-                          form.setValue('mvgDeadlineDays', days, { shouldDirty: true });
-                          const startDate = form.getValues('startDate');
-                          if (startDate) {
-                            const deadlineDate = new Date(startDate);
-                            deadlineDate.setDate(deadlineDate.getDate() - days);
-                            deadlineDate.setHours(23, 59, 59, 999);
-                            form.setValue('mvgDeadline', deadlineDate, { shouldDirty: true });
-                          }
-                        }}
-                        data-testid="input-mvg-deadline-days"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        0 means the MVG remains open through the end of the start day
-                      </p>
-                    </div>
+                    <MvgDeadlineField form={form} />
                   </div>
 
                   {/* Payment Timing Model — only shown when MVG is active */}

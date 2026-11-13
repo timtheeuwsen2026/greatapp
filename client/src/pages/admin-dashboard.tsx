@@ -1,3 +1,4 @@
+import { eventTimeZone, formatInZone } from "@shared/eventTime";
 import AdminEventFees from "@/components/AdminEventFees";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AdminCreatorApprovals from "@/components/AdminCreatorApprovals";
@@ -1085,7 +1086,7 @@ export default function AdminDashboard() {
                               <div>
                                 <span className="text-gray-500 dark:text-gray-400 block">MVG Deadline</span>
                                 <span className="font-medium" data-testid={`mvg-deadline-${experience.id}`}>
-                                  {(experience as any).mvgDeadline ? new Date((experience as any).mvgDeadline).toLocaleDateString() : 'Not set'}
+                                  {(experience as any).mvgDeadline ? formatInZone((experience as any).mvgDeadline, eventTimeZone(experience as any)) : 'Not set'}
                                 </span>
                               </div>
                             </div>

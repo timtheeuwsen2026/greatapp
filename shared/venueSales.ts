@@ -1,4 +1,5 @@
 import { venuePricedAddonCents } from "./addonChoices";
+import { eventPhase, formatEventWhen } from "./eventTime";
 /**
  * What has sold for the events at a venue, as the venue needs to see it.
  *
@@ -25,6 +26,11 @@ export type VenueSalesEvent = {
   title: string | null;
   slug?: string | null;
   startDate: string | Date | null;
+  endDate?: string | Date | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  city?: string | null;
+  location?: string | null;
   status: string | null;
   currency?: string | null;
   standingCapacity?: number | null;
@@ -41,8 +47,10 @@ export type VenueEventSales = {
   title: string;
   venueName: string | null;
   startDate: string | null;
-  /** upcoming, past, or cancelled (the event, not a booking). */
-  timing: "upcoming" | "past" | "cancelled";
+  /** upcoming, happening now, past, or cancelled (the event, not a booking). */
+  timing: "upcoming" | "happening" | "past" | "cancelled";
+  /** "Tue 10 Nov 2026, 00:00 – 01:00" in the event's city time (66.21). */
+  when: string;
   currency: string;
   capacity: number | null;
   /** Tickets paid for. */
@@ -115,10 +123,12 @@ export function summariseVenueSales(
     }
 
     const start = event.startDate ? new Date(event.startDate) : null;
+    // From its real start and end in its own city (66.21, 66.25d): it was
+    // "Upcoming" until the day after, so TEST 3 still said Upcoming afterwards.
+    const phase = eventPhase(event, now);
     const timing: VenueEventSales["timing"] = event.status === "cancelled"
       ? "cancelled"
-      // An event is "past" from the day after it starts, not the minute it starts.
-      : start && start.getTime() + 24 * 60 * 60 * 1000 < now.getTime() ? "past" : "upcoming";
+      : phase === "ended" ? "past" : phase === "happening" ? "happening" : "upcoming";
     const capacity = Number(event.standingCapacity || event.seatedCapacity || event.maxParticipants) || null;
 
     return {
@@ -128,6 +138,7 @@ export function summariseVenueSales(
       venueName: event.venueName ?? null,
       startDate: start && !Number.isNaN(start.getTime()) ? start.toISOString() : null,
       timing,
+      when: formatEventWhen(event),
       currency: (event.currency || "eur").toLowerCase(),
       capacity,
       booked,
@@ -140,11 +151,11 @@ export function summariseVenueSales(
   });
 
   // Next event first, then the most recent past ones, cancelled last.
-  const rank = { upcoming: 0, past: 1, cancelled: 2 } as const;
+  const rank = { happening: 0, upcoming: 0, past: 1, cancelled: 2 } as const;
   return rows.sort((a, b) => {
     if (rank[a.timing] !== rank[b.timing]) return rank[a.timing] - rank[b.timing];
     const at = a.startDate ? Date.parse(a.startDate) : 0;
     const bt = b.startDate ? Date.parse(b.startDate) : 0;
-    return a.timing === "upcoming" ? at - bt : bt - at;
+    return a.timing === "upcoming" || a.timing === "happening" ? at - bt : bt - at;
   });
 }

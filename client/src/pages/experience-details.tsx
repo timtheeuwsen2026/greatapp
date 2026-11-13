@@ -2,6 +2,8 @@ import AddonChoicePicker from "@/components/AddonChoicePicker";
 import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { bookingClosedMessage, hasExperiencePassed } from "@shared/eventLifecycle";
+import { EVENT_PHASE_LABEL, eventPhase, formatEventWhen } from "@shared/eventTime";
+import { cityOfEvent } from "@shared/cities";
 import { useLocation, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
@@ -496,12 +498,14 @@ export default function ExperienceDetails() {
     );
   }
 
+  // Day-month order, as people in Barcelona and Amsterdam write it (61.6).
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", { 
+    return new Date(dateString).toLocaleDateString("en-GB", {
       weekday: "long",
-      year: "numeric", 
-      month: "long", 
-      day: "numeric" 
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC",
     });
   };
 
@@ -581,6 +585,9 @@ export default function ExperienceDetails() {
   const salesClosedMessage = experience ? bookingClosedMessage(experience as any) : null;
   const eventHasPassed = !!salesClosedMessage;
   const eventIsOver = experience ? hasExperiencePassed(experience) : false;
+  // Between start and end the event is "Happening now" (66.21).
+  const eventPhaseNow = experience ? eventPhase(experience as any) : null;
+  const closedLabel = eventIsOver ? "Event ended" : eventPhaseNow === "happening" ? "Happening now" : "Sales closed";
 
   return (
     <div className="min-h-screen bg-white">
@@ -655,18 +662,21 @@ export default function ExperienceDetails() {
                     <Calendar className="h-5 w-5 text-gray-700" />
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900">
-                      {experience.startDate ? formatDate(experience.startDate.toString()) : 'TBD'}
-                      {experience.startDate !== experience.endDate && experience.endDate && (
-                        <span> – {formatDate(experience.endDate.toString())}</span>
+                    {/* One start and end, in the event's own city time (66.21). */}
+                    <p className="font-medium text-gray-900" data-testid="text-event-when">
+                      {formatEventWhen(experience as any) || 'TBD'}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {cityOfEvent(experience as any) ? `${cityOfEvent(experience as any)} time` : 'Local time'}
+                      {eventPhaseNow && eventPhaseNow !== "upcoming" && (
+                        <span
+                          className={`ml-2 rounded-full px-2 py-0.5 text-xs font-semibold ${eventPhaseNow === "happening" ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"}`}
+                          data-testid="badge-event-phase"
+                        >
+                          {EVENT_PHASE_LABEL[eventPhaseNow]}
+                        </span>
                       )}
                     </p>
-                    {(experience as any).startTime && (
-                      <p className="text-sm text-gray-600">
-                        {(experience as any).startTime}
-                        {(experience as any).endTime ? ` – ${(experience as any).endTime}` : ''}
-                      </p>
-                    )}
                   </div>
                 </div>
 
@@ -1639,7 +1649,7 @@ export default function ExperienceDetails() {
                                     data-testid={`ticket-availability-${index}`}
                                   >
                                     {eventHasPassed
-                                      ? (eventIsOver ? 'Event ended' : 'Sales closed')
+                                      ? closedLabel
                                       : isSoldOut
                                         ? 'Sold out'
                                         : `${spotsAvailable} ${spotsAvailable === 1 ? 'spot' : 'spots'} left`}
@@ -1761,7 +1771,7 @@ export default function ExperienceDetails() {
                               <div className="mt-4">
                                 {isClosed ? (
                                   <Button className="w-full h-12 bg-gray-200 text-gray-500 rounded-lg font-medium" size="lg" disabled data-testid={`button-soldout-ticket-${index}`}>
-                                    {eventHasPassed ? (eventIsOver ? "Event has ended" : "Sales closed") : "Sold Out"}
+                                    {eventHasPassed ? (eventIsOver ? "Event has ended" : closedLabel) : "Sold Out"}
                                   </Button>
                                 ) : isAuthenticated ? (
                                   <Link href={withDiscount(checkoutHref)}>

@@ -1,3 +1,4 @@
+import { formatEventWhen } from "@shared/eventTime";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -617,8 +618,7 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
               <div className="flex items-center gap-2" data-testid="text-detail-dates">
                 <Calendar className="h-4 w-4 shrink-0 text-gray-500" />
                 <span>
-                  {new Date(booking.experience.startDate).toLocaleDateString()}
-                  {booking.experience.endDate && ` - ${new Date(booking.experience.endDate).toLocaleDateString()}`}
+                  {formatEventWhen(booking.experience as any)}
                 </span>
               </div>
             )}
@@ -935,7 +935,7 @@ export default function TravelerBookings() {
                             {booking.experience?.startDate && (
                               <div className="flex items-center gap-1" data-testid={`text-booking-date-${booking.id}`}>
                                 <Calendar className="h-4 w-4" />
-                                <span>{new Date(booking.experience.startDate).toLocaleDateString()}</span>
+                                <span>{formatEventWhen(booking.experience as any)}</span>
                               </div>
                             )}
                             {(booking.experience?.location || booking.experience?.venue) && (

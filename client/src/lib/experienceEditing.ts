@@ -1,4 +1,5 @@
 import { getAccessToken } from "@/lib/authToken";
+import { eventStartsAt } from "@shared/eventTime";
 
 /**
  * A GET that reports "not there" instead of throwing.
@@ -59,6 +60,12 @@ export function experienceToBuilderFields(experience: any, platformPct: number) 
     startDate && mvgDeadline && !Number.isNaN(startDate.getTime()) && !Number.isNaN(mvgDeadline.getTime())
       ? Math.max(0, Math.min(30, Math.round((startDate.getTime() - mvgDeadline.getTime()) / MS_PER_DAY)))
       : undefined;
+  // The deadline as hours before the real start time (66.21).
+  const startsAt = eventStartsAt(rest as any);
+  const derivedDeadlineHours =
+    startsAt && mvgDeadline && !Number.isNaN(mvgDeadline.getTime())
+      ? Math.max(0, Math.min(720, Math.round((startsAt.getTime() - mvgDeadline.getTime()) / (60 * 60 * 1000))))
+      : undefined;
 
   const resolvedVenueType = rest.venueType
     || (linkedVenueId ? "catalog" : (rest.manualVenueName ? "manual" : "catalog"));
@@ -83,6 +90,7 @@ export function experienceToBuilderFields(experience: any, platformPct: number) 
     manualVenueCapacity: toFormNumber(rest.manualVenueCapacity) ?? null,
     minimumParticipants: toFormNumber(rest.minimumParticipants ?? rest.mvgMinimumSize ?? rest.mvgMin, 6),
     mvgDeadlineDays: derivedDeadlineDays ?? 7,
+    mvgDeadlineHours: derivedDeadlineHours ?? null,
     depositPercentage: toFormNumber(rest.depositPercentage, 20),
     balanceDueDays: toFormNumber(rest.balanceDueDays, 14),
     softHoldDurationHours: toFormNumber(rest.softHoldDurationHours, 48),

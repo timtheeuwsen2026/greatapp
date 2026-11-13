@@ -1,4 +1,4 @@
-import { hasExperiencePassed } from "./eventLifecycle";
+import { hasExperiencePassed, hasExperienceStarted } from "./eventLifecycle";
 
 type HappeningEvent = {
   lifecycleStatus?: string | null;
@@ -44,7 +44,8 @@ export function splitHomepageRows<T extends HappeningEvent>(
 
   const happening = list
     .filter((event) => event.lifecycleStatus === "forming" || event.lifecycleStatus === "confirmed")
-    .filter((event) => !hasExperiencePassed(event, now))
+    // Open for sign-up means not started yet: ticket sales close at the start (66.21).
+    .filter((event) => !hasExperienceStarted(event, now))
     .sort(compareHappeningEvents);
 
   // What already filled up or already happened, ranked by how many came. An

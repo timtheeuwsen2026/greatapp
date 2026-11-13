@@ -1,3 +1,4 @@
+import { DEFAULT_TIME_ZONE, formatInZone } from "./eventTime";
 // Who counts towards a minimum group.
 //
 // Every paid booking is now charged at checkout, so a place in the group is a
@@ -28,7 +29,8 @@ export function groupPaymentPromise(mvgMin: number | null | undefined, deadline:
   const people = Math.max(1, Number(mvgMin) || 1);
   const parsed = deadline ? new Date(deadline) : null;
   const by = parsed && !Number.isNaN(parsed.getTime())
-    ? ` by ${parsed.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Amsterdam" })}`
+    ? ` by ${formatInZone(parsed, DEFAULT_TIME_ZONE, { weekday: false })}`
     : "";
   return `You pay now. This event goes ahead once at least ${people} people have booked${by}. If it doesn't, you'll automatically get a full refund.`;
 }
+

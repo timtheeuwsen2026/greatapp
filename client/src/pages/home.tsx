@@ -164,6 +164,9 @@ export default function Home() {
           location: trip.location,
           city: trip.city,
           manualVenueAddress: trip.manualVenueAddress,
+          // Start and end times, so the rows switch at the real start (66.21).
+          startTime: trip.startTime,
+          endTime: trip.endTime,
           startDate: trip.startDate,
           endDate: trip.endDate,
           createdAt: trip.createdAt,

@@ -478,6 +478,8 @@ export const experienceDrafts = pgTable("experience_drafts", {
   mvgEnabled: boolean("mvg_enabled").default(true),
   mvgMinimumSize: integer("mvg_minimum_size").default(6),
   mvgDeadlineDays: integer("mvg_deadline_days").default(7),
+  /** Minimum-group deadline in hours before the start time (66.21); wins over the days. */
+  mvgDeadlineHours: integer("mvg_deadline_hours"),
   mvgStatus: mvgStatusEnum("mvg_status").default("pending"),
 
   // Step 8: Monetization
@@ -3997,6 +3999,7 @@ export const insertExperienceDraftSchema = createInsertSchema(experienceDrafts)
     mvgEnabled: z.boolean().optional(),
     mvgMinimumSize: z.coerce.number().int().min(1).max(10000).optional(),
     mvgDeadlineDays: z.coerce.number().int().min(0).max(365).optional(),
+    mvgDeadlineHours: z.coerce.number().int().min(0).max(8760).optional().nullable(),
 
     // Pricing - Base price validation
     price: z.coerce

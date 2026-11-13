@@ -1,3 +1,4 @@
+import { formatEventWhen } from "@shared/eventTime";
 import { venueInviteTerms } from '@shared/venueInviteTerms';
 import { groupPaymentPromise } from "@shared/groupCount";
 import sgMail from '@sendgrid/mail';
@@ -1023,7 +1024,7 @@ Hi ${user.firstName || 'there'},
 Great news! Your deposit for "${experience.title}" has been authorized.
 
 📍 Experience: ${experience.title}
-📅 Start Date: ${formatDate(experience.startDate)}
+📅 When: ${formatEventWhen(experience as any) || formatDate(experience.startDate)}
 💰 Deposit Amount: ${formatCurrency(booking.depositAmount)}
 📊 Status: Deposit authorized – waiting for group to form
 

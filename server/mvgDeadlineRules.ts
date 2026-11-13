@@ -1,3 +1,5 @@
+import { groupDeadlineAt, type EventTimeLike } from "@shared/eventTime";
+
 export const DEFAULT_MVG_DEADLINE_DAYS = 7;
 
 export const MVG_PREPUBLICATION_FAILURE_REASON =
@@ -12,19 +14,29 @@ export function normalizeMvgDeadlineDays(value: unknown): number {
   return Math.max(0, Math.trunc(parsed));
 }
 
+/**
+ * The minimum-group deadline (66.21, 64.2): a number of hours before the
+ * event's start time, in the event's own city time. 0 is the start itself,
+ * when ticket sales close anyway. A setting in days counts as 24 hours a day.
+ *
+ * It used to be the end of a day in UTC, so "0 days" ran past the start
+ * (until 23:59 UTC, 00:59 in Barcelona) and TEST 2 was refunded at 01:00.
+ * The check runs every 15 minutes, so a refund follows within 15 minutes.
+ */
 export function calculateMvgDeadline(
-  startDate: Date | string,
+  event: EventTimeLike | Date | string,
   deadlineDays: unknown,
+  deadlineHours?: unknown,
 ): Date {
-  const deadline = new Date(startDate);
-  if (Number.isNaN(deadline.getTime())) {
+  const timing: EventTimeLike = event instanceof Date || typeof event === "string" ? { startDate: event } : event;
+  const hours = Number(deadlineHours);
+  const before = deadlineHours !== undefined && deadlineHours !== null && deadlineHours !== "" && Number.isFinite(hours) && hours >= 0
+    ? hours
+    : normalizeMvgDeadlineDays(deadlineDays) * 24;
+  const deadline = groupDeadlineAt(timing, before);
+  if (!deadline) {
     throw new Error("Cannot calculate MVG deadline without a valid start date");
   }
-
-  deadline.setUTCDate(
-    deadline.getUTCDate() - normalizeMvgDeadlineDays(deadlineDays),
-  );
-  deadline.setUTCHours(23, 59, 59, 999);
   return deadline;
 }
 

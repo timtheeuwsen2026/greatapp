@@ -17,6 +17,7 @@ import { isPartnerRole } from "@shared/partnerAccess";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import BrandLogo from "@/components/BrandLogo";
 import { CityMenu } from "@/components/CityMenu";
+import { NoticesBell } from "@/components/NoticesBell";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -229,7 +230,7 @@ export default function Navigation() {
                 <Skeleton className="h-8 w-8 rounded-full" />
               </div>
             ) : isAuthenticated ? (
-              <><Link href="/messages" className="relative text-gray-700 hover:text-primary" aria-label="Messages" data-testid="nav-messages"><MessageCircle className="h-6 w-6" />{!!inbox?.unreadCount&&<span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-red-600 px-1 text-center text-xs font-bold text-white">{inbox.unreadCount>99?"99+":inbox.unreadCount}</span>}</Link><DropdownMenu>
+              <><NoticesBell /><Link href="/messages" className="relative text-gray-700 hover:text-primary" aria-label="Messages" data-testid="nav-messages"><MessageCircle className="h-6 w-6" />{!!inbox?.unreadCount&&<span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-red-600 px-1 text-center text-xs font-bold text-white">{inbox.unreadCount>99?"99+":inbox.unreadCount}</span>}</Link><DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Avatar className="cursor-pointer" data-testid="user-avatar">
                     <AvatarImage src={user?.profileImageUrl || ""} />
@@ -447,7 +448,8 @@ export default function Navigation() {
           </div>
 
           {/* Mobile hamburger */}
-          <div className="lg:hidden flex items-center">
+          <div className="lg:hidden flex items-center gap-4">
+            {isAuthenticated && <NoticesBell />}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="text-gray-700 hover:text-primary transition-colors"

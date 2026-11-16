@@ -20,6 +20,8 @@ import {
   venueContracts,
   venueInvites,
   venueOffers,
+  userNotices,
+  type UserNotice,
   collabIdeas,
   collabIdeaResponses,
   collabIdeaInvites,
@@ -137,6 +139,7 @@ import { isQualifyingReferralBooking, resolveMilestoneReward } from "./fulfillme
 import { sumBookingTicketQuantity } from "@shared/ticketDeduction";
 import { availableBookingQuantity, BookingCapacityError, withTicketCapacity } from "@shared/ticketAvailability";
 import { getVenueDealTermsKey, normalizeVenueDealModel } from "@shared/venueDealModels";
+import { placeAfterVenueAccepted } from "@shared/venueDealCard";
 
 /**
  * Drops the untracked-deal unlock from any ordinary write.
@@ -433,6 +436,10 @@ export interface IStorage {
   getVenueContractById(contractId: string): Promise<VenueContract | undefined>;
   getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
   acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract>;
+  // In-app notices (the bell). Adding the same key twice keeps the first.
+  addUserNotice(notice: { userId: string; noticeKey: string; kind: string; title: string; body?: string | null; link?: string | null; experienceId?: string | null }): Promise<void>;
+  getUserNotices(userId: string, limit?: number): Promise<{ notices: UserNotice[]; unread: number }>;
+  markUserNoticesRead(userId: string, ids?: string[]): Promise<void>;
   declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract>;
   updateVenueContractSponsorshipStatus(contractId: string, status: string, paymentIntentId?: string): Promise<VenueContract>;
 
@@ -3465,7 +3472,52 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(venueContracts.experienceId, experienceId), eq(venueContracts.venueId, venueId)))
       .returning();
     if (!contract) throw new Error("Contract not found");
+
+    // Every path that accepts a venue deal comes through here (the venue's
+    // Accept, the organiser accepting a counter, and both Stripe webhooks), so
+    // this is where the event learns where it takes place (66.32c, 66.34k).
+    try {
+      const [event] = await db.select().from(experiences).where(eq(experiences.id, experienceId));
+      const [venue] = await db.select().from(venues).where(eq(venues.id, venueId));
+      if (event && venue) {
+        const updates = placeAfterVenueAccepted(event as any, venue as any);
+        if (Object.keys(updates).length) {
+          await db.update(experiences).set({ ...updates, updatedAt: new Date() } as any).where(eq(experiences.id, experienceId));
+        }
+      }
+    } catch (error: any) {
+      console.error("Could not put the venue's address on the event:", error?.message || error);
+    }
     return contract;
+  }
+
+  async addUserNotice(notice: { userId: string; noticeKey: string; kind: string; title: string; body?: string | null; link?: string | null; experienceId?: string | null }): Promise<void> {
+    if (!notice.userId) return;
+    await db.insert(userNotices).values({
+      userId: notice.userId,
+      noticeKey: notice.noticeKey.slice(0, 200),
+      kind: notice.kind,
+      title: notice.title.slice(0, 255),
+      body: notice.body ?? null,
+      link: notice.link ?? null,
+      experienceId: notice.experienceId ?? null,
+    } as any).onConflictDoNothing({ target: userNotices.noticeKey });
+  }
+
+  async getUserNotices(userId: string, limit = 30): Promise<{ notices: UserNotice[]; unread: number }> {
+    const [notices, [{ unread }]] = await Promise.all([
+      db.select().from(userNotices).where(eq(userNotices.userId, userId)).orderBy(desc(userNotices.createdAt)).limit(limit),
+      db.select({ unread: count() }).from(userNotices).where(and(eq(userNotices.userId, userId), isNull(userNotices.readAt))),
+    ]);
+    return { notices, unread: Number(unread) || 0 };
+  }
+
+  async markUserNoticesRead(userId: string, ids?: string[]): Promise<void> {
+    const mine = eq(userNotices.userId, userId);
+    const unread = isNull(userNotices.readAt);
+    await db.update(userNotices)
+      .set({ readAt: new Date() } as any)
+      .where(ids && ids.length ? and(mine, unread, inArray(userNotices.id, ids)) : and(mine, unread));
   }
 
   async declineVenueContract(experienceId: string, venueId: string, reason?: string): Promise<VenueContract> {

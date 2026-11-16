@@ -64,6 +64,14 @@ import { normalizePromotionCounterTerms } from "./promotionDealRules";
 import { normalizeCurrency, resolveBookingGrossValue, summarizeImpactEarnings } from "./impactLedger";
 import { isVenueDealModel, isVenueDealSelectable, normalizeVenueDealTerms } from "./venueDealRules";
 import {
+  describeDealForCards,
+  noticeOrganiserOfVenueBid,
+  noticeVenueOfOrganiserAnswer,
+  notifyOrganiserOfVenueAnswer,
+  notifyOrganiserOfVenueCounter,
+  notifyVenueOfNewOffer,
+} from "./venueNotices";
+import {
   normalizeVenueDealModel,
   getVenueDealTermsKey,
   validateExperienceVenueDeal,
@@ -550,6 +558,12 @@ function buildVenueContractObject(input: any, experienceId: string, venueId: str
         ? numberOrZero(input.venueRevenueSharePct ?? input.venueRevenuePercentage)
         : 0,
       accessFee: numberOrZero(input.venueAccessFee),
+      commitmentFee: numberOrZero(input.venueCommitmentFee),
+      // The organiser's own words are the whole of a barter deal; the venue
+      // has to read them on the offer (point 57).
+      ...(normalizeVenueDealModel(model) === "venue_barter" && String(input.venueBarterTerms || "").trim()
+        ? { barterTerms: String(input.venueBarterTerms).trim().slice(0, 2000) }
+        : {}),
       currency: input.currency || "eur",
       platformPct: FIXED_PLATFORM_FEE_PCT,
       creatorPct: numberOrZero(input.creatorPct ?? input.creatorRevenuePercentage ?? (100 - FIXED_PLATFORM_FEE_PCT)),
@@ -5196,6 +5210,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           (draft as any).selectedVenueId,
           ownerId
         ));
+        // The builder publishes here, and this route used to tell the venue
+        // nothing: TEST 1's venue never heard of its offer (59.3).
+        notifyVenueOfNewOffer(experience.id).catch((error) =>
+          console.error("Venue offer notice failed:", error?.message || error));
       }
 
       // Delete the draft since it's now published
@@ -5262,6 +5280,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           selectedVenueId,
           userId
         ));
+        notifyVenueOfNewOffer(experience.id).catch((error) =>
+          console.error("Venue offer notice failed:", error?.message || error));
       }
       res.json(experience);
     } catch (error) {
@@ -5510,6 +5530,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           selectedVenueId,
           existing.creatorId,
         ));
+        notifyVenueOfNewOffer(updated.id).catch((error) =>
+          console.error("Venue offer notice failed:", error?.message || error));
       }
 
       // Same for a venue invited by email: publishing is no longer the only
@@ -8156,6 +8178,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           (existingDraft as any).selectedVenueId,
           userId
         ));
+        notifyVenueOfNewOffer(experience.id).catch((error) =>
+          console.error("Venue offer notice failed:", error?.message || error));
       }
       
       // Delete the draft
@@ -19293,6 +19317,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })().catch((err) => console.error('Venue contract resolution email failed:', err?.message || err));
   };
 
+  // In-app notices: the bell in the top bar (points 57-59).
+  app.get('/api/notices', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+      res.json(await storage.getUserNotices(userId));
+    } catch (err: any) {
+      console.error('Error loading notices:', err);
+      res.status(500).json({ message: 'Failed to load notices' });
+    }
+  });
+
+  app.post('/api/notices/read', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).slice(0, 100) : undefined;
+      await storage.markUserNoticesRead(userId, ids);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error marking notices read:', err);
+      res.status(500).json({ message: 'Failed to update notices' });
+    }
+  });
+
   app.get('/api/venue/pending-offers', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -19321,7 +19370,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
         offers.push({ ...experience, venue: stripVenuePricing(userVenues.find((v: any) => v.id === experience.linkedVenueId)), contract });
       }
-      res.json(offers);
+      res.json(await Promise.all(offers.map(async (offer: any) => ({
+        ...offer,
+        ...(await describeDealForCards(offer, offer.contract)),
+      }))));
     } catch (err: any) {
       console.error('Error fetching venue offers:', err);
       res.status(500).json({ message: 'Failed to fetch pending offers' });
@@ -19334,7 +19386,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const userVenues = await storage.getVenuesByCreator(userId);
       const venueIds = userVenues.map((venue: any) => venue.id);
-      res.json(await storage.getAcceptedVenueDealsForVenueOwner(userId, venueIds));
+      const deals = await storage.getAcceptedVenueDealsForVenueOwner(userId, venueIds);
+      res.json(await Promise.all(deals.map(async (deal: any) => ({
+        ...deal,
+        ...(await describeDealForCards(deal.experience, deal.source === 'contract' ? deal : null)),
+      }))));
     } catch (err: any) {
       console.error('Error fetching active venue deals:', err);
       res.status(500).json({ message: 'Failed to fetch active venue deals' });
@@ -19476,15 +19532,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         venueStatus: 'venue_confirmed',
         linkedVenueId: linkedVenue.id,
       } as any);
+      // 59.4: an event can already be live, with tickets sold, when its venue
+      // accepts. Only an event that was not live gets the "now live" mail.
+      const wasLive = ['approved', 'published'].includes(String(experience.status));
       await storage.updateExperienceStatus(experienceId, 'approved');
-      notifyCreatorEventPublished({
-        ...experience,
-        linkedVenueId: linkedVenue.id,
-        venueStatus: 'venue_confirmed',
-        status: 'approved',
-      }).catch((error) => {
-        console.error("Failed to send event published email:", error);
-      });
+      if (!wasLive) {
+        notifyCreatorEventPublished({
+          ...experience,
+          linkedVenueId: linkedVenue.id,
+          venueStatus: 'venue_confirmed',
+          status: 'approved',
+        }).catch((error) => {
+          console.error("Failed to send event published email:", error);
+        });
+      }
       // Accepting the deal also signs off any perk that was proposed alongside
       // it. The venue was shown the perk with the money terms, so agreeing to
       // one is agreeing to both — and only now may participants be told of it.
@@ -19495,8 +19556,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } as any);
       }
 
-      notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'accepted');
-      res.json({ success: true, contract: acceptedContract, message: 'Offer accepted — experience is now Live' });
+      notifyOrganiserOfVenueAnswer(experienceId, 'accepted', { wasLive }).catch((error) =>
+        console.error('Venue accepted notice failed:', error?.message || error));
+      res.json({ success: true, contract: acceptedContract, message: 'Offer accepted, the deal is agreed' });
     } catch (err: any) {
       console.error('Error accepting venue offer:', err);
       res.status(500).json({ message: 'Failed to accept offer' });
@@ -20055,7 +20117,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : undefined;
       const paidVenue = userVenues.find((venue: any) => venue.id === venueId);
       if (session.metadata?.experienceId) {
-        notifyCreatorOfVenueContractResolution(session.metadata.experienceId, paidVenue?.name, 'accepted');
+        notifyOrganiserOfVenueAnswer(session.metadata.experienceId, 'accepted', { wasLive: false }).catch((error) =>
+          console.error('Venue sponsorship notice failed:', error?.message || error));
       }
       res.json({ success: true, contract, message: 'Sponsorship paid and deal confirmed' });
     } catch (err: any) {
@@ -20092,7 +20155,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
       await releaseVenueDatesForExperience(experienceId);
       await storage.updateExperienceStatus(experienceId, 'draft');
-      notifyCreatorOfVenueContractResolution(experienceId, linkedVenue.name, 'rejected', reason);
+      notifyOrganiserOfVenueAnswer(experienceId, 'declined', { reason }).catch((error) =>
+        console.error('Venue declined notice failed:', error?.message || error));
       res.json({ success: true, contract: declinedContract, message: 'Offer rejected — experience returned to creator' });
     } catch (err: any) {
       console.error('Error rejecting venue offer:', err);
@@ -20163,21 +20227,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         'countered',
       );
 
-      (async () => {
-        const creator = await storage.getUser((experience as any).creatorId);
-        if (!creator?.email) return;
-        await notificationService.sendVenueBidReceivedEmail({
-          to: creator.email,
-          recipientName: creator.firstName,
-          venueName: linkedVenue.name,
-          experienceTitle: (experience as any).title,
-          experienceSlugOrId: (experience as any).slug || experienceId,
-          model,
-          terms: normalizedTerms,
-          currency: (experience as any).currency,
-          message,
-        });
-      })().catch((error) => console.error('Venue counter-offer email failed:', error?.message || error));
+      notifyOrganiserOfVenueCounter(experienceId, { id: offer?.id, model, terms: normalizedTerms, message })
+        .catch((error) => console.error('Venue counter-offer notice failed:', error?.message || error));
 
       res.status(201).json({ offer, contract: counteredContract, message: 'Counter offer sent to creator' });
     } catch (err: any) {
@@ -20400,6 +20451,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         currency: (experience as any).currency,
       });
     })().catch((err) => console.error('Venue bid resolution email failed:', err?.message || err));
+    noticeVenueOfOrganiserAnswer(offer, action).catch((err) =>
+      console.error('Venue bid resolution notice failed:', err?.message || err));
   };
 
   // POST /api/venue/open-events/:experienceId/offer
@@ -20476,6 +20529,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message,
         });
       })().catch((err) => console.error('Venue bid email failed:', err?.message || err));
+      noticeOrganiserOfVenueBid(offer).catch((err) =>
+        console.error('Venue bid notice failed:', err?.message || err));
 
       // The bid and the room open together, with the venue's own terms already
       // on the table. A creator who wants 18% rather than 20% now has somewhere
@@ -20578,6 +20633,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message: offer.message,
         });
       })().catch((err) => console.error('Venue bid email failed:', err?.message || err));
+      noticeOrganiserOfVenueBid(offer).catch((err) =>
+        console.error('Venue bid notice failed:', err?.message || err));
 
       res.json(updated);
     } catch (err: any) {
@@ -20713,7 +20770,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const deals = await storage.getAcceptedVenueOffersForCreator(userId);
-      res.json(deals);
+      res.json(await Promise.all(deals.map(async (deal: any) => ({
+        ...deal,
+        ...(await describeDealForCards(deal.experience, deal.offer)),
+      }))));
     } catch (err: any) {
       console.error('Error fetching accepted venue deals:', err);
       res.status(500).json({ message: 'Failed to fetch accepted deals' });

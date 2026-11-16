@@ -72,6 +72,8 @@ type VenueOfferForm = {
   minimumSpend: string;
   revenueSharePct: string;
   accessFee: string;
+  /** Barter Deal: what each side supplies, in words (point 57). */
+  barterTerms: string;
   message: string;
 };
 
@@ -87,6 +89,7 @@ const emptyVenueOfferForm = (): VenueOfferForm => ({
   minimumSpend: "",
   revenueSharePct: "",
   accessFee: "",
+  barterTerms: "",
   message: "",
 });
 
@@ -102,6 +105,7 @@ function venueOfferFormFromContract(contract: any, venueId: string): VenueOfferF
     minimumSpend: terms.minimumSpend != null ? String(terms.minimumSpend) : "",
     revenueSharePct: terms.revenueSharePct != null ? String(terms.revenueSharePct) : "",
     accessFee: terms.accessFee != null ? String(terms.accessFee) : "",
+    barterTerms: typeof terms.barterTerms === "string" && terms.barterTerms !== "0" ? terms.barterTerms : "",
   };
 }
 
@@ -146,9 +150,12 @@ const OFFER_FIELD_BY_TERMS_KEY: Record<string, keyof VenueOfferForm> = {
   fixedFee: "fixedFee",
 };
 
-function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
+function venueOfferTerms(form: VenueOfferForm): Record<string, number | string> {
   const termsKey = getVenueDealTermsKey(form.model);
   if (!termsKey) return {};
+  // Barter has words, not an amount. This used to send the number 0, which
+  // the organiser then read as the venue's terms.
+  if (termsKey === "barterTerms") return { barterTerms: form.barterTerms.trim() };
   const field = OFFER_FIELD_BY_TERMS_KEY[termsKey];
   return { [termsKey]: Number(form[field] || 0) };
 }
@@ -156,6 +163,7 @@ function venueOfferTerms(form: VenueOfferForm): Record<string, number> {
 function isVenueOfferFormValid(form: VenueOfferForm, allowUntracked = false): boolean {
   const termsKey = getVenueDealTermsKey(form.model);
   if (!termsKey) return false;
+  if (termsKey === "barterTerms") return true;
   const value = Number(form[OFFER_FIELD_BY_TERMS_KEY[termsKey]] || 0);
   return getVenueDealSelectionError(form.model, value, allowUntracked) === null;
 }
@@ -240,6 +248,21 @@ function VenueDealFields({ form, setForm, currency, isDaytime, allowUntracked = 
           selected && <p className="mt-1 text-xs text-gray-500">{selected.description}</p>
         )}
       </div>
+
+      {selected?.termsKey === "barterTerms" && (
+        <div>
+          <Label>What each side supplies and gets</Label>
+          <Textarea
+            rows={4}
+            maxLength={2000}
+            placeholder="For example: we give 50 runners a free coffee after the run, you mention us in two stories."
+            value={form.barterTerms}
+            onChange={(event) => setForm((current: VenueOfferForm) => ({ ...current, barterTerms: event.target.value }))}
+            data-testid="input-venue-offer-barter"
+          />
+          <p className="mt-1 text-xs text-gray-500">Add-ons are always paid to you at your own price, also on a barter deal.</p>
+        </div>
+      )}
 
       {selected && field && (
         <div>
@@ -1247,7 +1270,7 @@ function VenueDashboardContent() {
                             </div>
                             <div>
                               <p className="text-xs text-gray-500">Ticket Price</p>
-                              <p className="font-medium">{offer.price ? `$${parseFloat(offer.price).toFixed(0)}` : '—'}</p>
+                              <p className="font-medium">{Number(offer.price) > 0 ? `${euro(offer.price)} per person` : 'Free'}</p>
                             </div>
                           </div>
 
@@ -1256,9 +1279,12 @@ function VenueDashboardContent() {
                             price={offer.price}
                             maxParticipants={offer.maxParticipants}
                             currency={offer.currency}
-                            platformPct={offer.platformPct || offer.platformRevenuePercentage}
                             nights={nightsBetween(offer.startDate, offer.endDate)}
                             eventUrl={`/experience/${offer.slug || offer.id}`}
+                            addons={offer.dealAddons}
+                            barterTerms={offer.barterTerms}
+                            minimumGroup={offer.minimumGroup ?? null}
+                            history={offer.history}
                           />
                         </div>
 
@@ -1346,9 +1372,12 @@ function VenueDashboardContent() {
                           price={experience.price}
                           maxParticipants={experience.maxParticipants}
                           currency={experience.currency}
-                          platformPct={experience.platformPct || experience.platformRevenuePercentage}
                           nights={nightsBetween(experience.startDate, experience.endDate)}
                           eventUrl={`/experience/${experience.slug || experience.id}`}
+                          addons={deal.dealAddons}
+                          barterTerms={deal.barterTerms}
+                          minimumGroup={deal.minimumGroup ?? null}
+                          history={deal.history}
                         />
                         {deal.acceptedAt && (
                           <p className="mt-3 text-xs text-gray-500">Accepted {new Date(deal.acceptedAt).toLocaleDateString()}</p>
@@ -1793,8 +1822,10 @@ function VenueDashboardContent() {
                   price={counterModal.offer.price}
                   maxParticipants={counterModal.offer.maxParticipants}
                   currency={counterModal.offer.currency}
-                  platformPct={counterModal.offer.platformPct || counterModal.offer.platformRevenuePercentage}
                   nights={nightsBetween(counterModal.offer.startDate, counterModal.offer.endDate)}
+                  addons={counterModal.offer.dealAddons}
+                  barterTerms={counterModal.offer.barterTerms}
+                  minimumGroup={counterModal.offer.minimumGroup ?? null}
                 />
               </div>
             )}

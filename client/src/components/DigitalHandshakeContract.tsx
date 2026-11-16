@@ -1,4 +1,13 @@
 import { getVenueDealLabel, normalizeVenueDealModel } from "@shared/venueDealModels";
+import {
+  describeBarterPayout,
+  describeVenueAddonPay,
+  euro,
+  readBarterTerms,
+  describeVenueDealTerms,
+  type DealHistoryEntry,
+  type VenueDealAddon,
+} from "@shared/venueDealCard";
 
 interface DigitalHandshakeTerms {
   fixedFee?: number;
@@ -9,6 +18,9 @@ interface DigitalHandshakeTerms {
   minimumSpend?: number;
   revenueSharePct?: number;
   accessFee?: number;
+  commitmentFee?: number;
+  /** Barter Deal: what each side supplies, in the organiser's own words. */
+  barterTerms?: string;
   currency?: string;
   platformPct?: number;
 }
@@ -37,8 +49,34 @@ interface DigitalHandshakeContractProps {
   eventUrl?: string | null;
   /** Nights the space is held — turns a per-night rate into a real payout figure. */
   nights?: number | null;
+  /**
+   * Who is reading. The venue never sees the platform fee (Tim, 57.1); only
+   * the organiser and admin do.
+   */
+  viewer?: "venue" | "organiser";
+  /** The add-ons the venue supplies on this event, from the server. */
+  addons?: VenueDealAddon[] | null;
+  /** The organiser's barter text when the contract itself does not carry it. */
+  barterTerms?: string | null;
+  /** The event's minimum group as it is now; overrides the contract's copy (66.4). */
+  minimumGroup?: number | null;
+  /** The negotiation, oldest first. */
+  history?: DealHistoryEntry[] | null;
 }
 
+function formatWhen(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+const HISTORY_LABEL: Record<DealHistoryEntry["kind"], string> = {
+  proposal: "Offer",
+  counter: "Counter offer",
+  accepted: "Accepted",
+  declined: "Declined",
+};
 
 export function DigitalHandshakeContract({
   contract = {},
@@ -49,6 +87,11 @@ export function DigitalHandshakeContract({
   title = "Digital Handshake Contract",
   eventUrl,
   nights,
+  viewer = "venue",
+  addons,
+  barterTerms,
+  minimumGroup,
+  history,
 }: DigitalHandshakeContractProps) {
   const terms = contract?.terms || {};
   const risk = contract?.risk || {};
@@ -56,14 +99,16 @@ export function DigitalHandshakeContract({
   const model = normalizeVenueDealModel(contract?.model) || "access_only";
   const resolvedPlatformPct = Number(terms.platformPct ?? platformPct ?? 15);
   const resolvedCurrency = String(terms.currency || currency || "EUR").toUpperCase();
+  const isBarter = model === "venue_barter";
+  const barterText = readBarterTerms(terms, barterTerms ? { barterTerms } : null);
+  const dealAddons = addons || [];
+  const addonPay = describeVenueAddonPay(dealAddons);
+  const minimum = minimumGroup !== undefined
+    ? (minimumGroup || 0)
+    : (risk.requireMinimumParticipants ? Number(risk.minimumParticipants || 0) : 0);
 
-  const formatMoney = (value: unknown) => {
-    const number = Number(value || 0);
-    // "€2.50", sign in front (Tim: everything in euro, never "$" or "EUR 2.50").
-    const symbol = ({ EUR: "€", GBP: "£", USD: "$" } as Record<string, string>)[resolvedCurrency];
-    const amount = Number.isFinite(number) ? number.toFixed(2) : "0.00";
-    return symbol ? `${symbol}${amount}` : `${resolvedCurrency} ${amount}`;
-  };
+  // "€2.50", sign in front (Tim: everything in euro, never "$" or "EUR 2.50").
+  const formatMoney = (value: unknown) => euro(value);
 
   const gross = Number(price || 0) * Number(maxParticipants || 0);
   // Per Room / Per Night is the creator's rate across the rooms requested for
@@ -84,6 +129,7 @@ export function DigitalHandshakeContract({
       case "minimum_spend":
         return Number(terms.minimumSpend || 0);
       case "revenue_share":
+      case "commitment_plus_revenue_share":
         return gross * (Number(terms.revenueSharePct || 0) / 100);
       case "venue_sponsored":
         return -Number(terms.fixedFee || 0);
@@ -114,37 +160,43 @@ export function DigitalHandshakeContract({
           </a>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+      <div className={`grid grid-cols-1 gap-3 text-sm ${viewer === "organiser" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
         <span className="text-gray-500">
           Model: <strong className="text-gray-900 dark:text-white">{getVenueDealLabel(model, resolvedCurrency === "EUR" ? "€" : resolvedCurrency)}</strong>
         </span>
         <span className="text-gray-500">
           Status: <strong className="capitalize">{String(contract?.status || "pending").replace(/_/g, " ")}</strong>
         </span>
-        <span className="text-gray-500">
-          Platform: <strong>{Number.isFinite(resolvedPlatformPct) ? resolvedPlatformPct : 15}%</strong>
-        </span>
-      </div>
-
-      <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-500 md:grid-cols-2">
-        {model === "fixed_fee" && <span>Per ticket: <strong>{formatMoney(terms.fixedFee)}</strong></span>}
-        {model === "per_head" && <span>Per Participant: <strong>{formatMoney(terms.perHeadAmount)}</strong></span>}
-        {model === "per_room_night" && (
-          <span>
-            Per Room / Night: <strong>{formatMoney(terms.perRoomPerNight)}</strong>
+        {viewer === "organiser" && (
+          <span className="text-gray-500" data-testid="handshake-platform-fee">
+            Platform fee: <strong>{Number.isFinite(resolvedPlatformPct) ? resolvedPlatformPct : 15}% of tickets</strong>
           </span>
         )}
-        {model === "minimum_spend" && <span>Minimum Spend: <strong>{formatMoney(terms.minimumSpend)}</strong></span>}
-        {model === "revenue_share" && <span>Revenue Share: <strong>{Number(terms.revenueSharePct || 0)}%</strong></span>}
-        {model === "access_only" && <span>Access Fee: <strong>{formatMoney(terms.accessFee)}</strong></span>}
+      </div>
+
+      <p className="mt-2 text-xs text-gray-600 dark:text-gray-300" data-testid="handshake-terms-text">
+        {describeVenueDealTerms(model, terms)}
+      </p>
+
+      {/* The organiser's own words are the whole of a barter deal (57). */}
+      {isBarter && (
+        <div className="mt-2 rounded border border-purple-200 bg-white p-2 text-xs dark:border-purple-800 dark:bg-gray-800" data-testid="handshake-barter-terms">
+          <p className="font-semibold text-purple-800 dark:text-purple-200">What the organiser proposes</p>
+          <p className="mt-1 whitespace-pre-wrap text-gray-700 dark:text-gray-200">
+            {barterText || "No terms written yet. Ask the organiser in a counter offer."}
+          </p>
+        </div>
+      )}
+
+      <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-500 md:grid-cols-2">
         {model === "venue_sponsored" && (
-          <span>Sponsorship Fee (you pay): <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></span>
+          <span>Sponsorship Fee (venue pays): <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></span>
         )}
         {model === "upfront_rental" && (
-          <span>Rental Fee (creator pays you): <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></span>
+          <span>Rental Fee (organiser pays the venue): <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></span>
         )}
         <span>
-          Risk: <strong>{risk.requireMinimumParticipants ? `MVG ${risk.minimumParticipants || 0}` : "No MVG required"}</strong>
+          Minimum group: <strong>{minimum > 0 ? `${minimum} people` : "None, the event goes ahead"}</strong>
         </span>
       </div>
 
@@ -163,22 +215,72 @@ export function DigitalHandshakeContract({
         </div>
       )}
 
-      <p className="mt-2 text-xs text-gray-500">
-        {model === "venue_sponsored" ? (
-          <>Sponsorship cost to you: <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></>
+      {/* Add-ons are always paid to the venue at its own price, whatever the
+          deal (point 56); the organiser keeps only the margin on top. */}
+      {dealAddons.length > 0 && (
+        <div className="mt-2 rounded border bg-white p-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300" data-testid="handshake-addons">
+          <p className="mb-1 font-semibold">Add-ons</p>
+          {dealAddons.map((addon) => (
+            <div key={addon.name} className="flex flex-wrap justify-between gap-x-3">
+              <span>{addon.name}: participant pays {formatMoney(addon.unitPrice)}</span>
+              <span>
+                venue gets <strong>{formatMoney(addon.venueAmount)}</strong>
+                {viewer === "organiser" && <>, you keep {formatMoney(addon.organiserMargin)}</>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-2 text-xs text-gray-500" data-testid="handshake-venue-payout">
+        {isBarter ? (
+          <>Venue receives: <strong className="text-green-600">{describeBarterPayout(dealAddons)}</strong></>
+        ) : model === "venue_sponsored" ? (
+          <>Sponsorship cost to the venue: <strong className="text-orange-600">{formatMoney(terms.fixedFee)}</strong></>
         ) : model === "upfront_rental" ? (
-          <>Rental income from creator: <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></>
+          <>Rental income for the venue: <strong className="text-green-600">{formatMoney(terms.fixedFee)}</strong></>
         ) : (
           <>
-            Est. venue payout if full: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong>
+            Est. venue payout if sold out: <strong className="text-green-600">{formatMoney(venuePayoutPreview)}</strong> for tickets
             {model === "per_room_night" && (
               <span className="text-gray-400">
                 {" "}({requestedRooms} room{requestedRooms === 1 ? "" : "s"} × {heldNights} night{heldNights === 1 ? "" : "s"})
               </span>
             )}
+            {addonPay && <>, plus add-ons {addonPay}</>}
           </>
         )}
       </p>
+      {isBarter && (
+        <p className="mt-1 text-[11px] text-gray-400">
+          Barter leaves the venue out of the ticket split. Add-ons are always paid to the venue at its own price.
+        </p>
+      )}
+
+      {history && history.length > 0 && (
+        <details className="mt-3 text-xs" data-testid="handshake-history">
+          <summary className="cursor-pointer font-semibold text-gray-600">Deal history ({history.length})</summary>
+          <ol className="mt-2 space-y-2 border-l pl-3">
+            {history.map((entry, index) => (
+              <li key={`${entry.kind}-${index}`}>
+                <p className="text-gray-500">
+                  <strong className="text-gray-700 dark:text-gray-200">{HISTORY_LABEL[entry.kind]}</strong>
+                  {" "}by {entry.by === "organiser" ? "the organiser" : "the venue"}
+                  {entry.at ? `, ${formatWhen(entry.at)}` : ""}
+                </p>
+                {(entry.kind === "proposal" || entry.kind === "counter") && entry.model && (
+                  <p className="text-gray-600 dark:text-gray-300">{describeVenueDealTerms(entry.model, entry.terms)}</p>
+                )}
+                {entry.message && (
+                  <p className="mt-0.5 whitespace-pre-wrap rounded bg-white p-1.5 text-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                    {entry.message}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
     </div>
   );
 }

@@ -52,6 +52,7 @@ import Breadcrumb from "@/components/Breadcrumb";
 import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import DashboardGuard from "@/components/DashboardGuard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
+import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
 
 import { formatPriceByCurrency } from "@shared/pricingService";
 // Currency formatting helper
@@ -2198,15 +2199,6 @@ function CreatorDashboardContent() {
                   const offer = row.offer ?? row;
                   const venue = row.venue ?? {};
                   const exp = row.experience ?? {};
-                  const terms = offer.terms ?? {};
-                  // "Confirmed" on its own left the creator with no record of
-                  // what they had confirmed. The shared summary spells out the
-                  // agreed number for every model, in the event's own currency.
-                  const agreedTerms = formatVenueDealSummary(
-                    offer.model,
-                    terms,
-                    terms.currency || exp.currency,
-                  );
                   return (
                     <Card key={offer.id} className="border-green-200 dark:border-green-800 bg-green-50/30 dark:bg-green-900/10">
                       <CardContent className="p-4">
@@ -2234,16 +2226,28 @@ function CreatorDashboardContent() {
                               </Badge>
                             </div>
                           </div>
-                          <div className="text-sm sm:text-right shrink-0">
-                            <p className="text-xs text-gray-500">Agreed terms</p>
-                            <strong data-testid="text-active-deal-terms">{agreedTerms}</strong>
-                            {offer.risk?.requireMinimumParticipants && offer.risk?.minimumParticipants ? (
-                              <p className="text-xs text-gray-500">
-                                Confirms at {offer.risk.minimumParticipants} participants
-                              </p>
-                            ) : null}
-                          </div>
+                          {offer.acceptedAt || offer.updatedAt ? (
+                            <p className="text-xs text-gray-500 sm:text-right shrink-0">
+                              Agreed {new Date(offer.acceptedAt || offer.updatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                            </p>
+                          ) : null}
                         </div>
+                        {/* The whole deal, not one cut-off line (57): the barter
+                            text, the add-ons and who is paid what, and the
+                            counter offers that led here. */}
+                        <DigitalHandshakeContract
+                          title="Agreed terms"
+                          viewer="organiser"
+                          contract={{ ...offer, status: "accepted" }}
+                          price={exp.price}
+                          maxParticipants={exp.maxParticipants}
+                          currency={exp.currency}
+                          platformPct={exp.platformPct || exp.platformRevenuePercentage}
+                          addons={row.dealAddons}
+                          barterTerms={row.barterTerms}
+                          minimumGroup={row.minimumGroup ?? null}
+                          history={row.history}
+                        />
                       </CardContent>
                     </Card>
                   );

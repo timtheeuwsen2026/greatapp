@@ -2099,6 +2099,8 @@ export const venueContracts = pgTable("venue_contracts", {
       accessFee?: number;
       /** Commitment Fee + Revenue Split: the venue's one-off payment to the creator. */
       commitmentFee?: number;
+      /** Barter Deal: what each side supplies, in the organiser's own words (57). */
+      barterTerms?: string;
       currency?: string;
       platformPct?: number;
       creatorPct?: number;
@@ -4630,3 +4632,27 @@ export const paymentDifferences = pgTable(
 
 export type PaymentDifference = typeof paymentDifferences.$inferSelect;
 export type InsertPaymentDifference = typeof paymentDifferences.$inferInsert;
+
+// In-app notices (Tim, points 57-59): the bell in the top bar. A venue had no
+// way to learn of an offer except by opening its dashboard, and an organiser
+// none of learning a venue had answered. Every notice is also a mail; this is
+// the copy that waits in the app. `noticeKey` makes sending twice harmless.
+export const userNotices = pgTable(
+  "user_notices",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    noticeKey: varchar("notice_key", { length: 200 }).notNull().unique(),
+    kind: varchar("kind", { length: 40 }).notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    body: text("body"),
+    link: varchar("link", { length: 500 }),
+    experienceId: varchar("experience_id"),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("user_notices_user_idx").on(table.userId, table.createdAt)],
+);
+
+export type UserNotice = typeof userNotices.$inferSelect;
+export type InsertUserNotice = typeof userNotices.$inferInsert;

@@ -2172,6 +2172,45 @@ The Great. Team
     });
   }
 
+  /**
+   * A step in a venue deal, to either side (Tim, points 57 and 59.3): a new
+   * offer, a counter, an acceptance or a decline. The rows carry the full
+   * terms, the organiser's own barter text included, built by
+   * server/venueNotices.ts so the mail and the in-app notice say the same.
+   */
+  async sendVenueDealUpdateEmail(opts: {
+    to: string;
+    recipientName?: string | null;
+    subject: string;
+    intro: string;
+    rows: EmailReceiptRow[];
+    cta: { label: string; path: string };
+    eventKey: string;
+  }): Promise<void> {
+    const greeting = `Hi ${opts.recipientName?.trim() || 'there'},`;
+    const email = renderBaseEmail({
+      to: opts.to,
+      bodyText: `${greeting}
+
+${opts.intro}`,
+      receiptRows: opts.rows,
+      cta: { label: opts.cta.label, href: `${APP_BASE_URL}${opts.cta.path}` },
+      preheader: opts.intro.slice(0, 120),
+      growthFooterContext: 'partner',
+    });
+    const result = await sendEmailOnce({
+      eventKey: notificationEventKey('venue_deal', opts.to, opts.eventKey),
+      emailType: 'deal_engine',
+      to: opts.to,
+      subject: opts.subject,
+      text: email.text,
+      html: email.html,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to send venue deal email');
+    }
+  }
+
   // Venue owner resolved the creator's direct contract proposal.
   async sendVenueContractResolvedEmail(opts: {
     to: string;
@@ -2191,7 +2230,7 @@ The Great. Team
       experienceTitle: opts.experienceTitle,
       experienceSlugOrId: opts.experienceSlugOrId,
       ctaNote: opts.action === 'accepted'
-        ? 'Your event is now live and open for bookings.'
+        ? 'The deal is agreed and locked. A change is a new counter offer that both of you accept.'
         : 'Your event was returned to draft — you can pick another venue and republish.',
     });
   }

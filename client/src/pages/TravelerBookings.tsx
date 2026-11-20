@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import TicketQr from "@/components/TicketQr";
+import AddToCalendarButton from "@/components/AddToCalendarButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -624,11 +625,14 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
 
           <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
             {booking.experience?.startDate && (
-              <div className="flex items-center gap-2" data-testid="text-detail-dates">
+              <div className="flex flex-wrap items-center gap-2" data-testid="text-detail-dates">
                 <Calendar className="h-4 w-4 shrink-0 text-gray-500" />
                 <span>
                   {formatEventWhen(booking.experience as any)}
                 </span>
+                {!hasExperiencePassed(booking.experience as any) && (
+                  <AddToCalendarButton experience={booking.experience} />
+                )}
               </div>
             )}
             

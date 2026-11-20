@@ -31,6 +31,8 @@ import { getSupabaseAdminClient, isAuthenticated, optionalAuth } from "./supabas
 import { notificationService, formatPromotionDealSummary } from "./notifications";
 import { getLastEmailAttemptAt } from "./emailDeliveryLedger";
 import { registerOGRoutes } from "./og";
+import { registerAppLinkRoutes } from "./appLinks";
+import { registerAccountDeletionRoutes } from "./accountDeletion";
 import { resolvePartnerAccess, shouldAutoApproveCreator } from "@shared/partnerAccess";
 import { matchesStandingPreferences } from "@shared/collabSuggestions";
 import { dealRooms, dealRoomMessages, dealRoomReads } from "@shared/schema";
@@ -2249,6 +2251,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Register OG image + social bot prerender routes (must come before Vite catch-all)
   registerOGRoutes(app);
+
+  // iOS/Android app: universal-link files and in-app account deletion.
+  registerAppLinkRoutes(app);
+  registerAccountDeletionRoutes(app);
 
   app.get('/email-assets/email_logo.png', (_req, res) => {
     const sourceLogoPath = path.resolve(process.cwd(), 'client', 'public', 'assets', 'email_logo.png');

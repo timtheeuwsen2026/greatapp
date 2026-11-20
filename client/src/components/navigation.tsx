@@ -18,6 +18,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import BrandLogo from "@/components/BrandLogo";
 import { CityMenu } from "@/components/CityMenu";
 import { NoticesBell } from "@/components/NoticesBell";
+import { isNativeApp, openInBrowser } from "@/lib/nativeApp";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -265,6 +266,18 @@ export default function Navigation() {
                       Rewards & Referrals
                     </Link>
                   </DropdownMenuItem>
+                  {/* The iOS/Android app hides the hosting tools, so this opens
+                      Create experience in the phone's browser instead. */}
+                  {isNativeApp() && (
+                    <DropdownMenuItem
+                      className="gap-2"
+                      onSelect={() => openInBrowser("/create-experience")}
+                      data-testid="menu-host-experience"
+                    >
+                      <Plus className="h-4 w-4 text-muted-foreground" />
+                      Host an experience
+                    </DropdownMenuItem>
+                  )}
                   {user?.role === 'creator' && (
                     <DropdownMenuItem asChild>
                       <Link href="/creator" className="gap-2">
@@ -554,6 +567,20 @@ export default function Navigation() {
                     <TrendingUp className="h-4 w-4" />
                     Rewards & Referrals
                   </Link>
+                  {isNativeApp() && (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-700 hover:text-primary transition-colors font-medium"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        openInBrowser("/create-experience");
+                      }}
+                      data-testid="mobile-link-host-experience"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Host an experience
+                    </button>
+                  )}
 
                   {/* Community — present in the account dropdown but missing
                       here, which is the inconsistency the menu pass was about. */}

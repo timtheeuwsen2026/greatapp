@@ -24,6 +24,7 @@ import Navigation from "@/components/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { isAdminUser } from "@/lib/authUtils";
 import { supabase } from "@/lib/supabase";
+import DeleteAccountCard from "@/components/DeleteAccountCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -696,6 +697,8 @@ export default function Profile() {
                     </Button>
                   </CardContent>
                 </Card>
+
+                <DeleteAccountCard />
               </div>
             </TabsContent>
           </Tabs>

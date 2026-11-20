@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { orderAddons } from "@shared/eventOrders";
 import { Link, useLocation } from "wouter";
 import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
@@ -71,6 +72,10 @@ type Booking = {
   ticketSkuId: string | null;
   ticketName: string | null;
   createdAt: string;
+  addonItems?: Array<{ name?: string; quantity?: number; total?: number }> | null;
+  addonName?: string | null;
+  addonQuantity?: number | null;
+  addonTotal?: string | number | null;
 };
 
 // apiRequest rejects with "<status>: <raw body>"; pull the human message back out.
@@ -685,6 +690,19 @@ export default function BookingSuccess() {
                     <span className="font-medium text-gray-900">{booking.ticketName}</span>
                   </div>
                 )}
+
+                {/* The add-on with what it cost and where to collect it (58.3). */}
+                {booking && orderAddons(booking as any).map((addon) => (
+                  <div key={addon.name} className="flex items-center justify-between gap-2 pb-2 text-sm" data-testid="booking-addon-line">
+                    <span className="text-gray-700">
+                      {addon.name} × {addon.quantity}
+                      {((experience as any)?.venue || experience?.location) && (
+                        <span className="text-gray-500">, collect at {(experience as any)?.venue || experience?.location}</span>
+                      )}
+                    </span>
+                    {addon.total > 0 && <span className="font-medium text-gray-900">{formatCurrency(addon.total, currency)}</span>}
+                  </div>
+                ))}
 
                 {booking && hasOutstandingBalance ? (
                   <div className="space-y-3">

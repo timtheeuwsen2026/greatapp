@@ -47,6 +47,7 @@ export const COLLAB_SEEKING_TYPES: CollabSeekingOption[] = [
     label: "A sponsor",
     fields: [
       { key: "need", label: "What do you need from a sponsor?", placeholder: "Power / electricity on site" },
+      { key: "giveBack", label: "What you give back", placeholder: "Logo on the flyer and a story on the day" },
     ],
   },
   {
@@ -54,6 +55,7 @@ export const COLLAB_SEEKING_TYPES: CollabSeekingOption[] = [
     label: "A partner community",
     fields: [
       { key: "audience", label: "Whose audience are you after?", placeholder: "Run clubs, 25-40, Barcelona" },
+      { key: "earn", label: "How they earn", placeholder: "€2.00 per person who checks in" },
     ],
   },
   {

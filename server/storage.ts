@@ -304,6 +304,8 @@ export interface IStorage {
   createExperienceDraft(draft: InsertExperienceDraft): Promise<ExperienceDraft>;
   updateExperienceDraft(id: string, creatorId: string, updates: Partial<InsertExperienceDraft>): Promise<ExperienceDraft>;
   deleteExperienceDraft(id: string, creatorId: string): Promise<void>;
+  withdrawCollabIdeasForDraft(draftId: string): Promise<void>;
+  linkCollabIdeasToExperience(draftId: string, experienceId: string): Promise<void>;
   getExperienceDraftById(id: string): Promise<ExperienceDraft | undefined>;
   getExperienceDraft(id: string, creatorId: string): Promise<ExperienceDraft | undefined>;
 
@@ -436,6 +438,8 @@ export interface IStorage {
   getVenueContractById(contractId: string): Promise<VenueContract | undefined>;
   getAcceptedVenueContractForExperience(experienceId: string): Promise<VenueContract | undefined>;
   acceptVenueContract(experienceId: string, venueId: string): Promise<VenueContract>;
+  /** An event that will not take place: its open venue offers are withdrawn, its agreed deal is cancelled (66.10a/b). */
+  closeVenueDealsForCancelledEvent(experienceId: string): Promise<void>;
   // In-app notices (the bell). Adding the same key twice keeps the first.
   addUserNotice(notice: { userId: string; noticeKey: string; kind: string; title: string; body?: string | null; link?: string | null; experienceId?: string | null }): Promise<void>;
   getUserNotices(userId: string, limit?: number): Promise<{ notices: UserNotice[]; unread: number }>;
@@ -1403,6 +1407,8 @@ export class DatabaseStorage implements IStorage {
       .returning();
 
     if (!archived) throw new Error("Experience not found");
+    // The event will not take place: its venue deals end with it (66.10a/b).
+    await this.closeVenueDealsForCancelledEvent(id).catch(() => undefined);
     return archived;
   }
 
@@ -1544,6 +1550,20 @@ export class DatabaseStorage implements IStorage {
    * Only ever sets the timestamp when it is still empty, so a second scan of
    * the same ticket cannot quietly redeem a second coffee.
    */
+  /**
+   * The venue's "handed out" tick on its order sheet (58.2). Unlike a scan at
+   * the door it can be taken back, because a tick on a list is easy to misplace.
+   */
+  async setBookingAddonHandedOut(id: string, by: string, handedOut: boolean): Promise<Booking | undefined> {
+    const [row] = await db.update(bookings)
+      .set(handedOut
+        ? { addonRedeemedAt: new Date(), addonRedeemedBy: by }
+        : { addonRedeemedAt: null, addonRedeemedBy: null } as any)
+      .where(eq(bookings.id, id))
+      .returning();
+    return row;
+  }
+
   async redeemBookingAddon(id: string, redeemedBy: string): Promise<Booking | undefined> {
     const [booking] = await db
       .update(bookings)
@@ -3491,6 +3511,23 @@ export class DatabaseStorage implements IStorage {
     return contract;
   }
 
+  async closeVenueDealsForCancelledEvent(experienceId: string): Promise<void> {
+    // TEST 4 stayed a "Pending" offer for an event that no longer existed and
+    // TEST 1 and 2 stayed "Accepted" after they were cancelled (66.10, 66.19d).
+    await db.update(venueContracts)
+      .set({ status: sql`CASE WHEN ${venueContracts.status} = 'accepted' THEN 'cancelled' ELSE 'withdrawn' END`, updatedAt: new Date() } as any)
+      .where(and(
+        eq(venueContracts.experienceId, experienceId),
+        inArray(venueContracts.status, ["pending", "countered", "accepted"]),
+      ));
+    await db.update(venueOffers)
+      .set({ status: "declined", updatedAt: new Date() } as any)
+      .where(and(
+        eq(venueOffers.experienceId, experienceId),
+        inArray((venueOffers as any).status, ["pending", "admin_review"]),
+      ));
+  }
+
   async addUserNotice(notice: { userId: string; noticeKey: string; kind: string; title: string; body?: string | null; link?: string | null; experienceId?: string | null }): Promise<void> {
     if (!notice.userId) return;
     await db.insert(userNotices).values({
@@ -3751,6 +3788,26 @@ export class DatabaseStorage implements IStorage {
     if (result.length === 0) {
       throw new Error("Draft not found or access denied");
     }
+  }
+
+  /**
+   * An idea's open slots are part of its draft (Create flow 26). Deleted by the
+   * organiser, its posting leaves the Collab board. Not called on publish:
+   * publishing also deletes the draft, and deals may still be open then.
+   */
+  async withdrawCollabIdeasForDraft(draftId: string): Promise<void> {
+    await db
+      .update(collabIdeas)
+      .set({ status: "withdrawn", updatedAt: new Date() })
+      .where(and(eq(collabIdeas.experienceDraftId, draftId), eq(collabIdeas.status, "open")));
+  }
+
+  /** On publish: the posting now belongs to the real event, so the two can be traced. */
+  async linkCollabIdeasToExperience(draftId: string, experienceId: string): Promise<void> {
+    await db
+      .update(collabIdeas)
+      .set({ convertedExperienceId: experienceId, updatedAt: new Date() })
+      .where(eq(collabIdeas.experienceDraftId, draftId));
   }
 
   // Participant interaction operations
@@ -6144,6 +6201,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(collabIdeas.status, "open"),
+          // "Invite directly" only: the invitees see it through their link, the board does not.
+          eq(collabIdeas.listed, true),
           or(isNull(collabIdeas.expiresAt), sql`${collabIdeas.expiresAt} > NOW()`),
           // A period that has already finished is past, whatever the expiry
           // floor says. Without this an August weekend was still "open" in

@@ -10,11 +10,8 @@ function formatCurrency(amount: string | number | null, currency: string = 'EUR'
   if (amount === null || amount === undefined) return '-';
   const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
   if (isNaN(numAmount)) return '-';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency || 'EUR',
-    minimumFractionDigits: 0,
-  }).format(numAmount);
+  // Always "€2.00" (Tim: everything in euro).
+  return `€${numAmount.toFixed(2)}`;
 }
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";

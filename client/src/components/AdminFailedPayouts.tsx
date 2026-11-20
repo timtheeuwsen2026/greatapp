@@ -113,8 +113,7 @@ export default function AdminFailedPayouts() {
                 </span>
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-muted-foreground">
-                    {(payout.currency || "eur").toUpperCase()}{" "}
-                    {((payout.grossCents || 0) / 100).toFixed(2)}
+                    €{((payout.grossCents || 0) / 100).toFixed(2)}
                   </span>
                   <Badge className="bg-red-100 text-red-800">Failed</Badge>
                 </div>
@@ -141,16 +140,24 @@ export default function AdminFailedPayouts() {
                   >
                     Mark paid manually
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => retry.mutate(payout.id)}
-                    disabled={retry.isPending}
-                    data-testid={`button-retry-payout-${payout.id}`}
-                  >
-                    <RefreshCw className="mr-1 h-4 w-4" />
-                    Re-queue
-                  </Button>
+                  {/* Part already paid by hand: no Re-queue, so nothing is
+                      paid twice. Pay now in Payments skips that share and asks first. */}
+                  {(payout as any).manualShares > 0 ? (
+                    <span className="text-xs text-muted-foreground" data-testid={`text-manual-shares-${payout.id}`}>
+                      Part paid manually: use Pay now in Payments
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => retry.mutate(payout.id)}
+                      disabled={retry.isPending}
+                      data-testid={`button-retry-payout-${payout.id}`}
+                    >
+                      <RefreshCw className="mr-1 h-4 w-4" />
+                      Re-queue
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>

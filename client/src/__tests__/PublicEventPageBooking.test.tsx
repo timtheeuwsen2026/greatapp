@@ -26,7 +26,8 @@ vi.mock('@/components/OrganiserTurnout', () => ({ default: () => null }));
 vi.mock('@/components/promoter-referral-card', () => ({ default: () => null }));
 vi.mock('@/components/participant-referral-perk-card', () => ({ default: () => null }));
 
-const event = {
+let event: any;
+const liveEvent = {
   id: 'exp-yoga', title: 'Immersive Yoga and Breathwork', status: 'published',
   short_description: 'Rooftop', full_description: 'Rooftop sessions',
   start_date: new Date(Date.now() + 8 * 86400000).toISOString(),
@@ -40,6 +41,7 @@ const event = {
 };
 
 function renderPage() {
+  event = event || liveEvent;
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, queryFn: async ({ queryKey }) => (String(queryKey[0]).startsWith('/api/e') ? event : null) } },
   });
@@ -70,7 +72,7 @@ describe('where Book Now goes', () => {
 });
 
 describe('the page a share link lands on', () => {
-  beforeEach(() => { search = ''; });
+  beforeEach(() => { search = ''; event = liveEvent; });
 
   it('has Book Now buttons that actually go to booking, with the partner link intact', async () => {
     search = '?ref=amunt-yoga&share=tok';
@@ -87,5 +89,40 @@ describe('the page a share link lands on', () => {
     await screen.findByTestId('button-book-now');
     expect(screen.queryByText('Join Waitlist')).not.toBeInTheDocument();
     expect(screen.queryByTestId('button-join-waitlist')).not.toBeInTheDocument();
+  });
+});
+
+describe('an event that has ended (66.34f, 66.34l)', () => {
+  beforeEach(() => { search = ''; });
+
+  it('says it has ended, with the final count, and offers no booking', async () => {
+    event = {
+      ...liveEvent,
+      phase: 'ended',
+      lifecycleStatus: 'confirmed',
+      mvg: { ...liveEvent.mvg, enabled: false, current_signups: 3 },
+      pricing: { ...liveEvent.pricing, depositEnabled: true, depositAmount: 5 },
+    };
+    renderPage();
+    expect(await screen.findByTestId('text-booking-closed')).toHaveTextContent('This event has ended. 3 people joined.');
+    expect(screen.queryByTestId('button-book-now')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('button-book-now-final')).not.toBeInTheDocument();
+    expect(screen.getByTestId('heading-final-cta')).toHaveTextContent('This event has ended');
+    expect(screen.queryByText(/deposit/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/trip/i)).not.toBeInTheDocument();
+  });
+
+  it('closes booking once the event has started', async () => {
+    event = { ...liveEvent, phase: 'happening' };
+    renderPage();
+    expect(await screen.findByTestId('text-booking-closed')).toHaveTextContent('This event has started, booking is closed.');
+    expect(screen.queryByTestId('button-book-now')).not.toBeInTheDocument();
+  });
+
+  it('writes prices as €20.00 per person', async () => {
+    event = liveEvent;
+    renderPage();
+    await screen.findByTestId('button-book-now');
+    expect(screen.getAllByText(/€20\.00/).length).toBeGreaterThan(0);
   });
 });

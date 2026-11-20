@@ -18,9 +18,10 @@ import { fileTypeFromBuffer } from "file-type";
 import { storage } from "./storage";
 import { availableBookingQuantity, BookingCapacityError, isActiveRegistration, ticketId, ticketRegistrationCounts, withTicketCapacity } from "@shared/ticketAvailability";
 import { db } from "./db";
+import { paymentDifferences, venueContracts } from "@shared/schema";
 import { suggestedCityForIp, visitorIp } from "./visitorCity";
 import { adminCityFrom, onlyCity } from "./adminCity";
-import { ALL_CITIES, countEventsByCity, inCity, normalizeCityName } from "@shared/cities";
+import { ALL_CITIES, cityOfEvent, countEventsByCity, inCity, normalizeCityName } from "@shared/cities";
 import { discountLinks, bookings, platformSettings, experiences, experienceMessages, experienceChatReads, users, participantProfiles, participantRoles, communityApplications, venues, serviceProviders, venueOffers, venueFlashDeals, reviews, creatorAttendanceMilestones, attendanceMilestoneUnlocks, creatorProfiles } from "@shared/schema";
 import { eq, and, or, desc, asc, inArray, gt, gte, sql, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -53,7 +54,7 @@ import { uploadImageToSupabase, uploadDocumentToSupabase } from "./supabaseStora
 import { generateItinerary } from "./openai";
 import { calculateBookingCommission, lockCommissionsForExperience, updateCommissionStatus, voidCommissionsForExperience } from "./commissionService";
 import { handleStripeWebhook, finalizePromotionSponsorshipSession, finalizeVenueSponsorshipSession } from "./stripe-webhook";
-import { executeExperiencePayout, payScheduledPayoutNow, scheduleExperiencePayout } from "./payout-scheduler";
+import { executeExperiencePayout, payScheduledPayoutNow, scheduleExperiencePayout, settlePayoutIfFullyPaid } from "./payout-scheduler";
 import { isExperiencePayoutEligible, sumBookingPayoutGrossCents } from "./payoutRules";
 import {
   calculateTicketDeduction,
@@ -71,6 +72,11 @@ import {
   notifyOrganiserOfVenueCounter,
   notifyVenueOfNewOffer,
 } from "./venueNotices";
+import { describeVenueDealTerms, venueDealAddons } from "@shared/venueDealCard";
+import { buildEventOrders, buildPartnerOrders, eventOrderTotals } from "@shared/eventOrders";
+import { eventPhase, eventTimeZone, formatEventStart, formatEventWhen, formatInZone, payoutDueAt } from "@shared/eventTime";
+import { agreementLines, buildVenueAgreement } from "@shared/venueAgreement";
+import { renderTextPdf } from "./simplePdf";
 import {
   normalizeVenueDealModel,
   getVenueDealTermsKey,
@@ -535,6 +541,39 @@ function countRequestedRooms(input: any): number {
   );
 }
 
+/**
+ * What a declined venue deal does to its event.
+ *
+ * It used to send the event back to draft every time, also an event that was
+ * live with paid bookings, which then vanished for the people who had paid.
+ * An event nobody has booked yet still goes back to draft so the organiser can
+ * pick another venue; one with bookings stays live, without the venue.
+ */
+async function returnEventAfterVenueDecline(experienceId: string): Promise<void> {
+  const rows = await storage.getBookingsByExperience(experienceId);
+  const booked = rows.some((row: any) => !row.cancelledAt
+    && ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"].includes(String(row.status)));
+  if (!booked) {
+    await storage.updateExperienceStatus(experienceId, 'draft');
+    return;
+  }
+  await storage.updateExperience(experienceId, { linkedVenueId: null, venueStatus: 'venue_pending' } as any);
+}
+
+/** Event columns that carry the venue deal; frozen once the venue has accepted (57). */
+const LOCKED_VENUE_DEAL_FIELDS = [
+  "venueCompensationModel",
+  "venueFixedFee",
+  "venuePerHeadAmount",
+  "venuePerRoomPerNight",
+  "venueMinimumSpend",
+  "venueRevenueSharePct",
+  "venueRevenuePercentage",
+  "venueAccessFee",
+  "venueCommitmentFee",
+  "venueBarterTerms",
+] as const;
+
 function buildVenueContractObject(input: any, experienceId: string, venueId: string, creatorId: string) {
   const model = input.venueCompensationModel || "access_only";
   const singleDayEvent = isSingleDayExperience({
@@ -965,6 +1004,9 @@ function parseCollabIdeaBody(body: any): { error?: string; values: Record<string
       // category the poster never chose, so an idea with no upload renders a
       // neutral placeholder in the browser instead.
       photoUrl: body?.photoUrl ? String(body.photoUrl) : null,
+      // Only when said: an edit from the old Collab Idea form sends nothing and
+      // must not put an invite-only posting back on the board.
+      ...(typeof body?.listed === "boolean" ? { listed: body.listed } : {}),
     },
   };
 }
@@ -3878,6 +3920,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const { id } = req.params;
       await storage.deleteExperienceDraft(id, userId);
+      // A deleted idea leaves the Collab board. Never fails the delete itself.
+      await storage.withdrawCollabIdeasForDraft(id).catch((error) =>
+        console.error("Draft deleted, but its Collab posting stayed open:", error));
       res.json({ message: "Draft deleted" });
     } catch (error) {
       console.error("Error deleting experience draft:", error);
@@ -3933,6 +3978,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const drafts = await storage.getExperienceDraftsByCreator(userId);
       for (const draft of drafts) {
         await storage.deleteExperienceDraft(draft.id, userId);
+        await storage.withdrawCollabIdeasForDraft(draft.id).catch((error) =>
+          console.error("Draft deleted, but its Collab posting stayed open:", error));
       }
       res.json({ message: "All drafts deleted" });
     } catch (error) {
@@ -4840,6 +4887,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         full_description: experience.description,
         start_date: experience.startDate,
         end_date: experience.endDate,
+        // Where the event stands in its own city's time (66.21): booking closes
+        // at the start, and an ended event says so (66.34f, l).
+        phase: eventPhase(experience as any),
+        when: formatEventWhen(experience as any, { weekday: true, year: true }),
         duration: durationDays,
         
         // Media fields
@@ -5216,6 +5267,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error("Venue offer notice failed:", error?.message || error));
       }
 
+      // The idea's Collab posting now belongs to the event; it stays open,
+      // since publishing is allowed while deals are still open (28.4).
+      await storage.linkCollabIdeasToExperience(draftId, experience.id).catch((error) =>
+        console.error("Published, but the Collab posting was not linked:", error));
       // Delete the draft since it's now published
       await storage.deleteExperienceDraft(draftId, ownerId);
       
@@ -5500,6 +5555,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         creatorId: _creatorId,
         ...updates
       } = mapped as any;
+
+      // An agreed venue deal is locked (Tim, 57): one side saving the event in
+      // the builder must not change what the venue is paid. A change is a new
+      // counter offer both accept. Picking a different venue is a new offer.
+      const agreedVenueDeal = await storage.getAcceptedVenueContractForExperience(existing.id);
+      const keepsAgreedVenue = !!agreedVenueDeal
+        && (!req.body?.selectedVenueId || req.body.selectedVenueId === agreedVenueDeal.venueId);
+      if (keepsAgreedVenue) {
+        for (const field of LOCKED_VENUE_DEAL_FIELDS) delete (updates as any)[field];
+      }
 
       // The builder shows whichever venue is selected, so that selection is the
       // link. Reading it off the payload rather than the publish-time mapping
@@ -8182,6 +8247,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error("Venue offer notice failed:", error?.message || error));
       }
       
+      await storage.linkCollabIdeasToExperience(draftId, experience.id).catch((error) =>
+        console.error("Published, but the Collab posting was not linked:", error));
       // Delete the draft
       await storage.deleteExperienceDraft(draftId, userId);
       
@@ -12680,9 +12747,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * open defeats the point. A count is not a listing: no titles, no cities, no
    * posters. The ideas themselves stay behind the partner gate.
    */
-  app.get("/api/collab/ideas/open-count", async (_req: any, res) => {
+  app.get("/api/collab/ideas/open-count", async (req: any, res) => {
     try {
-      const ideas = await storage.getOpenCollabIdeas(200);
+      // Follows the city the visitor picked (66.31f); "All cities" or no city counts all.
+      const city = typeof req.query.city === "string" ? req.query.city : "";
+      const ideas = (await storage.getOpenCollabIdeas(200))
+        .filter((idea: any) => !city || inCity(idea.city, city));
       res.json({ openCount: ideas.length });
     } catch (error) {
       // Zero rather than an error: the strip simply does not draw, which is the
@@ -12913,11 +12983,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const seekingPartnerType = parsed.values.seekingPartnerType as string;
       const estimatedEnd = parsed.values.estimatedEnd as Date | null;
 
+      // The idea flow (Create flow point 26) posts from an event draft. Only the
+      // draft's own organiser can tie a posting to it.
+      const draftId = String(body.experienceDraftId || "").trim();
+      if (draftId && !(await storage.getExperienceDraft(draftId, posterId))) {
+        return res.status(403).json({ message: "That draft is not yours" });
+      }
+
       const poster = await storage.getUser(posterId);
       const idea = await storage.createCollabIdea({
         posterId,
         posterRole: poster?.role || "creator",
         ...parsed.values,
+        experienceDraftId: draftId || null,
         status: "open",
         // "Bring your own community?" — the poster's own trackable link, minted
         // server-side so two ideas can never share a code. Always issued: it
@@ -12934,7 +13012,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the idea is on the board either way.
       let notified = 0;
       try {
-        if (seekingPartnerType === "venue") {
+        // Invite-only postings are not on the board, so nobody is told to look there.
+        if (seekingPartnerType === "venue" && idea.listed !== false) {
           const candidates = await storage.getApprovedVenuesForMatching();
           const matches = candidates.filter((venue: any) =>
             venueMatchesCollabIdea(idea as any, venue));
@@ -14991,8 +15070,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const mvgProgress = await storage.getMVGProgress(exp.id);
           const mvgMet = mvgProgress.mvg_met;
           const resolvedMvgStatus = mvgMet ? 'met' : (exp.mvgStatus || 'pending');
+          // A cancelled event keeps the count it ended with (66.18f): TEST 2
+          // read "MVG 0/3" after its two buyers were refunded, not "2 of 3".
+          let finalParticipantCount: number | null = null;
+          if (exp.status === 'cancelled' && (exp as any).cancelledAt) {
+            const cancelledAt = new Date((exp as any).cancelledAt).getTime();
+            const rows = await storage.getBookingsByExperience(exp.id);
+            finalParticipantCount = rows
+              .filter((booking: any) => {
+                const status = String(booking.status);
+                if (["confirmed", "fully_paid", "deposit_paid", "deposit_authorized", "pending"].includes(status) && !booking.cancelledAt) return true;
+                // Refunded or cancelled together with the event, not before it.
+                return ["refunded", "cancelled"].includes(status) && booking.cancelledAt
+                  && new Date(booking.cancelledAt).getTime() >= cancelledAt - 10 * 60 * 1000;
+              })
+              .reduce((sum: number, booking: any) => sum + Math.max(1, Number(booking.ticketQuantity) || 1), 0);
+          }
           return {
             ...exp,
+            finalParticipantCount,
             currentParticipants: mvgProgress.current_participants,
             participantCount: mvgProgress.current_participants,
             mvgMet,
@@ -15070,6 +15166,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // orbit, so they stay in the community — but their spend does not count.
       const countsAsAttending = (status: string | null) =>
         status === "confirmed" || status === "deposit_paid" || status === "fully_paid";
+      // A sign-up is a booking that still stands (66.18g): cancelled, refunded
+      // and failed bookings are not counted, and a person "came back" only
+      // after more than one event that has actually taken place.
+      const stands = (booking: any) => !booking.cancelledAt
+        && ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"].includes(String(booking.status));
+      const attendedEvents = new Map<string, Set<string>>();
 
       const byUser = new Map<string, any>();
       for (const booking of bookings) {
@@ -15089,21 +15191,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lastEventDate: null as Date | null,
           events: [] as string[],
           referredCount: 0,
+          lastEventLive: false,
         };
 
-        existing.bookingCount += 1;
-        if (countsAsAttending(booking.status)) {
+        const live = stands(booking);
+        if (live) existing.bookingCount += 1;
+        if (live && countsAsAttending(booking.status)) {
           existing.totalSpend += numberOrZero(booking.amount);
         }
-        if (booking.experienceId && !existing.events.includes(booking.experienceId)) {
+        if (live && booking.experienceId && !existing.events.includes(booking.experienceId)) {
           existing.events.push(booking.experienceId);
           existing.eventCount = existing.events.length;
         }
+        if (live && booking.experienceId && booking.experience && booking.experience.status !== "cancelled"
+          && (booking.attendanceStatus === "attended" || hasExperiencePassed(booking.experience))) {
+          const seen = attendedEvents.get(booking.userId) ?? new Set<string>();
+          seen.add(booking.experienceId);
+          attendedEvents.set(booking.userId, seen);
+        }
 
+        // The latest event a person signed up for; one they only cancelled
+        // says so instead of passing for their latest event.
         const startDate = booking.experience?.startDate ? new Date(booking.experience.startDate) : null;
-        if (startDate && (!existing.lastEventDate || startDate > existing.lastEventDate)) {
+        const preferLive = live || !existing.lastEventLive;
+        if (startDate && preferLive && (!existing.lastEventDate || startDate > existing.lastEventDate || (live && !existing.lastEventLive))) {
           existing.lastEventDate = startDate;
-          existing.lastEventTitle = booking.experience?.title ?? null;
+          existing.lastEventLive = live;
+          existing.lastEventTitle = booking.experience?.title
+            ? `${booking.experience.title}${live ? "" : " (cancelled)"}`
+            : null;
         }
 
         byUser.set(booking.userId, existing);
@@ -15123,7 +15239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const attendance = await getAttendanceCountsForUsers(userIds as string[], creatorId);
 
       const members = Array.from(byUser.values())
-        .map((member) => ({
+        .map(({ lastEventLive: _lastEventLive, ...member }) => ({
           ...member,
           eventsWithMe: attendance.get(member.userId)?.withOrganiser ?? member.eventCount,
           eventsPlatformWide: attendance.get(member.userId)?.platformWide ?? member.eventCount,
@@ -15135,8 +15251,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         members,
         totals: {
           members: members.length,
-          bookings: bookings.length,
-          repeat: members.filter((member) => member.eventCount > 1).length,
+          bookings: bookings.filter(stands).length,
+          repeat: Array.from(attendedEvents.values()).filter((events) => events.size > 1).length,
         },
       });
     } catch (error) {
@@ -15573,6 +15689,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/experiences/:id/announcements", isAuthenticated, async (req: any, res) => {
     try {
       const creatorId = req.user.claims.sub;
+      // Only the event's own organiser (or admin) posts its updates. Any
+      // signed-in account could post one to any event.
+      const target: any = await storage.getExperience(req.params.id);
+      if (!target) return res.status(404).json({ message: "Event not found" });
+      if (target.creatorId !== creatorId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: "Only the organiser can post updates to this event" });
+      }
       const announcement = await storage.createAnnouncement({
         ...req.body,
         experienceId: req.params.id,
@@ -16684,7 +16807,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/community/groups", async (req, res) => {
     try {
       const groups = await storage.getCommunityGroups();
-      res.json(groups);
+      // ?city= (66.31f): a group has no city of its own yet, so it takes the
+      // city its organiser runs most events in. A group with no events
+      // anywhere shows only under "All cities".
+      const city = typeof req.query.city === "string" ? req.query.city : "";
+      if (!city || city === ALL_CITIES) return res.json(groups);
+      const events = await storage.getExperiences({});
+      const citiesByCreator = new Map<string, Map<string, number>>();
+      for (const event of events as any[]) {
+        const eventCity = cityOfEvent(event);
+        if (!event.creatorId || !eventCity) continue;
+        const counts = citiesByCreator.get(event.creatorId) || new Map<string, number>();
+        counts.set(eventCity, (counts.get(eventCity) || 0) + 1);
+        citiesByCreator.set(event.creatorId, counts);
+      }
+      const groupCity = (group: any): string | null => {
+        const counts = citiesByCreator.get(group.createdBy);
+        if (!counts) return null;
+        return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      };
+      res.json(groups.filter((group: any) => inCity(groupCity(group), city)));
     } catch (error) {
       console.error("Error fetching community groups:", error);
       res.status(500).json({ message: "Failed to fetch groups" });
@@ -17460,6 +17602,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Set an event's city by hand (66.24): for events made before cities, or put
   // in the wrong one.
+  // "Hide from public" for internal tests (Tim, 66.20e). It only takes the
+  // event out of public lists: nothing is cancelled or refunded, and the event
+  // page still opens from its link.
+  app.patch("/api/admin/experiences/:id/visibility", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const existing = await storage.getExperience(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Experience not found" });
+      const hiddenFromPublic = req.body?.hiddenFromPublic === true;
+      const updated = await storage.updateExperience(req.params.id, { hiddenFromPublic } as any);
+      res.json({ id: updated.id, hiddenFromPublic: (updated as any).hiddenFromPublic === true });
+    } catch (error) {
+      console.error("Error changing event visibility:", error);
+      res.status(500).json({ message: "Could not change the visibility" });
+    }
+  });
+
   app.patch("/api/admin/experiences/:id/city", isAuthenticated, async (req: any, res) => {
     try {
       if (!await checkIsAdmin(req)) {
@@ -17548,6 +17709,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error loading payment differences:", error);
       res.status(500).json({ message: "Failed to load payment differences" });
+    }
+  });
+
+  // "Mark as test" (Tim, 66.29g, 66.30d): our own test payment that Stripe
+  // collected on a booking that is cancelled. The booking is flagged as a test
+  // (out of every money total, never paid out) and the difference is cleared.
+  // Moves no money: refund it in Stripe instead if it was a real buyer.
+  app.post("/api/admin/payment-differences/:id/mark-test", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!await checkIsAdmin(req)) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      const [row] = await db.select().from(paymentDifferences).where(eq(paymentDifferences.id, req.params.id));
+      if (!row) return res.status(404).json({ message: "Difference not found" });
+      if (row.bookingId) {
+        await db.update(bookings).set({ testPayment: true } as any).where(eq(bookings.id, row.bookingId));
+      }
+      await db.update(paymentDifferences)
+        .set({ resolvedAt: new Date(), note: `${row.note ? `${row.note} ` : ""}Marked as test by an admin.` } as any)
+        .where(eq(paymentDifferences.id, row.id));
+      res.json({ success: true, message: "Marked as a test payment. It is kept out of every money total." });
+    } catch (error: any) {
+      console.error("Error marking payment difference as test:", error);
+      res.status(500).json({ message: error?.message || "Could not mark it as a test" });
     }
   });
 
@@ -19222,6 +19407,336 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── Orders of one event (Tim 58.1, 58.2, 66.35) ──────────────────────────
+  // One row per booking: person, ticket, add-ons, amount, status and whether
+  // the add-on was handed out. The venue's order sheet and the organiser's
+  // Orders screen (board D2) read the same rows.
+  async function loadEventOrders(event: any, viewer: 'venue' | 'organiser') {
+    const rows = await storage.getBookingsByExperience(event.id);
+    const userIds = Array.from(new Set(rows.map((row: any) => row.userId).filter(Boolean)));
+    const users = await Promise.all(userIds.map((id: any) => storage.getUser(id)));
+    const people = new Map(users.filter(Boolean).map((user: any) => [user.id, user]));
+    const orders = buildEventOrders(rows as any, people as any, viewer);
+    return {
+      event: {
+        id: event.id,
+        slug: event.slug,
+        title: event.title,
+        when: formatEventWhen(event, { weekday: true, year: true }),
+        venue: event.venue || null,
+        location: event.location || null,
+        capacity: Number(event.maxParticipants) || null,
+        status: event.status,
+      },
+      orders,
+      totals: eventOrderTotals(orders),
+    };
+  }
+
+  /**
+   * The organiser's Orders of one event (Tim, 66.35, board D2): the order list
+   * plus the money of this event from the same calculation as the payout
+   * ("Your share" = tickets − platform fee − venue share − partner commission),
+   * the venue and where its deal stands, and where the payout stands.
+   */
+  async function loadOrganiserOrders(event: any) {
+    const base = await loadEventOrders(event, 'organiser');
+    const { byExperience } = await getCreatorEarningsBreakdown(event.creatorId);
+    const money: any = byExperience.find((row: any) => row.experienceId === event.id)
+      || { grossCents: 0, platformFeeCents: 0, spaceShareCents: 0, partnerCommissionCents: 0, netCents: 0 };
+    const contract: any = await storage.getVenueContractByExperience(event.id);
+    const venueId = contract?.venueId || event.linkedVenueId;
+    const venue: any = venueId ? await storage.getVenue(venueId) : null;
+    const VENUE_STATUS: Record<string, string> = {
+      pending: 'Waiting for venue',
+      countered: 'Counter offer from the venue',
+      accepted: 'Agreed',
+      declined: 'Declined by the venue',
+      cancelled: 'Cancelled with the event',
+      withdrawn: 'Withdrawn',
+    };
+    const payouts = await storage.getScheduledPayoutsForCreator(event.creatorId);
+    const payout: any = (payouts as any[]).find((row) => row.experienceId === event.id && row.status !== 'cancelled');
+    const refunded = base.orders.filter((order) => order.status === 'refunded' || order.status === 'cancelled');
+    return {
+      ...base,
+      // For board D2: when orders close (the start), each add-on's price split
+      // per unit, and the venue's city.
+      startsAt: formatEventStart(event, { weekday: true }),
+      addonPrices: venueDealAddons(event.ticketSkus),
+      money: {
+        revenue: money.grossCents / 100,
+        platformFee: money.platformFeeCents / 100,
+        venueShare: money.spaceShareCents / 100,
+        partnerCommission: money.partnerCommissionCents / 100,
+        yourShare: money.netCents / 100,
+      },
+      refunds: {
+        count: refunded.length,
+        amount: Math.round(refunded.reduce((sum, order) => sum + order.amount, 0) * 100) / 100,
+      },
+      venue: venue || event.manualVenueName ? {
+        name: venue?.name || event.manualVenueName || null,
+        city: venue?.city || event.city || null,
+        agreed: contract?.status === 'accepted',
+        address: venue?.location || event.manualVenueAddress || null,
+        status: contract ? (VENUE_STATUS[String(contract.status)] || String(contract.status)) : (event.venueType === 'manual' ? 'Invited by email' : null),
+        deal: contract ? describeVenueDealTerms(contract.model, contract.terms) : null,
+      } : null,
+      payout: event.status === 'cancelled'
+        ? { stage: 'cancelled', date: null, label: 'Cancelled, nothing is paid out' }
+        : eventPayoutStage({
+          eventEnd: event.endDate ?? event.startDate,
+          requireMinimumParticipants: event.requireMinimumParticipants,
+          mvgStatus: event.mvgStatus,
+          payoutStatus: payout?.status,
+          scheduledFor: payout?.scheduledFor,
+          processedAt: payout?.processedAt,
+        }),
+    };
+  }
+
+  // "Message everyone" on the Orders screen (66.35, board D2): an update on the
+  // event, a notice in each booked person's bell and a mail. Only the event's
+  // organiser (or admin), only people whose booking still stands.
+  app.post('/api/creator/experiences/:experienceId/message-everyone', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const event: any = await storage.getExperience(req.params.experienceId);
+      if (!event) return res.status(404).json({ message: 'Event not found' });
+      if (event.creatorId !== userId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      const message = String(req.body?.message || '').trim().slice(0, 2000);
+      if (!message) return res.status(400).json({ message: 'Write a message first.' });
+      const rows = await storage.getBookingsByExperience(event.id);
+      const recipientIds = Array.from(new Set(rows
+        .filter((row: any) => !row.cancelledAt && ['pending', 'deposit_authorized', 'deposit_paid', 'confirmed', 'fully_paid'].includes(String(row.status)))
+        .map((row: any) => row.userId)
+        .filter(Boolean))) as string[];
+      const organiser: any = await storage.getUser(event.creatorId);
+      const organiserName = [organiser?.firstName, organiser?.lastName].filter(Boolean).join(' ') || 'The organiser';
+      const announcement: any = await storage.createAnnouncement({
+        experienceId: event.id,
+        creatorId: event.creatorId,
+        title: `Message from ${organiserName}`,
+        content: message,
+      } as any);
+      const link = `/experience/${event.slug || event.id}`;
+      let mailed = 0;
+      for (const id of recipientIds) {
+        const person: any = await storage.getUser(id);
+        await storage.addUserNotice({
+          userId: id,
+          noticeKey: `organiser-message:${announcement?.id || Date.now()}:${id}`,
+          kind: 'organiser_message',
+          title: `${event.title}: message from ${organiserName}`,
+          body: message,
+          link,
+          experienceId: event.id,
+        }).catch(() => undefined);
+        if (person?.email) {
+          await notificationService.sendVenueDealUpdateEmail({
+            to: person.email,
+            recipientName: person.firstName,
+            subject: `${event.title}: a message from ${organiserName}`,
+            intro: message,
+            rows: [{ label: 'Event', value: event.title }, { label: 'When', value: formatEventWhen(event, { weekday: true, year: true }) || '' }],
+            cta: { label: 'View the event', path: link },
+            eventKey: `organiser-message:${announcement?.id || Date.now()}:${id}`,
+            growthFooterContext: 'none',
+          }).then(() => { mailed++; }).catch(() => undefined);
+        }
+      }
+      res.json({ sent: recipientIds.length, mailed, message: `Sent to ${recipientIds.length} ${recipientIds.length === 1 ? 'person' : 'people'}.` });
+    } catch (err: any) {
+      console.error('Error messaging attendees:', err);
+      res.status(500).json({ message: 'Failed to send the message' });
+    }
+  });
+
+  async function venueOwnsEvent(userId: string, event: any): Promise<boolean> {
+    if (!event?.linkedVenueId) return false;
+    const userVenues = await storage.getVenuesByCreator(userId);
+    return userVenues.some((venue: any) => venue.id === event.linkedVenueId);
+  }
+
+  app.get('/api/venue/events/:experienceId/orders', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const event = await storage.getExperience(req.params.experienceId);
+      if (!event) return res.status(404).json({ message: 'Event not found' });
+      if (!(await venueOwnsEvent(userId, event)) && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      res.json(await loadEventOrders(event, 'venue'));
+    } catch (err: any) {
+      console.error('Error loading venue order sheet:', err);
+      res.status(500).json({ message: 'Failed to load the order sheet' });
+    }
+  });
+
+  app.get('/api/creator/experiences/:experienceId/orders', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const event = await storage.getExperience(req.params.experienceId);
+      if (!event) return res.status(404).json({ message: 'Event not found' });
+      if (event.creatorId !== userId && !(await checkIsAdmin(req))) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      res.json(await loadOrganiserOrders(event));
+    } catch (err: any) {
+      console.error('Error loading organiser orders:', err);
+      res.status(500).json({ message: 'Failed to load orders' });
+    }
+  });
+
+  // "As partner" (Tim, 66.35, 66.22h, 66.23e): the bookings this account
+  // brought in through its own link (first link wins), per event, with its
+  // commission and when that is paid. Any account; only its own bookings.
+  app.get('/api/partner/orders', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const rows = await storage.getPromoterBookings(userId);
+      if (!rows.length) return res.json({ events: [], totals: { orders: 0, coming: 0, secured: 0, paid: 0 } });
+      const userIds = Array.from(new Set(rows.map((row: any) => row.userId).filter(Boolean)));
+      const users = await Promise.all(userIds.map((id: any) => storage.getUser(id)));
+      const people = new Map(users.filter(Boolean).map((user: any) => [user.id, user]));
+      const grouped = buildPartnerOrders(rows as any, people as any);
+      const events: any[] = [];
+      for (const group of grouped) {
+        const event: any = await storage.getExperience(group.experienceId);
+        if (!event) continue;
+        const due = payoutDueAt(event);
+        const phase = event.status === 'cancelled' ? 'cancelled' : eventPhase(event);
+        events.push({
+          ...group,
+          event: {
+            id: event.id,
+            slug: event.slug,
+            title: event.title,
+            when: formatEventWhen(event, { weekday: true, year: true }),
+            city: event.city || null,
+            phase,
+          },
+          // Commission is paid with the event's payout, 24 hours after it ends.
+          payoutLabel: phase === 'cancelled'
+            ? 'Event cancelled, no commission is due'
+            : group.totals.coming + group.totals.secured > 0 && due
+              ? `Paid with the event payout, ${formatInZone(due, eventTimeZone(event), { weekday: true, time: true })}`
+              : null,
+        });
+      }
+      const rank = (entry: any) => (entry.event.phase === 'cancelled' ? 2 : entry.event.phase === 'ended' ? 1 : 0);
+      events.sort((a: any, b: any) => rank(a) - rank(b));
+      const sum = (key: 'coming' | 'secured' | 'paid') => Math.round(events.reduce((total, entry: any) => total + entry.totals[key], 0) * 100) / 100;
+      res.json({
+        events,
+        totals: { orders: events.reduce((total, entry: any) => total + entry.totals.orders, 0), coming: sum('coming'), secured: sum('secured'), paid: sum('paid') },
+      });
+    } catch (err: any) {
+      console.error('Error loading partner orders:', err);
+      res.status(500).json({ message: 'Failed to load your partner orders' });
+    }
+  });
+
+  app.post('/api/venue/orders/:bookingId/handed-out', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const booking = await storage.getBooking(req.params.bookingId);
+      if (!booking) return res.status(404).json({ message: 'Order not found' });
+      const event = await storage.getExperience(booking.experienceId);
+      const allowed = (await venueOwnsEvent(userId, event)) || event?.creatorId === userId || (await checkIsAdmin(req));
+      if (!allowed) return res.status(403).json({ message: 'Access denied' });
+      const updated = await storage.setBookingAddonHandedOut(booking.id, userId, req.body?.handedOut !== false);
+      res.json({ bookingId: booking.id, handedOutAt: updated?.addonRedeemedAt ?? null });
+    } catch (err: any) {
+      console.error('Error ticking add-on handed out:', err);
+      res.status(500).json({ message: 'Failed to update the order' });
+    }
+  });
+
+  // ─── The venue deal as a contract (Tim 57, board D3) ─────────────────────
+  // For the organiser, the venue's owner and admin. The venue never sees the
+  // platform fee or the organiser's add-on margin.
+  async function loadVenueAgreement(req: any, experienceId: string) {
+    const userId = req.user.claims.sub;
+    const event: any = await storage.getExperience(experienceId);
+    if (!event) return { status: 404 as const };
+    const contract: any = await storage.getVenueContractByExperience(experienceId);
+    if (!contract) return { status: 404 as const };
+    const isAdmin = await checkIsAdmin(req);
+    const isOrganiser = event.creatorId === userId;
+    const venue: any = await storage.getVenue(contract.venueId);
+    const isVenue = !!venue && venue.createdBy === userId;
+    if (!isOrganiser && !isVenue && !isAdmin) return { status: 403 as const };
+    const viewer: 'venue' | 'organiser' | 'admin' = isOrganiser ? 'organiser' : isVenue ? 'venue' : 'admin';
+    const organiser: any = await storage.getUser(event.creatorId);
+    const card = await describeDealForCards(event, contract);
+    const agreement = buildVenueAgreement({
+      contract,
+      event: {
+        title: event.title,
+        when: formatEventWhen(event, { weekday: true, year: true }),
+        capacity: Number(event.maxParticipants) || null,
+        price: Number(event.price) || 0,
+        minimumGroup: card.minimumGroup,
+        barterTerms: event.venueBarterTerms,
+      },
+      organiser: { name: [organiser?.firstName, organiser?.lastName].filter(Boolean).join(' ') || 'The organiser' },
+      venue: { name: venue?.name || 'The venue', address: venue?.location || null },
+      addons: card.dealAddons,
+      history: card.history,
+      viewer,
+      platformFeePct: viewer === 'venue' ? null : eventFeeRates(event).ticketPlatformFeePct,
+    });
+    return {
+      status: 200 as const,
+      body: {
+        viewer,
+        event: { id: event.id, slug: event.slug, title: event.title },
+        contractStatus: contract.status,
+        agreement,
+        history: card.history,
+      },
+    };
+  }
+
+  app.get('/api/deals/venue/:experienceId', isAuthenticated, async (req: any, res) => {
+    try {
+      const result = await loadVenueAgreement(req, req.params.experienceId);
+      if (result.status !== 200) {
+        return res.status(result.status).json({ message: result.status === 404 ? 'No venue deal for this event' : 'Access denied' });
+      }
+      res.json(result.body);
+    } catch (err: any) {
+      console.error('Error loading venue agreement:', err);
+      res.status(500).json({ message: 'Failed to load the agreement' });
+    }
+  });
+
+  app.get('/api/deals/venue/:experienceId/agreement.pdf', isAuthenticated, async (req: any, res) => {
+    try {
+      const result = await loadVenueAgreement(req, req.params.experienceId);
+      if (result.status !== 200) {
+        return res.status(result.status).json({ message: result.status === 404 ? 'No venue deal for this event' : 'Access denied' });
+      }
+      const { agreement } = result.body;
+      const lines = agreementLines(agreement).map((text, index) => ({
+        text,
+        bold: index === 0 || /^\d\. /.test(text) || /^(Organiser|Venue): /.test(text),
+        size: index === 0 ? 15 : undefined,
+      }));
+      const pdf = renderTextPdf(lines);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="agreement-${agreement.number}.pdf"`);
+      res.send(pdf);
+    } catch (err: any) {
+      console.error('Error rendering agreement PDF:', err);
+      res.status(500).json({ message: 'Failed to create the PDF' });
+    }
+  });
+
   app.get('/api/venue/analytics', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -19317,6 +19832,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })().catch((err) => console.error('Venue contract resolution email failed:', err?.message || err));
   };
 
+  // Whether each event's venue has agreed yet (Tim, 59.4): "Waiting for venue"
+  // on the event page and the organiser's list. Public, and only the status
+  // and the venue's name: no terms.
+  app.get('/api/venue-status', async (req: any, res) => {
+    try {
+      const ids = String(req.query.ids || '').split(',').map((id) => id.trim()).filter(Boolean).slice(0, 100);
+      if (!ids.length) return res.json({});
+      const rows = await db
+        .select({ experienceId: venueContracts.experienceId, status: venueContracts.status, createdAt: venueContracts.createdAt, venueName: venues.name })
+        .from(venueContracts)
+        .leftJoin(venues, eq(venues.id, venueContracts.venueId))
+        .where(inArray(venueContracts.experienceId, ids));
+      const latest = new Map<string, any>();
+      for (const row of rows) {
+        const seen = latest.get(row.experienceId);
+        if (!seen || new Date(row.createdAt || 0) > new Date(seen.createdAt || 0)) latest.set(row.experienceId, row);
+      }
+      const out: Record<string, { status: 'waiting' | 'agreed'; venueName: string | null }> = {};
+      for (const [id, row] of Array.from(latest)) {
+        if (row.status === 'pending' || row.status === 'countered') out[id] = { status: 'waiting', venueName: row.venueName ?? null };
+        else if (row.status === 'accepted') out[id] = { status: 'agreed', venueName: row.venueName ?? null };
+      }
+      res.json(out);
+    } catch (err: any) {
+      console.error('Error loading venue status:', err);
+      res.status(500).json({ message: 'Failed to load venue status' });
+    }
+  });
+
   // In-app notices: the bell in the top bar (points 57-59).
   app.get('/api/notices', isAuthenticated, async (req: any, res) => {
     try {
@@ -19389,7 +19933,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const deals = await storage.getAcceptedVenueDealsForVenueOwner(userId, venueIds);
       res.json(await Promise.all(deals.map(async (deal: any) => ({
         ...deal,
-        ...(await describeDealForCards(deal.experience, deal.source === 'contract' ? deal : null)),
+        ...(await describeDealForCards(
+          deal.experience,
+          deal.source === 'contract' ? { ...deal, venueId: deal.venue?.id, createdAt: deal.createdAt ?? deal.acceptedAt } : null,
+        )),
       }))));
     } catch (err: any) {
       console.error('Error fetching active venue deals:', err);
@@ -20154,7 +20701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const declinedContract = await storage.declineVenueContract(experienceId, linkedVenue.id, reason);
       await releaseVenueDatesForExperience(experienceId);
-      await storage.updateExperienceStatus(experienceId, 'draft');
+      await returnEventAfterVenueDecline(experienceId);
       notifyOrganiserOfVenueAnswer(experienceId, 'declined', { reason }).catch((error) =>
         console.error('Venue declined notice failed:', error?.message || error));
       res.json({ success: true, contract: declinedContract, message: 'Offer rejected — experience returned to creator' });
@@ -20411,6 +20958,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         venueTargetDeal: e.venueTargetDeal,
         venueTargetDealValue: e.venueTargetDealValue,
         requestedContract: buildRequestedVenueContractObject(e),
+        // What the venue would hand out and be paid for, whatever the deal (57).
+        dealAddons: venueDealAddons(e.ticketSkus),
         price: e.price,
         currency: e.currency,
         platformPct: FIXED_PLATFORM_FEE_PCT,
@@ -21024,7 +21573,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (directContract?.venueId === offer.venueId && directContract.status === 'countered') {
         await storage.declineVenueContract(offer.experienceId, offer.venueId, 'Creator declined venue counter offer');
         await releaseVenueDatesForExperience(offer.experienceId);
-        await storage.updateExperienceStatus(offer.experienceId, 'draft');
+        await returnEventAfterVenueDecline(offer.experienceId);
       }
       notifyVenueOwnerOfBidResolution(offer, 'declined');
       res.json(declined);
@@ -21061,9 +21610,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { byExperience } = await getCreatorEarningsBreakdown(userId);
       const ownCents = new Map(byExperience.map((row: any) => [row.experienceId, row.netCents]));
 
+      const cancelledEvents = new Set<string>();
+      for (const row of rows as any[]) {
+        const event: any = await storage.getExperience(row.experienceId);
+        if (event && (event.status === "cancelled" || event.cancelledAt)) cancelledEvents.add(row.experienceId);
+      }
       res.json(rows
-        // A cancelled event is never paid out, so it is not listed as one (66.18b).
-        .filter((row: any) => row.status !== "cancelled")
+        // A cancelled event is never paid out, so it is not listed as one (66.18b),
+        // and a free event has no payout at all (66.29d).
+        .filter((row: any) => row.status !== "cancelled" && !cancelledEvents.has(row.experienceId))
+        .filter((row: any) => (row.totalGrossAmountCents || 0) + (row.additionalGrossAmountCents || 0) > 0 || row.status === "pending")
         .map((row: any) => ({
         id: row.id,
         experienceId: row.experienceId,
@@ -21118,6 +21674,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Raw, deliberately: an admin acting on this needs Stripe's own words,
         // which usually name the setting to change.
         errorMessage: row.errorMessage || null,
+        // Shares already paid by hand: no Re-queue then (66.30c).
+        manualShares: Object.values((row.stripeTransferIds as Record<string, string>) || {})
+          .filter((value) => String(value).startsWith("manual:")).length,
       })));
     } catch (error) {
       console.error("Error listing scheduled payouts:", error);
@@ -21136,6 +21695,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (payout.status !== "failed") {
         return res.status(409).json({
           message: `Only a failed payout can be retried — this one is ${payout.status}.`,
+        });
+      }
+      // A share already paid by hand: re-queuing risks paying it twice, so the
+      // admin uses "Pay now" in Payments, which asks first (66.30c).
+      if (Object.values((payout.stripeTransferIds as Record<string, string>) || {}).some((value) => String(value).startsWith("manual:"))) {
+        return res.status(409).json({
+          message: "Part of this payout is marked as paid manually. Use Pay now in Payments, which skips that share and asks you to confirm.",
         });
       }
 
@@ -21192,7 +21758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (sibling && (sibling.status === "completed" || sibling.status === "processing")) {
         return res.status(409).json({ message: `This event already has a payout that is ${sibling.status}. Paying this one too would pay it twice.` });
       }
-      const result = await payScheduledPayoutNow(req.params.id);
+      const result = await payScheduledPayoutNow(req.params.id, { confirmManual: req.body?.confirmManual === true });
       res.status(result.ok ? 200 : 409).json(result);
     } catch (error: any) {
       console.error("Error paying out now:", error);
@@ -21246,7 +21812,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inArray(bookings.commissionStatus, ["estimated", "locked"] as any),
             ));
         }
-        return res.json({ payout: updatedOne, message: "Marked as paid manually. The payout run will pay everyone else." });
+        // Nobody left to pay (or only people without Stripe): the payout is
+        // paid, or partly paid with those shares held, instead of "Failed"
+        // with a "Pay now" next to "Paid manually" (66.29c).
+        const settled = await settlePayoutIfFullyPaid(payout.id).catch(() => "open" as const);
+        return res.json({
+          payout: await storage.getScheduledPayoutById(payout.id) ?? updatedOne,
+          message: settled === "paid"
+            ? "Marked as paid manually. Everyone is paid, so this payout is now Paid."
+            : settled === "partly_paid"
+              ? "Marked as paid manually. Only shares without a Stripe account are left; they stay held until those people connect Stripe."
+              : "Marked as paid manually. The payout run will pay everyone else.",
+        });
       }
 
       const updated = await storage.updateScheduledPayout(payout.id, {

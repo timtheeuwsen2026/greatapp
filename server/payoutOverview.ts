@@ -37,6 +37,12 @@ export type OverviewEvent = {
   isTest: boolean;
   /** Other payout rows for the same event that were left out (66.13). */
   duplicates: number;
+  /** What the sales are made of, to explain the fee (66.29e). */
+  ticketGrossCents: number | null;
+  addonGrossCents: number | null;
+  ticketFeePct: number | null;
+  /** "Free event, no payout" and the like: nothing to pay (66.29d). */
+  note: string | null;
   scheduledFor: string | null;
   processedAt: string | null;
   errorMessage: string | null;
@@ -113,8 +119,14 @@ export async function buildPayoutOverview(options: { includePaidDays?: number; c
       currency: (payout.currency || "eur").toLowerCase(),
       payoutStatus: payout.status,
       partlyPaid,
-      isTest: !!organiser?.testAccount,
+      // A test account's event, or one the admin hid from the public as an
+      // internal test (66.29h, 63.6): labelled Test and left out of the totals.
+      isTest: !!organiser?.testAccount || (experience as any)?.hiddenFromPublic === true,
       duplicates: 0,
+      ticketGrossCents: null,
+      addonGrossCents: null,
+      ticketFeePct: null,
+      note: null,
       scheduledFor: payout.scheduledFor ? new Date(payout.scheduledFor).toISOString() : null,
       processedAt: payout.processedAt ? new Date(payout.processedAt).toISOString() : null,
       errorMessage: payout.errorMessage ?? null,
@@ -161,7 +173,16 @@ export async function buildPayoutOverview(options: { includePaidDays?: number; c
         if (open) {
           event.grossCents = plan.grossCents;
           event.platformFeeCents = plan.platformFeeCents;
-          if (!plan.eligible) event.planError = plan.reason;
+          if (!plan.eligible) {
+            // Nothing owed is not a problem to fix: a free event, a cancelled one.
+            if (plan.grossCents === 0) event.note = plan.reason;
+            else event.planError = plan.reason;
+          }
+        }
+        if (typeof plan.ticketGrossCents === "number") {
+          event.ticketGrossCents = plan.ticketGrossCents;
+          event.addonGrossCents = plan.addonGrossCents ?? 0;
+          event.ticketFeePct = plan.ticketFeePct ?? null;
         }
         const venue = experience?.linkedVenueId && plan.lines.some((line) => line.recipientType === "venue")
           ? await storage.getVenue(experience.linkedVenueId) : undefined;
@@ -183,9 +204,32 @@ export async function buildPayoutOverview(options: { includePaidDays?: number; c
           });
           if (!settled) event.owedCents += line.amountCents;
         }
+        // Every share settled, by Stripe or by hand: it is paid, whatever the
+        // stored status still says (66.29c). No "Pay now" then.
+        if (open && plan.lines.length > 0 && plan.lines.every((line) => transferIds[line.key])) {
+          event.payoutStatus = "completed";
+        }
       } catch (error: any) {
         event.planError = error?.message || "Could not work out this payout";
       }
+    }
+
+    for (const key of heldKeys) {
+      if (event.lines.some((line) => line.key === key)) continue;
+      const userId = key.startsWith("promoter:") ? key.slice("promoter:".length) : null;
+      const user = await userOf(userId);
+      const venue = (key === "venue" || key === "venue_addons") && experience?.linkedVenueId
+        ? await storage.getVenue(experience.linkedVenueId) : undefined;
+      event.lines.push({
+        key,
+        role: roleOf(key),
+        name: venue?.name || nameOf(user, key),
+        email: user?.email ?? null,
+        amountCents: 0,
+        stripeConnected: false,
+        settled: null,
+        held: true,
+      });
     }
 
     if (!event.isTest) overview.owedCents += event.owedCents;

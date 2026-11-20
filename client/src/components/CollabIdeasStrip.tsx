@@ -17,11 +17,12 @@ import { ArrowRight, Lightbulb } from "lucide-react";
  * Renders nothing at all when there are no open ideas: a strip saying "0 collab
  * ideas" is an advert for the platform being quiet.
  */
-export default function CollabIdeasStrip() {
+export default function CollabIdeasStrip({ city }: { city?: string | null } = {}) {
   // A count, from the one endpoint that is public. The authenticated summary
-  // would 401 for exactly the visitor this strip exists to reach.
+  // would 401 for exactly the visitor this strip exists to reach. It follows
+  // the city the visitor picked (66.31f).
   const { data } = useQuery<{ openCount: number }>({
-    queryKey: ["/api/collab/ideas/open-count"],
+    queryKey: ["/api/collab/ideas/open-count", { city: city || undefined }],
     retry: false,
   });
 

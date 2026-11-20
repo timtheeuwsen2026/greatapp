@@ -53,13 +53,9 @@ function numberOrZero(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatCurrency(amount: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: (currency || "EUR").toUpperCase(),
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(amount);
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function formatCurrency(amount: number, _currency?: string): string {
+  return `€${(Number(amount) || 0).toFixed(2)}`;
 }
 
 export function getPromotionDealType(offer: PromotionOfferInput): string | null {
@@ -97,7 +93,7 @@ export function getPromotionOfferSummary(
       const remaining = Math.max(attendeeTarget - referredBookings, 0);
       return {
         dealType,
-        label: "Milestone Barter",
+        label: "Bring people, get a reward",
         headline: `Bring ${attendeeTarget} attendee${attendeeTarget === 1 ? "" : "s"} to unlock ${rewardTickets} free ticket${rewardTickets === 1 ? "" : "s"}`,
         body: remaining > 0
           ? `${referredBookings}/${attendeeTarget} bookings tracked so far. ${remaining} more to unlock the reward.`
@@ -109,7 +105,7 @@ export function getPromotionOfferSummary(
     case "brand_barter":
       return {
         dealType,
-        label: "Brand Barter",
+        label: "Goods for exposure",
         headline: "Products/services for exposure",
         body: offer.promotionBrandPitch?.trim()
           || "This creator is looking for products or services in exchange for exposure.",

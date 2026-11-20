@@ -1119,6 +1119,10 @@ export const experiences = pgTable("experiences", {
   cancelledAt: timestamp("cancelled_at"),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by").references(() => users.id),
+  // "Hide from public" (Tim, 66.20e): an internal test stays bookable by its
+  // link but is left out of the homepage, Explore and every public list. It
+  // cancels and refunds nothing.
+  hiddenFromPublic: boolean("hidden_from_public").default(false),
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -2257,6 +2261,10 @@ export const collabIdeas = pgTable("collab_ideas", {
   status: varchar("status", { length: 20 }).default("open"),
   /** Set when the idea became a real event, so the two can be traced. */
   convertedExperienceId: varchar("converted_experience_id").references(() => experiences.id),
+  /** False when the poster chose "Invite directly" only: the row carries invites, the board never shows it. */
+  listed: boolean("listed").notNull().default(true),
+  /** The event draft this posting belongs to, when it came from the idea flow (Create flow point 26). */
+  experienceDraftId: varchar("experience_draft_id"),
   /** Retreats need a long window; short collabs do not. Set on creation. */
   expiresAt: timestamp("expires_at"),
 

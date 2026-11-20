@@ -25,9 +25,7 @@ import { TripCardSkeletonGrid } from "@/components/skeletons/TripCardSkeleton";
 import { ProgressiveImage } from "@/components/ProgressiveImage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCoreWebVitals } from "@/hooks/useCoreWebVitals";
-import { JoinTripModal } from "@/components/JoinTripModal";
 import { useToast } from "@/hooks/use-toast";
-import { useDepositMutation } from "@/hooks/useDepositMutation";
 import { useRealtimeMVGUpdates } from "@/hooks/useRealtimeUpdates";
 import BrandLogo from "@/components/BrandLogo";
 import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
@@ -80,11 +78,9 @@ export default function Home() {
   const showCityBanner = !pathCity && !cityChosen && !!suggestedCity && !cityBannerClosed;
   const { isAuthenticated, user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<string>("all");
-  const [selectedTrip, setSelectedTrip] = useState<any | null>(null);
   const [boostExperience, setBoostExperience] = useState<any | null>(null);
   const [heroSearchQuery, setHeroSearchQuery] = useState("");
   const { toast } = useToast();
-  const depositMutation = useDepositMutation();
   const { isConnected } = useRealtimeMVGUpdates('all');
   const happeningScrollRef = useRef<HTMLDivElement>(null);
   const provenScrollRef = useRef<HTMLDivElement>(null);
@@ -164,6 +160,9 @@ export default function Home() {
           location: trip.location,
           city: trip.city,
           manualVenueAddress: trip.manualVenueAddress,
+          // The venue's name on the card, under the photo (66.31e, 66.34k).
+          venue: trip.venue,
+          manualVenueName: trip.manualVenueName,
           // Start and end times, so the rows switch at the real start (66.21).
           startTime: trip.startTime,
           endTime: trip.endTime,
@@ -289,214 +288,6 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Human gap psychology — people help people, not percentages
-  const getUrgencyLabel = (spotsNeeded: number) => {
-    if (spotsNeeded === 1) return "🔥 Just 1 more member to make this real!";
-    if (spotsNeeded <= 3) return `🔥 Just ${spotsNeeded} more members to make this real!`;
-    if (spotsNeeded <= 6) return `⚡ ${spotsNeeded} more members needed to confirm this experience!`;
-    return `👥 ${spotsNeeded} more members needed to make this happen!`;
-  };
-
-  // Handler for opening join modal
-  const handleJoinClick = (experience: any, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    // Only allow joining if required data exists
-    if (experience.price === null || experience.price === undefined ||
-        !experience.minimumParticipants ||
-        experience.currentParticipants === null || experience.currentParticipants === undefined) {
-      toast({
-        variant: "destructive",
-        title: "Cannot Join Yet",
-        description: "This experience is still being set up. Check back soon!",
-      });
-      return;
-    }
-
-    // Use ONLY real database values - no fabricated calculations
-    const unlockPrice = experience.price;
-    const mvgGoal = unlockPrice * experience.minimumParticipants;
-    const amountFunded = unlockPrice * experience.currentParticipants;
-    const mvgRemaining = Math.max(0, mvgGoal - amountFunded);
-    const isEarlyFounder = experience.currentParticipants <= Math.floor(experience.minimumParticipants * 0.3);
-
-    setSelectedTrip({
-      id: experience.id,
-      title: experience.title,
-      location: experience.location,
-      coverImageUrl: experience.coverImageUrl,
-      unlockPrice,
-      mvgGoal,
-      amountFunded,
-      mvgRemaining,
-      fundingPercentage: experience.fundingPercentage || 0,
-      currentParticipants: experience.currentParticipants,
-      minimumParticipants: experience.minimumParticipants,
-      isEarlyFounder,
-      currency: experience.currency,
-      lifecycleStatus: experience.lifecycleStatus,
-    });
-  };
-
-  // Handler for deposit confirmation - integrated with backend
-  const handleDepositConfirm = async () => {
-    if (!selectedTrip) return;
-
-    const tripId = selectedTrip.id;
-    const tripTitle = selectedTrip.title;
-    const depositAmount = selectedTrip.unlockPrice;
-
-    try {
-      // Call the deposit mutation
-      const result = await depositMutation.mutateAsync({
-        experienceId: tripId,
-        amount: depositAmount,
-        paymentMethodNonce: 'sandbox_test'
-      }) as any;
-
-      const mvgStatus = result.mvg_status;
-      const mvgReached = mvgStatus.funded_percent >= 100 || mvgStatus.seats_taken >= selectedTrip.minimumParticipants;
-
-      // Show success message
-      if (mvgReached) {
-        toast({
-          title: "🎉 Experience Confirmed!",
-          description: `${tripTitle} has reached its MVG target and is now confirmed! The host and all participants will be notified.`,
-        });
-      } else {
-        const remaining = selectedTrip.minimumParticipants - mvgStatus.seats_taken;
-        toast({
-          title: "Deposit Confirmed! 🎉",
-          description: `You've joined ${tripTitle}. ${remaining} more member(s) needed to confirm this experience.`,
-        });
-      }
-
-      setSelectedTrip(null);
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Deposit Failed",
-        description: error.message || "Unable to process deposit. Please try again.",
-      });
-    }
-  };
-
-  // Compact card used inside the horizontal "swimlane" feeds (Trending / Newly Added)
-  const renderSwimlaneCard = (experience: any) => {
-    const spotsNeeded = experience.participantsNeeded ?? 0;
-    const urgencyLabel = spotsNeeded > 0 ? getUrgencyLabel(spotsNeeded) : null;
-    const daysLeft = getDaysUntilDeadline(experience.fundingDeadline);
-    const spotsTaken = experience.currentParticipants;
-    const spotsTotal = experience.minimumParticipants;
-    const price = experience.price;
-    const activeChatters = experience.activeChatters;
-    const isConfirmed = experience.lifecycleStatus === 'confirmed';
-    const getDepositAmount = () => {
-      const ticketSkus = experience.ticketSkus || [];
-      if (ticketSkus.length > 0) {
-        const deposits = ticketSkus.map((s: any) => s.depositPerPerson || 0).filter((d: number) => d > 0);
-        if (deposits.length > 0) return Math.min(...deposits);
-      }
-      const expDeposit = parseFloat(experience.depositAmount);
-      if (!isNaN(expDeposit) && expDeposit > 0) return expDeposit;
-      return 0;
-    };
-    const depositAmount = getDepositAmount();
-    return (
-      <Card
-        key={experience.id}
-        className="flex-shrink-0 w-[280px] sm:w-[320px] snap-start overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 bg-white dark:bg-gray-800 border border-primary/15 dark:border-primary/20 cursor-pointer group"
-        onClick={() => setLocation(`/experiences/${experience.id}`)}
-        data-testid={`swimlane-card-${experience.id}`}
-      >
-        {/* Image */}
-        <div className="relative w-full overflow-hidden" style={{ paddingBottom: '66%' }}>
-          <ProgressiveImage
-            src={normalizeImageUrl(experience.coverImageUrl) || "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop"}
-            alt={experience.title}
-            className="absolute inset-0 group-hover:scale-105 transition-transform duration-300"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/60 pointer-events-none" />
-          {/* Lifecycle badge */}
-          <div className="absolute top-3 left-3 z-10">
-            {isConfirmed ? (
-              <span className="inline-flex items-center gap-1 bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
-                ✅ IT'S HAPPENING
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 bg-primary text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg animate-pulse">
-                ⚡ FORMING NOW
-              </span>
-            )}
-          </div>
-          {activeChatters > 0 && (
-            <div className="absolute top-3 right-3 bg-green-500 text-white px-2.5 py-1 rounded-full text-xs font-semibold shadow-lg flex items-center gap-1 z-10">
-              <MessageCircle className="h-3.5 w-3.5" />+{activeChatters}
-            </div>
-          )}
-        </div>
-        <CardContent className="p-5">
-          {urgencyLabel && !isConfirmed && (
-            <p className="text-base font-black text-primary leading-tight tracking-tight mb-2">{urgencyLabel}</p>
-          )}
-          <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2 line-clamp-2 min-h-[2.75rem]">{experience.title}</h3>
-          <div className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 mb-1">
-            <MapPin className="h-4 w-4 flex-shrink-0" /><span className="line-clamp-1">{experience.location}</span>
-          </div>
-          {experience.startDate && (
-            <div className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 mb-3">
-              <Calendar className="h-4 w-4 flex-shrink-0" />
-              <span>{new Date(experience.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-            </div>
-          )}
-          {experience.requireMinimumParticipants && spotsTaken !== null && spotsTaken !== undefined && spotsTotal ? (
-            <div className="mb-3">
-              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 mb-1.5">
-                <div
-                  className={`h-2 rounded-full transition-all duration-500 ${isConfirmed ? 'bg-emerald-500' : 'bg-primary'}`}
-                  style={{ width: `${Math.min(100, experience.fundingPercentage || 0)}%` }}
-                />
-              </div>
-              <ExperienceParticipantSocialProof
-                participants={experience.participants}
-                joinedCount={spotsTaken}
-                className="mt-2"
-              />
-              <p className={`mt-1 text-xs font-semibold ${isConfirmed ? 'text-emerald-700' : 'text-primary'}`}>
-                {!isConfirmed && spotsNeeded > 0 ? `${spotsNeeded} more needed to confirm` : 'Group confirmed!'}
-              </p>
-            </div>
-          ) : (
-            <ExperienceParticipantSocialProof
-              participants={experience.participants}
-              joinedCount={spotsTaken}
-              className="mb-3"
-            />
-          )}
-          <div className="pt-3 border-t border-gray-100 dark:border-gray-700 mb-3">
-            {depositAmount > 0 ? (
-              <>
-                <p className="text-lg font-bold text-gray-900 dark:text-white">Reserve for {formatCurrency(depositAmount, experience.currency)}</p>
-                <p className="text-xs text-gray-500">Full price {formatCurrency(price, experience.currency)} pp</p>
-              </>
-            ) : parseFloat(price) > 0 ? (
-              <p className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(price, experience.currency)} pp</p>
-            ) : (
-              <p className="text-lg font-bold text-gray-900 dark:text-white">Free RSVP</p>
-            )}
-          </div>
-          <Button
-            size="sm"
-            className="w-full bg-gradient-to-r from-primary to-secondary hover:opacity-90 text-white font-semibold"
-            onClick={(e) => { e.stopPropagation(); setLocation(`/experiences/${experience.id}`); }}
-            data-testid={`button-swimlane-reserve-${experience.id}`}
-          >
-            {isConfirmed ? 'Secure Your Spot' : 'Reserve Your Spot'}
-          </Button>
-        </CardContent>
-      </Card>
-    );
-  };
 
   const renderDiscoveryCard = (experience: any) => (
     <DiscoveryExperienceCard key={experience.id} experience={experience} layout="swimlane" />
@@ -520,17 +311,16 @@ export default function Home() {
 
       {/* 1. Hero Section with Search Bar + Category Pills — solid brand gradient, compact
           height so the search bar, pills, and first row of cards sit above the fold */}
-      <section id="main-content" tabIndex={-1} className="relative overflow-visible bg-gradient-to-br from-primary via-primary/80 to-secondary min-h-[60vh] flex items-center justify-center px-4 py-10 sm:py-12">
+      {/* Compact on purpose (66.31g): the search, the chips and the first event
+          cards must all be visible without scrolling, on a phone too. */}
+      <section id="main-content" tabIndex={-1} className="relative overflow-visible bg-gradient-to-br from-primary via-primary/80 to-secondary flex items-center justify-center px-2 py-5 sm:px-4 sm:py-8">
         <div className="max-w-7xl mx-auto w-full relative z-10">
-          <div className="text-center text-white px-4 sm:px-6 lg:px-8">
-            <h1 className="font-bold mb-4 leading-[1.1] px-2" style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)' }}>
+          <div className="text-center text-white px-2 sm:px-6 lg:px-8">
+            <h1 className="font-bold mb-4 leading-[1.1] px-2 sm:mb-6" style={{ fontSize: 'clamp(1.5rem, 4vw, 2.75rem)' }}>
               Experiences backed by real communities.
             </h1>
-            <p className="text-white/95 mb-8 max-w-4xl mx-auto leading-relaxed px-2" style={{ fontSize: 'clamp(1.1rem, 2vw, 1.5rem)' }}>
-              Join a squad, reserve your spot, and make the experience a reality.
-            </p>
             <form
-              className="mx-auto flex max-w-4xl flex-col gap-2 rounded-2xl bg-white p-2 shadow-2xl shadow-black/25 sm:flex-row sm:rounded-full"
+              className="mx-auto flex max-w-4xl flex-row gap-2 rounded-full bg-white p-1.5 shadow-2xl shadow-black/25 sm:p-2"
               onSubmit={(event) => {
                 event.preventDefault();
                 openExperienceSearch();
@@ -545,7 +335,7 @@ export default function Home() {
                   placeholder="Search destination, activity, or category..."
                   value={heroSearchQuery}
                   onChange={(event) => setHeroSearchQuery(event.target.value)}
-                  className="h-14 border-0 bg-transparent pl-12 pr-4 text-base text-slate-950 shadow-none placeholder:text-slate-500 focus-visible:ring-0"
+                  className="h-11 border-0 bg-transparent pl-12 pr-2 text-base text-slate-950 shadow-none placeholder:text-slate-500 focus-visible:ring-0 sm:h-14 sm:pr-4"
                   aria-label="Search destination, activity, or category"
                   data-testid="input-homepage-experience-search"
                 />
@@ -553,21 +343,21 @@ export default function Home() {
               <Button
                 type="submit"
                 size="lg"
-                className="h-14 rounded-xl bg-primary px-8 text-base font-bold text-white hover:bg-primary/90 sm:rounded-full"
+                className="h-11 rounded-full bg-primary px-5 text-base font-bold text-white hover:bg-primary/90 sm:h-14 sm:px-8"
                 data-testid="button-homepage-search"
               >
                 Search
               </Button>
             </form>
 
-            <div className="mx-auto mt-5 max-w-5xl overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="mx-auto mt-3 max-w-5xl overflow-x-auto pb-1 [scrollbar-width:none] sm:mt-5 [&::-webkit-scrollbar]:hidden">
               <div className="flex min-w-max justify-start gap-2 sm:justify-center" role="group" aria-label="Popular experience categories">
                 {HOMEPAGE_QUICK_CATEGORIES.map((category) => (
                   <button
                     key={category}
                     type="button"
                     onClick={() => openExperienceSearch(category)}
-                    className="rounded-full border border-white/60 bg-slate-950/25 px-4 py-2 text-sm font-semibold text-white backdrop-blur-md transition hover:border-white hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    className="rounded-full border border-white/60 bg-slate-950/25 px-3 py-1.5 text-sm font-semibold text-white backdrop-blur-md sm:px-4 sm:py-2 transition hover:border-white hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                     data-testid={`homepage-quick-category-${category.toLowerCase().replace(/\s+/g, "-")}`}
                   >
                     {category}
@@ -588,24 +378,25 @@ export default function Home() {
           </div>
         </div>
       ) : (
-        <div className="relative z-20 bg-white dark:bg-gray-900 pt-10 pb-8">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+        <div className="relative z-20 bg-white dark:bg-gray-900 pt-4 pb-8 sm:pt-6">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
             {/* First visit: the city guessed from the internet address (66.24, board C1). */}
             {showCityBanner && suggestedCity && (
               <div
-                className="flex flex-col gap-4 rounded-2xl border border-primary/30 bg-primary/5 p-5 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-2 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 role="region"
                 aria-label="Your city"
                 data-testid="city-banner"
               >
                 <div>
-                  <p className="text-lg font-semibold text-gray-900 dark:text-white">Looks like you are in {suggestedCity}</p>
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                  <p className="font-semibold text-gray-900 dark:text-white">Looks like you are in {suggestedCity}</p>
+                  <p className="hidden text-sm text-gray-600 dark:text-gray-300 sm:block">
                     We use your approximate location from your internet address. Nothing is stored until you choose.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
+                    size="sm"
                     className="rounded-full"
                     onClick={() => openCity(suggestedCity)}
                     data-testid="button-city-banner-accept"
@@ -620,13 +411,6 @@ export default function Home() {
                 </div>
               </div>
             )}
-
-            <div>
-              <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white" data-testid="heading-city">
-                Experiences in {cityLabel}
-              </h2>
-              <p className="mt-1 text-gray-500 dark:text-gray-400">Join a squad, reserve your spot, and make it happen.</p>
-            </div>
 
             {visibleExperiences.length === 0 ? (
               /* Empty state */
@@ -654,14 +438,13 @@ export default function Home() {
                 {/* 2. Happening now — everything open for sign-up */}
                 {happeningNowExps.length > 0 && (
                   <section id="happening-now-section">
-                    <div className="mb-5 flex items-start justify-between gap-4">
+                    <div className="mb-4 flex items-start justify-between gap-4">
                       <div>
-                        <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+                        <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2" data-testid="heading-happening-now">
                           ⚡ Happening now{cityName ? ` in ${cityName}` : ""}
                         </h2>
                         <p className="text-gray-500 dark:text-gray-400">
-                          Upcoming and still open for sign-up. The badge on each card tells
-                          you whether it's still forming or already confirmed.
+                          Join a squad, reserve your spot. When enough people join, it happens.
                         </p>
                       </div>
                       <div className="hidden sm:flex items-center gap-2 shrink-0">
@@ -780,7 +563,7 @@ export default function Home() {
                   </section>
                 )}
 
-                <CollabIdeasStrip />
+                <CollabIdeasStrip city={cityName} />
               </>
             )}
           </div>
@@ -790,7 +573,7 @@ export default function Home() {
       {/* Communities, not the venue directory. Venue inventory is supply the
           platform manages, so it belongs in the admin dashboard; what a first
           visitor should see is the groups they could join. */}
-      <FeaturedCommunities />
+      <FeaturedCommunities city={cityName} />
 
       {/* 4. How It Works - 3-Step Social Contract (the MVG model) */}
       <section id="how-it-works" className="py-16 lg:py-24 bg-gray-50 dark:bg-gray-900" data-testid="how-it-works-section">
@@ -800,7 +583,7 @@ export default function Home() {
               How It Works
             </h2>
             <p className="text-lg text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
-              Three steps. One commitment. Zero risk if the group doesn't form.
+              Three steps. You pay when you book, and get everything back if the group doesn't form.
             </p>
           </div>
 
@@ -809,13 +592,13 @@ export default function Home() {
 
             {/* Step 1 */}
             <div className="flex flex-col items-center text-center relative" data-testid="how-it-works-step-1">
-              <div className="text-6xl mb-5" role="img" aria-label="Vote deposit icon">🗳️</div>
+              <div className="text-6xl mb-5" role="img" aria-label="Booking icon">🗳️</div>
               <div className="inline-flex items-center justify-center w-7 h-7 bg-primary text-white rounded-full text-sm font-bold mb-4">1</div>
               <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">
-                Reserve with a Vote
+                Book your spot
               </h3>
               <p className="text-gray-500 dark:text-gray-400 text-base leading-relaxed max-w-xs mx-auto">
-                Pay a small refundable deposit. This is your commitment to the group — your vote that this experience should happen.
+                You pay when you book. Your booking is your vote that this experience should happen.
               </p>
               {/* Arrow connector — desktop only */}
               <div className="hidden md:flex absolute top-8 -right-4 z-10 items-center">
@@ -847,7 +630,7 @@ export default function Home() {
                 Unlock the Experience
               </h3>
               <p className="text-gray-500 dark:text-gray-400 text-base leading-relaxed max-w-xs mx-auto">
-                Once the minimum group is met, the experience confirms automatically. Your deposit converts and the magic happens.
+                Once the minimum group is met, the experience is confirmed automatically. If the group does not reach the minimum, you get a full refund automatically.
               </p>
             </div>
           </div>
@@ -855,7 +638,7 @@ export default function Home() {
           {/* Safety reassurance */}
           <div className="text-center mb-10" data-testid="how-it-works-reassurance">
             <p className="text-gray-400 dark:text-gray-500 text-sm md:text-base italic">
-              No group? No charge. Every deposit is fully refundable if the experience doesn't confirm.
+              You pay when you book. If the group does not reach the minimum, you get a full refund automatically.
             </p>
           </div>
 
@@ -1055,7 +838,7 @@ export default function Home() {
               </div>
 
               <p className="text-gray-700 dark:text-gray-300 text-lg leading-relaxed mb-8">
-                Launch retreats with zero financial risk — no deposits, no losses, only confirmed groups.
+                Launch retreats with zero financial risk: no upfront costs, no losses, only confirmed groups.
               </p>
 
               <Button
@@ -1294,25 +1077,14 @@ export default function Home() {
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                 {/* Legal Copy */}
                 <div className="text-sm text-gray-400 max-w-2xl">
-                  <p className="mb-2">&copy; 2024 Great. All rights reserved.</p>
+                  <p className="mb-2">&copy; {new Date().getFullYear()} Great. All rights reserved.</p>
                   <p className="text-xs">
-                    This is a functional prototype demonstrating community-backed local experiences with Stripe Sandbox payment processing.
-                    All bookings use test payment methods. No real charges will be made.
+                    Payments are processed securely by Stripe. If an event does not reach its minimum group, every buyer gets a full refund automatically.
                   </p>
                 </div>
 
                 {/* Links */}
                 <div className="flex flex-col sm:flex-row gap-4 text-sm">
-                  <a
-                    href="https://github.com/replit/replit/blob/main/README.md"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-gray-400 hover:text-white transition-colors flex items-center gap-1"
-                    data-testid="link-setup-readme"
-                    aria-label="Read setup and documentation on GitHub"
-                  >
-                    📖 Setup & Documentation
-                  </a>
                   <button
                     onClick={() => setLocation('/about')}
                     className="text-gray-400 hover:text-white transition-colors"
@@ -1330,7 +1102,7 @@ export default function Home() {
                     </button>
                   ) : (
                     <a
-                      href="/api/login"
+                      href="/login"
                       className="text-gray-400 hover:text-white transition-colors"
                       aria-label="Log in to your account"
                     >
@@ -1343,16 +1115,6 @@ export default function Home() {
           </div>
         </div>
       </footer>
-
-      {/* Join Trip Modal */}
-      {selectedTrip && (
-        <JoinTripModal
-          open={!!selectedTrip}
-          onClose={() => setSelectedTrip(null)}
-          trip={selectedTrip}
-          onConfirm={handleDepositConfirm}
-        />
-      )}
 
       {/* Share Kit Modal */}
       {boostExperience && (

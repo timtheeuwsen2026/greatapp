@@ -1,5 +1,8 @@
 import { useSearch, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Hammer, Lightbulb } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import { describeEventDate, isConceptDraft } from "@shared/conceptIdea";
 import Navigation from "@/components/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import PartnerToolingGate, { usePartnerAccess } from "@/components/PartnerToolingGate";
@@ -27,9 +30,10 @@ export const IDEA_FLOW_HREF = "/create-experience?start=idea";
  */
 export default function CreateExperiencePage() {
   const { data: access } = usePartnerAccess();
-  const startIdea = new URLSearchParams(useSearch()).get("start") === "idea";
-
-  const content = startIdea ? <IdeaFlow /> : <CreateChoice />;
+  const search = new URLSearchParams(useSearch());
+  const startIdea = search.get("start") === "idea";
+  // ?draft= reopens a saved idea where it stopped (Save as draft, or Change from the builder).
+  const content = startIdea ? <IdeaFlow draftId={search.get("draft")} /> : <CreateChoice />;
 
   // Signed-out visitors are sent to sign in and brought back here.
   return (
@@ -100,7 +104,59 @@ function CreateChoice() {
         <p className="mt-6 text-sm text-gray-500">
           An idea becomes an event later, carrying over everything you've already answered.
         </p>
+
+        <UnfinishedIdeas />
       </div>
     </main>
+  );
+}
+
+type DraftRow = { id: string; title?: string | null; startDate?: string | null; endDate?: string | null; concept?: any; updatedAt?: string | null };
+
+/**
+ * Ideas saved with "Save as draft", to pick up again. Here rather than in a
+ * role's own dashboard: any account can start an idea, and only the Creator
+ * dashboard lists drafts, so a venue or an affiliate would otherwise never
+ * find theirs again.
+ */
+function UnfinishedIdeas() {
+  const [, navigate] = useLocation();
+  const { data } = useQuery<DraftRow[]>({
+    queryKey: ["/api/experience-drafts", "unfinished-ideas"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/experience-drafts");
+      const body = await response.json();
+      return Array.isArray(body) ? body : [];
+    },
+    retry: false,
+  });
+  const ideas = (data ?? [])
+    .filter((draft) => isConceptDraft(draft) && !draft.concept?.sentAt)
+    .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
+    .slice(0, 5);
+  if (ideas.length === 0) return null;
+
+  return (
+    <section className="mt-10" data-testid="unfinished-ideas">
+      <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Continue an idea</h2>
+      <ul className="mt-3 divide-y overflow-hidden rounded-2xl border bg-white dark:border-gray-800 dark:bg-gray-900">
+        {ideas.map((draft) => (
+          <li key={draft.id}>
+            <button
+              type="button"
+              onClick={() => navigate(`${IDEA_FLOW_HREF}&draft=${encodeURIComponent(draft.id)}`)}
+              className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+              data-testid={`unfinished-idea-${draft.id}`}
+            >
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-gray-950 dark:text-white">{draft.title?.trim() || "Untitled idea"}</span>
+                <span className="block text-sm text-gray-500">{describeEventDate({ startDate: draft.startDate, endDate: draft.endDate, concept: draft.concept })}</span>
+              </span>
+              <ArrowRight className="h-5 w-5 shrink-0 text-gray-400" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

@@ -14,6 +14,11 @@ import AdminDashboard from "@/pages/admin-dashboard";
 import CreatorDashboard from "@/pages/creator-dashboard";
 import CommunityHub from "@/pages/community-hub";
 import VenueDashboard from "@/pages/venue-dashboard";
+import VenueOrderSheet from "@/pages/venue-order-sheet";
+import DashboardEvents from "@/pages/dashboard-events";
+import DashboardEventOrders from "@/pages/dashboard-event-orders";
+import DashboardAsPartner from "@/pages/dashboard-as-partner";
+import VenueDealAgreement from "@/pages/venue-deal-agreement";
 import ServiceProviderDashboard from "@/pages/service-provider-dashboard";
 import SimpleCreatorProfileSetup from "@/pages/simple-creator-profile-setup";
 import ParticipantProfileSetup from "@/pages/participant-profile-setup";
@@ -188,9 +193,16 @@ function Router() {
       {/* Venues get the same hard gate creators already had. The dashboard is
           the right destination — it was just reachable before the profile that
           gives it anything to show. */}
+      <Route path="/venue-dashboard/orders/:experienceId" component={VenueOrderSheet} />
+      {/* The new organiser dashboard (Tim, point 60, boards D1 to D5): My events and Orders (D2) first. */}
+      <Route path="/dashboard/events/:experienceId/orders" component={DashboardEventOrders} />
+      <Route path="/dashboard/events" component={DashboardEvents} />
+      <Route path="/dashboard/as-partner" component={DashboardAsPartner} />
       <Route path="/venue-dashboard">
         <VenueOnboardingGate><VenueDashboard /></VenueOnboardingGate>
       </Route>
+      {/* The agreed venue deal as a contract (Tim 57, board D3), for both sides. */}
+      <Route path="/deals/venue/:experienceId" component={VenueDealAgreement} />
       <Route path="/service-provider-dashboard" component={ServiceProviderDashboard} />
       <Route path="/promoter" component={PromoterDashboard} />
       <Route path="/promoter/profile-setup" component={PromoterProfileSetup} />

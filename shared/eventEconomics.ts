@@ -86,6 +86,12 @@ export type EventEconomicsInput = {
   /** Participant cashback, as a percentage of ticket revenue. */
   promoterCommissionPct?: number;
   /**
+   * What that line is called. A partner on Commission per Ticket is not a
+   * participant cashback (Tim, 64.7): the builder passes "Partner commission:
+   * Good Soles (10%)" when the highest rate is a partner's.
+   */
+  promoterCommissionLabel?: string;
+  /**
    * Partners whose deal is paid out of ticket revenue — Commission per Ticket
    * or Revenue Split — one entry each.
    *
@@ -357,7 +363,7 @@ export function calculateEventEconomics(input: EventEconomicsInput): EventEconom
   if (promoterBounty > 0) {
     lines.push({
       key: "promoter_bounty",
-      label: `Participant Cashback (${promoterCommissionPct}%)`,
+      label: input.promoterCommissionLabel || `Participant Cashback (${promoterCommissionPct}%)`,
       amount: -promoterBounty,
       tier: "per_unit",
       kind: "promotion",

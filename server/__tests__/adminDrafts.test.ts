@@ -97,6 +97,7 @@ describe('an admin finishing someone else\'s event draft', () => {
         getExperienceDraftById: async () => draft,
         createExperience: async (data: any) => ({ id: 'e1', ...data }),
         deleteExperienceDraft,
+        linkCollabIdeasToExperience: async () => {},
       },
       resolveCurrentUserId: () => 'tim',
       checkIsAdmin: async () => true,

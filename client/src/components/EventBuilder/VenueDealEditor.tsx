@@ -44,9 +44,8 @@ export function VenueDealEditor({
   isDaytime: boolean;
   manualDealUnlocked?: boolean;
   /**
-   * False only when the event has tickets and every one of them is free. A
-   * venue taking a percentage of ticket revenue would then be taking a
-   * percentage of nothing, so those two models are not offered.
+   * False while every ticket is free. The percentage models stay offered,
+   * with a note that they apply once a ticket or add-on has a price.
    */
   paidTicketsConfigured?: boolean;
   /**
@@ -77,10 +76,10 @@ export function VenueDealEditor({
     currencySymbol,
     currentValue: model,
     allowUntracked: manualDealUnlocked,
-  }).filter((option) =>
-    paidTicketsConfigured || hasPaidAddons
-    || option.value === model
-    || (option.value !== "revenue_share" && option.value !== "commitment_plus_revenue_share"));
+  });
+  // Never hidden because Pricing is still empty (Tim, 64.1 and 66.33): the
+  // price is set after this step, so a share of ticket sales stays on offer
+  // and the note below says it applies once something has a price.
   const selected = options.find((option) => option.value === model) || null;
 
   const choose = (option: VenueDealOption) => {
@@ -394,8 +393,9 @@ export function VenueDealEditor({
             data-testid="input-venue-deal-barter"
           />
           <p className="mt-1 text-xs text-gray-500">
-            No money moves either way, so the venue is left out of the ticket split
-            entirely — write down what you each agreed while it is still fresh.
+            No money moves for tickets, so the venue is left out of the ticket split.
+            Add-ons are always paid to the venue at its own price. Write down what
+            you each agreed: the venue reads this text on the offer.
           </p>
         </div>
       )}
@@ -416,8 +416,8 @@ export function VenueDealEditor({
 
       {!paidTicketsConfigured && !hasPaidAddons && (
         <p className="text-xs text-gray-500" data-testid="text-venue-no-paid-ticket">
-          Entry is free and no paid add-on is configured yet. Add a paid extra on Pricing
-          if your venue agreement is a share of add-on sales.
+          No ticket or add-on has a price yet. A Revenue Split applies once you set a
+          ticket price or a paid add-on on Pricing.
         </p>
       )}
 

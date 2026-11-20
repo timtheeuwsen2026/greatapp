@@ -8,6 +8,7 @@ const storage = vi.hoisted(() => ({
   getBookingsByExperience: vi.fn(),
   markBookingAsRefunded: vi.fn(async () => ({})),
   getUser: vi.fn(async () => ({ email: "buyer@example.com", firstName: "Anna" })),
+  closeVenueDealsForCancelledEvent: vi.fn(async () => {}),
 }));
 const returnBookingMoney = vi.hoisted(() => vi.fn(async () => {}));
 const sendBookingCancelledEmail = vi.hoisted(() => vi.fn(async () => ({ success: true })));
@@ -46,6 +47,8 @@ describe("cancelling an event", () => {
     expect(storage.markBookingAsRefunded).toHaveBeenCalledTimes(2);
     expect(sendBookingCancelledEmail).toHaveBeenCalledWith(expect.objectContaining({ outcome: "refunded", amountLabel: "€7.00" }));
     expect(state.updates[0]).toMatchObject({ status: "cancelled", cancellationReason: "Venue closed" });
+    // Its venue deals end with it (66.10a/b): no "Pending" offer or "Accepted" deal left behind.
+    expect(storage.closeVenueDealsForCancelledEvent).toHaveBeenCalled();
   });
 
   it("keeps a booking whose refund failed, so it can be retried", async () => {

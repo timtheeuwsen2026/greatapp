@@ -1,6 +1,8 @@
 type PublicExperienceCandidate = {
   status?: string | null;
   price?: unknown;
+  /** Admin's "Hide from public" for internal tests (66.20e). */
+  hiddenFromPublic?: boolean | null;
 };
 
 /**
@@ -9,5 +11,6 @@ type PublicExperienceCandidate = {
  * marketplace experience.
  */
 export function isPublicExperienceListable(experience: PublicExperienceCandidate): boolean {
+  if (experience.hiddenFromPublic === true) return false;
   return experience.status === "approved" || experience.status === "published";
 }

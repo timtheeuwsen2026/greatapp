@@ -29,3 +29,10 @@ it('keeps the ticket benchmark for paid entry with no add-ons', () => {
   editor(true, false);
   expect(screen.getByTestId('text-venue-deal-benchmark-outlier')).toBeTruthy();
 });
+// 64.1 / 66.33: nothing priced yet still offers a Revenue Split, with the note.
+it('offers Revenue Split before anything has a price, and says when it applies', async () => {
+  const save = editor(false, false, 'venue_barter');
+  expect(screen.getByTestId('text-venue-no-paid-ticket').textContent).toContain('applies once you set a ticket price');
+  await userEvent.setup().click(screen.getByTestId('venue-deal-revenue_share'));
+  expect(save).toHaveBeenCalledWith('venueCompensationModel', 'revenue_share', { shouldDirty: true });
+});

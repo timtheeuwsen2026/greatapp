@@ -113,8 +113,12 @@ export function decidePaymentReconciliation(
   }
 
   if (intent.disputed) {
-    return { action: "none", kind: "dispute", note: "The buyer disputed this payment with their bank." };
+    return { action: "none", kind: "dispute", note: "The buyer disputed this payment with the bank." };
   }
+
+  // An admin marked this booking as a test (66.30d): it stays out of every
+  // money total and is no longer a difference to act on.
+  if (booking.testPayment) return { action: "none" };
 
   switch (intent.status) {
     case "requires_capture": {

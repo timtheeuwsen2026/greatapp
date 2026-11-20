@@ -911,6 +911,8 @@ export function formatVenueDealSummary(
 
   const definition = DEFINITIONS[normalized];
   const code = String(currency || terms?.currency || "eur").toUpperCase();
+  // "€0.50", sign in front, two decimals (Tim: everything in euro, 66.3).
+  const money = (value: number) => code === "EUR" ? `€${(Number(value) || 0).toFixed(2)}` : `${code} ${(Number(value) || 0).toFixed(2)}`;
   const value = readVenueDealValue(normalized, terms);
 
   if (normalized === "venue_barter") {
@@ -921,7 +923,7 @@ export function formatVenueDealSummary(
   if (definition.valueKind === "none") {
     const accessFee = Number(terms?.accessFee || 0);
     return accessFee > 0
-      ? `Access-Only / Pay-at-Counter — ${code} ${accessFee} access fee`
+      ? `Access-Only / Pay-at-Counter — ${money(accessFee)} access fee`
       : "Access-Only / Pay-at-Counter";
   }
 
@@ -930,20 +932,20 @@ export function formatVenueDealSummary(
     case "revenue_share":
       return `Revenue Split — ${amount}% of ticket sales`;
     case "fixed_fee":
-      return `Ticket Deduction — ${code} ${amount} per ticket`;
+      return `Ticket Deduction — ${money(amount)} per ticket`;
     case "per_head":
-      return `Per-Participant Package — ${code} ${amount} per participant`;
+      return `Per-Participant Package — ${money(amount)} per participant`;
     case "per_room_night":
-      return `Per Room / Per Night — ${code} ${amount} per room per night`;
+      return `Per Room / Per Night — ${money(amount)} per room per night`;
     case "upfront_rental":
-      return `Upfront Rental — creator pays ${code} ${amount}`;
+      return `Upfront Rental — creator pays ${money(amount)}`;
     case "venue_sponsored":
-      return `Venue Sponsorship — venue pays ${code} ${amount} to the creator`;
+      return `Venue Sponsorship — venue pays ${money(amount)} to the creator`;
     case "minimum_spend":
-      return `Minimum Spend Guarantee — ${code} ${amount}`;
+      return `Minimum Spend Guarantee — ${money(amount)}`;
     case "commitment_plus_revenue_share": {
       const fee = Number(terms?.commitmentFee || 0);
-      return `Commitment Fee + Revenue Split — venue pays ${code} ${fee} upfront, then takes ${amount}% of ticket and add-on sales`;
+      return `Commitment Fee + Revenue Split — venue pays ${money(fee)} upfront, then takes ${amount}% of ticket and add-on sales`;
     }
     case "manual_counter_revenue":
       return `Manual agreement (untracked) — ${amount}% of counter revenue, settled directly between organiser and venue`;
@@ -1047,9 +1049,9 @@ export function explainVenueDealMechanics(input: VenueDealMechanicsInput): strin
     case "venue_barter":
       // No arithmetic to show, and saying "€0.00 to the venue" would read as a
       // deal that pays them nothing rather than one that was never about money.
-      return `No money moves either way. You each supply what you agreed, and the calculator `
-        + `leaves the venue out of the ticket split entirely — so whatever the tickets earn is `
-        + `yours after the platform fee.`;
+      return `No money moves for tickets. You each supply what you agreed, and the calculator `
+        + `leaves the venue out of the ticket split, so whatever the tickets earn is yours after `
+        + `the platform fee. Add-ons are always paid to the venue at its own price.`;
 
     case "minimum_spend":
       return `A spend guarantee settled at the venue's own register. The platform never sees this `

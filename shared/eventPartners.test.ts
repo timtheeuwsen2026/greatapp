@@ -180,7 +180,7 @@ describe("partnerTermSummary", () => {
     expect(partnerTermSummary(partner())).toBe("2 × free tickets per 15 people brought");
     expect(partnerTermSummary(partner({
       dealType: "commission_per_ticket", terms: { commissionPct: 10 },
-    }))).toBe("10% of ticket sales through their link");
+    }))).toBe("10% of tickets sold through their own link, after discounts");
     expect(partnerTermSummary(partner({
       dealType: "financial_sponsorship", terms: { amount: 250 },
     }), "€")).toBe("€250.00 towards the event");

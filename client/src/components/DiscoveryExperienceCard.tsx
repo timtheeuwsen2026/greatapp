@@ -1,4 +1,5 @@
-import { formatEventStart } from "@shared/eventTime";
+import { eventPhase, formatEventStart } from "@shared/eventTime";
+import { formatPricePerPerson } from "@shared/priceLabel";
 import { Calendar, MapPin, MessageCircle } from "lucide-react";
 import { cityOfEvent } from "@shared/cities";
 import { useLocation } from "wouter";
@@ -24,14 +25,15 @@ function getEventCity(experience: any): string | null {
   return cityOfEvent(experience);
 }
 
-/** The neighbourhood or place line under the photo. */
-function getCity(experience: any) {
-  const parts = String(experience.location || "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const city = parts[parts.length - 1] || "Location TBA";
-  return city.replace(/^\d{3,6}\s+/, "").trim() || city;
+/**
+ * The venue under the photo. The city is on the photo already, once (66.31e):
+ * this line used to repeat it from the address as "Spain" or "Barcelona Spain".
+ */
+function getVenueName(experience: any): string | null {
+  // The accepted venue (written on acceptance), else the venue the organiser
+  // typed in by hand.
+  const venue = String(experience.venue || experience.venueName || experience.manualVenueName || "").trim();
+  return venue || null;
 }
 
 const PILLAR_LABELS: Record<string, string> = {
@@ -68,30 +70,6 @@ function getPrice(experience: any) {
   return Number(experience.pricePerPerson ?? experience.price ?? 0);
 }
 
-function getDeposit(experience: any) {
-  const deposits = Array.isArray(experience.ticketSkus)
-    ? experience.ticketSkus
-        .map((sku: any) => Number(sku.depositPerPerson))
-        .filter((deposit: number) => Number.isFinite(deposit) && deposit > 0)
-    : [];
-  if (deposits.length > 0) return Math.min(...deposits);
-  const deposit = Number(experience.depositAmount || 0);
-  return Number.isFinite(deposit) ? deposit : 0;
-}
-
-function formatCurrency(amount: number, currency?: string | null) {
-  if (!Number.isFinite(amount) || amount < 0) return "Price TBA";
-  if (amount === 0) return "Free";
-  try {
-    return new Intl.NumberFormat("en", {
-      style: "currency",
-      currency: String(currency || "EUR").toUpperCase(),
-      maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    return `${String(currency || "EUR").toUpperCase()} ${amount.toFixed(0)}`;
-  }
-}
 
 function getUrgency(experience: any, currentParticipants: number) {
   const participantsNeeded = Number(
@@ -118,9 +96,13 @@ export function DiscoveryExperienceCard({
   const currentParticipants = Math.max(0, Number(experience.currentParticipants ?? experience.participantCount ?? 0));
   const participants = experience.participantsPreview ?? experience.participants ?? [];
   const isConfirmed = experience.lifecycleStatus === "confirmed" || experience.mvgMet || experience.mvgStatus === "met";
-  const urgency = getUrgency(experience, currentParticipants);
+  // Sales close at the start (66.21). A started or ended event is not
+  // bookable, so it says so and has no booking button (66.31a, 66.34e).
+  const phase = eventPhase(experience);
+  const bookable = phase !== "happening" && phase !== "ended";
+  const urgency = bookable ? getUrgency(experience, currentParticipants) : null;
   const price = getPrice(experience);
-  const deposit = getDeposit(experience);
+  const venueName = getVenueName(experience);
   const pillars = getPillars(experience);
   const target = Number(experience.minimumParticipants || 0);
   const progress = target > 0
@@ -153,9 +135,19 @@ export function DiscoveryExperienceCard({
           </div>
         )}
         <div className="absolute right-3 top-3 z-10">
-          <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold text-white shadow-lg ${isConfirmed ? "bg-emerald-600" : "bg-primary"}`}>
-            {isConfirmed ? "✅ IT'S HAPPENING" : "⚡ FORMING NOW"}
-          </span>
+          {phase === "ended" ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gray-800/90 px-3 py-1.5 text-xs font-bold text-white shadow-lg" data-testid={`card-status-${experience.id}`}>
+              Ended
+            </span>
+          ) : phase === "happening" ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-600 px-3 py-1.5 text-xs font-bold text-white shadow-lg" data-testid={`card-status-${experience.id}`}>
+              Started
+            </span>
+          ) : (
+            <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold text-white shadow-lg ${isConfirmed ? "bg-emerald-600" : "bg-primary"}`} data-testid={`card-status-${experience.id}`}>
+              {isConfirmed ? "✅ IT'S HAPPENING" : "⚡ FORMING NOW"}
+            </span>
+          )}
         </div>
         {Number(experience.activeChatters || 0) > 0 && (
           <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-full bg-green-500 px-2.5 py-1 text-xs font-semibold text-white shadow-lg">
@@ -170,9 +162,11 @@ export function DiscoveryExperienceCard({
             {urgency}
           </p>
         )}
-        <p className="mb-1 text-xs font-medium text-gray-500" data-testid={`card-location-${experience.id}`}>
-          {getCity(experience)}
-        </p>
+        {venueName && (
+          <p className="mb-1 line-clamp-1 text-xs font-medium text-gray-500" data-testid={`card-location-${experience.id}`}>
+            {venueName}
+          </p>
+        )}
         {pillars.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-1" data-testid={`card-pillars-${experience.id}`}>
             {pillars.map((pillar) => (
@@ -201,7 +195,7 @@ export function DiscoveryExperienceCard({
           </div>
         )}
 
-        {experience.requireMinimumParticipants && target > 0 && (
+        {bookable && experience.requireMinimumParticipants && target > 0 && (
           <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
             <div className={`h-2 rounded-full ${isConfirmed ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${progress}%` }} />
           </div>
@@ -213,28 +207,35 @@ export function DiscoveryExperienceCard({
           className="mb-3"
         />
 
-        <div className="mb-3 border-t border-gray-100 pt-3 dark:border-gray-700">
-          {deposit > 0 ? (
-            <>
-              <p className="text-lg font-bold text-gray-900 dark:text-white">Reserve for {formatCurrency(deposit, experience.currency)}</p>
-              <p className="text-xs text-gray-500">Full price {formatCurrency(price, experience.currency)} pp</p>
-            </>
-          ) : (
-            <p className="text-lg font-bold text-gray-900 dark:text-white">{price > 0 ? `${formatCurrency(price, experience.currency)} pp` : "Free RSVP"}</p>
-          )}
-        </div>
+        {bookable ? (
+          <>
+            {/* The full price, always: every ticket is charged in full at
+                checkout (point 53), so the card never talks of a deposit. */}
+            <div className="mb-3 border-t border-gray-100 pt-3 dark:border-gray-700">
+              <p className="text-lg font-bold text-gray-900 dark:text-white" data-testid={`card-price-${experience.id}`}>
+                {formatPricePerPerson(price)}
+              </p>
+            </div>
 
-        <Button
-          size="sm"
-          className="w-full bg-gradient-to-r from-primary to-secondary font-semibold text-white hover:opacity-90"
-          onClick={(event) => {
-            event.stopPropagation();
-            setLocation(`/experiences/${experience.id}`);
-          }}
-          data-testid={`button-discovery-card-${experience.id}`}
-        >
-          {isConfirmed ? "Secure Your Spot" : "Reserve Your Spot"}
-        </Button>
+            <Button
+              size="sm"
+              className="w-full bg-gradient-to-r from-primary to-secondary font-semibold text-white hover:opacity-90"
+              onClick={(event) => {
+                event.stopPropagation();
+                setLocation(`/experiences/${experience.id}`);
+              }}
+              data-testid={`button-discovery-card-${experience.id}`}
+            >
+              {isConfirmed ? "Secure Your Spot" : "Reserve Your Spot"}
+            </Button>
+          </>
+        ) : (
+          <p className="border-t border-gray-100 pt-3 text-sm font-medium text-gray-600 dark:border-gray-700 dark:text-gray-300" data-testid={`card-closed-${experience.id}`}>
+            {phase === "ended"
+              ? `This event has ended${currentParticipants > 0 ? `, ${currentParticipants} ${currentParticipants === 1 ? "person" : "people"} joined` : ""}`
+              : "Started, booking is closed"}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

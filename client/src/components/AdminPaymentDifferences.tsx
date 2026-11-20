@@ -70,12 +70,9 @@ const STRIPE_STATUS: Record<string, string> = {
   not_in_stripe: "Not in live Stripe",
 };
 
-function money(cents: number, currency: string | null): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: (currency || "eur").toUpperCase() }).format(cents / 100);
-  } catch {
-    return `€${(cents / 100).toFixed(2)}`;
-  }
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function money(cents: number, _currency?: string | null): string {
+  return `${cents < 0 ? "−" : ""}€${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
 function day(value: string | null): string {
@@ -103,6 +100,16 @@ export default function AdminPaymentDifferences() {
       });
     },
     onError: (error) => toast({ title: "Check not run", description: readableError(error), variant: "destructive" }),
+  });
+
+  // Our own test payment on a cancelled booking (66.30d): out of the totals.
+  const markTest = useMutation({
+    mutationFn: async (id: string) => (await apiRequest("POST", `/api/admin/payment-differences/${id}/mark-test`, {})).json(),
+    onSuccess: (result: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payment-differences"] });
+      toast({ title: "Marked as test", description: result?.message });
+    },
+    onError: (error) => toast({ title: "Not marked", description: readableError(error), variant: "destructive" }),
   });
 
   const open = rows.filter((row) => !row.resolvedAt);
@@ -178,7 +185,25 @@ export default function AdminPaymentDifferences() {
                     </td>
                     <td className="p-3">
                       {!row.resolvedAt ? (
-                        <Badge variant="destructive">Open</Badge>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant="destructive">Open</Badge>
+                          {row.bookingId && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              disabled={markTest.isPending}
+                              onClick={() => {
+                                if (window.confirm("Mark this as our own test payment? It is kept out of every money total and is never paid out. If it was a real buyer, refund it in Stripe instead.")) {
+                                  markTest.mutate(row.id);
+                                }
+                              }}
+                              data-testid={`button-mark-test-${row.id}`}
+                            >
+                              Mark as test
+                            </Button>
+                          )}
+                        </div>
                       ) : row.autoFixed ? (
                         <Badge className="bg-emerald-600">Fixed automatically</Badge>
                       ) : (

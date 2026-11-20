@@ -201,14 +201,14 @@ describe("venue deal vocabulary", () => {
     expect(formatVenueDealSummary("revenue_share", { revenueSharePct: 50 }, "eur"))
       .toBe("Revenue Split — 50% of ticket sales");
     expect(formatVenueDealSummary("per_room_night", { perRoomPerNight: 120 }, "eur"))
-      .toBe("Per Room / Per Night — EUR 120 per room per night");
+      .toBe("Per Room / Per Night — €120.00 per room per night");
     expect(formatVenueDealSummary("per_head", { perHeadAmount: 85 }, "eur"))
-      .toBe("Per-Participant Package — EUR 85 per participant");
+      .toBe("Per-Participant Package — €85.00 per participant");
     expect(formatVenueDealSummary("access_only", {}, "eur"))
       .toBe("Access-Only / Pay-at-Counter");
     // Legacy rows still read correctly.
     expect(formatVenueDealSummary("flat_rental", { fixedFee: 300 }, "eur"))
-      .toBe("Upfront Rental — creator pays EUR 300");
+      .toBe("Upfront Rental — creator pays €300.00");
   });
 });
 
@@ -459,7 +459,7 @@ describe("commitment fee plus revenue share", () => {
   it("reads back as one sentence naming both halves", () => {
     const summary = formatVenueDealSummary("commitment_plus_revenue_share", terms, "eur");
 
-    expect(summary).toContain("EUR 50");
+    expect(summary).toContain("€50.00");
     expect(summary).toContain("20%");
     expect(summary).toMatch(/upfront/i);
   });

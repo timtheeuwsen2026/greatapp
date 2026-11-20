@@ -154,6 +154,29 @@ describe('the builder shows what the idea already said', () => {
     expect(screen.getByTestId('idea-summary-card')).toHaveTextContent('For Everyone');
   });
 
+  it('lists the open slots with their invite links and a way back to change them', () => {
+    routeParams = { draftId: 'draft-9' };
+    render(<IdeaSummaryCard concept={{
+      stage: 'concept', dateMode: 'open', interests: ['sport'], level: 'anyone',
+      needs: ['venue', 'community'], sentAt: '2026-11-20T10:00:00.000Z',
+      slots: {
+        venue: { board: true, direct: false } as any,
+        community: { board: false, direct: true, earn: 'per_person', amountPerPerson: 2, inviteUrl: 'https://great.test/collab-invite/abc' } as any,
+      },
+    }} />);
+    expect(screen.getByTestId('idea-summary-for')).toHaveTextContent('For Sport and movement · anyone');
+    expect(screen.getByTestId('idea-summary-need-venue')).toHaveTextContent('A venue or space · On the Collab board');
+    expect(screen.getByTestId('idea-summary-need-community')).toHaveTextContent('Invite sent · €2.00 per person who checks in');
+    expect(screen.getByTestId('idea-summary-need-community')).toHaveTextContent('https://great.test/collab-invite/abc');
+    expect(screen.getByTestId('idea-summary-change')).toHaveAttribute('href', '/create-experience?start=idea&draft=draft-9');
+    expect(screen.queryByTestId('idea-summary-not-sent')).not.toBeInTheDocument();
+  });
+
+  it('says when the slots were saved but never sent', () => {
+    render(<IdeaSummaryCard concept={{ stage: 'concept', dateMode: 'open', needs: ['sponsor'], slots: { sponsor: { board: true } as any } }} />);
+    expect(screen.getByTestId('idea-summary-not-sent')).toBeInTheDocument();
+  });
+
   it('shows nothing when the idea answered nothing, or the event did not start as one', () => {
     const { container, rerender } = render(<IdeaSummaryCard concept={{ stage: 'concept', dateMode: 'open' }} />);
     expect(container).toBeEmptyDOMElement();

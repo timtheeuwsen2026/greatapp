@@ -53,6 +53,7 @@ import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import DashboardGuard from "@/components/DashboardGuard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
+import { WaitingForVenueBadge } from "@/components/WaitingForVenueBadge";
 
 import { formatPriceByCurrency } from "@shared/pricingService";
 // Currency formatting helper
@@ -962,7 +963,7 @@ function CreatorDashboardContent() {
     { value: "venue-offers", label: "Offers" },
     { value: "active-deals", label: "Active Deals" },
     { value: "promotion-deals", label: "Promotion Deals" },
-    { value: "fulfillment", label: "Fulfillment" },
+    { value: "fulfillment", label: "Rewards to hand out" },
     { value: "flash-deals", label: "Flash Deals" },
   ];
 
@@ -1084,7 +1085,7 @@ function CreatorDashboardContent() {
             <p className="text-xs text-gray-500">{ledger.bookingsCount} booking{ledger.bookingsCount !== 1 ? 's' : ''}</p>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">My Share</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Your share</p>
             <p className="text-2xl font-bold text-green-600" data-testid="ledger-my-share">
               {formatCurrency(ledger.myShare || 0, ledger.currency)}
             </p>
@@ -1116,11 +1117,11 @@ function CreatorDashboardContent() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Net Earnings</p>
+                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Your share</p>
                   <p className="text-2xl font-bold">
                     {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
                   </p>
-                  <p className="text-xs text-gray-500">After all fees</p>
+                  <p className="text-xs text-gray-500">After the platform fee, venue and partner commission</p>
                 </div>
                 <DollarSign className="w-8 h-8 text-green-500" />
               </div>
@@ -1135,7 +1136,7 @@ function CreatorDashboardContent() {
                   <p className="text-2xl font-bold">
                     {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalGross || 0, earningsCurrency)}
                   </p>
-                  <p className="text-xs text-gray-500">{typedEarnings.summary?.bookingsCount || 0} bookings</p>
+                  <p className="text-xs text-gray-500">{typedEarnings.summary?.bookingsCount || 0} {(typedEarnings.summary?.bookingsCount || 0) === 1 ? "booking" : "bookings"}</p>
                 </div>
                 <Users className="w-8 h-8 text-blue-500" />
               </div>
@@ -1367,15 +1368,17 @@ function CreatorDashboardContent() {
                   <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
                     <Calendar className="w-8 h-8 text-orange-600" />
                   </div>
-                  <h3 className="text-lg font-medium text-orange-800 dark:text-orange-200 mb-2">Complete Setup First</h3>
+                  {/* It only ever meant the missing Stripe connection: it went
+                      away once Stripe was connected (66.25e, 66.18i). */}
+                  <h3 className="text-lg font-medium text-orange-800 dark:text-orange-200 mb-2">Connect Stripe to get paid</h3>
                   <p className="text-orange-700 dark:text-orange-300 mb-4">
-                    Finish your creator onboarding to unlock experience creation
+                    Your events can be published and sold. To receive your share 24 hours after each event, connect a Stripe account.
                   </p>
                   <Button onClick={() => {
                     const setupTab = document.querySelector('[value="setup"]') as HTMLElement;
                     setupTab?.click();
                   }}>
-                    Continue Setup
+                    Connect Stripe
                   </Button>
                 </CardContent>
               </Card>
@@ -1636,6 +1639,13 @@ function CreatorDashboardContent() {
                       <CardContent className="p-4">
                         <div className="flex justify-between items-start mb-2">
                           <h3 className="font-semibold text-lg truncate">{experience.title}</h3>
+                          <a
+                            href={`/dashboard/events/${experience.id}/orders`}
+                            className="ml-2 shrink-0 text-sm font-medium text-primary hover:underline"
+                            data-testid={`link-orders-${experience.id}`}
+                          >
+                            Orders
+                          </a>
                           <div className="flex items-center gap-1">
                             {(experience as any).lifecycleStatus === 'forming' && (
                               <Badge className="bg-amber-100 text-amber-800 text-xs">Forming</Badge>
@@ -1646,6 +1656,7 @@ function CreatorDashboardContent() {
                             {(experience as any).lifecycleStatus === 'cancelled' && (
                               <Badge className="bg-red-100 text-red-800 text-xs">Cancelled</Badge>
                             )}
+                            {experience.status !== 'cancelled' && <WaitingForVenueBadge experienceId={experience.id} />}
                             {getStatusBadge(experience.status)}
                           </div>
                         </div>
@@ -1671,7 +1682,7 @@ function CreatorDashboardContent() {
                           </span>
                           <span>
                             <Users className="w-3 h-3 inline mr-1" />
-                            {experience.participantCount || 0}/{experience.maxParticipants || experience.capacity || '∞'}
+                            {experience.finalParticipantCount ?? experience.participantCount ?? 0}/{experience.maxParticipants || experience.capacity || '∞'}
                           </span>
                         </div>
                         
@@ -1699,10 +1710,14 @@ function CreatorDashboardContent() {
                         
                         {/* MVG progress and deadline */}
                         <TicketRegistrationBreakdown rows={headcount?.events.find((event) => event.id === experience.id)?.ticketRegistrations} />
-                        {(experience.mvgEnabled || (experience.minimumParticipants && experience.minimumParticipants > 0)) && (
+                        {/* Only when the minimum group is switched on (66.5, 66.25c):
+                            a minimum stored on an event that has it off is no minimum. */}
+                        {experience.requireMinimumParticipants === true && (experience.minimumParticipants || experience.mvgMin) && (
                           <div className="text-xs text-gray-500 mb-3" data-testid={`mvg-progress-text-${experience.id}`}>
                             <span className="flex items-center gap-1">
-                              MVG: {experience.participantCount || experience.currentParticipants || 0}/{experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin}
+                              {experience.finalParticipantCount != null
+                                ? `${experience.finalParticipantCount} of ${experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin} joined when it was cancelled`
+                                : `MVG: ${experience.participantCount || experience.currentParticipants || 0}/${experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin}`}
                               {(experience as any).lifecycleStatus === 'confirmed' ? (
                                 <span data-testid={`mvg-status-indicator-${experience.id}`}>
                                   <CheckCircle className="w-3 h-3 text-green-500" />
@@ -2079,11 +2094,8 @@ function CreatorDashboardContent() {
                 };
                 const terms = offer.terms ?? {};
                 const currency = String(terms.currency || experience.currency || "EUR").toUpperCase();
-                const formatMoney = (value: unknown) => new Intl.NumberFormat(undefined, {
-                  style: "currency",
-                  currency,
-                  minimumFractionDigits: 2,
-                }).format(Number(value || 0));
+                // Always "€2.00" (Tim: everything in euro).
+                const formatMoney = (value: unknown) => `€${(Number(value) || 0).toFixed(2)}`;
                 return (
                   <Card key={offer.id} className="border-blue-200 dark:border-blue-800">
                     <CardContent className="p-5">
@@ -2247,6 +2259,7 @@ function CreatorDashboardContent() {
                           barterTerms={row.barterTerms}
                           minimumGroup={row.minimumGroup ?? null}
                           history={row.history}
+                          agreementUrl={"risk" in offer && (exp.id || offer.experienceId) ? `/deals/venue/${exp.id || offer.experienceId}` : null}
                         />
                       </CardContent>
                     </Card>
@@ -2436,9 +2449,11 @@ function CreatorDashboardContent() {
           <TabsContent value="fulfillment" className="space-y-4">
             <PartnerToolingGate inline>
             <div>
-              <h2 className="text-xl font-semibold">Perk Fulfillment</h2>
+              <h2 className="text-xl font-semibold">Rewards to hand out</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Referral milestones as they progress. A reward becomes fulfillable once its target is reached — mark each item fulfilled after you deliver it.
+                Only for rewards and perks, never for orders: when someone brings the number of
+                people their reward needs (for example "bring 3, get a free ticket"), it shows here. Hand it out,
+                then mark it done. Add-on orders are on the venue's order sheet.
               </p>
             </div>
 
@@ -2740,7 +2755,7 @@ function CreatorDashboardContent() {
                           <th className="text-left p-2">Gross Amount</th>
                           <th className="text-left p-2">Platform Fee</th>
                           <th className="text-left p-2">Stripe Fee</th>
-                          <th className="text-left p-2">Net Earnings</th>
+                          <th className="text-left p-2">Your share</th>
                           <th className="text-left p-2">Status</th>
                           <th className="text-left p-2">Date</th>
                         </tr>
@@ -2858,7 +2873,7 @@ function CreatorDashboardContent() {
                         <div key={exp.experienceId} className="p-3 border rounded-lg">
                           <div className="flex justify-between items-start mb-2">
                             <h5 className="font-medium truncate">{exp.experienceTitle}</h5>
-                            <span className="text-sm text-gray-500">{exp.totalBookings} bookings</span>
+                            <span className="text-sm text-gray-500">{exp.totalBookings} {exp.totalBookings === 1 ? "booking" : "bookings"}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-sm">
                             <div>
@@ -3311,7 +3326,7 @@ function CreatorDashboardContent() {
                     {typedAnalytics.topExperiences?.map((exp: any, index: number) => (
                       <div key={exp.id} className="flex justify-between items-center">
                         <span className="truncate">{index + 1}. {exp.title}</span>
-                        <span className="text-sm text-gray-500">{exp.bookings} bookings</span>
+                        <span className="text-sm text-gray-500">{exp.bookings} {exp.bookings === 1 ? "booking" : "bookings"}</span>
                       </div>
                     )) || <p className="text-gray-500">No data available</p>}
                   </div>

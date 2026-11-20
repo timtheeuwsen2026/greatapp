@@ -111,12 +111,9 @@ interface PromoterProfile {
   stripeVerificationStatus?: string | null;
 }
 
-function formatCurrency(amount: number, currency: string): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency,
-    minimumFractionDigits: 2,
-  }).format(amount);
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function formatCurrency(amount: number, _currency?: string): string {
+  return `€${(Number(amount) || 0).toFixed(2)}`;
 }
 
 function formatDate(dateString: string | null): string {

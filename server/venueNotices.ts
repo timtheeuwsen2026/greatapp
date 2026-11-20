@@ -195,7 +195,9 @@ export async function notifyOrganiserOfVenueAnswer(
     ? `${venue.name} accepted your deal for "${event.title}". The terms below are agreed and locked; a change is a new counter offer that both of you accept. ${opts.wasLive
       ? "Your event stays live, nothing changes for people who already booked."
       : "Your event is now live and open for bookings."} The venue's name and address are now on the event page.`
-    : `${venue.name} declined your offer for "${event.title}".${opts.reason ? "" : " No reason was given."} You can pick another venue or enter an address yourself.`;
+    : `${venue.name} declined your offer for "${event.title}".${opts.reason ? "" : " No reason was given."} ${["approved", "published"].includes(String(event.status))
+      ? "People have already booked, so your event stays live without the venue: pick another venue or enter an address yourself, and tell your guests."
+      : "Your event went back to draft: pick another venue or enter an address yourself, then publish again."}`;
   const rows = [...eventRows(event, venue, organiser), ...dealRowsFor(event, contract?.model, contract?.terms || {}, contract?.terms, event)];
   if (!accepted && opts.reason) rows.splice(4, 0, { label: `Reason from ${venue.name}`, value: String(opts.reason) });
   await deliver({

@@ -627,15 +627,15 @@ describe("POST /api/bookings/:id/cancel", () => {
       currency: "eur",
       notice: null,
     });
-    expect(res.body.message).toMatch(/cancelled and EUR 20\.00 has been returned/);
-    expect(res.body.message).toMatch(/remaining EUR 80\.00/);
+    expect(res.body.message).toMatch(/cancelled and €20\.00 has been returned/);
+    expect(res.body.message).toMatch(/remaining €80\.00/);
     // Not put back: some of the money has already gone, and a live booking
     // would be flipped to refunded by the webhook with nothing left to retry.
     expect(storage.revertBookingCancellation).not.toHaveBeenCalled();
     expect(row.status).toBe("cancelled");
     expect(row.cancelledAt).toBeInstanceOf(Date);
     // Not every intent that held money was returned, so the deposit is not
-    // recorded as refunded: EUR 80.00 is still with the platform.
+    // recorded as refunded: €80.00 is still with the platform.
     expect(row.depositStatus).toBeNull();
     expect(storage.updateBooking).not.toHaveBeenCalled();
     expect(settleCancelledBooking).toHaveBeenCalledWith(expect.objectContaining({
@@ -721,7 +721,7 @@ describe("POST /api/bookings/:id/cancel", () => {
         outcome: "refunded",
         amountReturned: 80,
         currency: "eur",
-        notice: "A hold of EUR 20.00 on your card couldn't be released right away; it will drop off automatically within about 7 days.",
+        notice: "A hold of €20.00 on your card couldn't be released right away; it will drop off automatically within about 7 days.",
       });
       expect(res.body.code).toBeUndefined();
       expect(res.body.amountOutstanding).toBeUndefined();
@@ -735,7 +735,7 @@ describe("POST /api/bookings/:id/cancel", () => {
         notice: res.body.notice,
       }));
       expect(settleCancelledBooking.mock.calls[0][0].amountOutstanding).toBeUndefined();
-      expect(logged(warnings).some((line) => line.includes("booking-1") && line.includes("pi_deposit") && line.includes("EUR 20.00"))).toBe(true);
+      expect(logged(warnings).some((line) => line.includes("booking-1") && line.includes("pi_deposit") && line.includes("€20.00"))).toBe(true);
       expect(logged(errors).some((line) => line.includes("CRITICAL"))).toBe(false);
     });
 
@@ -749,7 +749,7 @@ describe("POST /api/bookings/:id/cancel", () => {
       // The refund goes first, and the hold is still attempted after it.
       expect(stripe.refunds.create.mock.invocationCallOrder[0])
         .toBeLessThan(stripe.paymentIntents.cancel.mock.invocationCallOrder[0]);
-      expect(res.body).toMatchObject({ outcome: "refunded", amountReturned: 80, notice: expect.stringMatching(/hold of EUR 20\.00/) });
+      expect(res.body).toMatchObject({ outcome: "refunded", amountReturned: 80, notice: expect.stringMatching(/hold of €20\.00/) });
       expect(row).toMatchObject({ status: "cancelled", depositStatus: null });
     });
 
@@ -769,7 +769,7 @@ describe("POST /api/bookings/:id/cancel", () => {
 
       // The attendee is told what is known; the hold is checked by a person.
       expect(res.statusCode).toBe(200);
-      expect(res.body).toMatchObject({ outcome: "refunded", amountReturned: 80, notice: expect.stringMatching(/hold of EUR 20\.00/) });
+      expect(res.body).toMatchObject({ outcome: "refunded", amountReturned: 80, notice: expect.stringMatching(/hold of €20\.00/) });
       const critical = logged(errors).find((line) => line.includes("CRITICAL"));
       expect(critical).toContain("booking-1");
       expect(critical).toContain("pi_deposit");
@@ -1217,7 +1217,7 @@ describe("settleCancelledBooking", () => {
 
     await vi.waitFor(() => expect(deps.notificationService.sendBookingCancelledOrganiserEmail).toHaveBeenCalled());
     expect(deps.notificationService.sendBookingCancelledEmail).toHaveBeenCalledWith(expect.objectContaining({
-      to: "attendee@example.test", outcome: "hold_released", amountLabel: "EUR 45.00", bookingId: "booking-1",
+      to: "attendee@example.test", outcome: "hold_released", amountLabel: "€45.00", bookingId: "booking-1",
     }));
     expect(deps.notificationService.sendBookingCancelledOrganiserEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: "organiser@example.test", attendeeName: "Ana S.", ticketQuantity: 2,

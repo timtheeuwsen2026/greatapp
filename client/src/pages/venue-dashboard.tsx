@@ -1143,7 +1143,7 @@ function VenueDashboardContent() {
                               price={event.price}
                               maxParticipants={event.maxParticipants}
                               currency={event.currency}
-                              platformPct={event.platformPct}
+                              addons={event.dealAddons}
                               nights={nightsBetween(event.startDate, event.endDate)}
                               eventUrl={`/experience/${event.slug || event.id}`}
                             />
@@ -1285,6 +1285,7 @@ function VenueDashboardContent() {
                             barterTerms={offer.barterTerms}
                             minimumGroup={offer.minimumGroup ?? null}
                             history={offer.history}
+                            agreementUrl={contract?.id ? `/deals/venue/${offer.id}` : null}
                           />
                         </div>
 
@@ -1378,6 +1379,7 @@ function VenueDashboardContent() {
                           barterTerms={deal.barterTerms}
                           minimumGroup={deal.minimumGroup ?? null}
                           history={deal.history}
+                          agreementUrl={deal.source === "contract" && experience.id ? `/deals/venue/${experience.id}` : null}
                         />
                         {deal.acceptedAt && (
                           <p className="mt-3 text-xs text-gray-500">Accepted {new Date(deal.acceptedAt).toLocaleDateString()}</p>
@@ -1736,7 +1738,7 @@ function VenueDashboardContent() {
                   price={offerModal.event.price}
                   maxParticipants={offerModal.event.maxParticipants}
                   currency={offerModal.event.currency}
-                  platformPct={offerModal.event.platformPct}
+                  addons={offerModal.event.dealAddons}
                   nights={nightsBetween(offerModal.event.startDate, offerModal.event.endDate)}
                 />
               </div>

@@ -56,6 +56,7 @@ export async function cancelEventAndRefund(experienceId: string, reason: string)
     .where(and(eq(scheduledPayouts.experienceId, experienceId), inArray(scheduledPayouts.status, ["pending", "failed"] as any)));
   await voidCommissionsForExperience(experienceId);
   await releaseVenueDatesForExperience(experienceId).catch(() => undefined);
+  await storage.closeVenueDealsForCancelledEvent(experienceId).catch(() => undefined);
 
   const currency = (experience.currency || "eur").toLowerCase();
   const result = { ok: true as const, refunded: 0, freeCancelled: 0, failed: [] as Array<{ bookingId: string; message: string }> };

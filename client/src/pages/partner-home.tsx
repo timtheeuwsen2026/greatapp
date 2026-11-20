@@ -198,6 +198,10 @@ export default function PartnerHome() {
           <p className="mt-1 text-gray-600">
             Events you're partnered on, and the audience you've brought to each.
           </p>
+          {/* Who booked through your link, per event, with your commission (66.35). */}
+          <Link href="/dashboard/as-partner" className="mt-2 inline-block text-sm font-medium text-indigo-700 hover:underline" data-testid="link-as-partner">
+            See every booking through your link and your commission →
+          </Link>
         </div>
 
         {/* Three numbers, and only ones that mean something. "Credits earned"

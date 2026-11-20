@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import CreateExperiencePage from '../pages/create-experience';
@@ -17,6 +18,16 @@ vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock('@/components/navigation', () => ({ default: () => <nav data-testid="site-nav" /> }));
 vi.mock('@/components/CreateFlow/IdeaFlow', () => ({ default: () => <div data-testid="idea-flow" /> }));
 
+let drafts: any[] = [];
+vi.mock('@/lib/queryClient', () => ({
+  apiRequest: async () => ({ json: async () => drafts }),
+}));
+
+function renderPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}><CreateExperiencePage /></QueryClientProvider>);
+}
+
 let search = '';
 const navigate = vi.fn();
 vi.mock('wouter', () => ({ useSearch: () => search, useLocation: () => ['/create-experience', navigate] }));
@@ -31,12 +42,32 @@ beforeEach(() => {
   authState = { user: { id: 'u1', role: 'creator' }, isAuthenticated: true, isLoading: false };
   partnerAccess = { canUseTooling: true };
   search = '';
+  drafts = [];
   navigate.mockReset();
 });
 
 describe('the /create-experience page', () => {
+  it('lists ideas saved as drafts, for any role, and reopens one where it stopped', async () => {
+    authState = { user: { id: 'u1', role: 'venue_provider' }, isAuthenticated: true, isLoading: false };
+    drafts = [
+      { id: 'idea-a', title: 'Halloween coffee rave', concept: { stage: 'concept', dateMode: 'open' } },
+      { id: 'idea-sent', title: 'Already sent', concept: { stage: 'concept', dateMode: 'open', sentAt: '2026-11-20T10:00:00Z' } },
+      { id: 'built', title: 'Built in the builder', concept: null },
+    ];
+    renderPage();
+    fireEvent.click(await screen.findByTestId('unfinished-idea-idea-a'));
+    expect(navigate).toHaveBeenCalledWith('/create-experience?start=idea&draft=idea-a');
+    expect(screen.queryByTestId('unfinished-idea-idea-sent')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('unfinished-idea-built')).not.toBeInTheDocument();
+  });
+
+  it('shows no list when there is nothing to continue', () => {
+    renderPage();
+    expect(screen.queryByTestId('unfinished-ideas')).not.toBeInTheDocument();
+  });
+
   it('asks first: an idea, or ready to build', () => {
-    render(<CreateExperiencePage />);
+    renderPage();
     expect(screen.getByText('I have an idea')).toBeInTheDocument();
     expect(screen.getByText("I'm ready to build")).toBeInTheDocument();
     expect(screen.queryByTestId('idea-flow')).not.toBeInTheDocument();
@@ -44,20 +75,20 @@ describe('the /create-experience page', () => {
   });
 
   it('sends "I have an idea" to the idea phase', () => {
-    render(<CreateExperiencePage />);
+    renderPage();
     fireEvent.click(screen.getByTestId('button-create-have-idea'));
     expect(navigate).toHaveBeenCalledWith('/create-experience?start=idea');
   });
 
   it(`sends "I'm ready to build" to the builder existing organisers know`, () => {
-    render(<CreateExperiencePage />);
+    renderPage();
     fireEvent.click(screen.getByTestId('button-create-ready-to-build'));
     expect(navigate).toHaveBeenCalledWith('/event-builder');
   });
 
   it('shows the idea phase on its own, full screen, to someone the tooling is open to', () => {
     search = 'start=idea';
-    render(<CreateExperiencePage />);
+    renderPage();
     expect(screen.getByTestId('idea-flow')).toBeInTheDocument();
     expect(screen.queryByTestId('site-nav')).not.toBeInTheDocument();
   });
@@ -65,7 +96,7 @@ describe('the /create-experience page', () => {
   it('says why, inside the site navigation, to someone still waiting on approval', () => {
     search = 'start=idea';
     partnerAccess = { canUseTooling: false, state: 'pending_review' };
-    render(<CreateExperiencePage />);
+    renderPage();
     expect(screen.getByTestId('gate-notice')).toBeInTheDocument();
     expect(screen.getByTestId('site-nav')).toBeInTheDocument();
     expect(screen.queryByTestId('idea-flow')).not.toBeInTheDocument();
@@ -76,7 +107,7 @@ describe('the /create-experience page', () => {
     (role) => {
       authState = { user: { id: 'u1', role }, isAuthenticated: true, isLoading: false };
       search = 'start=idea';
-      render(<CreateExperiencePage />);
+      renderPage();
       expect(screen.getByTestId('idea-flow')).toBeInTheDocument();
     },
   );
@@ -85,7 +116,7 @@ describe('the /create-experience page', () => {
     search = 'start=idea';
     authState = { user: null, isAuthenticated: false, isLoading: false };
     partnerAccess = undefined;
-    render(<CreateExperiencePage />);
+    renderPage();
     expect(screen.queryByTestId('idea-flow')).not.toBeInTheDocument();
   });
 });

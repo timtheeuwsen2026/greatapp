@@ -10,13 +10,14 @@ describe('live builder invitation updates', () => {
       getExperience: vi.fn(async () => event),
       updateExperience: vi.fn(async (_id, updates) => (event = { ...event, ...updates })),
       upsertVenueInvite: vi.fn(async input => ({ ...input, token: 'same-token' })),
+      getAcceptedVenueContractForExperience: vi.fn(async () => undefined),
     };
     const createVenueInviteForExperience = routeFunction('createVenueInviteForExperience', {
       storage, venueInviteTerms, randomBytes: () => ({ toString: () => 'new-token' }), VENUE_INVITE_TTL_DAYS: 60,
     });
     const notificationService = { sendExternalVenueInvitation: vi.fn(async () => {}) };
     const syncPartnersForExperience = vi.fn(async () => {});
-    const run = routeFunction('/api/experiences/:id/builder', { eventFeeRates,
+    const run = routeFunction('/api/experiences/:id/builder', { eventFeeRates, LOCKED_VENUE_DEAL_FIELDS: [],
       storage, createVenueInviteForExperience, notificationService, syncPartnersForExperience,
       resolveCurrentUserId: () => 'creator', checkIsAdmin: async () => false,
       validateDraftForPublication: () => ({ isValid: true }), buildExperienceFromBuilderPayload: (body: any) => body,
@@ -31,6 +32,41 @@ describe('live builder invitation updates', () => {
     expect(storage.upsertVenueInvite.mock.calls[1][0]).toMatchObject({ proposedModel: 'venue_barter', proposedValue: null, proposedTerms: { barterTerms: 'Bag drop and changing, no money' } });
     expect(syncPartnersForExperience).toHaveBeenCalledTimes(2);
     expect(notificationService.sendExternalVenueInvitation).not.toHaveBeenCalled();
+  });
+});
+
+describe('agreed venue deal is locked (Tim, 57)', () => {
+  const LOCKED_VENUE_DEAL_FIELDS = ['venueCompensationModel', 'venueFixedFee', 'venueBarterTerms'];
+  const setup = (accepted: any) => {
+    let event: any = { id: 'event', creatorId: 'creator', linkedVenueId: 'venue-1', venueCompensationModel: 'fixed_fee', venueFixedFee: '0.50' };
+    const storage = {
+      getExperience: vi.fn(async () => event),
+      updateExperience: vi.fn(async (_id: string, updates: any) => (event = { ...event, ...updates })),
+      getAcceptedVenueContractForExperience: vi.fn(async () => accepted),
+      upsertVenueContract: vi.fn(async () => ({})),
+    };
+    const run = routeFunction('/api/experiences/:id/builder', { eventFeeRates, LOCKED_VENUE_DEAL_FIELDS,
+      storage, createVenueInviteForExperience: async () => undefined, notificationService: {},
+      syncPartnersForExperience: async () => {}, notifyVenueOfNewOffer: async () => {},
+      resolveCurrentUserId: () => 'creator', checkIsAdmin: async () => false,
+      validateDraftForPublication: () => ({ isValid: true }), buildExperienceFromBuilderPayload: (body: any) => body,
+      buildAddonRequests: () => [], syncBuilderParticipantRoles: async () => {},
+    }, 'put');
+    return { storage, run, get: () => event };
+  };
+  const body = { title: 'TEST 3', selectedVenueId: 'venue-1', venueCompensationModel: 'fixed_fee', venueFixedFee: '2.00' };
+
+  it('keeps the agreed terms when the organiser saves the event again', async () => {
+    const { run, get } = setup({ venueId: 'venue-1', status: 'accepted' });
+    const res = routeResponse(); await run({ params: { id: 'event' }, body }, res);
+    expect(res.statusCode).toBe(200);
+    expect(get()).toMatchObject({ title: 'TEST 3', venueFixedFee: '0.50' });
+  });
+
+  it('lets the organiser change terms while no deal is agreed', async () => {
+    const { run, get } = setup(undefined);
+    const res = routeResponse(); await run({ params: { id: 'event' }, body }, res);
+    expect(get().venueFixedFee).toBe('2.00');
   });
 });
 

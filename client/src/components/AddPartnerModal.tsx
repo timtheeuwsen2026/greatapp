@@ -74,8 +74,8 @@ export default function AddPartnerModal({
   /** The tile that was tapped on the Partners step, when one was. */
   initialPartnerType?: PartnerTypeId | null;
   /**
-   * False only when the event has tickets and every one of them is free.
-   * Commission per Ticket is then a share of nothing, so it is not offered.
+   * False while every ticket is free. Commission per Ticket stays offered and
+   * says it applies once a ticket price is set (66.33).
    */
   paidTicketsConfigured?: boolean;
   currencySymbol?: string;
@@ -143,16 +143,13 @@ export default function AddPartnerModal({
     }
   }, [partnerType, editing]);
 
-  /** The deals this type may be offered. Financial Sponsorship is a brand's. */
-  const dealOptions = useMemo(
-    () => dealTypesForPartnerType(partnerType).filter((deal) =>
-      // An entry already saved on commission keeps its card, so editing it is
-      // possible; it simply cannot be newly chosen on a free event.
-      paidTicketsConfigured
-      || !deal.revenueShareEligible
-      || editing?.dealType === deal.id),
-    [partnerType, paidTicketsConfigured, editing?.dealType],
-  );
+  /**
+   * The deals this type may be offered. Financial Sponsorship is a brand's.
+   * Commission per Ticket is always offered (Tim, 66.33, 14 Nov): the ticket
+   * price is set on Pricing, after this step, so "free" here usually only
+   * means "not priced yet". Publishing checks that a ticket has a price.
+   */
+  const dealOptions = useMemo(() => dealTypesForPartnerType(partnerType), [partnerType]);
 
   // Switching a sponsor to a community leaves Financial Sponsorship selected
   // and its card gone from the list — an entry that cannot be saved with no
@@ -455,9 +452,20 @@ export default function AddPartnerModal({
                         )}>
                           {deal.label}
                         </p>
-                        {active && (
-                          <p className="mt-0.5 text-xs text-indigo-800 dark:text-indigo-200">
-                            {deal.description}
+                        <p className={cn(
+                          "mt-0.5 text-xs",
+                          active ? "text-indigo-800 dark:text-indigo-200" : "text-gray-500",
+                        )}>
+                          {deal.description}
+                        </p>
+                        {active && deal.example && (
+                          <p className="mt-0.5 text-xs italic text-indigo-700/80 dark:text-indigo-300/80" data-testid={`partner-deal-example-${deal.id}`}>
+                            For example: {deal.example}
+                          </p>
+                        )}
+                        {deal.revenueShareEligible && !paidTicketsConfigured && (
+                          <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-300" data-testid="text-commission-needs-price">
+                            Applies once you set a ticket price.
                           </p>
                         )}
                       </div>
@@ -480,12 +488,6 @@ export default function AddPartnerModal({
                   {dealRestrictionReason("financial_sponsorship")}
                 </p>
               )}
-            {!paidTicketsConfigured && (
-              <p className="mt-2 text-xs text-gray-500" data-testid="text-no-paid-ticket">
-                Commission per Ticket is not offered: every ticket on this event is
-                free, so there is no ticket revenue to take a share of.
-              </p>
-            )}
           </div>
 
           {/* ── The fields this deal needs, and only those ─────────────── */}
@@ -507,6 +509,10 @@ export default function AddPartnerModal({
               </div>
 
               <p className="text-xs text-muted-foreground">Applies only to tickets booked through this partner’s tracking link, after discounts. Their link becomes available on Partner Home when they accept the invitation, for every partner type.</p>
+              {/* 66.33: works next to a venue deal; the two are separate. */}
+              <p className="text-xs text-muted-foreground" data-testid="text-commission-from-your-share">
+                It comes out of your share, not the venue's: a venue deal stays as agreed, and Pricing shows the venue and each partner on their own line.
+              </p>
 
               {/* Affiliate's own two fields, inline — the same pattern as
                   Milestone Barter's attendee target, not a separate section. */}

@@ -65,6 +65,7 @@ const NOT_THE_BUILDERS: Record<string, string> = {
   mvgLastCheckedAt: "the MVG scheduler owns this",
   archivedAt: "archive action",
   archivedBy: "archive action",
+  hiddenFromPublic: "admin Hide from public (66.20e)",
   cancelledAt: "cancellation flow",
   cancellationReason: "cancellation flow",
   venueStatus: "derived from the venue type at publish",

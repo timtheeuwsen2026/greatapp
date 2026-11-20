@@ -160,3 +160,11 @@ export function hasPaidTicketConfigured(skus: RevenueSkuLike[] | null | undefine
   if (!Array.isArray(skus) || skus.length === 0) return true;
   return skus.some((sku) => getSkuEntryPrice(sku) > 0);
 }
+
+/**
+ * Strict: at least one ticket has a price. Used at publish, when "not priced
+ * yet" no longer means "still to come" (66.33).
+ */
+export function hasPricedTicket(skus: RevenueSkuLike[] | null | undefined): boolean {
+  return Array.isArray(skus) && skus.some((sku) => getSkuEntryPrice(sku) > 0);
+}

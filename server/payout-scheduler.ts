@@ -76,6 +76,7 @@ export function startPayoutScheduler(): void {
     await scheduleMissingPayouts();
     await processReadyPayouts();
     await payHeldPartnerCommissions();
+    await payHeldRecipientShares();
   });
 
   console.log("[Payout Scheduler] Started — runs every hour");
@@ -198,6 +199,17 @@ export async function processReadyPayouts(): Promise<{
         `[Payout Scheduler] Done: ${results.succeeded} succeeded, ${results.failed} failed`
       );
     }
+
+    // A failed payout whose shares were all paid by hand, or are only held for
+    // people without Stripe, is not "failed" (66.29c). Moves no money.
+    for (const row of await storage.getAllScheduledPayouts()) {
+      if (row.status !== "failed") continue;
+      const hasManual = Object.values((row.stripeTransferIds as Record<string, string>) || {})
+        .some((value) => String(value).startsWith("manual:"));
+      if (!hasManual) continue;
+      await settlePayoutIfFullyPaid(row.id).catch((error) =>
+        console.error(`[Payout Scheduler] Could not settle ${row.id}:`, error?.message || error));
+    }
   } catch (err: any) {
     console.error("[Payout Scheduler] Fatal error:", err.message);
   }
@@ -212,9 +224,28 @@ export async function processReadyPayouts(): Promise<{
  * rules and the same no-double-pay guards as the hourly one; a failure is
  * recorded on the payout with Stripe's own reason.
  */
-export async function payScheduledPayoutNow(scheduledPayoutId: string): Promise<{ ok: boolean; message: string }> {
+export async function payScheduledPayoutNow(
+  scheduledPayoutId: string,
+  options: { confirmManual?: boolean } = {},
+): Promise<{ ok: boolean; message: string; needsConfirmation?: boolean }> {
   const payout = await storage.getScheduledPayoutById(scheduledPayoutId);
   if (!payout) return { ok: false, message: "Payout not found" };
+  // A share marked "paid manually" is skipped by the run, but if the money
+  // never actually went out by hand, or went out twice, that is a double
+  // payment or a missing one. Say so before anything moves (66.30c).
+  const manual = Object.entries((payout.stripeTransferIds as Record<string, string>) || {})
+    .filter(([, value]) => String(value).startsWith("manual:"));
+  if (String(payout.errorMessage || "").startsWith("Paid manually")) {
+    return { ok: false, message: "This payout is marked as paid manually. Pay now is not available, so nothing is paid twice." };
+  }
+  if (manual.length && !options.confirmManual) {
+    return {
+      ok: false,
+      needsConfirmation: true,
+      message: `${manual.length === 1 ? "One share is" : `${manual.length} shares are`} already marked as paid manually and will be skipped. `
+        + "Only continue if that money really went out by hand, or Pay now will pay the others while that share stays unpaid in Stripe.",
+    };
+  }
   const holdsShares = Object.keys((payout.stripeTransferIds as Record<string, string>) || {}).some((key) => key.startsWith("held:"));
   if (payout.status !== "pending" && payout.status !== "failed" && !(payout.status === "completed" && holdsShares)) {
     return { ok: false, message: `Only a waiting, failed or partly paid payout can be paid now — this one is ${payout.status}.` };
@@ -258,6 +289,10 @@ export type PayoutPlan = {
   grossCents: number;
   platformFeeCents: number;
   lines: PayoutPlanLine[];
+  /** What the sales are made of, so the fee can be explained (66.29e). */
+  ticketGrossCents?: number;
+  addonGrossCents?: number;
+  ticketFeePct?: number;
 };
 
 /**
@@ -311,15 +346,18 @@ export async function executeExperiencePayout(
     lines: planLines,
   });
 
-  // Only pay out experiences where MVG was met (or non-MVG events that are published)
+  // Only pay out events that went ahead: never a cancelled one (66.18b), and
+  // with a minimum group only once it was reached.
   if (!isExperiencePayoutEligible(experience)) {
-    if (dryRun) return planOf(false, "The minimum group was not reached", 0, 0);
+    const eventCancelled = experience.status === "cancelled" || !!(experience as any).cancelledAt;
+    const reason = eventCancelled ? "The event was cancelled, so nothing is paid out" : "The minimum group was not reached";
+    if (dryRun) return planOf(false, reason, 0, 0);
     console.log(
-      `[Payout Scheduler] Skipping ${experienceId}: mvgStatus=${experience.mvgStatus}`
+      `[Payout Scheduler] Skipping ${experienceId}: status=${experience.status} mvgStatus=${experience.mvgStatus}`
     );
     await storage.updateScheduledPayout(scheduledPayoutId, {
       status: "cancelled",
-      errorMessage: "MVG not met — no payout",
+      errorMessage: eventCancelled ? "Event cancelled — no payout" : "MVG not met — no payout",
       processedAt: new Date(),
     });
     return;
@@ -351,11 +389,14 @@ export async function executeExperiencePayout(
     additionalGrossCents,
   );
 
+  // A free event (or one whose every booking was refunded) has nothing to pay
+  // out: no "€0.00 scheduled" row (66.29d).
   if (grossAmountCents === 0) {
-    if (dryRun) return planOf(true, null, 0, 0);
+    if (dryRun) return planOf(false, FREE_EVENT_NO_PAYOUT, 0, 0);
     console.log(`[Payout Scheduler] ${experienceId}: gross = 0, skipping`);
     await storage.updateScheduledPayout(scheduledPayoutId, {
-      status: "completed",
+      status: "cancelled",
+      errorMessage: FREE_EVENT_NO_PAYOUT,
       totalGrossAmountCents: 0,
       processedAt: new Date(),
     });
@@ -445,6 +486,11 @@ export async function executeExperiencePayout(
   );
 
   const currentRates = eventFeeRates(experience, platformFeePct);
+  // Tickets and add-ons apart: the fee is a share of tickets only, so the
+  // admin can see why it is less than 15% of all sales (66.29e).
+  const addonGrossCents = Math.min(grossAmountCents, confirmedBookings.reduce(
+    (sum, booking) => sum + Math.max(0, Math.round(Number(booking.addonTotal || 0) * 100)), 0,
+  ));
   const platformFeeAmountCents = confirmedBookings.reduce(
     (total, booking) => total + bookingPlatformFeeCents(booking, platformFeePct, true), 0,
   ) + Math.round(Math.max(0, grossAmountCents - bookingGrossCents) * currentRates.ticketPlatformFeePct / 100);
@@ -835,7 +881,14 @@ export async function executeExperiencePayout(
     await storage.updateScheduledPayout(scheduledPayoutId, { stripeTransferIds: transferIds } as any);
   }
 
-  if (dryRun) return planOf(true, null, grossAmountCents, platformFeeAmountCents);
+  if (dryRun) {
+    return {
+      ...planOf(true, null, grossAmountCents, platformFeeAmountCents),
+      ticketGrossCents: grossAmountCents - addonGrossCents,
+      addonGrossCents,
+      ticketFeePct: currentRates.ticketPlatformFeePct,
+    };
+  }
 
   const heldPartners = Object.keys(transferIds).filter((key) => key.startsWith("held:promoter:")).length;
   const heldNote = [
@@ -860,6 +913,41 @@ export async function executeExperiencePayout(
     `Platform: ${platformFeeAmountCents / 100}, ` +
     `Transfers: ${Object.keys(transferIds).join(", ")}`
   );
+}
+
+export const FREE_EVENT_NO_PAYOUT = "Free event, no payout: nothing was collected.";
+
+/**
+ * Close a payout once nobody is owed anything any more (66.29c).
+ *
+ * Bandido's two shares were both marked paid manually, yet the payout stayed
+ * "Failed" with a "Pay now" button and stayed in "Payouts needing attention"
+ * and "Still to pay". When every share is settled (paid through Stripe or
+ * marked paid by hand) the payout is paid; when the only shares left belong to
+ * people without a Stripe account, it is partly paid with those shares held,
+ * exactly as a normal run would leave it. Moves no money.
+ */
+export async function settlePayoutIfFullyPaid(scheduledPayoutId: string): Promise<"paid" | "partly_paid" | "open"> {
+  const payout = await storage.getScheduledPayoutById(scheduledPayoutId);
+  if (!payout || (payout.status !== "failed" && payout.status !== "pending")) return "open";
+  const plan = await executeExperiencePayout(
+    payout.experienceId, payout.id, payout.totalGrossAmountCents ?? 0, payout.additionalGrossAmountCents ?? 0, { dryRun: true },
+  ) as PayoutPlan;
+  if (!plan?.eligible || !plan.lines.length) return "open";
+  const transferIds = { ...((payout.stripeTransferIds as Record<string, string>) || {}) };
+  const unsettled = plan.lines.filter((line) => !transferIds[line.key]);
+  if (unsettled.some((line) => line.accountReady)) return "open";
+  const manual = Object.values(transferIds).some((value) => String(value).startsWith("manual:"));
+  for (const line of unsettled) transferIds[`held:${line.key}`] = "awaiting-payout-account";
+  await storage.updateScheduledPayout(payout.id, {
+    status: "completed",
+    processedAt: new Date(),
+    stripeTransferIds: transferIds,
+    errorMessage: unsettled.length
+      ? `Partly paid: held until they connect Stripe: ${unsettled.map((line) => `${line.recipientType} ${formatPayoutAmount(line.amountCents, plan.currency)}`).join(", ")}`
+      : manual ? "Paid (some shares paid manually)" : null,
+  } as any);
+  return unsettled.length ? "partly_paid" : "paid";
 }
 
 // ─── Shares held for a missing Stripe account ────────────────────────────────
@@ -1198,6 +1286,14 @@ export async function scheduleExperiencePayout(
   } catch {
     experience = undefined;
   }
+  // Nothing collected (a free event): nothing to schedule (66.29d). A paid
+  // booking later schedules it as usual.
+  if (!(totalGrossCents > 0)) {
+    console.log(`[Payout Scheduler] ${experienceId}: nothing collected, no payout scheduled`);
+    return;
+  }
+  // A cancelled event is never paid out (66.18b).
+  if (experience && !isExperiencePayoutEligible(experience)) return;
   const scheduledFor = (experience && payoutDueAt(experience as any))
     || new Date(eventEndDate.getTime() + PAYOUT_DELAY_HOURS * 60 * 60 * 1000);
   await storage.upsertScheduledPayout(experienceId, scheduledFor, totalGrossCents);

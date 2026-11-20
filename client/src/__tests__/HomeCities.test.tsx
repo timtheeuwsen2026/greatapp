@@ -55,7 +55,11 @@ beforeEach(() => {
 describe("homepage per city (66.24)", () => {
   it("shows the city's own events, the city on each card, and the others underneath", async () => {
     renderHome();
-    expect(await screen.findByTestId("heading-city")).toHaveTextContent("Experiences in Amsterdam");
+    // One heading only (66.31g): "Experiences in …" is gone.
+    expect(await screen.findByTestId("heading-happening-now")).toHaveTextContent("⚡ Happening now in Amsterdam");
+    expect(screen.getByText("Join a squad, reserve your spot. When enough people join, it happens.")).toBeInTheDocument();
+    expect(screen.queryByTestId("heading-city")).not.toBeInTheDocument();
+    expect(screen.queryByText(/make it happen|make the experience a reality/)).not.toBeInTheDocument();
     const happening = screen.getByTestId("happening-now-swimlane");
     expect(within(happening).getByText("020 Run Culture, Sunday 5K")).toBeInTheDocument();
     expect(within(happening).queryByText("Sunday Social 5K, Good Soles")).not.toBeInTheDocument();
@@ -80,14 +84,14 @@ describe("homepage per city (66.24)", () => {
   it("does not ask again once a city is chosen", async () => {
     Object.assign(cityState, { city: "Barcelona", chosen: true, suggested: null });
     renderHome();
-    expect(await screen.findByTestId("heading-city")).toHaveTextContent("Experiences in Barcelona");
+    expect(await screen.findByTestId("heading-happening-now")).toHaveTextContent("⚡ Happening now in Barcelona");
     expect(screen.queryByTestId("city-banner")).not.toBeInTheDocument();
   });
 
   it("opens a city from its own address, as the Instagram links do", async () => {
     path = "/barcelona";
     renderHome();
-    expect(await screen.findByTestId("heading-city")).toHaveTextContent("Experiences in Barcelona");
+    expect(await screen.findByTestId("heading-happening-now")).toHaveTextContent("⚡ Happening now in Barcelona");
     expect(cityState.setCity).toHaveBeenCalledWith("Barcelona");
     expect(screen.queryByTestId("city-banner")).not.toBeInTheDocument();
   });
@@ -95,7 +99,7 @@ describe("homepage per city (66.24)", () => {
   it("shows every city under All cities, without the other-cities row", async () => {
     Object.assign(cityState, { city: "all", chosen: true, suggested: null });
     renderHome();
-    expect(await screen.findByTestId("heading-city")).toHaveTextContent("Experiences in all cities");
+    expect(await screen.findByTestId("heading-happening-now")).toHaveTextContent(/^⚡ Happening now$/);
     expect(screen.getByText("Sunday Social 5K, Good Soles")).toBeInTheDocument();
     expect(screen.getByText("020 Run Culture, Sunday 5K")).toBeInTheDocument();
     expect(screen.queryByTestId("other-cities-section")).not.toBeInTheDocument();

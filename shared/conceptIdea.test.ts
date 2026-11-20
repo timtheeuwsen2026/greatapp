@@ -71,15 +71,24 @@ describe("idea screen 1 — only the title is required", () => {
   });
 });
 
-describe("idea screen 2 — everything optional, but a range has to make sense", () => {
-  it("accepts nothing", () => {
-    expect(hasErrors(validateIdeaAudience(idea()))).toBe(false);
+describe("idea screen 2 — one to three interests; the group size is optional, but a range has to make sense", () => {
+  const sport = { interests: ["sport" as const] };
+
+  it("needs one interest and nothing else", () => {
+    expect(validateIdeaAudience(idea()).interests).toBeTruthy();
+    expect(hasErrors(validateIdeaAudience(idea(sport)))).toBe(false);
+  });
+
+  it("takes at most three interests, and words for Something else", () => {
+    expect(validateIdeaAudience(idea({ interests: ["sport", "mind_body", "food_drink", "travel"] })).interests).toMatch(/3/);
+    expect(validateIdeaAudience(idea({ interests: ["other"] })).interestOther).toBeTruthy();
+    expect(hasErrors(validateIdeaAudience(idea({ interests: ["other"], interestOther: "Board games" })))).toBe(false);
   });
 
   it("accepts a range and a single bound", () => {
-    expect(hasErrors(validateIdeaAudience(idea({ groupSizeMin: "10", groupSizeMax: "60" })))).toBe(false);
-    expect(hasErrors(validateIdeaAudience(idea({ groupSizeMax: 60 })))).toBe(false);
-    expect(hasErrors(validateIdeaAudience(idea({ groupSizeMin: 10 })))).toBe(false);
+    expect(hasErrors(validateIdeaAudience(idea({ ...sport, groupSizeMin: "10", groupSizeMax: "60" })))).toBe(false);
+    expect(hasErrors(validateIdeaAudience(idea({ ...sport, groupSizeMax: 60 })))).toBe(false);
+    expect(hasErrors(validateIdeaAudience(idea({ ...sport, groupSizeMin: 10 })))).toBe(false);
   });
 
   it("rejects a top lower than the bottom", () => {
@@ -95,7 +104,7 @@ describe("idea screen 2 — everything optional, but a range has to make sense",
   it("refuses a group the builder would then reject", () => {
     expect(validateIdeaAudience(idea({ groupSizeMax: "201" })).groupSizeMax).toMatch(/200/);
     expect(validateIdeaAudience(idea({ groupSizeMin: "500" })).groupSizeMin).toMatch(/200/);
-    expect(hasErrors(validateIdeaAudience(idea({ groupSizeMax: "200" })))).toBe(false);
+    expect(hasErrors(validateIdeaAudience(idea({ interests: ["sport"], groupSizeMax: "200" })))).toBe(false);
   });
 
   it("holds the audience to a sensible length", () => {
@@ -239,8 +248,9 @@ describe("sanitiseConcept — the boundary for the concept column", () => {
   it("drops unknown keys", () => {
     const result = sanitiseConcept({ stage: "concept", dateMode: "open", approved: true, __proto__: { admin: true }, status: "published" });
     expect(Object.keys(result!).sort()).toEqual([
-      "audience", "dateMode", "dayPreference", "groupSizeMax", "groupSizeMin",
-      "linkedVenueId", "periodEnd", "periodStart", "place", "stage",
+      "audience", "collabIdeaId", "dateMode", "dayPreference", "groupSizeMax", "groupSizeMin",
+      "interestOther", "interests", "level", "linkedVenueId", "needs", "note", "periodEnd", "periodStart",
+      "place", "sentAt", "slots", "stage",
     ]);
   });
 

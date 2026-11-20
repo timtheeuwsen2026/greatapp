@@ -4,6 +4,8 @@ export type PayoutEligibilityInput = {
   requireMinimumParticipants?: boolean | null;
   mvgEnabled?: boolean | null;
   mvgStatus?: string | null;
+  status?: string | null;
+  cancelledAt?: Date | string | null;
 };
 
 type MoneyValue = string | number | null | undefined;
@@ -21,6 +23,10 @@ function positiveMoney(value: MoneyValue): number | null {
 }
 
 export function isExperiencePayoutEligible(experience: PayoutEligibilityInput): boolean {
+  // A cancelled event is never paid out (Tim, 66.18b), whatever its minimum
+  // group: its buyers are refunded, and a refund that failed must not turn
+  // into a payout.
+  if (experience.status === "cancelled" || experience.cancelledAt) return false;
   const requiresMvg = !!(experience.requireMinimumParticipants || experience.mvgEnabled);
   return !requiresMvg || experience.mvgStatus === "met";
 }

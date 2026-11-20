@@ -2,7 +2,7 @@ import AddonChoicePicker from "@/components/AddonChoicePicker";
 import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { bookingClosedMessage, hasExperiencePassed } from "@shared/eventLifecycle";
-import { EVENT_PHASE_LABEL, eventPhase, formatEventWhen } from "@shared/eventTime";
+import { EVENT_PHASE_LABEL, eventPhase, eventStartsAt, formatEventWhen } from "@shared/eventTime";
 import { cityOfEvent } from "@shared/cities";
 import { useLocation, useRoute, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import ShareButton from "@/components/ShareButton";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
+import { WaitingForVenueBadge } from "@/components/WaitingForVenueBadge";
 import { ReviewSummary } from "@/components/ReviewSummary";
 import OrganiserTurnout from "@/components/OrganiserTurnout";
 import { EventAttendanceProgress } from "@/components/AttendanceProgress";
@@ -524,7 +525,7 @@ export default function ExperienceDetails() {
       USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'C$', AUD: 'A$', CHF: 'CHF '
     };
     const symbol = symbols[currencyCode] || currencyCode + ' ';
-    return `${symbol}${numAmount.toFixed(0)}`;
+    return `${symbol}${numAmount.toFixed(2)}`;
   };
 
   // Get pricing from ticket SKUs or fall back to legacy fields
@@ -684,21 +685,30 @@ export default function ExperienceDetails() {
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
                     <MapPin className="h-5 w-5 text-gray-700" />
                   </div>
-                  <AddressLink
-                    address={experience.location}
-                    name={(experience as any).venue || undefined}
-                    showIcon={false}
-                    className="font-medium text-gray-900"
-                    data-testid="hero-address-link"
-                  />
+                  <div>
+                    {/* The venue by name once it accepted (66.34k): the
+                        address alone did not say where people are going. */}
+                    {(experience as any).venue && (
+                      <p className="font-semibold text-gray-900" data-testid="hero-venue-name">{(experience as any).venue}</p>
+                    )}
+                    <AddressLink
+                      address={experience.location}
+                      name={(experience as any).venue || undefined}
+                      showIcon={false}
+                      className={(experience as any).venue ? "text-sm text-gray-600" : "font-medium text-gray-900"}
+                      data-testid="hero-address-link"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border bg-gray-50">
                     <Users className="h-5 w-5 text-gray-700" />
                   </div>
-                  <p className="font-medium text-gray-900">
-                    {isMvgForming
+                  <p className="font-medium text-gray-900" data-testid="hero-participant-count">
+                    {eventIsOver
+                      ? `${liveParticipantCount} ${liveParticipantCount === 1 ? "person" : "people"} joined`
+                      : isMvgForming
                       ? formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)
                       : formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)}
                   </p>
@@ -706,7 +716,7 @@ export default function ExperienceDetails() {
               </div>
 
               {/* FORMING — the "help us make it happen" call to action */}
-              {experience.lifecycleStatus === 'forming' && experience.requireMinimumParticipants && (() => {
+              {!eventHasPassed && experience.lifecycleStatus === 'forming' && experience.requireMinimumParticipants && (() => {
                 // liveParticipantCount comes from the live booking count (getMVGProgress) — not the stale DB column
                 const liveCurrent = liveParticipantCount;
                 const liveMin = experience.minimumParticipants ?? experience.mvgMin ?? 1;
@@ -734,16 +744,33 @@ export default function ExperienceDetails() {
               })()}
 
               {/* CONFIRMED */}
-              {experience.lifecycleStatus === 'confirmed' && experience.requireMinimumParticipants && (
+              {/* After the event (66.34f): it has ended, with the final count,
+                  and no booking, cancellation or deposit text. */}
+              {eventIsOver && experience.lifecycleStatus !== 'cancelled' ? (
+                <div
+                  className="mt-6 flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 p-5"
+                  data-testid="hero-ended-overlay"
+                >
+                  <CheckCircle className="h-5 w-5 shrink-0 text-gray-500" />
+                  <div>
+                    <p className="text-sm font-bold text-gray-900">This event has ended</p>
+                    <p className="text-xs text-gray-600">
+                      {liveParticipantCount > 0
+                        ? `${liveParticipantCount} ${liveParticipantCount === 1 ? "person" : "people"} joined`
+                        : "Nobody joined this event"}
+                    </p>
+                  </div>
+                </div>
+              ) : experience.lifecycleStatus === 'confirmed' && experience.requireMinimumParticipants && (
                 <div
                   className="mt-6 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-5"
                   data-testid="hero-confirmed-overlay"
                 >
                   <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
                   <div>
-                    <p className="text-sm font-bold text-emerald-900">Group confirmed — this experience is happening!</p>
+                    <p className="text-sm font-bold text-emerald-900">Group confirmed: this experience is happening!</p>
                     <p className="text-xs text-emerald-700">
-                      {isFreeExperience ? "Your spot is secured" : "Your deposit is secured"}
+                      The minimum group is reached, so it goes ahead.
                     </p>
                   </div>
                 </div>
@@ -794,6 +821,12 @@ export default function ExperienceDetails() {
             {experience.location && (
               <div className="mb-8">
                 <h2 className="text-2xl font-semibold mb-4">Where</h2>
+                {experience.status !== 'cancelled' && (
+                  <WaitingForVenueBadge experienceId={experience.id} withName className="mb-2" />
+                )}
+                {(experience as any).venue && (
+                  <p className="mb-1 font-semibold text-gray-900" data-testid="where-venue-name">{(experience as any).venue}</p>
+                )}
                 <AddressLink
                   address={experience.location}
                   name={(experience as any).venue || undefined}
@@ -873,22 +906,27 @@ export default function ExperienceDetails() {
                 <CardTitle className="flex items-center justify-between">
                   <span className="flex items-center">
                     <Users className="h-5 w-5 mr-2 text-primary" />
-                    {experience.requireMinimumParticipants
+                    {eventIsOver
+                      ? `People who joined (${liveParticipantCount})`
+                      : experience.requireMinimumParticipants
                       ? `Meet Other Participants (${isMvgForming
                           ? formatMvgParticipantCount(liveParticipantCount, experience.minimumParticipants || experience.mvgMin || 0, false)
                           : formatCapacityParticipantCount(liveParticipantCount, experience.maxParticipants)})`
                       : `Meet Other Participants (${liveParticipantCount} joined)`}
                   </span>
-                  <div className="flex items-center space-x-2">
-                    <Badge variant="secondary" className="text-primary border-primary/20">
-                      {isMvgForming ? `${mvgSpotsNeeded} more needed` : `${spotsLeft} spots left`}
-                    </Badge>
-                  </div>
+                  {!eventHasPassed && (
+                    <div className="flex items-center space-x-2">
+                      <Badge variant="secondary" className="text-primary border-primary/20">
+                        {isMvgForming ? `${mvgSpotsNeeded} more needed` : `${spotsLeft} spots left`}
+                      </Badge>
+                    </div>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-6">
-                  {/* Join the Community Before Booking */}
+                  {/* Join the Community Before Booking: only while booking is open */}
+                  {!eventHasPassed && (
                   <div className="bg-white/50 border border-primary/10 rounded-lg p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -923,6 +961,7 @@ export default function ExperienceDetails() {
                       </div>
                     </div>
                   </div>
+                  )}
 
                   {isCreator && <TicketRegistrationBreakdown rows={experience.ticketRegistrations} />}
                   {/* Current Participants */}
@@ -983,9 +1022,11 @@ export default function ExperienceDetails() {
                             {liveParticipantCount} People Joined
                           </h4>
                           <p className="text-gray-600 text-sm mb-4">
-                            Participant details are private for this experience, but you can still join the community and connect after booking.
+                            {eventHasPassed
+                              ? "Participant details are private for this experience."
+                              : "Participant details are private for this experience, but you can still join the community and connect after booking."}
                           </p>
-                          <div className="flex justify-center">
+                          {!eventHasPassed && <div className="flex justify-center">
                             <SimpleSmartButton 
                               action="join_community"
                               size="sm" 
@@ -994,10 +1035,14 @@ export default function ExperienceDetails() {
                             >
                               Join Community
                             </SimpleSmartButton>
-                          </div>
+                          </div>}
                         </div>
                       )}
                     </div>
+                  ) : eventHasPassed ? (
+                    <p className="py-6 text-center text-sm text-gray-600" data-testid="participants-none-ended">
+                      Nobody joined this event.
+                    </p>
                   ) : (
                     <div className="text-center py-8">
                       <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1454,7 +1499,7 @@ export default function ExperienceDetails() {
                     <span className="text-3xl font-bold text-gray-900" data-testid="text-price-per-person">
                       {formatCurrency(effectivePrice, experience.currency)}
                     </span>
-                    <span className="text-gray-500 ml-1">/person</span>
+                    {effectivePrice > 0 && <span className="text-gray-500 ml-1">per person</span>}
                   </div>
                   
                   {/* Loyalty progress at the decision moment, rather than only
@@ -1508,10 +1553,7 @@ export default function ExperienceDetails() {
                         data-testid="button-book-single-price"
                       >
                         <Ticket className="h-5 w-5 mr-2 text-white" />
-                        {depositAmount > 0 
-                          ? `Book Now – ${formatCurrency(depositAmount, experience.currency)} Deposit`
-                          : 'Book Now'
-                        }
+                        Book Now
                       </Button>
                     </Link>
                   )}
@@ -1531,7 +1573,7 @@ export default function ExperienceDetails() {
                   )}
                   
                   {/* Show ticket selection prompt when there are ticket options */}
-                  {spotsLeft > 0 && ticketSkus.length > 0 && (
+                  {!eventHasPassed && spotsLeft > 0 && ticketSkus.length > 0 && (
                     <Button
                       className="mb-3 w-full border border-primary bg-primary py-5 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-primary/90 hover:text-white hover:shadow-xl"
                       size="lg"
@@ -1816,7 +1858,7 @@ export default function ExperienceDetails() {
                   )}
                   
                   {/* Deposit Information - DATA CONTRACT: Use depositAmount or ticketSkus.depositPerPerson (fixed amount only) */}
-                  {depositAmount > 0 && (
+                  {!eventHasPassed && depositAmount > 0 && (
                     <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
                       <div className="space-y-1 text-sm">
                         <div className="flex items-center justify-between">
@@ -2044,18 +2086,27 @@ export default function ExperienceDetails() {
                   )}
                 </div>
 
-                <div className="mt-6 pt-6 border-t">
-                  {!isFreeExperience && (
-                    <div className="flex items-center text-sm text-gray-600">
-                      <i className="fas fa-shield-alt mr-2"></i>
-                      <span>Secure payment with Stripe</span>
-                    </div>
-                  )}
-                  <div className="flex items-center text-sm text-gray-600 mt-2">
-                    <i className="fas fa-undo mr-2"></i>
-                    <span>Free cancellation up to 24h before</span>
+                {/* Booking reassurance only while booking is open (66.34l), and
+                    the 24-hour line only while it can still apply (65.6). */}
+                {!eventHasPassed && (
+                  <div className="mt-6 pt-6 border-t">
+                    {!isFreeExperience && (
+                      <div className="flex items-center text-sm text-gray-600">
+                        <i className="fas fa-shield-alt mr-2"></i>
+                        <span>Secure payment with Stripe</span>
+                      </div>
+                    )}
+                    {(() => {
+                      const startsAt = eventStartsAt(experience as any);
+                      return startsAt && startsAt.getTime() - Date.now() > 24 * 60 * 60 * 1000;
+                    })() && (
+                      <div className="flex items-center text-sm text-gray-600 mt-2">
+                        <i className="fas fa-undo mr-2"></i>
+                        <span>Free cancellation up to 24h before</span>
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </div>

@@ -28,9 +28,10 @@ function formatCategory(value: string): string {
  * platform manages, communities are the reason someone signs up. The venue
  * directory it replaced now lives in the admin dashboard.
  */
-export function FeaturedCommunities({ limit = 6 }: { limit?: number }) {
+export function FeaturedCommunities({ limit = 6, city }: { limit?: number; city?: string | null }) {
+  // Follows the city the visitor picked (66.31f).
   const { data: groups = [], isLoading } = useQuery<CommunityGroup[]>({
-    queryKey: ["/api/community/groups"],
+    queryKey: city ? ["/api/community/groups", { city }] : ["/api/community/groups"],
   });
 
   // A private group is not an invitation to a stranger reading the homepage.
@@ -110,7 +111,9 @@ export function FeaturedCommunities({ limit = 6 }: { limit?: number }) {
         ) : (
           <div className="rounded-2xl border border-dashed bg-slate-50 px-6 py-10 text-center dark:bg-slate-900">
             <Users className="mx-auto mb-3 h-10 w-10 text-slate-400" aria-hidden="true" />
-            <h3 className="text-lg font-semibold">The first communities are forming</h3>
+            <h3 className="text-lg font-semibold">
+              {city && city !== "all" ? `No communities in ${city} yet` : "The first communities are forming"}
+            </h3>
             <p className="mt-1 text-sm text-muted-foreground">
               Groups will appear here as soon as they are created.
             </p>

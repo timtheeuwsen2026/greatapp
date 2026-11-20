@@ -24,6 +24,7 @@ import {
 import { format } from "date-fns";
 import { VenueInfoCard } from "@/components/VenueInfoCard";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
+import { WaitingForVenueBadge } from "@/components/WaitingForVenueBadge";
 import CreatorProfileCard from "@/components/creator-profile-card";
 import OrganiserTurnout from "@/components/OrganiserTurnout";
 import Navigation from "@/components/navigation";
@@ -60,6 +61,10 @@ interface PublicEventData {
   full_description: string;
   start_date: string;
   end_date: string;
+  /** upcoming, happening (started) or ended, in the event's city time. */
+  phase?: "upcoming" | "happening" | "ended" | null;
+  /** "Tue 10 Nov 2026, 19:00 – 21:00". */
+  when?: string;
   duration: number;
   /** The address the creator typed, present whether or not a venue is linked. */
   location?: string | null;
@@ -390,10 +395,7 @@ export default function PublicEventPage() {
       gbp: '£',
     };
     const symbol = currencySymbols[currency.toLowerCase()] || '€';
-    return `${symbol}${safeAmount.toLocaleString(undefined, {
-      minimumFractionDigits: safeAmount % 1 ? 2 : 0,
-      maximumFractionDigits: 2,
-    })}`;
+    return `${symbol}${safeAmount.toFixed(2)}`;
   };
 
   const getLowestPrice = () => {
@@ -420,6 +422,15 @@ export default function PublicEventPage() {
   const totalSpots = getTotalAvailableSpots();
   const depositAmount = Number(event.pricing.depositAmount || 0);
   const mvgMet = event.mvg.status === 'met' || event.lifecycleStatus === 'confirmed';
+  // Booking closes at the start (66.21); after the end the page says the event
+  // has ended, with the final count and no booking text (66.34f, l).
+  const bookingClosed = event.phase === 'happening' || event.phase === 'ended' || event.lifecycleStatus === 'cancelled';
+  const joinedCount = Number(event.mvg.current_signups || 0);
+  const closedText = event.lifecycleStatus === 'cancelled'
+    ? 'This event was cancelled.'
+    : event.phase === 'ended'
+    ? `This event has ended. ${joinedCount > 0 ? `${joinedCount} ${joinedCount === 1 ? 'person' : 'people'} joined.` : 'Nobody joined.'}`
+    : 'This event has started, booking is closed.';
   const mvgPercentage = calculateMvgPercentage(
     event.mvg.current_signups,
     event.mvg.minimum_required,
@@ -538,16 +549,20 @@ export default function PublicEventPage() {
                       <MapPin className="h-5 w-5 text-gray-700" />
                     </div>
                     <div>
+                      {/* Venue name, then its address (66.34k). The link
+                          shows the address whenever there is one, so the name
+                          used to disappear and the address printed twice. */}
+                      {event.venue.name && (
+                        <p className="font-semibold text-gray-900" data-testid="hero-venue-name">{event.venue.name}</p>
+                      )}
+                      <WaitingForVenueBadge experienceId={event.id} className="my-1" />
                       <AddressLink
                         address={event.venue.location}
                         name={event.venue.name}
                         showIcon={false}
-                        className="font-medium text-gray-900"
+                        className={event.venue.name ? "text-sm text-gray-600" : "font-medium text-gray-900"}
                         data-testid="hero-address-link"
                       />
-                      {event.venue.name && event.venue.location && (
-                        <p className="text-sm text-gray-600">{event.venue.location}</p>
-                      )}
                     </div>
                   </div>
                 )}
@@ -556,14 +571,20 @@ export default function PublicEventPage() {
               <div className="mt-8">
                 {/* This page is where a partner's share link lands, and the
                     button used to do nothing at all. */}
-                <Button
-                  asChild
-                  size="lg"
-                  className="px-8 py-6 text-lg font-semibold"
-                  data-testid="button-book-now"
-                >
-                  <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
-                </Button>
+                {bookingClosed ? (
+                  <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 font-medium text-gray-700" data-testid="text-booking-closed">
+                    {closedText}
+                  </p>
+                ) : (
+                  <Button
+                    asChild
+                    size="lg"
+                    className="px-8 py-6 text-lg font-semibold"
+                    data-testid="button-book-now"
+                  >
+                    <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -587,13 +608,13 @@ export default function PublicEventPage() {
                   <div>
                     <p className="text-sm text-gray-600">From</p>
                     <p className="text-xl font-bold text-gray-900">
-                      {formatCurrency(lowestPrice, event.pricing.currency)}
+                      {formatCurrency(lowestPrice, event.pricing.currency)} <span className="text-base font-medium text-gray-600">per person</span>
                     </p>
                   </div>
                 </div>
               )}
 
-              {event.pricing.depositEnabled && depositAmount > 0 && (
+              {!bookingClosed && event.pricing.depositEnabled && depositAmount > 0 && (
                 <div className="flex items-center gap-3" data-testid="fact-deposit-amount">
                   <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
                     <Lock className="w-6 h-6 text-primary" />
@@ -988,13 +1009,17 @@ export default function PublicEventPage() {
                 
                 {/* Status Note */}
                 <p className="text-sm text-gray-600" data-testid="mvg-status-indicator">
-                  {event.lifecycleStatus === 'confirmed' ? (
+                  {event.phase === 'ended' && event.lifecycleStatus !== 'cancelled' ? (
+                    <span className="text-gray-700 font-medium" data-testid="mvg-ended-badge">
+                      This event has ended. {joinedCount} {joinedCount === 1 ? 'person' : 'people'} joined.
+                    </span>
+                  ) : event.lifecycleStatus === 'confirmed' ? (
                     <span className="text-green-700 font-medium" data-testid="mvg-reached-badge">
-                      ✓ Group confirmed — this trip is happening!
+                      ✓ Group confirmed: this event is happening!
                     </span>
                   ) : event.lifecycleStatus === 'cancelled' ? (
                     <span className="text-red-700 font-medium" data-testid="mvg-cancelled-badge">
-                      ✗ Trip cancelled — minimum group size was not reached.
+                      ✗ Event cancelled: the minimum group was not reached.
                     </span>
                   ) : (
                     <span>
@@ -1108,16 +1133,18 @@ export default function PublicEventPage() {
             <div className="flex flex-col md:flex-row items-center justify-between gap-6">
               <div className="text-center md:text-left">
                 <h2 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-final-cta">
-                  Ready to Join?
+                  {bookingClosed ? (event.phase === 'ended' ? 'This event has ended' : 'Booking is closed') : 'Ready to Join?'}
                 </h2>
                 <p className="text-lg text-gray-600">
-                  {event.mvg.enabled && event.mvg.current_signups < event.mvg.minimum_required
+                  {bookingClosed
+                    ? closedText
+                    : event.mvg.enabled && event.mvg.current_signups < event.mvg.minimum_required
                     ? `Help us reach ${event.mvg.minimum_required} participants to confirm this experience`
                     : 'Secure your spot for this amazing experience'}
                 </p>
                 
                 {/* Price reminder */}
-                {lowestPrice !== null && (
+                {!bookingClosed && lowestPrice !== null && (
                   <p className="text-sm text-gray-600 mt-2">
                     From {formatCurrency(lowestPrice, event.pricing.currency)} per person
                   </p>
@@ -1128,14 +1155,16 @@ export default function PublicEventPage() {
                 {/* An event still forming its minimum group is booked like any
                     other — the bookings are what form it. This said "Join
                     Waitlist" and, like the button above, went nowhere. */}
-                <Button
-                  asChild
-                  size="lg"
-                  className="px-8 py-6 text-lg font-semibold"
-                  data-testid="button-book-now-final"
-                >
-                  <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
-                </Button>
+                {!bookingClosed && (
+                  <Button
+                    asChild
+                    size="lg"
+                    className="px-8 py-6 text-lg font-semibold"
+                    data-testid="button-book-now-final"
+                  >
+                    <Link href={bookingHrefFor(event.id, search)}>Book Now</Link>
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>

@@ -345,6 +345,8 @@ async function processMVGFailure(experienceId: string, failureReason: string) {
     .where(eq(experiences.id, experienceId));
   // The event is off, so stop holding the venue's dates against it.
   await releaseVenueDatesForExperience(experienceId);
+  // The event will not take place: its venue deals end with it (66.10b).
+  await storage.closeVenueDealsForCancelledEvent(experienceId).catch(() => undefined);
   await voidCommissionsForExperience(experienceId);
   
   const experience = await storage.getExperience(experienceId);

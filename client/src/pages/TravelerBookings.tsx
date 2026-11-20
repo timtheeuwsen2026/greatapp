@@ -17,6 +17,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Calendar, MapPin, CreditCard, Clock, Image as ImageIcon } from "lucide-react";
+
+/** "9 Nov 2026": the one date format Tim asked for (66.34g). */
+function formatDay(value: string | Date | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Madrid" });
+}
 import { Link } from "wouter";
 import Navigation from "@/components/navigation";
 import { LocationMap, AddressLink } from "@/components/LocationMap";
@@ -145,9 +154,9 @@ type StatusInfo = { label: string; description: string; variant: "default" | "se
 
 const statusConfig: Record<string, StatusInfo> = {
   pending: { label: "Pending", description: "Awaiting confirmation", variant: "secondary" },
-  deposit_authorized: { label: "Deposit Held", description: "Deposit held - awaiting trip confirmation", variant: "default" },
-  deposit_paid: { label: "Deposit Paid", description: "Spot secured - balance due before the trip", variant: "default" },
-  confirmed: { label: "Confirmed", description: "Trip confirmed!", variant: "default" },
+  deposit_authorized: { label: "Deposit Held", description: "Payment held, waiting for the group to confirm", variant: "default" },
+  deposit_paid: { label: "Deposit Paid", description: "Spot secured, balance due before the event", variant: "default" },
+  confirmed: { label: "Confirmed", description: "Event confirmed!", variant: "default" },
   fully_paid: { label: "Paid", description: "Paid in full - your spot is confirmed", variant: "default" },
   failed: { label: "Failed", description: "Payment failed", variant: "destructive" },
 };
@@ -627,6 +636,9 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
                 not an address to retype into their phone. */}
             {(booking.experience?.location || booking.experience?.venue) && (
               <>
+                {booking.experience?.venue && (
+                  <p className="font-medium text-gray-900 sm:col-span-2" data-testid="text-detail-venue">{booking.experience.venue}</p>
+                )}
                 <AddressLink
                   address={booking.experience.location}
                   name={booking.experience.venue}
@@ -701,7 +713,7 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
             {hasOutstandingBalance && booking.balanceDueDate && (
               <div className="flex items-center gap-2 text-sm text-orange-600 mt-2" data-testid="text-detail-due-date">
                 <Clock className="h-4 w-4" />
-                <span>Balance due by {new Date(booking.balanceDueDate).toLocaleDateString()}</span>
+                <span>Balance due by {formatDay(booking.balanceDueDate)}</span>
               </div>
             )}
           </div>
@@ -741,17 +753,17 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
                   {isEventCancelled(booking) ? (
                     <span className="text-red-600">
                       {didGroupFail(booking)
-                        ? "❌ Trip cancelled — the minimum group wasn't reached."
-                        : "❌ Trip cancelled — this event was called off."}
+                        ? "❌ Event cancelled: the minimum group wasn't reached."
+                        : "❌ Event cancelled: this event was called off."}
                       {mvgPaymentNote && (
                         <span data-testid="mvg-status-payment-note"> {mvgPaymentNote}</span>
                       )}
                     </span>
                   ) : groupFormed ? (
-                    <span className="text-green-600">✅ Group confirmed — this trip is happening!</span>
+                    <span className="text-green-600">✅ Group confirmed: this event is happening!</span>
                   ) : (
                     <span className="text-gray-600">
-                      Forming — trip confirms once {minimumParticipants} people join.
+                      Forming: the event confirms once {minimumParticipants} people join.
                     </span>
                   )}
                 </div>
@@ -760,7 +772,7 @@ function BookingDetailView({ booking, open, onClose }: { booking: EnrichedBookin
           ) : null}
 
           <div className="text-xs text-gray-500" data-testid="text-detail-booking-date">
-            Booked on {new Date(booking.bookingDate || booking.createdAt).toLocaleDateString()}
+            Booked on {formatDay(booking.bookingDate || booking.createdAt)}
           </div>
         </div>
 
@@ -838,7 +850,7 @@ export default function TravelerBookings() {
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="text-page-title">My Bookings</h1>
-              <p className="text-gray-600">View your trip bookings and payment status</p>
+              <p className="text-gray-600">View your event bookings and payment status</p>
             </div>
             <Button asChild data-testid="button-browse-experiences">
               <Link href="/experiences">Browse Experiences</Link>
@@ -938,6 +950,9 @@ export default function TravelerBookings() {
                                 <span>{formatEventWhen(booking.experience as any)}</span>
                               </div>
                             )}
+                            {booking.experience?.venue && (
+                              <span className="font-medium text-gray-800" data-testid={`text-booking-venue-${booking.id}`}>{booking.experience.venue}</span>
+                            )}
                             {(booking.experience?.location || booking.experience?.venue) && (
                               <AddressLink
                                 address={booking.experience.location}
@@ -949,7 +964,7 @@ export default function TravelerBookings() {
                           </div>
                           
                           <p className="mt-2 text-xs text-gray-500" data-testid={`text-booking-created-${booking.id}`}>
-                            Booked on {new Date(booking.bookingDate || booking.createdAt).toLocaleDateString()}
+                            Booked on {formatDay(booking.bookingDate || booking.createdAt)}
                           </p>
 
                           {/* The code the door scans. Collapsed until asked for:

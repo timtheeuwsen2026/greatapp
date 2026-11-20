@@ -393,7 +393,7 @@ describe("helpers", () => {
   });
 
   it("formats an amount the way the transactional emails do", () => {
-    expect(formatCancellationAmount(12.5, "eur")).toBe("EUR 12.50");
+    expect(formatCancellationAmount(12.5, "eur")).toBe("€12.50");
   });
 });
 

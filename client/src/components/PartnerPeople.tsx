@@ -19,12 +19,10 @@ const STATE_LABEL: Record<PartnerPersonState, string> = {
   refunded: "Refunded",
 };
 
-function money(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${currency.toUpperCase()}`;
-  }
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function money(amount: number, _currency?: string): string {
+  const value = Number(amount) || 0;
+  return `${value < 0 ? "−" : ""}€${Math.abs(value).toFixed(2)}`;
 }
 
 /**

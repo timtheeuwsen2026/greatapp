@@ -36,6 +36,18 @@ const goodConcept = {
   stage: "concept", dateMode: "period", periodStart: "2026-10-25", periodEnd: "2026-11-01",
   dayPreference: "weekends", audience: "Runners", groupSizeMin: 10, groupSizeMax: 60,
   place: "Barceloneta", linkedVenueId: null,
+  // Screens 2 to 6 of the idea flow (Create flow 26): kept whole as well.
+  interests: ["sport", "music_nightlife"], interestOther: null, level: "anyone",
+  needs: ["community"],
+  slots: {
+    community: {
+      board: true, direct: true, inviteSource: "email", inviteUserId: null, inviteName: null,
+      inviteEmail: "runclub@example.com", kindOfSpace: null, dealPreferences: [], ownCommunity: false,
+      earn: "per_person", amountPerPerson: 2, need: null, giveBack: null, service: null,
+      inviteUrl: "https://great.test/collab-invite/abc",
+    },
+  },
+  note: "We bring the speakers.", collabIdeaId: "idea-1", sentAt: "2026-10-14T10:00:00.000Z",
 };
 
 describe("creating a draft", () => {

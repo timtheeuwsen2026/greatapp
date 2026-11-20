@@ -27,8 +27,121 @@ export type ConceptDayPreference = "weekdays" | "weekends" | "any";
 export const CONCEPT_DATE_MODES: readonly ConceptDateMode[] = ["exact", "period", "open"];
 export const CONCEPT_DAY_PREFERENCES: readonly ConceptDayPreference[] = ["weekdays", "weekends", "any"];
 
-/** Suggestions only — the audience field takes any text. */
+/** Suggestions only — the audience field takes any text. Kept for drafts made before the interests below. */
 export const AUDIENCE_SUGGESTIONS = ["Runners", "Swimmers", "Cyclists", "Everyone"] as const;
+
+/**
+ * Screen 2, who is it for: broad interests instead of sports only (Tim, Create
+ * flow 35, "Audience"). Specific activities belong in the event itself. These
+ * stay tags, for the "For" line, matching with communities and Explore filters.
+ */
+export type IdeaInterestId =
+  | "sport" | "mind_body" | "food_drink" | "music_nightlife"
+  | "learning" | "travel" | "meet_people" | "other";
+
+export const IDEA_INTERESTS: Array<{ id: IdeaInterestId; label: string; hint?: string }> = [
+  { id: "sport", label: "Sport and movement", hint: "Runs, gym, Hyrox, triathlon" },
+  { id: "mind_body", label: "Mind and body", hint: "Yoga, breathwork, wellness" },
+  { id: "food_drink", label: "Food and drink" },
+  { id: "music_nightlife", label: "Music and nightlife" },
+  { id: "learning", label: "Learning and creativity", hint: "Workshops, talks" },
+  { id: "travel", label: "Travel and adventure", hint: "Retreats, trips" },
+  { id: "meet_people", label: "Meeting new people" },
+  { id: "other", label: "Something else" },
+];
+export const IDEA_INTERESTS_MAX = 3;
+export const IDEA_INTEREST_OTHER_MAX = 60;
+
+export type IdeaLevel = "anyone" | "beginners" | "experienced";
+export const IDEA_LEVELS: Array<{ id: IdeaLevel; label: string }> = [
+  { id: "anyone", label: "Anyone" },
+  { id: "beginners", label: "Beginners" },
+  { id: "experienced", label: "Experienced" },
+];
+
+/**
+ * Screen 3, what do you still need (Create flow 26.1). It only decides which
+ * screens follow. "Nothing" is the empty list, answered.
+ */
+export type IdeaNeedId = "venue" | "community" | "sponsor" | "service_provider";
+export const IDEA_NEEDS: Array<{ id: IdeaNeedId; label: string; hint: string }> = [
+  { id: "venue", label: "A venue or space", hint: "A place to hold it" },
+  { id: "community", label: "People or a community", hint: "A run club, a group, an audience" },
+  { id: "sponsor", label: "A sponsor or product", hint: "Drinks, gear, power, budget" },
+  { id: "service_provider", label: "A service provider", hint: "A photographer, DJ, coach" },
+];
+
+export type IdeaInviteSource = "platform" | "link" | "email";
+/** How a community earns (26.2). Only per person carries an amount. */
+export type PeopleEarn = "per_person" | "free_access" | "barter" | "fixed_fee";
+export const PEOPLE_EARN_OPTIONS: Array<{ id: PeopleEarn; label: string }> = [
+  { id: "per_person", label: "Per person" },
+  { id: "free_access", label: "Free access" },
+  { id: "barter", label: "Barter" },
+  { id: "fixed_fee", label: "Fixed fee" },
+];
+/** Tim: the standard per-person rate is about €2, set in the people step. */
+export const DEFAULT_AMOUNT_PER_PERSON = 2;
+export const AMOUNT_PER_PERSON_MAX = 500;
+
+/** What the venue could live with: the same five answers as the Collab Idea form. */
+export const VENUE_DEAL_IDS = ["revenue_split", "barter", "upfront_fee", "content_for_exposure", "open_to_discuss"] as const;
+export type VenueDealId = (typeof VENUE_DEAL_IDS)[number];
+
+/**
+ * One open slot: a need with how the organiser wants to fill it. Not a separate
+ * object (26.3): it lives on the event's concept, and the posting on the Collab
+ * board is written from it.
+ */
+export interface IdeaSlot {
+  /** Show it on the Collab board. */
+  board: boolean;
+  /** Invite somebody they already have in mind. */
+  direct: boolean;
+  inviteSource: IdeaInviteSource;
+  /** Picked from the people on Great. */
+  inviteUserId: string | null;
+  inviteName: string | null;
+  inviteEmail: string | null;
+  /** Venue */
+  kindOfSpace: string | null;
+  dealPreferences: VenueDealId[];
+  /** People or community */
+  ownCommunity: boolean;
+  earn: PeopleEarn | null;
+  amountPerPerson: number | null;
+  /** Sponsor or product */
+  need: string | null;
+  giveBack: string | null;
+  /** Service provider */
+  service: string | null;
+  /** Set once the direct invite exists, so sending again never invites twice. */
+  inviteUrl: string | null;
+}
+
+export const SLOT_TEXT_MAX = 300;
+
+export function emptySlot(need: IdeaNeedId): IdeaSlot {
+  return {
+    board: need !== "community",
+    direct: need === "community",
+    inviteSource: need === "community" ? "link" : "platform",
+    inviteUserId: null,
+    inviteName: null,
+    inviteEmail: null,
+    kindOfSpace: null,
+    dealPreferences: [],
+    ownCommunity: false,
+    earn: need === "community" ? "per_person" : null,
+    amountPerPerson: need === "community" ? DEFAULT_AMOUNT_PER_PERSON : null,
+    need: null,
+    giveBack: null,
+    service: null,
+    inviteUrl: null,
+  };
+}
+
+export const IDEA_NOTE_MAX = 1000;
 
 export const IDEA_TITLE_MAX = 120;
 export const IDEA_LINE_MAX = 280;
@@ -56,9 +169,21 @@ export interface ConceptIdea {
   place: string | null;
   /** A Great venue the organiser picked in the place field, if any. */
   linkedVenueId: string | null;
+  /** Screen 2 tags. Absent on drafts made before them. */
+  interests?: IdeaInterestId[];
+  interestOther?: string | null;
+  level?: IdeaLevel | null;
+  /** Screen 3. Null until answered; an empty list is "Nothing". */
+  needs?: IdeaNeedId[] | null;
+  slots?: Partial<Record<IdeaNeedId, IdeaSlot>>;
+  /** Review screen: "Anything else?" */
+  note?: string | null;
+  /** The Collab board posting written from the slots, once sent. */
+  collabIdeaId?: string | null;
+  sentAt?: string | null;
 }
 
-/** The raw answers on the two idea screens. Numbers may arrive as typed text. */
+/** The raw answers on the idea screens. Numbers may arrive as typed text. */
 export interface IdeaInput {
   title: string;
   oneLiner: string;
@@ -76,6 +201,15 @@ export interface IdeaInput {
   audience: string;
   groupSizeMin: string | number | null;
   groupSizeMax: string | number | null;
+  interests: IdeaInterestId[];
+  interestOther: string;
+  level: IdeaLevel;
+  needs: IdeaNeedId[] | null;
+  slots: Partial<Record<IdeaNeedId, IdeaSlot>>;
+  note: string;
+  photoUrl: string;
+  collabIdeaId: string | null;
+  sentAt: string | null;
 }
 
 export const EMPTY_IDEA: IdeaInput = {
@@ -93,6 +227,15 @@ export const EMPTY_IDEA: IdeaInput = {
   audience: "",
   groupSizeMin: "",
   groupSizeMax: "",
+  interests: [],
+  interestOther: "",
+  level: "anyone",
+  needs: null,
+  slots: {},
+  note: "",
+  photoUrl: "",
+  collabIdeaId: null,
+  sentAt: null,
 };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -127,7 +270,7 @@ export function localToday(now: Date = new Date()): string {
 
 export type IdeaErrors = Partial<Record<
   "title" | "oneLiner" | "exactStart" | "exactEnd" | "startTime" | "periodStart" | "periodEnd" | "place"
-  | "audience" | "groupSizeMin" | "groupSizeMax",
+  | "audience" | "groupSizeMin" | "groupSizeMax" | "interests" | "interestOther" | "needs" | "note",
   string
 >>;
 
@@ -174,12 +317,20 @@ export function validateIdeaBasics(input: IdeaInput, today: string = localToday(
   return errors;
 }
 
-/** Screen 2: who is it for. Everything is optional, but a range has to make sense. */
+/** Screen 2: who is it for. One to three interests; the group size is optional, but a range has to make sense. */
 export function validateIdeaAudience(input: IdeaInput): IdeaErrors {
   const errors: IdeaErrors = {};
 
   if (input.audience.trim().length > IDEA_AUDIENCE_MAX) {
     errors.audience = `Keep this under ${IDEA_AUDIENCE_MAX} characters.`;
+  }
+  const interests = input.interests ?? [];
+  if (interests.length === 0) errors.interests = "Pick at least one.";
+  else if (interests.length > IDEA_INTERESTS_MAX) errors.interests = `Pick up to ${IDEA_INTERESTS_MAX}.`;
+  if (interests.includes("other")) {
+    const other = (input.interestOther ?? "").trim();
+    if (!other) errors.interestOther = "Say what it is, in a few words.";
+    else if (other.length > IDEA_INTEREST_OTHER_MAX) errors.interestOther = `Keep this under ${IDEA_INTEREST_OTHER_MAX} characters.`;
   }
 
   const filled = (value: string | number | null) => value !== null && value !== undefined && String(value).trim() !== "";
@@ -200,20 +351,294 @@ export function hasErrors(errors: IdeaErrors): boolean {
   return Object.keys(errors).length > 0;
 }
 
+const INTEREST_IDS = new Set<string>(IDEA_INTERESTS.map((entry) => entry.id));
+const LEVEL_IDS = new Set<string>(IDEA_LEVELS.map((entry) => entry.id));
+const NEED_IDS = new Set<string>(IDEA_NEEDS.map((entry) => entry.id));
+const EARN_IDS = new Set<string>(PEOPLE_EARN_OPTIONS.map((entry) => entry.id));
+const SOURCE_IDS = new Set<string>(["platform", "link", "email"]);
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function sanitiseInterests(raw: unknown): IdeaInterestId[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(new Set(raw.map(String).filter((id) => INTEREST_IDS.has(id))))
+    .slice(0, IDEA_INTERESTS_MAX) as IdeaInterestId[];
+}
+
+export function sanitiseNeeds(raw: unknown): IdeaNeedId[] | null {
+  if (!Array.isArray(raw)) return null;
+  // In the order of the list, whatever order they were ticked in, so the screens follow it.
+  const picked = new Set(raw.map(String));
+  return IDEA_NEEDS.map((entry) => entry.id).filter((id) => picked.has(id) && NEED_IDS.has(id));
+}
+
+/** A money amount per person: positive, two decimals, capped. Null for anything else. */
+export function parseAmountPerPerson(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" ? value : Number(String(value).replace(",", ".").trim());
+  if (!Number.isFinite(number) || number <= 0 || number > AMOUNT_PER_PERSON_MAX) return null;
+  return Math.round(number * 100) / 100;
+}
+
+/** One slot, cleaned: only the fields its own need asks for survive. */
+export function sanitiseSlot(need: IdeaNeedId, raw: unknown): IdeaSlot {
+  const base = emptySlot(need);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
+  const value = raw as Record<string, unknown>;
+  const inviteSource = SOURCE_IDS.has(String(value.inviteSource)) ? (value.inviteSource as IdeaInviteSource) : base.inviteSource;
+  const email = cleanText(value.inviteEmail, 254);
+  const slot: IdeaSlot = {
+    ...base,
+    board: typeof value.board === "boolean" ? value.board : base.board,
+    direct: typeof value.direct === "boolean" ? value.direct : base.direct,
+    inviteSource,
+    inviteUserId: inviteSource === "platform" ? cleanText(value.inviteUserId, 64) : null,
+    inviteName: inviteSource === "platform" ? cleanText(value.inviteName, 120) : null,
+    inviteEmail: inviteSource !== "platform" && email && EMAIL.test(email) ? email.toLowerCase() : null,
+    inviteUrl: cleanText(value.inviteUrl, 500),
+  };
+  if (need === "venue") {
+    slot.kindOfSpace = cleanText(value.kindOfSpace, SLOT_TEXT_MAX);
+    slot.dealPreferences = Array.isArray(value.dealPreferences)
+      ? Array.from(new Set(value.dealPreferences.map(String)))
+        .filter((id): id is VenueDealId => (VENUE_DEAL_IDS as readonly string[]).includes(id))
+      : [];
+  }
+  if (need === "community") {
+    slot.ownCommunity = value.ownCommunity === true;
+    slot.earn = EARN_IDS.has(String(value.earn)) ? (value.earn as PeopleEarn) : base.earn;
+    slot.amountPerPerson = slot.earn === "per_person" ? parseAmountPerPerson(value.amountPerPerson) : null;
+  }
+  if (need === "sponsor") {
+    slot.need = cleanText(value.need, SLOT_TEXT_MAX);
+    slot.giveBack = cleanText(value.giveBack, SLOT_TEXT_MAX);
+  }
+  if (need === "service_provider") {
+    slot.service = cleanText(value.service, SLOT_TEXT_MAX);
+  }
+  return slot;
+}
+
+/** The slots for the needs that are ticked. A need unticked later leaves nothing behind. */
+export function sanitiseSlots(needs: IdeaNeedId[] | null, raw: unknown): Partial<Record<IdeaNeedId, IdeaSlot>> {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const out: Partial<Record<IdeaNeedId, IdeaSlot>> = {};
+  for (const need of needs ?? []) out[need] = sanitiseSlot(need, source[need]);
+  return out;
+}
+
+const interestLabel = (id: IdeaInterestId, other?: string | null) =>
+  id === "other" ? (other?.trim() || "Something else") : (IDEA_INTERESTS.find((entry) => entry.id === id)?.label ?? id);
+
+/**
+ * "Sport and movement, music and nightlife · anyone" — screen 2's interests and
+ * level as one line. Tim's pre-launch "For" line adds the group size after it.
+ */
+export function describeInterests(interests: IdeaInterestId[] | undefined, other?: string | null, level?: IdeaLevel | null): string | null {
+  const list = sanitiseInterests(interests ?? []);
+  if (list.length === 0) return null;
+  const words = list.map((id, index) => {
+    const label = interestLabel(id, other);
+    // Only the built-in labels are lowered; what somebody typed stays as typed.
+    return index === 0 || id === "other" ? label : label.charAt(0).toLowerCase() + label.slice(1);
+  });
+  const levelText = level && LEVEL_IDS.has(level) ? IDEA_LEVELS.find((entry) => entry.id === level)!.label.toLowerCase() : null;
+  return [words.join(", "), levelText].filter(Boolean).join(" · ");
+}
+
+export function describeGroupSize(min: number | null | undefined, max: number | null | undefined): string | null {
+  if (min && max) return min === max ? `${min} people` : `${min} to ${max} people`;
+  if (max) return `Up to ${max} people`;
+  if (min) return `From ${min} people`;
+  return null;
+}
+
+/** The whole "For" line: "Sport and movement · anyone · 10 to 60 people". Older drafts read their typed audience. */
+export function describeIdeaFor(concept: Partial<ConceptIdea> | null | undefined): string | null {
+  if (!concept) return null;
+  const who = describeInterests(concept.interests, concept.interestOther, concept.level) ?? (concept.audience?.trim() || null);
+  const parts = [who, describeGroupSize(concept.groupSizeMin, concept.groupSizeMax)].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** "€2.00 per person who checks in", "Free access", … */
+export function describePeopleEarn(slot: Pick<IdeaSlot, "earn" | "amountPerPerson"> | null | undefined): string | null {
+  if (!slot?.earn) return null;
+  if (slot.earn === "per_person") {
+    // The form holds what was typed until it is saved, so read it as a number here.
+    const amount = parseAmountPerPerson(slot.amountPerPerson);
+    return amount ? `€${amount.toFixed(2)} per person who checks in` : "Per person who checks in";
+  }
+  return PEOPLE_EARN_OPTIONS.find((entry) => entry.id === slot.earn)?.label ?? null;
+}
+
 /** The `concept` column value for these answers. */
 export function buildConcept(input: IdeaInput): ConceptIdea {
   const period = input.dateMode === "period";
+  const interests = sanitiseInterests(input.interests);
+  const level = LEVEL_IDS.has(input.level) ? input.level : "anyone";
+  const interestOther = interests.includes("other") ? cleanText(input.interestOther, IDEA_INTEREST_OTHER_MAX) : null;
+  const needs = sanitiseNeeds(input.needs);
   return {
     stage: "concept",
     dateMode: input.dateMode,
     periodStart: period && isRealDay(input.periodStart) ? input.periodStart : null,
     periodEnd: period && isRealDay(input.periodEnd) ? input.periodEnd : null,
     dayPreference: period ? (input.dayPreference ?? "any") : null,
-    audience: cleanText(input.audience, IDEA_AUDIENCE_MAX),
+    // Interests replace the typed audience; the line they make is kept in the old
+    // field too, so every place that reads `audience` keeps showing something true.
+    audience: interests.length
+      ? cleanText(describeInterests(interests, interestOther, level), IDEA_AUDIENCE_MAX)
+      : cleanText(input.audience, IDEA_AUDIENCE_MAX),
     groupSizeMin: parseGroupSize(input.groupSizeMin),
     groupSizeMax: parseGroupSize(input.groupSizeMax),
     place: cleanText(input.place, IDEA_PLACE_MAX),
     linkedVenueId: cleanText(input.linkedVenueId, 64),
+    interests,
+    interestOther,
+    level,
+    needs,
+    slots: sanitiseSlots(needs, input.slots),
+    note: cleanText(input.note, IDEA_NOTE_MAX),
+    collabIdeaId: cleanText(input.collabIdeaId, 64),
+    sentAt: cleanText(input.sentAt, 40),
+  };
+}
+
+export type SlotErrors = Partial<Record<"find" | "invite" | "inviteEmail" | "amountPerPerson" | "kindOfSpace" | "need" | "service", string>>;
+
+/** One need's screen. Text answers are optional; who to invite and the amount are not, once chosen. */
+export function validateIdeaSlot(need: IdeaNeedId, slot: IdeaSlot | undefined): SlotErrors {
+  const errors: SlotErrors = {};
+  const value = slot ?? emptySlot(need);
+  const ownOnly = need === "community" && value.ownCommunity;
+  if (!value.board && !value.direct && !ownOnly) {
+    errors.find = need === "community"
+      ? "Choose Post to board, Invite directly or I bring my own community."
+      : "Choose Post to board, Invite directly, or both.";
+  }
+  if (value.direct && !value.inviteUrl) {
+    if (value.inviteSource === "platform" && !value.inviteUserId) errors.invite = "Pick who to invite, or invite by link or email.";
+    if (value.inviteSource === "email") {
+      const email = (value.inviteEmail ?? "").trim();
+      if (!email || !EMAIL.test(email)) errors.inviteEmail = "Enter their email address.";
+    }
+  }
+  if (need === "community" && value.earn === "per_person" && parseAmountPerPerson(value.amountPerPerson) === null) {
+    errors.amountPerPerson = `Enter an amount between €0.01 and €${AMOUNT_PER_PERSON_MAX}.`;
+  }
+  return errors;
+}
+
+/** Screen 3 must be answered: something, or "Nothing". */
+export function validateIdeaNeeds(input: IdeaInput): IdeaErrors {
+  return input.needs === null ? { needs: "Pick what you still need, or Nothing." } : {};
+}
+
+/** The needs whose slot asks for a posting: on the board, or with somebody invited directly. */
+export function needsToPost(input: Pick<IdeaInput, "needs" | "slots">): IdeaNeedId[] {
+  return (input.needs ?? []).filter((need) => {
+    const slot = input.slots?.[need];
+    return !!slot && (slot.board || slot.direct);
+  });
+}
+
+/** The midday instant for a day, as the builder and the draft routes send dates. */
+function dayInstant(day: string | null | undefined): string | null {
+  return isRealDay(day) ? `${day}T12:00:00.000Z` : null;
+}
+
+/**
+ * The Collab board posting written from the slots (26.3). Null when there is
+ * nothing to post. `listed` is false when every slot is "Invite directly" only,
+ * so the row carries the invites and the board never shows it.
+ */
+export function buildCollabIdeaPayload(input: IdeaInput, draftId: string | null) {
+  const needs = needsToPost(input);
+  if (needs.length === 0) return null;
+  const onBoard = needs.filter((need) => input.slots[need]?.board);
+  // Cleaned the way the draft stores them: trimmed, and only each need's own fields.
+  const concept = buildConcept(input);
+  const venue = concept.slots?.venue;
+  const community = concept.slots?.community;
+  const sponsor = concept.slots?.sponsor;
+  const service = concept.slots?.service_provider;
+  const typeDetails: Record<string, Record<string, string>> = {};
+  if (venue?.kindOfSpace) typeDetails.venue = { kindOfSpace: venue.kindOfSpace };
+  if (community) {
+    const earn = describePeopleEarn(community);
+    if (earn) typeDetails.community = { earn };
+  }
+  if (sponsor && (sponsor.need || sponsor.giveBack)) {
+    typeDetails.sponsor = {
+      ...(sponsor.need ? { need: sponsor.need } : {}),
+      ...(sponsor.giveBack ? { giveBack: sponsor.giveBack } : {}),
+    };
+  }
+  if (service?.service) typeDetails.service_provider = { service: service.service };
+
+  const exact = input.dateMode === "exact";
+  const period = input.dateMode === "period";
+  const start = exact ? input.exactStart : period ? input.periodStart : null;
+  const end = exact ? (input.exactEnd || input.exactStart) : period ? input.periodEnd : null;
+  const description = [input.oneLiner.trim(), input.note.trim()].filter(Boolean).join("\n\n");
+
+  return {
+    title: input.title.trim().slice(0, IDEA_TITLE_MAX),
+    description: description || null,
+    // The board lists what it is asked to find; an invite-only posting still
+    // needs its types for the invites that hang off it.
+    seekingPartnerTypes: onBoard.length ? onBoard : needs,
+    typeDetails,
+    dealPreferences: venue?.dealPreferences ?? [],
+    audience: describeIdeaFor(concept),
+    city: input.place.trim() || null,
+    groupSizeMin: concept.groupSizeMin,
+    groupSizeMax: concept.groupSizeMax,
+    estimatedStart: dayInstant(start),
+    estimatedEnd: dayInstant(end),
+    photoUrl: input.photoUrl.trim() || null,
+    listed: onBoard.length > 0,
+    experienceDraftId: draftId,
+  };
+}
+
+/** The idea answers back out of a saved draft, so the flow can be reopened where it stopped. */
+export function ideaInputFromDraft(draft: Record<string, any> | null | undefined): IdeaInput | null {
+  if (!draft || !isConceptDraft(draft)) return null;
+  const concept = sanitiseConcept(draft.concept)!;
+  const day = (value: unknown) => {
+    if (!value) return "";
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+  };
+  const startDay = day(draft.startDate);
+  const endDay = day(draft.endDate);
+  return {
+    ...EMPTY_IDEA,
+    title: String(draft.title ?? ""),
+    oneLiner: String(draft.description ?? ""),
+    dateMode: concept.dateMode,
+    exactStart: concept.dateMode === "exact" ? startDay : "",
+    exactEnd: concept.dateMode === "exact" && endDay && endDay !== startDay ? endDay : "",
+    startTime: typeof draft.startTime === "string" ? draft.startTime : "",
+    periodStart: concept.periodStart ?? "",
+    periodEnd: concept.periodEnd ?? "",
+    dayPreference: concept.dayPreference,
+    place: concept.place ?? String(draft.location ?? ""),
+    linkedVenueId: concept.linkedVenueId,
+    // Interests are shown as chips; the old free-text audience only comes back when there are none.
+    audience: concept.interests?.length ? "" : (concept.audience ?? ""),
+    groupSizeMin: concept.groupSizeMin ?? "",
+    groupSizeMax: concept.groupSizeMax ?? "",
+    interests: concept.interests ?? [],
+    interestOther: concept.interestOther ?? "",
+    level: concept.level ?? "anyone",
+    needs: concept.needs ?? null,
+    slots: concept.slots ?? {},
+    note: concept.note ?? "",
+    photoUrl: String(draft.coverImageUrl ?? ""),
+    collabIdeaId: concept.collabIdeaId ?? null,
+    sentAt: concept.sentAt ?? null,
   };
 }
 
@@ -238,6 +663,8 @@ export function sanitiseConcept(raw: unknown): ConceptIdea | null {
     ? (value.dayPreference as ConceptDayPreference)
     : null;
 
+  const interests = sanitiseInterests(value.interests);
+  const needs = sanitiseNeeds(value.needs);
   return {
     stage: "concept",
     dateMode,
@@ -249,6 +676,14 @@ export function sanitiseConcept(raw: unknown): ConceptIdea | null {
     groupSizeMax: parseGroupSize(value.groupSizeMax),
     place: cleanText(value.place, IDEA_PLACE_MAX),
     linkedVenueId: cleanText(value.linkedVenueId, 64),
+    interests,
+    interestOther: interests.includes("other") ? cleanText(value.interestOther, IDEA_INTEREST_OTHER_MAX) : null,
+    level: LEVEL_IDS.has(String(value.level)) ? (value.level as IdeaLevel) : null,
+    needs,
+    slots: sanitiseSlots(needs, value.slots),
+    note: cleanText(value.note, IDEA_NOTE_MAX),
+    collabIdeaId: cleanText(value.collabIdeaId, 64),
+    sentAt: cleanText(value.sentAt, 40),
   };
 }
 
@@ -291,6 +726,9 @@ export function buildIdeaDraftFields(input: IdeaInput) {
     category: "",
     venueType: "catalog" as const,
     maxParticipants: max,
+    // The review screen's optional photo is the event's cover. Only a full URL:
+    // the draft schema refuses anything else, and one bad field fails the whole save.
+    coverImageUrl: /^https?:\/\//i.test(input.photoUrl ?? "") ? input.photoUrl.trim() : "",
     concept: buildConcept(input),
   };
 }

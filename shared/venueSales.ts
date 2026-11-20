@@ -129,7 +129,9 @@ export function summariseVenueSales(
     const timing: VenueEventSales["timing"] = event.status === "cancelled"
       ? "cancelled"
       : phase === "ended" ? "past" : phase === "happening" ? "happening" : "upcoming";
-    const capacity = Number(event.standingCapacity || event.seatedCapacity || event.maxParticipants) || null;
+    // The event's own capacity (58.5): TEST 1 showed "3 / 20", the venue's
+    // standing room, for an event with 5 spots.
+    const capacity = Number(event.maxParticipants || event.standingCapacity || event.seatedCapacity) || null;
 
     return {
       experienceId: event.id,

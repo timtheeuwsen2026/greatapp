@@ -833,7 +833,7 @@ describe('Booking Details after a booking stops being active', () => {
     await openDetails();
 
     const indicator = screen.getByTestId('mvg-status-indicator').textContent;
-    expect(indicator).toContain("Trip cancelled — the minimum group wasn't reached.");
+    expect(indicator).toContain("Event cancelled: the minimum group wasn't reached.");
     expect(indicator).toContain('If you were charged, contact the organiser about a refund.');
     const description = screen.getByTestId('text-detail-status-description').textContent;
     expect(description).toContain("The group didn't reach its minimum");
@@ -864,7 +864,7 @@ describe('Booking Details after a booking stops being active', () => {
     await openDetails();
 
     expect(screen.getByTestId('mvg-status-indicator').textContent)
-      .toContain('Trip cancelled — this event was called off.');
+      .toContain('Event cancelled: this event was called off.');
     expect(screen.getByTestId('mvg-status-payment-note').textContent?.trim())
       .toBe('If you were charged, contact the organiser about a refund.');
     expect(screen.getByTestId('text-detail-status-description').textContent)
@@ -914,7 +914,7 @@ describe('Booking Details after a booking stops being active', () => {
     await openDetails();
 
     expect(screen.getByTestId('mvg-status-indicator').textContent)
-      .toContain("Trip cancelled — the minimum group wasn't reached.");
+      .toContain("Event cancelled: the minimum group wasn't reached.");
     expect(screen.queryByTestId('mvg-status-payment-note')).toBeNull();
     expect(screen.getByTestId('text-detail-status-description').textContent)
       .toBe("The group didn't reach its minimum, so the event was cancelled.");

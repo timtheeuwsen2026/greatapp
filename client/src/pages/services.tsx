@@ -78,10 +78,8 @@ export default function ServicesPage() {
   const formatPrice = (price: number | null, priceModel: string, currency: string = 'EUR') => {
     if (!price) return "Contact for pricing";
     
-    const formattedPrice = new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency,
-    }).format(Number(price));
+    // Always "€2.00" (Tim: everything in euro).
+    const formattedPrice = `€${Number(price).toFixed(2)}`;
     
     switch (priceModel) {
       case "per_hour": return `${formattedPrice}/hour`;

@@ -6,12 +6,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Calendar, CheckCircle2, ShoppingBag, Users } from "lucide-react";
 import type { VenueEventSales } from "@shared/venueSales";
 
-function money(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${currency.toUpperCase()}`;
-  }
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function money(amount: number, _currency?: string): string {
+  const value = Number(amount) || 0;
+  return `${value < 0 ? "−" : ""}€${Math.abs(value).toFixed(2)}`;
 }
 
 function eventDate(value: string | null): string {
@@ -83,9 +81,16 @@ export default function VenueSales() {
                     {event.venueName && <span> · {event.venueName}</span>}
                   </p>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => navigate(`/experience/${event.slugOrId}`)}>
-                  View event
-                </Button>
+                <div className="flex gap-2">
+                  {event.timing !== "cancelled" && (
+                    <Button size="sm" onClick={() => navigate(`/venue-dashboard/orders/${event.experienceId}`)} data-testid={`button-order-sheet-${event.experienceId}`}>
+                      Order sheet
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/experience/${event.slugOrId}`)}>
+                    View event
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

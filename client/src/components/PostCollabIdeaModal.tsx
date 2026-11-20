@@ -750,7 +750,7 @@ export default function PostCollabIdeaModal({
 }
 
 /** One type's "Invite directly" block: search Great, share a link, or email. */
-function CollabDirectInvite({
+export function CollabDirectInvite({
   typeId,
   isEditing,
   source,

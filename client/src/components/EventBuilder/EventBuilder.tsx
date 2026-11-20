@@ -106,6 +106,9 @@ import {
   revenueShareEligible,
   revenueSharePartners,
   sanitisePartnerEntries,
+  commissionPartnerNames,
+  joinNames,
+  partnerCommissionLineLabel,
   PARTNER_TYPES,
   type DealTier,
   type EventPartnerEntry,
@@ -152,6 +155,7 @@ import {
   getSkuCapacity,
   getSkuEntryPrice,
   hasPaidTicketConfigured,
+  hasPricedTicket,
   summariseTicketRevenue,
 } from "@shared/ticketRevenue";
 import {
@@ -1926,6 +1930,15 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
     const hasBasePricing = basePrice !== undefined && basePrice !== null && basePrice !== '' && Number(basePrice) >= 0;
     if (!hasTicketPricing && !hasBasePricing) {
       errors.push("Please set a ticket price, including 0 for free RSVP events");
+    }
+
+    // 66.33: Commission per Ticket is always offered on Partners, before the
+    // price is set. At publish a ticket has to have a price, or the partner
+    // would earn a share of nothing.
+    const commissionPartners = commissionPartnerNames(sanitisePartnerEntries(data.eventPartners));
+    const pricedEntry = ticketSkus.length > 0 ? hasPricedTicket(ticketSkus) : Number(basePrice) > 0;
+    if (commissionPartners.length > 0 && !pricedEntry) {
+      errors.push(`${joinNames(commissionPartners)} ${commissionPartners.length === 1 ? "earns" : "earn"} Commission per Ticket, but every ticket is free. Set a ticket price on Pricing, or change the partner deal.`);
     }
 
     const totalTicketCapacity = ticketSkus.reduce(
@@ -5460,7 +5473,7 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false, experienceI
     },
     {
       value: 'milestone_barter',
-      title: 'Milestone Barter',
+      title: 'Bring people, get a reward',
       description: 'Reward participants when enough friends book from their link.',
     },
   ] as const;
@@ -5782,8 +5795,14 @@ function PromotionStep({ form, goToStep, manualDealUnlocked = false, experienceI
               </ul>
               {ticketPartners.length > 0 && (
                 <p className="mt-3 border-t pt-2 text-xs text-gray-600 dark:text-gray-300">
-                  Each partner earns their agreed rate only on ticket sales through their own link.
-                  Rates are not added together. The highest rate is <strong>{maximumPartnerCommissionPct(partners)}%</strong>.
+                  Each partner earns their own rate, only on tickets sold through their own link,
+                  after discounts. A booking pays one partner only, so rates are never added together.
+                  It comes out of your share; a venue deal stays a separate line.
+                  {!paidTicketsConfigured && (
+                    <span className="mt-1 block text-amber-700 dark:text-amber-300" data-testid="text-partners-commission-needs-price">
+                      Commission applies once you set a ticket price on Pricing.
+                    </span>
+                  )}
                 </p>
               )}
             </div>
@@ -6749,8 +6768,17 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
     // Conservative forecast: all sales attributed at the highest agreed rate.
     // A booking has one referrer; adding every partner's rate overstates costs.
     promoterCommissionPct: Math.max(isCommissionPromotion ? influencerCommissionPct : 0, maximumPartnerCommissionPct(pricingPartners)),
+    promoterCommissionLabel: partnerCommissionLineLabel(pricingPartners, isCommissionPromotion ? influencerCommissionPct : 0),
     partnerShares: [],
   };
+  // 66.33 / 64.8: each partner's own rate, under the one commission line.
+  const commissionPartnerRates = pricingPartners
+    .filter((partner) => partner.dealType === 'commission_per_ticket' && partner.status !== 'declined'
+      && Number(partner.terms?.commissionPct) > 0)
+    .map((partner) => `${partner.name || 'Partner'} ${Number(partner.terms?.commissionPct)}%`);
+  const commissionPartnersOnFreeEvent = !hasPricedTicket(ticketSkus)
+    ? commissionPartnerNames(pricingPartners)
+    : [];
   const economics = calculateEventEconomics(economicsInput);
 
   // ── The three questions the calculator answers ──────────────────────────
@@ -7960,6 +7988,23 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                   <p className="text-xs text-gray-500" data-testid="text-free-tickets-note">
                     Paid tickets only — {paidTicketCapacity} of {ticketTotalCapacity} spots.
                     Free RSVPs contribute zero entry revenue. Paid add-ons are shown separately.
+                  </p>
+                )}
+
+                {commissionPartnerRates.length > 0 && hasPricedTicket(ticketSkus) && (
+                  <p className="text-xs text-gray-500" data-testid="text-partner-commission-rates">
+                    Partner commission: {commissionPartnerRates.join(', ')} of tickets sold through
+                    their own link, after discounts. It comes out of your share, next to the venue line.
+                    {commissionPartnerRates.length > 1
+                      && ' A booking pays one partner only, so the line above takes the highest rate on every ticket; the real amount is lower.'}
+                  </p>
+                )}
+
+                {commissionPartnersOnFreeEvent.length > 0 && (
+                  <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100" data-testid="text-commission-free-event">
+                    {joinNames(commissionPartnersOnFreeEvent)} {commissionPartnersOnFreeEvent.length === 1 ? 'earns' : 'earn'} Commission
+                    per Ticket, but every ticket is free, so there is nothing to earn a share of. Set a
+                    ticket price, or change the partner deal. You cannot publish until one of the two is done.
                   </p>
                 )}
 

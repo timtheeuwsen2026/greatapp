@@ -77,41 +77,50 @@ export type PartnerDealOption = {
   revenueShareEligible: boolean;
   /** Which extra field this deal needs before it can be saved. */
   requires: "percentage" | "attendee_target" | "product" | "amount" | "content_terms";
+  /** One example under the explanatory line (Tim, 66.36d). */
+  example?: string;
 };
 
+// Names and texts decided by Tim on 14 Nov (66.33, 66.36): one explanatory
+// line and one example under each option.
 export const PARTNER_DEAL_TYPES: PartnerDealOption[] = [
   {
     id: "member_discount",
     label: "Discount for their members",
-    description: "A percentage off tickets booked through this partner’s member link.",
+    description: "Their members get a discount on the ticket.",
+    example: "Good Soles members get 10% off with the code GOODSOLES",
     revenueShareEligible: false,
     requires: "percentage",
   },
   {
     id: "commission_per_ticket",
     label: "Commission per Ticket",
-    description: "A percentage of ticket revenue for each ticket they bring.",
+    description: "They earn a percentage of every ticket they sell through their link.",
+    example: "10% per ticket: on a €10.00 ticket they earn €1.00",
     revenueShareEligible: true,
     requires: "percentage",
   },
   {
     id: "milestone_barter",
-    label: "Milestone Barter (Free Access)",
-    description: "Free access once they bring a target number of attendees.",
+    label: "Bring people, get a reward",
+    description: "They bring a number of people and get a reward from you: a free ticket, or anything you write in.",
+    example: "bring 7, go free · bring 3, get a T-shirt from Strong X",
     revenueShareEligible: false,
     requires: "attendee_target",
   },
   {
     id: "brand_barter",
-    label: "Brand Barter (Products for Exposure)",
-    description: "They supply product or kit; you give exposure in return.",
+    label: "Goods for exposure",
+    description: "They supply goods or kit and you give exposure in return.",
+    example: "50 cans of cold brew for the bar named on the poster and two stories",
     revenueShareEligible: false,
     requires: "product",
   },
   {
     id: "financial_sponsorship",
     label: "Financial Sponsorship",
-    description: "A fixed amount they pay towards the event.",
+    description: "They pay money towards the event and get visibility.",
+    example: "€500 towards the event, their logo on the poster and a mention at the start",
     revenueShareEligible: false,
     requires: "amount",
   },
@@ -207,7 +216,7 @@ export const BARTER_ALLOCATIONS: Array<{
   {
     id: "host",
     label: "The host who brings the people",
-    hint: "One account earns it for recruiting — their Milestone Barter reward.",
+    hint: "One account earns it for recruiting — their reward for bringing people.",
   },
   {
     id: "participants",
@@ -422,6 +431,48 @@ export function partnerSharePct(partner: { dealType?: unknown; terms?: PartnerTe
   return Number.isFinite(pct) && pct > 0 ? pct : 0;
 }
 
+/**
+ * 66.33: the partners on Commission per Ticket, by name. The option is always
+ * offered in the Partners step, because the ticket price is only set later, on
+ * Pricing. So publishing checks that a ticket has a price once one of these is
+ * on the event, and Pricing warns when the event is free.
+ */
+export function commissionPartnerNames(partners: Array<{ dealType?: unknown; status?: unknown; name?: unknown }>): string[] {
+  return (Array.isArray(partners) ? partners : [])
+    .filter((partner) => partner?.dealType === "commission_per_ticket" && partner?.status !== "declined")
+    .map((partner) => String(partner?.name || "").trim() || "A partner");
+}
+
+/**
+ * The name of the commission line on Pricing (Tim, 64.7 and 64.8). The line
+ * takes the highest rate on every ticket, because a booking pays one partner
+ * only. It was always called "Participant Cashback", also when the rate was a
+ * partner's. Undefined when the participant cashback is the higher rate.
+ */
+export function partnerCommissionLineLabel(
+  partners: Array<{ dealType?: unknown; status?: unknown; name?: unknown; terms?: PartnerTerms | null }>,
+  cashbackPct = 0,
+): string | undefined {
+  const rows = (Array.isArray(partners) ? partners : [])
+    .filter((partner) => partner?.dealType === "commission_per_ticket" && partner?.status !== "declined")
+    .map((partner) => ({
+      name: String(partner?.name || "").trim() || "Partner",
+      pct: Math.min(100, Math.max(0, Number(partner?.terms?.commissionPct) || 0)),
+    }))
+    .filter((row) => row.pct > 0);
+  if (!rows.length) return undefined;
+  const highest = Math.max(...rows.map((row) => row.pct));
+  if (highest < Math.max(0, Number(cashbackPct) || 0)) return undefined;
+  if (rows.length === 1) return `Partner commission: ${rows[0].name} (${highest}%)`;
+  return `Partner commission, highest rate (${highest}%)`;
+}
+
+/** "Good Soles", "Good Soles and Run X", "Good Soles, Run X and Club Y". */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] || "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** Total percentage claimed by partners out of ticket revenue. */
 export function totalPartnerSharePct(partners: Array<{ dealType?: unknown; terms?: PartnerTerms | null }>): number {
   return (Array.isArray(partners) ? partners : [])
@@ -476,7 +527,7 @@ export function partnerTermSummary(
   const terms = partner?.terms || {};
   switch (partner?.dealType) {
     case "commission_per_ticket":
-      return `${Number(terms.commissionPct || 0)}% of ticket sales through their link`;
+      return `${Number(terms.commissionPct || 0)}% of tickets sold through their own link, after discounts`;
     case "member_discount":
       return `${Number(terms.discountPct || 0)}% off tickets through their member link`;
     case "milestone_barter":

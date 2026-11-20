@@ -214,6 +214,14 @@ function ledgerTypeLabel(contractType: AdminDealLedgerItem["contractType"]): str
 
 function LedgerStatusBadge({ status }: { status: string }) {
   const normalized = status || "pending";
+  // 66.28b: paid out, but a share is held for someone without Stripe.
+  if (normalized === "partly_paid") {
+    return <Badge className="whitespace-nowrap bg-amber-100 text-amber-800"><Clock className="mr-1 h-3 w-3" />Partly paid, share held</Badge>;
+  }
+  // 66.10a/b: an offer on an event that will not take place.
+  if (normalized === "withdrawn") {
+    return <Badge className="whitespace-nowrap bg-gray-100 text-gray-700"><XCircle className="mr-1 h-3 w-3" />Withdrawn (event cancelled)</Badge>;
+  }
   if (["accepted", "confirmed", "fully_paid", "deposit_paid", "completed", "paid"].includes(normalized)) {
     return <Badge className="whitespace-nowrap bg-green-100 text-green-800"><CheckCircle className="mr-1 h-3 w-3" />{formatDealType(normalized)}</Badge>;
   }
@@ -916,6 +924,7 @@ export default function AdminDashboard() {
                             <span>Category: {experience.category}</span>
                             <span>Location: {experience.location}</span>
                             <AdminEventCity experienceId={experience.id} city={(experience as any).city ?? null} />
+                            <AdminHideFromPublic experienceId={experience.id} hidden={(experience as any).hiddenFromPublic === true} />
                             {experience.minimumParticipants && experience.minimumParticipants > 0 && (
                               <>
                                 <span data-testid={`mvg-progress-text-${experience.id}`}>
@@ -2264,6 +2273,38 @@ function PageControls({ pagination, page, onPage }: { pagination?: { totalPages:
   if (!pagination || pagination.totalPages <= 1) return null;
   const pages = Array.from({ length: pagination.totalPages }, (_, index) => index + 1).filter(value => value === 1 || value === pagination.totalPages || Math.abs(value - page) <= 2);
   return <div className="flex flex-wrap items-center justify-center gap-2 pt-4"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => onPage(page - 1)}>Previous</Button>{pages.map(value => <Button key={value} size="sm" variant={value === page ? "default" : "outline"} onClick={() => onPage(value)}>{value}</Button>)}<Button size="sm" variant="outline" disabled={page === pagination.totalPages} onClick={() => onPage(page + 1)}>Next</Button></div>;
+}
+
+/**
+ * "Hide from public" (66.20e): takes an internal test out of the homepage,
+ * Explore and every public list. Cancels and refunds nothing; the event page
+ * still opens from its link.
+ */
+function AdminHideFromPublic({ experienceId, hidden }: { experienceId: string; hidden: boolean }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const save = useMutation({
+    mutationFn: async (next: boolean) =>
+      (await apiRequest("PATCH", `/api/admin/experiences/${experienceId}/visibility`, { hiddenFromPublic: next })).json(),
+    onSuccess: (_data, next) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/experiences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/experiences?includeParticipants=true"] });
+      toast({ title: next ? "Hidden from public" : "Visible to the public again", description: next ? "Nothing was cancelled or refunded. The event page still opens from its link." : undefined });
+    },
+    onError: (error: any) => toast({ title: "Could not change the visibility", description: error?.message, variant: "destructive" }),
+  });
+  return (
+    <label className="inline-flex items-center gap-1" title="Leaves the event out of the homepage, Explore and public lists. Cancels and refunds nothing.">
+      <input
+        type="checkbox"
+        checked={hidden}
+        disabled={save.isPending}
+        onChange={(event) => save.mutate(event.target.checked)}
+        data-testid={`checkbox-hide-from-public-${experienceId}`}
+      />
+      Hide from public
+    </label>
+  );
 }
 
 /** The event's city, changeable by an admin in place (66.24). */

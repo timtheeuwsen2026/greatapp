@@ -62,6 +62,8 @@ interface DigitalHandshakeContractProps {
   minimumGroup?: number | null;
   /** The negotiation, oldest first. */
   history?: DealHistoryEntry[] | null;
+  /** The contract page for this deal (board D3), when there is one. */
+  agreementUrl?: string | null;
 }
 
 function formatWhen(value: string | null): string {
@@ -92,6 +94,7 @@ export function DigitalHandshakeContract({
   barterTerms,
   minimumGroup,
   history,
+  agreementUrl,
 }: DigitalHandshakeContractProps) {
   const terms = contract?.terms || {};
   const risk = contract?.risk || {};
@@ -148,6 +151,16 @@ export function DigitalHandshakeContract({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-xs font-semibold text-gray-600">{title}</p>
+        <div className="flex flex-wrap items-center gap-3">
+        {agreementUrl && (
+          <a
+            href={agreementUrl}
+            className="text-xs font-semibold text-primary hover:underline"
+            data-testid="link-view-full-deal"
+          >
+            View full deal →
+          </a>
+        )}
         {eventUrl && (
           <a
             href={eventUrl}
@@ -159,6 +172,7 @@ export function DigitalHandshakeContract({
             View Event Details →
           </a>
         )}
+        </div>
       </div>
       <div className={`grid grid-cols-1 gap-3 text-sm ${viewer === "organiser" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
         <span className="text-gray-500">

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, readableError } from "@/lib/queryClient";
+import { apiRequest, authHeaders, readableError } from "@/lib/queryClient";
 import { useAdminCity } from "@/hooks/useAdminCity";
 import { Download, Send, Wallet } from "lucide-react";
 
@@ -35,6 +35,10 @@ export type OverviewEvent = {
   payoutStatus: string;
   partlyPaid?: boolean;
   isTest?: boolean;
+  ticketGrossCents?: number | null;
+  addonGrossCents?: number | null;
+  ticketFeePct?: number | null;
+  note?: string | null;
   duplicates?: number;
   scheduledFor: string | null;
   processedAt: string | null;
@@ -57,12 +61,9 @@ const ROLE_LABEL: Record<OverviewLine["role"], string> = {
   organiser: "Organiser", venue: "Venue", partner: "Partner", other: "Other",
 };
 
-function money(cents: number, currency = "eur"): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(cents / 100);
-  } catch {
-    return `€${(cents / 100).toFixed(2)}`;
-  }
+// Always "€2.00", sign in front, whatever the browser language (Tim: everything in euro).
+function money(cents: number, _currency = "eur"): string {
+  return `${cents < 0 ? "−" : ""}€${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
 function day(value: string | null): string {
@@ -76,6 +77,7 @@ function dayTime(value: string | null): string {
 }
 
 function statusBadge(event: OverviewEvent) {
+  if (event.note) return <Badge variant="outline">{event.note.split(":")[0]}</Badge>;
   if (event.payoutStatus === "completed" && event.partlyPaid) return <Badge className="bg-amber-500">Partly paid, share held</Badge>;
   if (event.payoutStatus === "completed") return <Badge className="bg-emerald-600">Paid {day(event.processedAt)}</Badge>;
   if (event.payoutStatus === "failed") return <Badge variant="destructive">Failed</Badge>;
@@ -109,9 +111,30 @@ export default function AdminPayoutOverview() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/scheduled-payouts"] });
   };
 
+  // "Pay now" asks first when a share was already paid by hand, so nobody is
+  // paid twice by mistake (66.30c). The server refuses without the yes.
   const payNow = useMutation({
-    mutationFn: async (payoutId: string) => (await apiRequest("POST", `/api/admin/scheduled-payouts/${payoutId}/pay-now`, {})).json(),
-    onSuccess: (result: any) => { refresh(); toast({ title: "Payout sent", description: result?.message }); },
+    mutationFn: async ({ payoutId, confirmManual }: { payoutId: string; confirmManual?: boolean }) => {
+      const res = await fetch(`/api/admin/scheduled-payouts/${payoutId}/pay-now`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ confirmManual: !!confirmManual }),
+      });
+      const body = await res.json().catch(() => ({}));
+      return { ...body, payoutId, httpOk: res.ok };
+    },
+    onSuccess: (result: any) => {
+      if (result?.needsConfirmation) {
+        if (window.confirm(`${result.message}\n\nPay the remaining shares now?`)) {
+          payNow.mutate({ payoutId: result.payoutId, confirmManual: true });
+        }
+        return;
+      }
+      refresh();
+      toast(result?.httpOk
+        ? { title: "Payout sent", description: result?.message }
+        : { title: "Not paid", description: result?.message, variant: "destructive" });
+    },
     onError: (error) => { refresh(); toast({ title: "Not paid", description: readableError(error), variant: "destructive" }); },
   });
 
@@ -192,13 +215,23 @@ export default function AdminPayoutOverview() {
                       <div className="text-xs text-gray-500">
                         Sales {money(event.grossCents, event.currency)} · Great fee {money(event.platformFeeCents, event.currency)}
                       </div>
+                      {/* Why the fee is what it is: a share of tickets only (66.29e). */}
+                      {typeof event.ticketGrossCents === "number" && event.grossCents > 0 && (
+                        <div className="text-xs text-gray-500" data-testid={`payout-fee-split-${event.payoutId}`}>
+                          Tickets {money(event.ticketGrossCents, event.currency)}
+                          {(event.addonGrossCents || 0) > 0 && <> + add-ons {money(event.addonGrossCents || 0, event.currency)}</>}
+                          {event.ticketFeePct != null && <>. Fee: {event.ticketFeePct}% of tickets{(event.addonGrossCents || 0) > 0 ? ", no fee on the venue's add-on price" : ""}</>}
+                        </div>
+                      )}
+                      {event.note && <div className="text-xs text-gray-500" data-testid={`payout-note-${event.payoutId}`}>{event.note}</div>}
                     </div>
                     <div className="flex items-center gap-2">
                       {statusBadge(event)}
-                      {(event.payoutStatus === "pending" || event.payoutStatus === "failed" || event.partlyPaid) && event.owedCents > 0 && (
+                      {(event.payoutStatus === "pending" || event.payoutStatus === "failed" || event.partlyPaid) && event.owedCents > 0
+                        && !String(event.errorMessage || "").startsWith("Paid manually") && (
                         <Button
                           size="sm"
-                          onClick={() => payNow.mutate(event.payoutId)}
+                          onClick={() => payNow.mutate({ payoutId: event.payoutId })}
                           disabled={payNow.isPending}
                           data-testid={`button-pay-now-${event.payoutId}`}
                         >
@@ -230,7 +263,7 @@ export default function AdminPayoutOverview() {
                           {line.settled ? (
                             <Badge className="bg-emerald-600">{line.settled.startsWith("manual:") ? "Paid manually" : "Paid"}</Badge>
                           ) : line.held ? (
-                            <Badge className="bg-amber-500">Held: {line.stripeConnected ? "paid on the next run" : "no Stripe account"}</Badge>
+                            <Badge className="bg-amber-500">Held: {line.stripeConnected ? "paid on the next run" : "no Stripe account yet"}</Badge>
                           ) : line.stripeConnected ? (
                             <Badge variant="secondary">Stripe connected</Badge>
                           ) : (

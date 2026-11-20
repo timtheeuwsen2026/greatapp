@@ -1,4 +1,5 @@
 import { formatEventWhen } from "@shared/eventTime";
+import { orderAddons } from "@shared/eventOrders";
 import { venueInviteTerms } from '@shared/venueInviteTerms';
 import { groupPaymentPromise } from "@shared/groupCount";
 import sgMail from '@sendgrid/mail';
@@ -93,9 +94,9 @@ export function formatPromotionDealSummary(
     case 'commission_per_ticket':
       return `Commission per Ticket — ${t.commissionPct ?? t.influencerCommissionPct ?? 0}% per ticket sold`;
     case 'milestone_barter':
-      return `Milestone Barter — bring ${t.attendeeTarget ?? 'X'} attendees, earn ${t.rewardTickets ?? 1} free ticket(s)`;
+      return `Bring people, get a reward — bring ${t.attendeeTarget ?? 'X'} attendees, earn ${t.rewardTickets ?? 1} free ticket(s)`;
     case 'brand_barter':
-      return `Brand Barter — ${t.brandPitch || 'products or services in exchange for exposure'}`;
+      return `Goods for exposure — ${t.brandPitch || 'goods or kit in exchange for exposure'}`;
     case 'financial_sponsorship':
       return `Financial Sponsorship — ${cur} ${t.sponsorshipAmount ?? 0} for exposure`;
     default:
@@ -343,6 +344,36 @@ function formatTime(date: Date | string | null | undefined): string {
 function formatCurrency(amount: string | number | null | undefined): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : Number(amount || 0);
   return `€${(Number.isFinite(num) ? num : 0).toFixed(2)}`;
+}
+
+/**
+ * When and where, for a buyer's booking mail (66.34k, 59.1): the venue's name
+ * and address once a venue has accepted (written onto the event by
+ * storage.acceptVenueContract), with a map link.
+ */
+export function bookingWhenWhereRows(experience: any): EmailReceiptRow[] {
+  const rows: EmailReceiptRow[] = [];
+  const when = formatEventWhen(experience, { weekday: true, year: true });
+  if (when) rows.push({ label: 'When', value: when });
+  const venueName = String(experience?.venue || '').trim();
+  const address = String(experience?.location || '').trim();
+  const place = venueName && address && !address.toLowerCase().includes(venueName.toLowerCase())
+    ? `${venueName}, ${address}`
+    : venueName || address;
+  if (place) {
+    rows.push({ label: 'Where', value: place });
+    rows.push({ label: 'Map', value: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}` });
+  }
+  return rows;
+}
+
+/** "Coffee × 1, collect at Test Venue: €1.25", one row per add-on (58.3). */
+export function bookingAddonRows(experience: any, booking: any): EmailReceiptRow[] {
+  const collectAt = String(experience?.venue || experience?.location || '').trim();
+  return orderAddons(booking).map((addon) => ({
+    label: 'Add-on',
+    value: `${addon.name} × ${addon.quantity}${collectAt ? `, collect at ${collectAt}` : ''}${addon.total > 0 ? `: ${formatCurrency(addon.total)}` : ''}`,
+  }));
 }
 
 function communityHubUrl(): string {
@@ -859,7 +890,9 @@ class NotificationService {
       to: opts.to,
       bodyText,
       receiptRows: [
+        ...bookingWhenWhereRows(opts.experience),
         { label: 'Ticket Type', value: opts.booking.ticketName || 'General Admission' },
+        ...bookingAddonRows(opts.experience, opts.booking),
         { label: 'Total Paid', value: formatCurrency(bookingTotalPaid(opts.booking)) },
       ],
       cta: { label: 'Meet Your Squad in the Hub', href: communityHubUrl() },
@@ -1050,7 +1083,9 @@ The Great. Team
           to: user.email,
           bodyText,
           receiptRows: [
+            ...bookingWhenWhereRows(experience),
             { label: 'Ticket Type', value: booking.ticketName || 'General Admission' },
+            ...bookingAddonRows(experience, booking),
             ...(booking.isDepositOnly
               ? [
                 { label: 'Deposit Paid Today', value: formatCurrency(booking.depositAmount) },
@@ -1723,9 +1758,9 @@ The Great. Team
         case 'commission_per_ticket':
           return `Commission per Ticket: ${event.influencerCommissionPct || 0}% per ticket sold.`;
         case 'milestone_barter':
-          return `Milestone Barter: Bring ${event.promotionMilestoneAttendeeTarget || 'X'} attendees and earn ${event.promotionMilestoneRewardTickets || 1} free ticket(s).`;
+          return `Bring people, get a reward: bring ${event.promotionMilestoneAttendeeTarget || 'X'} attendees and earn ${event.promotionMilestoneRewardTickets || 1} free ticket(s).`;
         case 'brand_barter':
-          return `Brand Barter: ${event.promotionBrandPitch || 'Products or services in exchange for exposure.'}`;
+          return `Goods for exposure: ${event.promotionBrandPitch || 'Goods or kit in exchange for exposure.'}`;
         case 'financial_sponsorship':
           return `Financial Sponsorship: ${String(event.currency || 'eur').toUpperCase()} ${event.promotionSponsorshipAmount || 0} for exposure.`;
         default:
@@ -2186,6 +2221,7 @@ The Great. Team
     rows: EmailReceiptRow[];
     cta: { label: string; path: string };
     eventKey: string;
+    growthFooterContext?: GrowthFooterContext;
   }): Promise<void> {
     const greeting = `Hi ${opts.recipientName?.trim() || 'there'},`;
     const email = renderBaseEmail({
@@ -2196,7 +2232,7 @@ ${opts.intro}`,
       receiptRows: opts.rows,
       cta: { label: opts.cta.label, href: `${APP_BASE_URL}${opts.cta.path}` },
       preheader: opts.intro.slice(0, 120),
-      growthFooterContext: 'partner',
+      growthFooterContext: opts.growthFooterContext ?? 'partner',
     });
     const result = await sendEmailOnce({
       eventKey: notificationEventKey('venue_deal', opts.to, opts.eventKey),

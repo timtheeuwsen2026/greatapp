@@ -479,5 +479,7 @@ export function decideIntentCancellation(
 /** "EUR 25.00" — the form the platform's transactional emails already use. */
 export function formatCancellationAmount(amount: number, currency: string): string {
   const value = Number.isFinite(amount) ? amount : 0;
-  return `${String(currency || "eur").toUpperCase()} ${value.toFixed(2)}`;
+  // "€12.50", sign in front (Tim: everything in euro).
+  const code = String(currency || "eur").toUpperCase();
+  return code === "EUR" ? `€${value.toFixed(2)}` : `${code} ${value.toFixed(2)}`;
 }

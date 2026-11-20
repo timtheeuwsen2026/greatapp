@@ -7,6 +7,8 @@ export type NativePlatform = "ios" | "android";
 export interface NativeSignInResult {
   provider: "google" | "apple";
   idToken?: string;
+  /** Google only. */
+  accessToken?: string;
   profile?: { givenName?: string | null; familyName?: string | null; email?: string | null } | null;
 }
 

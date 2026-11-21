@@ -357,13 +357,13 @@ export default function WhyUs() {
                 <li><Link href="/why-us" className="hover:text-white">Why Us</Link></li>
                 <li><Link href="/services" className="hover:text-white">How It Works</Link></li>
                 <li><a href="#" className="hover:text-white">About</a></li>
-                <li><a href="#" className="hover:text-white">Contact</a></li>
+                <li><a href="mailto:hello@greatexperiences.ai" className="hover:text-white">Contact: hello@greatexperiences.ai</a></li>
               </ul>
             </div>
           </div>
 
           <div className="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
-            <p>&copy; 2024 Great. All rights reserved.</p>
+            <p>&copy; {new Date().getFullYear()} Great. All rights reserved.</p>
           </div>
         </div>
       </footer>

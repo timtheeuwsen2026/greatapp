@@ -1,9 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { isSignInCancel, nativeApp } from "@/lib/nativeApp";
 
 type Provider = "google" | "apple";
+type Enabled = Record<Provider, boolean>;
+
+/**
+ * Which logins Supabase has switched on, from its public settings. On the
+ * website a button for a login that is not switched on yet only leads to an
+ * error page, so it stays hidden until the provider is enabled. The app always
+ * shows its buttons: that is where the providers are being set up and tested.
+ */
+function useEnabledProviders(inApp: boolean): Enabled | null {
+  const [enabled, setEnabled] = useState<Enabled | null>(inApp ? { google: true, apple: true } : null);
+  useEffect(() => {
+    if (inApp) return;
+    const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!url || !key) {
+      setEnabled({ google: false, apple: false });
+      return;
+    }
+    let cancelled = false;
+    fetch(`${url}/auth/v1/settings`, { headers: { apikey: key } })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((settings) => {
+        if (!cancelled) setEnabled({ google: !!settings?.external?.google, apple: !!settings?.external?.apple });
+      })
+      .catch(() => {
+        if (!cancelled) setEnabled({ google: false, apple: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inApp]);
+  return enabled;
+}
 
 /**
  * "Continue with Google" and "Continue with Apple".
@@ -24,7 +57,9 @@ export default function SocialSignIn({ returnTo, mode }: { returnTo: string | nu
   const app = nativeApp();
   // Sign in with Apple: native on iOS, the web flow in browsers. The Android
   // app shows Google only.
-  const showApple = !app || app.platform === "ios";
+  const enabled = useEnabledProviders(!!app);
+  const showApple = (!app || app.platform === "ios") && !!enabled?.apple;
+  const showGoogle = !!enabled?.google;
 
   async function signIn(provider: Provider) {
     setBusy(provider);
@@ -79,6 +114,9 @@ export default function SocialSignIn({ returnTo, mode }: { returnTo: string | nu
     setBusy(null);
   }
 
+  // Nothing switched on yet: the page shows the email form only, as before.
+  if (!showApple && !showGoogle) return null;
+
   return (
     <div className="mb-6 space-y-3" data-testid="social-sign-in">
       {showApple && (
@@ -93,6 +131,7 @@ export default function SocialSignIn({ returnTo, mode }: { returnTo: string | nu
           {busy === "apple" ? "Connecting…" : "Continue with Apple"}
         </button>
       )}
+      {showGoogle && (
       <button
         type="button"
         onClick={() => signIn("google")}
@@ -103,6 +142,7 @@ export default function SocialSignIn({ returnTo, mode }: { returnTo: string | nu
         <GoogleLogo />
         {busy === "google" ? "Connecting…" : "Continue with Google"}
       </button>
+      )}
       {mode === "signup" && (
         <p className="text-center text-xs text-muted-foreground">
           By continuing with Apple or Google you agree to our{" "}

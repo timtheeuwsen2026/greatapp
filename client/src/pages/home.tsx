@@ -1078,6 +1078,17 @@ export default function Home() {
                 {/* Legal Copy */}
                 <div className="text-sm text-gray-400 max-w-2xl">
                   <p className="mb-2">&copy; {new Date().getFullYear()} Great. All rights reserved.</p>
+                  {/* A visible contact option: Apple checks the site for one (app review). */}
+                  <p className="mb-2">
+                    Questions or help:{" "}
+                    <a
+                      href="mailto:hello@greatexperiences.ai"
+                      className="text-gray-200 underline underline-offset-2 hover:text-white"
+                      data-testid="link-footer-contact-email"
+                    >
+                      hello@greatexperiences.ai
+                    </a>
+                  </p>
                   <p className="text-xs">
                     Payments are processed securely by Stripe. If an event does not reach its minimum group, every buyer gets a full refund automatically.
                   </p>

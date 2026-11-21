@@ -24,6 +24,19 @@ function readStored(): string | null {
 }
 
 let memoryChoice: string | null = typeof window === "undefined" ? null : readStored();
+/**
+ * The account city this browser last took over. The account only wins when its
+ * city really changes (a new device, a change made elsewhere), never because a
+ * pick made here has not reached the account copy yet: that copied the old city
+ * straight back over every pick until the page was refreshed (Tim, bug 2).
+ */
+let syncedAccountChoice: string | null = null;
+
+/** Tests only: forget what this browser took over. */
+export function resetCityStateForTests() {
+  memoryChoice = null;
+  syncedAccountChoice = null;
+}
 
 function writeStored(city: string) {
   memoryChoice = city;
@@ -57,14 +70,16 @@ export interface CityState {
 }
 
 export function useCity(): CityState {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, refreshUser } = useAuth();
   const stored = useSyncExternalStore(subscribe, () => memoryChoice, () => null);
   const accountChoice = cleanChoice((user as any)?.preferredCity);
 
-  // The account's choice wins on a new device.
+  // The account's choice wins on a new device, or after a change made elsewhere.
   useEffect(() => {
-    if (accountChoice && accountChoice !== stored) writeStored(accountChoice);
-  }, [accountChoice, stored]);
+    if (!accountChoice || accountChoice === syncedAccountChoice) return;
+    syncedAccountChoice = accountChoice;
+    if (accountChoice !== memoryChoice) writeStored(accountChoice);
+  }, [accountChoice]);
 
   const chosenCity = cleanChoice(stored) ?? accountChoice;
 
@@ -82,12 +97,16 @@ export function useCity(): CityState {
       if (!clean) return;
       writeStored(clean);
       if (isAuthenticated) {
-        apiRequest("PUT", "/api/me/city", { city: clean }).catch(() => {
-          // Kept in the browser; the account catches up next time.
-        });
+        // This pick is what the account will say; it must not be undone while it saves.
+        syncedAccountChoice = clean;
+        apiRequest("PUT", "/api/me/city", { city: clean })
+          .then(() => refreshUser?.())
+          .catch(() => {
+            // Kept in the browser; the account catches up next time.
+          });
       }
     },
-    [isAuthenticated],
+    [isAuthenticated, refreshUser],
   );
 
   return {

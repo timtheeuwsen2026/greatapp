@@ -944,6 +944,32 @@ async function syncBuilderParticipantRoles(experience: any) {
  * type, because the venue match-and-notify query and every existing card reads
  * it. The multi-select is additive.
  */
+/**
+ * The name each organiser shows in public: their creator profile's display name,
+ * else their first name. One lookup per organiser, and a failed one leaves that
+ * organiser unnamed rather than failing the list.
+ */
+async function loadPublicHostNames(creatorIds: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const unique = Array.from(new Set(creatorIds.filter((id): id is string => !!id)));
+  await Promise.all(unique.map(async (id) => {
+    try {
+      const profile = await storage.getCreatorProfileByUserId(id);
+      const display = String((profile as any)?.displayName ?? "").trim();
+      if (display) {
+        names.set(id, display);
+        return;
+      }
+      const user = await storage.getUser(id);
+      const first = String(user?.firstName ?? "").trim();
+      if (first) names.set(id, first);
+    } catch {
+      // Unnamed in search; the list itself still loads.
+    }
+  }));
+  return names;
+}
+
 function parseCollabIdeaBody(body: any): { error?: string; values: Record<string, any> } {
   const title = String(body?.title || "").trim();
   if (!title) return { error: "Give your idea a title", values: {} };
@@ -4532,8 +4558,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Real participant count is fetched from bookings for every experience, not just
       // MVG-gated ones — the listing/card UI shows "X / Y participants" for all of them.
       const enrichWithLiveLifecycle = async (exps: any[]) => {
+        // Search matches on the host too (Tim, bug 1): the public name the
+        // organiser shows ("Good Soles"), else their first name. Never more.
+        const hostNames = await loadPublicHostNames(exps.map((exp) => exp.creatorId));
         return Promise.all(exps.map(async (exp) => {
-          exp = withTicketCapacity(exp);
+          exp = { ...withTicketCapacity(exp), hostName: hostNames.get(exp.creatorId) ?? null };
           const mvgProgress = await storage.getMVGProgress(exp.id);
           const curr = mvgProgress.current_participants;
           if (exp.requireMinimumParticipants) {

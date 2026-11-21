@@ -11,6 +11,7 @@ import { DiscoveryExperienceCard } from "@/components/DiscoveryExperienceCard";
 import { CityMenu } from "@/components/CityMenu";
 import { useCity } from "@/hooks/useCity";
 import { ALL_CITIES, cityOfEvent, inCity, liveCityByName } from "@shared/cities";
+import { searchEvents } from "@shared/eventSearch";
 
 /** A ?city= link naming a live city (or "all") switches the site's city; anything else filters the place. */
 function siteCityFromParam(value: string | null): string | null {
@@ -43,6 +44,11 @@ const quickCategories = [
 ] as const;
 
 const EXPERIENCES_PER_PAGE = 9;
+
+/** A chip from Home ("Fitness & Yoga") names a kind of event: any of its words will do. */
+function isCategoryLabel(query: string): boolean {
+  return query.includes("&");
+}
 
 export default function Experiences() {
   const [, setLocation] = useLocation();
@@ -134,23 +140,15 @@ export default function Experiences() {
   }, [searchQuery, selectedCity, selectedPillar, currentPage]);
 
   // These discovery inputs can also feed a swipe deck in a later phase.
+  // Search (Tim, bug 1): title, category, city and host only, by word stem, so
+  // "Running" finds run events and not every description that mentions running.
+  // A chip names a kind of event, so any of its words is enough.
+  const chipSearch = quickCategories.some((category) => category.toLowerCase() === searchQuery.trim().toLowerCase());
   const filteredExperiences = Array.isArray(experiences) ? experiences.filter((experience: any) => {
-    const query = searchQuery.trim().toLowerCase();
-    const searchableText = [
-      experience.title,
-      experience.description,
-      experience.location,
-      String(experience.category || "").replace(/_/g, " "),
-      ...(Array.isArray(experience.greatPillars) ? experience.greatPillars : []),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
     const experiencePillars = Array.isArray(experience.greatPillars)
       ? experience.greatPillars.map((pillar: unknown) => String(pillar).toLowerCase())
       : [];
     const fallbackPillars = legacyCategoryPillars[experience.category] || [];
-    const matchesSearch = !query || searchableText.includes(query);
     const matchesSiteCity = inCity(cityOfEvent(experience), siteCity);
     const matchesCity = matchesSiteCity && (!selectedCity
       || String(experience.location || "").toLowerCase().includes(selectedCity.trim().toLowerCase()));
@@ -158,13 +156,21 @@ export default function Experiences() {
       || experiencePillars.includes(selectedPillar)
       || (experiencePillars.length === 0 && fallbackPillars.includes(selectedPillar));
 
-    return matchesSearch && matchesCity && matchesPillar;
+    return matchesCity && matchesPillar;
   }) : [];
 
-  const totalPages = Math.max(1, Math.ceil(filteredExperiences.length / EXPERIENCES_PER_PAGE));
+  // Upcoming first, soonest first. Ended events only show while searching, last
+  // and greyed out under "Past events"; the plain list is what is still to come.
+  const { upcoming: upcomingExperiences, past: pastExperiences } = searchEvents(
+    filteredExperiences, searchQuery, chipSearch || isCategoryLabel(searchQuery) ? "any" : "all",
+  );
+  const searching = searchQuery.trim().length > 0;
+  const shownPast = searching ? pastExperiences.slice(0, 6) : [];
+
+  const totalPages = Math.max(1, Math.ceil(upcomingExperiences.length / EXPERIENCES_PER_PAGE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const pageStart = (safeCurrentPage - 1) * EXPERIENCES_PER_PAGE;
-  const paginatedExperiences = filteredExperiences.slice(pageStart, pageStart + EXPERIENCES_PER_PAGE);
+  const paginatedExperiences = upcomingExperiences.slice(pageStart, pageStart + EXPERIENCES_PER_PAGE);
 
   useEffect(() => {
     if (!isLoading && currentPage > totalPages) setCurrentPage(totalPages);
@@ -531,8 +537,8 @@ export default function Experiences() {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
                 <CityMenu className="mr-2" />
-                <span className={filteredExperiences.length === 0 ? 'text-red-600 font-medium' : ''}>
-                  {filteredExperiences.length} experience{filteredExperiences.length !== 1 ? 's' : ''} found
+                <span className={upcomingExperiences.length === 0 ? 'text-red-600 font-medium' : ''} data-testid="text-results-count">
+                  {upcomingExperiences.length} upcoming experience{upcomingExperiences.length !== 1 ? 's' : ''} found
                   {siteCity !== ALL_CITIES && <> in <strong className="text-gray-800">{siteCity}</strong></>}
                 </span>
                 {searchQuery && (
@@ -555,8 +561,8 @@ export default function Experiences() {
                   >
                     Clear filters
                   </button>
-                  {filteredExperiences.length === 0 && (
-                    <span className="text-red-600 text-xs">• No matches</span>
+                  {upcomingExperiences.length === 0 && (
+                    <span className="text-red-600 text-xs">• No upcoming matches</span>
                   )}
                 </div>
               )}
@@ -566,13 +572,13 @@ export default function Experiences() {
       </section>
 
       {/* Experiences Section */}
-      {filteredExperiences.length > 0 && (
+      {upcomingExperiences.length > 0 && (
         <section id="experiences-results" className="scroll-mt-4 py-12">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
               <h2 className="text-2xl font-bold text-gray-900">Available Experiences</h2>
               <Badge className="bg-green-100 text-green-800 border-green-200">
-                {filteredExperiences.length} experience{filteredExperiences.length !== 1 ? 's' : ''}
+                {upcomingExperiences.length} experience{upcomingExperiences.length !== 1 ? 's' : ''}
               </Badge>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -584,7 +590,7 @@ export default function Experiences() {
             {totalPages > 1 && (
               <nav className="mt-10 flex flex-col items-center gap-3" aria-label="Experiences pagination" data-testid="experiences-pagination">
                 <p className="text-sm text-gray-600">
-                  Showing {pageStart + 1}–{Math.min(pageStart + EXPERIENCES_PER_PAGE, filteredExperiences.length)} of {filteredExperiences.length} experiences
+                  Showing {pageStart + 1}–{Math.min(pageStart + EXPERIENCES_PER_PAGE, upcomingExperiences.length)} of {upcomingExperiences.length} experiences
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   <Button
@@ -635,8 +641,42 @@ export default function Experiences() {
         </section>
       )}
 
+      {/* Nothing upcoming for this search: say so, and offer to post it as an idea (point 47). */}
+      {upcomingExperiences.length === 0 && searching && (
+        <section className="py-12" data-testid="search-empty">
+          <div className="mx-auto max-w-2xl px-4 text-center sm:px-6">
+            <h3 className="text-2xl font-semibold text-gray-900">
+              No upcoming events for "{searchQuery.trim()}"{siteCity !== ALL_CITIES ? ` in ${siteCity}` : ""}
+            </h3>
+            <p className="mt-2 text-gray-600">Nobody has planned it yet. Post it as an idea and see who wants to join.</p>
+            <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+              <Button onClick={() => setLocation("/create-experience?start=idea")} className="btn-gradient" data-testid="button-post-as-idea">
+                Post it as an idea
+              </Button>
+              <Button variant="outline" onClick={clearFilters} data-testid="button-clear-filters">
+                Clear the search
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Ended events matching the search: last, greyed out, never bookable from here. */}
+      {shownPast.length > 0 && (
+        <section className="pb-12" data-testid="search-past-events">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <h2 className="mb-4 text-lg font-semibold text-gray-500">Past events</h2>
+            <div className="grid grid-cols-1 gap-8 opacity-60 grayscale md:grid-cols-2 lg:grid-cols-3">
+              {shownPast.map((experience: any) => (
+                <DiscoveryExperienceCard key={experience.id} experience={experience} layout="grid" />
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Enhanced No Results Section */}
-      {filteredExperiences.length === 0 && (
+      {upcomingExperiences.length === 0 && !searching && (
         <section className="py-16">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center">

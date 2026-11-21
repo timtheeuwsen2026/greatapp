@@ -185,15 +185,15 @@
 
 /* Button gradient hover effects with blue-purple theme */
 .btn-gradient {
-  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--secondary)) 100%);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
   transition: all 0.3s ease;
   color: hsl(211, 100%, 99%);
   border: none;
 }
 
 .btn-gradient:hover {
-  background: linear-gradient(135deg, color-mix(in srgb, hsl(var(--primary)) 93%, white) 0%, color-mix(in srgb, hsl(var(--secondary)) 93%, white) 100%);
-  box-shadow: 0 10px 25px -5px hsl(var(--secondary) / 0.4);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 93%, white) 0%, color-mix(in srgb, var(--secondary) 93%, white) 100%);
+  box-shadow: 0 10px 25px -5px color-mix(in srgb, var(--secondary) 40%, transparent);
   color: hsl(211, 100%, 99%);
 }
 

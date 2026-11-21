@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { Compass } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
 import LegalConsentLabel from "@/components/LegalConsentLabel";
+import SocialSignIn from "@/components/SocialSignIn";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -378,6 +379,8 @@ export default function AuthPage() {
                   </button>
                 ))}
               </div>
+
+              {mode !== "reset" && <SocialSignIn returnTo={returnTo} mode={mode} />}
 
               <form onSubmit={mode === "login" ? handleLogin : mode === "reset" ? handlePasswordReset : handleSignup} className="space-y-5">
                 {mode === "signup" && (

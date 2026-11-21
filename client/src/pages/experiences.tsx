@@ -12,6 +12,7 @@ import { CityMenu } from "@/components/CityMenu";
 import { useCity } from "@/hooks/useCity";
 import { ALL_CITIES, cityOfEvent, inCity, liveCityByName } from "@shared/cities";
 import { searchEvents } from "@shared/eventSearch";
+import { EVENT_CATEGORIES, categoryLabel, currentCategory } from "@shared/eventCategories";
 
 /** A ?city= link naming a live city (or "all") switches the site's city; anything else filters the place. */
 function siteCityFromParam(value: string | null): string | null {
@@ -20,19 +21,12 @@ function siteCityFromParam(value: string | null): string | null {
   return liveCityByName(value)?.name ?? null;
 }
 
-const pillars = [
+// The one category list (66.46) replaces the four Great pillars as the filter.
+// An event made before reads its old category as the nearest new one.
+const pillars: Array<{ id: string; title: string }> = [
   { id: "all", title: "All" },
-  { id: "health", title: "Health" },
-  { id: "sports", title: "Sports" },
-  { id: "wellness", title: "Wellness" },
-  { id: "food", title: "Food" },
-] as const;
-
-const legacyCategoryPillars: Record<string, string[]> = {
-  sports_wellness: ["sports", "wellness"],
-  retreats: ["health", "wellness"],
-  adventure_trips: ["sports"],
-};
+  ...EVENT_CATEGORIES.map((category) => ({ id: category.id, title: category.label })),
+];
 
 const quickCategories = [
   "Run Clubs",
@@ -145,16 +139,10 @@ export default function Experiences() {
   // A chip names a kind of event, so any of its words is enough.
   const chipSearch = quickCategories.some((category) => category.toLowerCase() === searchQuery.trim().toLowerCase());
   const filteredExperiences = Array.isArray(experiences) ? experiences.filter((experience: any) => {
-    const experiencePillars = Array.isArray(experience.greatPillars)
-      ? experience.greatPillars.map((pillar: unknown) => String(pillar).toLowerCase())
-      : [];
-    const fallbackPillars = legacyCategoryPillars[experience.category] || [];
     const matchesSiteCity = inCity(cityOfEvent(experience), siteCity);
     const matchesCity = matchesSiteCity && (!selectedCity
       || String(experience.location || "").toLowerCase().includes(selectedCity.trim().toLowerCase()));
-    const matchesPillar = selectedPillar === "all"
-      || experiencePillars.includes(selectedPillar)
-      || (experiencePillars.length === 0 && fallbackPillars.includes(selectedPillar));
+    const matchesPillar = selectedPillar === "all" || currentCategory(experience.category) === selectedPillar;
 
     return matchesCity && matchesPillar;
   }) : [];
@@ -277,7 +265,7 @@ export default function Experiences() {
       ? experience.greatPillars.find((pillar: unknown) => Boolean(pillar))
       : undefined;
 
-    return formatLabel(String(corePillar || experience.category || "Experience"));
+    return categoryLabel(experience.category) || formatLabel(String(corePillar || experience.category || "Experience"));
   };
 
   const getUrgency = (experience: any): { text: string; className: string } | null => {
@@ -480,7 +468,7 @@ export default function Experiences() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Find your next experience</h2>
-            <p className="text-sm text-gray-600">Choose a city and a Great pillar to narrow the marketplace.</p>
+            <p className="text-sm text-gray-600">Choose a city and a category to narrow the list.</p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -513,7 +501,7 @@ export default function Experiences() {
           {/* Great Pillar Filter */}
           <div className="mt-4">
             <div className="-mx-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:overflow-visible sm:px-0">
-              <div className="flex min-w-max gap-2 sm:min-w-0 sm:flex-wrap" role="group" aria-label="Filter by Great pillar">
+              <div className="flex min-w-max gap-2 sm:min-w-0 sm:flex-wrap" role="group" aria-label="Filter by category">
                 {pillars.map((pillar) => (
                   <Button
                     key={pillar.id}

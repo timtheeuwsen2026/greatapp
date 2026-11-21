@@ -42,7 +42,7 @@ export type IdeaInterestId =
 export const IDEA_INTERESTS: Array<{ id: IdeaInterestId; label: string; hint?: string }> = [
   { id: "sport", label: "Sport and movement", hint: "Runs, gym, Hyrox, triathlon" },
   { id: "mind_body", label: "Mind and body", hint: "Yoga, breathwork, wellness" },
-  { id: "food_drink", label: "Food and drink" },
+  { id: "food_drink", label: "Food and drinks" },
   { id: "music_nightlife", label: "Music and nightlife" },
   { id: "learning", label: "Learning and creativity", hint: "Workshops, talks" },
   { id: "travel", label: "Travel and adventure", hint: "Retreats, trips" },
@@ -72,17 +72,47 @@ export const IDEA_NEEDS: Array<{ id: IdeaNeedId; label: string; hint: string }> 
 ];
 
 export type IdeaInviteSource = "platform" | "link" | "email";
-/** How a community earns (26.2). Only per person carries an amount. */
-export type PeopleEarn = "per_person" | "free_access" | "barter" | "fixed_fee";
-export const PEOPLE_EARN_OPTIONS: Array<{ id: PeopleEarn; label: string }> = [
-  { id: "per_person", label: "Per person" },
-  { id: "free_access", label: "Free access" },
-  { id: "barter", label: "Barter" },
-  { id: "fixed_fee", label: "Fixed fee" },
+/**
+ * How a community earns. Offered: an amount per person who checks in (26.2) and
+ * the builder's own community deals, with the names of 66.36, so the idea and
+ * the builder speak the same language. The last three are the first version's
+ * answers, still read on ideas saved with them, no longer offered.
+ */
+export type PeopleEarn =
+  | "per_person" | "commission_per_ticket" | "milestone_barter" | "member_discount"
+  | "free_access" | "barter" | "fixed_fee";
+export const PEOPLE_EARN_OPTIONS: Array<{ id: PeopleEarn; label: string; hint?: string }> = [
+  { id: "per_person", label: "Per person who checks in", hint: "A fixed amount for each person they bring" },
+  { id: "commission_per_ticket", label: "Commission per ticket", hint: "A percentage of every ticket sold through their link" },
+  { id: "milestone_barter", label: "Bring people, get a reward", hint: "For example: bring 10, get 1 free ticket" },
+  { id: "member_discount", label: "Discount for their members", hint: "Their members get a lower price" },
+];
+const LEGACY_EARN_LABELS: Partial<Record<PeopleEarn, string>> = {
+  free_access: "Free access",
+  barter: "Barter",
+  fixed_fee: "Fixed fee",
+};
+export const COMMISSION_PCT_MAX = 50;
+
+/** How a service provider is paid (Tim, 66.4x): the builder's three service deals. */
+export type ServicePay = "fee" | "barter" | "content_license";
+export const SERVICE_PAY_OPTIONS: Array<{ id: ServicePay; label: string; hint: string }> = [
+  { id: "fee", label: "Fee", hint: "A fixed amount for the job" },
+  { id: "barter", label: "Barter", hint: "A free ticket, product or exposure instead of money" },
+  { id: "content_license", label: "Content licence", hint: "You may use what they make, for example photos" },
 ];
 /** Tim: the standard per-person rate is about €2, set in the people step. */
 export const DEFAULT_AMOUNT_PER_PERSON = 2;
 export const AMOUNT_PER_PERSON_MAX = 500;
+export const SERVICE_FEE_MAX = 20000;
+
+/** A service fee in euros: positive, two decimals, capped. Null for anything else. */
+export function parseServiceFee(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" ? value : Number(String(value).replace(",", ".").trim());
+  if (!Number.isFinite(number) || number <= 0 || number > SERVICE_FEE_MAX) return null;
+  return Math.round(number * 100) / 100;
+}
 
 /** What the venue could live with: the same five answers as the Collab Idea form. */
 export const VENUE_DEAL_IDS = ["revenue_split", "barter", "upfront_fee", "content_for_exposure", "open_to_discuss"] as const;
@@ -110,11 +140,16 @@ export interface IdeaSlot {
   ownCommunity: boolean;
   earn: PeopleEarn | null;
   amountPerPerson: number | null;
+  /** Commission per ticket, in percent. */
+  commissionPct: number | null;
   /** Sponsor or product */
   need: string | null;
   giveBack: string | null;
   /** Service provider */
   service: string | null;
+  servicePay: ServicePay | null;
+  /** Euros, for a fee. Optional. */
+  feeAmount: number | null;
   /** Set once the direct invite exists, so sending again never invites twice. */
   inviteUrl: string | null;
 }
@@ -137,6 +172,9 @@ export function emptySlot(need: IdeaNeedId): IdeaSlot {
     need: null,
     giveBack: null,
     service: null,
+    servicePay: null,
+    feeAmount: null,
+    commissionPct: null,
     inviteUrl: null,
   };
 }
@@ -193,6 +231,8 @@ export interface IdeaInput {
   exactEnd: string;
   /** HH:MM, optional */
   startTime: string;
+  /** HH:MM, optional here; the builder asks for it before publishing (A2). */
+  endTime: string;
   periodStart: string;
   periodEnd: string;
   dayPreference: ConceptDayPreference | null;
@@ -219,6 +259,7 @@ export const EMPTY_IDEA: IdeaInput = {
   exactStart: "",
   exactEnd: "",
   startTime: "",
+  endTime: "",
   periodStart: "",
   periodEnd: "",
   dayPreference: null,
@@ -269,7 +310,7 @@ export function localToday(now: Date = new Date()): string {
 }
 
 export type IdeaErrors = Partial<Record<
-  "title" | "oneLiner" | "exactStart" | "exactEnd" | "startTime" | "periodStart" | "periodEnd" | "place"
+  "title" | "oneLiner" | "exactStart" | "exactEnd" | "startTime" | "endTime" | "periodStart" | "periodEnd" | "place"
   | "audience" | "groupSizeMin" | "groupSizeMax" | "interests" | "interestOther" | "needs" | "note",
   string
 >>;
@@ -303,6 +344,12 @@ export function validateIdeaBasics(input: IdeaInput, today: string = localToday(
       }
     }
     if (input.startTime && !TIME.test(input.startTime)) errors.startTime = "Use a time like 18:30.";
+    if (input.endTime && !TIME.test(input.endTime)) errors.endTime = "Use a time like 21:00.";
+    // On one day the end comes after the start; a trip ends on a later day, so any time is fine.
+    const oneDay = !input.exactEnd || input.exactEnd === input.exactStart;
+    if (!errors.startTime && !errors.endTime && oneDay && input.startTime && input.endTime && input.endTime <= input.startTime) {
+      errors.endTime = "The end time is before the start.";
+    }
   }
 
   if (input.dateMode === "period") {
@@ -354,7 +401,16 @@ export function hasErrors(errors: IdeaErrors): boolean {
 const INTEREST_IDS = new Set<string>(IDEA_INTERESTS.map((entry) => entry.id));
 const LEVEL_IDS = new Set<string>(IDEA_LEVELS.map((entry) => entry.id));
 const NEED_IDS = new Set<string>(IDEA_NEEDS.map((entry) => entry.id));
-const EARN_IDS = new Set<string>(PEOPLE_EARN_OPTIONS.map((entry) => entry.id));
+const EARN_IDS = new Set<string>([...PEOPLE_EARN_OPTIONS.map((entry) => entry.id), ...Object.keys(LEGACY_EARN_LABELS)]);
+const SERVICE_PAY_IDS = new Set<string>(SERVICE_PAY_OPTIONS.map((entry) => entry.id));
+
+/** A percentage from a form field: above 0, at most COMMISSION_PCT_MAX, one decimal. */
+export function parseCommissionPct(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" ? value : Number(String(value).replace(",", ".").replace("%", "").trim());
+  if (!Number.isFinite(number) || number <= 0 || number > COMMISSION_PCT_MAX) return null;
+  return Math.round(number * 10) / 10;
+}
 const SOURCE_IDS = new Set<string>(["platform", "link", "email"]);
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -407,6 +463,7 @@ export function sanitiseSlot(need: IdeaNeedId, raw: unknown): IdeaSlot {
     slot.ownCommunity = value.ownCommunity === true;
     slot.earn = EARN_IDS.has(String(value.earn)) ? (value.earn as PeopleEarn) : base.earn;
     slot.amountPerPerson = slot.earn === "per_person" ? parseAmountPerPerson(value.amountPerPerson) : null;
+    slot.commissionPct = slot.earn === "commission_per_ticket" ? parseCommissionPct(value.commissionPct) : null;
   }
   if (need === "sponsor") {
     slot.need = cleanText(value.need, SLOT_TEXT_MAX);
@@ -414,6 +471,8 @@ export function sanitiseSlot(need: IdeaNeedId, raw: unknown): IdeaSlot {
   }
   if (need === "service_provider") {
     slot.service = cleanText(value.service, SLOT_TEXT_MAX);
+    slot.servicePay = SERVICE_PAY_IDS.has(String(value.servicePay)) ? (value.servicePay as ServicePay) : null;
+    slot.feeAmount = slot.servicePay === "fee" ? parseServiceFee(value.feeAmount) : null;
   }
   return slot;
 }
@@ -461,14 +520,27 @@ export function describeIdeaFor(concept: Partial<ConceptIdea> | null | undefined
 }
 
 /** "€2.00 per person who checks in", "Free access", … */
-export function describePeopleEarn(slot: Pick<IdeaSlot, "earn" | "amountPerPerson"> | null | undefined): string | null {
+export function describePeopleEarn(slot: (Pick<IdeaSlot, "earn" | "amountPerPerson"> & { commissionPct?: number | string | null }) | null | undefined): string | null {
   if (!slot?.earn) return null;
   if (slot.earn === "per_person") {
     // The form holds what was typed until it is saved, so read it as a number here.
     const amount = parseAmountPerPerson(slot.amountPerPerson);
     return amount ? `€${amount.toFixed(2)} per person who checks in` : "Per person who checks in";
   }
-  return PEOPLE_EARN_OPTIONS.find((entry) => entry.id === slot.earn)?.label ?? null;
+  if (slot.earn === "commission_per_ticket") {
+    const pct = parseCommissionPct(slot.commissionPct);
+    return pct ? `Commission per ticket: ${pct}%` : "Commission per ticket";
+  }
+  return PEOPLE_EARN_OPTIONS.find((entry) => entry.id === slot.earn)?.label ?? LEGACY_EARN_LABELS[slot.earn] ?? null;
+}
+
+/** "Fee: €150.00", "Barter", "Content licence". */
+export function describeServicePay(slot: { servicePay?: ServicePay | null; feeAmount?: number | string | null } | null | undefined): string | null {
+  if (!slot?.servicePay) return null;
+  const option = SERVICE_PAY_OPTIONS.find((entry) => entry.id === slot.servicePay);
+  if (!option) return null;
+  const fee = slot.servicePay === "fee" ? parseServiceFee(slot.feeAmount) : null;
+  return fee ? `Fee: €${fee.toFixed(2)}` : option.label;
 }
 
 /** The `concept` column value for these answers. */
@@ -504,7 +576,7 @@ export function buildConcept(input: IdeaInput): ConceptIdea {
   };
 }
 
-export type SlotErrors = Partial<Record<"find" | "invite" | "inviteEmail" | "amountPerPerson" | "kindOfSpace" | "need" | "service", string>>;
+export type SlotErrors = Partial<Record<"find" | "invite" | "inviteEmail" | "amountPerPerson" | "commissionPct" | "feeAmount" | "kindOfSpace" | "need" | "service", string>>;
 
 /** One need's screen. Text answers are optional; who to invite and the amount are not, once chosen. */
 export function validateIdeaSlot(need: IdeaNeedId, slot: IdeaSlot | undefined): SlotErrors {
@@ -525,6 +597,14 @@ export function validateIdeaSlot(need: IdeaNeedId, slot: IdeaSlot | undefined): 
   }
   if (need === "community" && value.earn === "per_person" && parseAmountPerPerson(value.amountPerPerson) === null) {
     errors.amountPerPerson = `Enter an amount between €0.01 and €${AMOUNT_PER_PERSON_MAX}.`;
+  }
+  if (need === "community" && value.earn === "commission_per_ticket" && parseCommissionPct(value.commissionPct) === null) {
+    errors.commissionPct = `Enter a percentage between 0.1 and ${COMMISSION_PCT_MAX}.`;
+  }
+  // The fee amount is optional: "to agree" is a fine answer at the idea stage.
+  if (need === "service_provider" && value.servicePay === "fee" && value.feeAmount !== null && value.feeAmount !== undefined
+    && String(value.feeAmount).trim() !== "" && parseServiceFee(value.feeAmount) === null) {
+    errors.feeAmount = `Enter an amount between €0.01 and €${SERVICE_FEE_MAX}, or leave it empty.`;
   }
   return errors;
 }
@@ -574,7 +654,13 @@ export function buildCollabIdeaPayload(input: IdeaInput, draftId: string | null)
       ...(sponsor.giveBack ? { giveBack: sponsor.giveBack } : {}),
     };
   }
-  if (service?.service) typeDetails.service_provider = { service: service.service };
+  if (service && (service.service || service.servicePay)) {
+    const pay = describeServicePay(service);
+    typeDetails.service_provider = {
+      ...(service.service ? { service: service.service } : {}),
+      ...(pay ? { pay } : {}),
+    };
+  }
 
   const exact = input.dateMode === "exact";
   const period = input.dateMode === "period";
@@ -621,6 +707,7 @@ export function ideaInputFromDraft(draft: Record<string, any> | null | undefined
     exactStart: concept.dateMode === "exact" ? startDay : "",
     exactEnd: concept.dateMode === "exact" && endDay && endDay !== startDay ? endDay : "",
     startTime: typeof draft.startTime === "string" ? draft.startTime : "",
+    endTime: typeof draft.endTime === "string" ? draft.endTime : "",
     periodStart: concept.periodStart ?? "",
     periodEnd: concept.periodEnd ?? "",
     dayPreference: concept.dayPreference,
@@ -718,12 +805,13 @@ export function buildIdeaDraftFields(input: IdeaInput) {
     startDate,
     endDate,
     startTime: startDate && TIME.test(input.startTime) ? input.startTime : null,
+    endTime: startDate && TIME.test(input.endTime ?? "") ? input.endTime : null,
     location: input.place.trim().slice(0, IDEA_PLACE_MAX),
     selectedVenueId: linked,
-    // What a draft started in the builder carries. Left out, the draft takes
-    // the table's defaults — a category the organiser never chose, and no
-    // venue type, which leaves the Venue step's radio cards unselected.
-    category: "",
+    // The category is inferred, not asked (point 30, 66.46): the first interest
+    // picked is the event's category, and the ids are the same list. Left out,
+    // the draft would take the table's default, a category nobody chose.
+    category: sanitiseInterests(input.interests)[0] ?? "",
     venueType: "catalog" as const,
     maxParticipants: max,
     // The review screen's optional photo is the event's cover. Only a full URL:

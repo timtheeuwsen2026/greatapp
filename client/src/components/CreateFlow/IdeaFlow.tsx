@@ -31,6 +31,9 @@ import {
   describeEventDate,
   describeIdeaFor,
   describePeopleEarn,
+  describeServicePay,
+  DEFAULT_AMOUNT_PER_PERSON,
+  SERVICE_PAY_OPTIONS,
   emptySlot,
   hasErrors,
   ideaInputFromDraft,
@@ -606,20 +609,41 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                         <FieldError message={errors.exactEnd} testId="idea-error-exact-end" />
                       </div>
                     </div>
-                    <div>
-                      <Label htmlFor="idea-start-time" className="text-sm text-gray-600">
-                        Start time (optional)
-                      </Label>
-                      <Input
-                        id="idea-start-time"
-                        type="time"
-                        value={input.startTime}
-                        onChange={(event) => patch({ startTime: event.target.value })}
-                        className="mt-1 h-12 w-40 rounded-xl text-base"
-                        data-testid="idea-start-time"
-                      />
-                      <FieldError message={errors.startTime} testId="idea-error-start-time" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label htmlFor="idea-start-time" className="text-sm text-gray-600">
+                          Start time (optional)
+                        </Label>
+                        <Input
+                          id="idea-start-time"
+                          type="time"
+                          value={input.startTime}
+                          onChange={(event) => patch({ startTime: event.target.value })}
+                          className="mt-1 h-12 rounded-xl text-base"
+                          data-testid="idea-start-time"
+                        />
+                        <FieldError message={errors.startTime} testId="idea-error-start-time" />
+                      </div>
+                      <div>
+                        <Label htmlFor="idea-end-time" className="text-sm text-gray-600">
+                          End time (optional)
+                        </Label>
+                        <Input
+                          id="idea-end-time"
+                          type="time"
+                          value={input.endTime}
+                          onChange={(event) => patch({ endTime: event.target.value })}
+                          className="mt-1 h-12 rounded-xl text-base"
+                          data-testid="idea-end-time"
+                        />
+                        <FieldError message={errors.endTime} testId="idea-error-end-time" />
+                      </div>
                     </div>
+                    <p className="text-sm text-gray-500" data-testid="idea-kind-hint">
+                      {input.exactEnd && input.exactEnd > input.exactStart
+                        ? "With an end date this becomes a multi-day event."
+                        : "One date makes it a day event. Add an end date for a multi-day event."}
+                    </p>
                   </div>
                 )}
 
@@ -928,7 +952,12 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                         <Chip
                           key={option.id}
                           selected={slot.earn === option.id}
-                          onClick={() => patchSlot("community", { earn: option.id })}
+                          onClick={() => patchSlot("community", {
+                            earn: option.id,
+                            // Start the amount where Tim set the standard: about €2 a person.
+                            ...(option.id === "per_person" && slot.amountPerPerson == null ? { amountPerPerson: DEFAULT_AMOUNT_PER_PERSON } : {}),
+                          })}
+                          hint={option.hint}
                           testId={`idea-earn-${option.id}`}
                         >
                           {option.label}
@@ -955,6 +984,26 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                         </div>
                         <FieldError message={slotErrors.amountPerPerson} testId="idea-error-amount-per-person" />
                         <p className="mt-1.5 text-sm text-gray-500">Paid for each person who comes through their link and checks in.</p>
+                      </div>
+                    )}
+                    {slot.earn === "commission_per_ticket" && (
+                      <div className="mt-3">
+                        <Label htmlFor="idea-commission-pct" className="text-sm text-gray-600">
+                          Percentage of each ticket sold through their link
+                        </Label>
+                        <div className="mt-1 flex items-center gap-2">
+                          <Input
+                            id="idea-commission-pct"
+                            inputMode="decimal"
+                            value={slot.commissionPct ?? ""}
+                            onChange={(event) => patchSlot("community", { commissionPct: event.target.value as unknown as number })}
+                            className="h-12 w-28 rounded-xl text-base"
+                            data-testid="idea-commission-pct"
+                          />
+                          <span className="text-base text-gray-700">%</span>
+                        </div>
+                        <FieldError message={slotErrors.commissionPct} testId="idea-error-commission-pct" />
+                        <p className="mt-1.5 text-sm text-gray-500">It comes out of your share, after discounts. It applies once tickets have a price.</p>
                       </div>
                     )}
                   </div>
@@ -1021,6 +1070,44 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                     className="mt-2 h-12 rounded-xl text-base"
                     data-testid="idea-service"
                   />
+                </div>
+              )}
+
+              {currentNeed === "service_provider" && (
+                <div>
+                  <p className="text-base font-semibold">How are they paid?</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {SERVICE_PAY_OPTIONS.map((option) => (
+                      <Chip
+                        key={option.id}
+                        selected={slot.servicePay === option.id}
+                        onClick={() => patchSlot("service_provider", { servicePay: slot.servicePay === option.id ? null : option.id })}
+                        hint={option.hint}
+                        testId={`idea-service-pay-${option.id}`}
+                      >
+                        {option.label}
+                      </Chip>
+                    ))}
+                  </div>
+                  {slot.servicePay === "fee" && (
+                    <div className="mt-3">
+                      <Label htmlFor="idea-service-fee" className="text-sm text-gray-600">
+                        Fee <span className="text-gray-500">(optional, you can agree it later)</span>
+                      </Label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-base text-gray-700">€</span>
+                        <Input
+                          id="idea-service-fee"
+                          inputMode="decimal"
+                          value={slot.feeAmount ?? ""}
+                          onChange={(event) => patchSlot("service_provider", { feeAmount: event.target.value as unknown as number })}
+                          className="h-12 w-32 rounded-xl text-base"
+                          data-testid="idea-service-fee"
+                        />
+                      </div>
+                      <FieldError message={slotErrors.feeAmount} testId="idea-error-service-fee" />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1235,6 +1322,7 @@ function describeSlot(need: IdeaNeedId, slot: IdeaSlot | undefined): string {
     need === "sponsor" ? slot.need : null,
     need === "sponsor" && slot.giveBack ? `you give back: ${slot.giveBack}` : null,
     need === "service_provider" ? slot.service : null,
+    need === "service_provider" ? describeServicePay(slot) : null,
   ].filter(Boolean);
   const text = [...find, ...details].join(" · ");
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Not filled in";

@@ -63,6 +63,7 @@ export const COLLAB_SEEKING_TYPES: CollabSeekingOption[] = [
     label: "A service provider",
     fields: [
       { key: "service", label: "What service?", placeholder: "Photographer for the morning" },
+      { key: "pay", label: "How they are paid", placeholder: "Fee, barter or content licence" },
     ],
   },
   {

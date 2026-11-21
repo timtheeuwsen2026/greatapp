@@ -85,6 +85,7 @@ import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { IdeaPeriodCard, IdeaSummaryCard } from "@/components/CreateFlow/IdeaSummaryCard";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
+import { ALL_EVENT_CATEGORY_VALUES, EVENT_CATEGORIES, LEGACY_EVENT_CATEGORIES, categoryLabel } from "@shared/eventCategories";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import DiscountLinkManager from "@/components/DiscountLinkManager";
 import AddPartnerModal from "@/components/AddPartnerModal";
@@ -220,7 +221,7 @@ const eventBuilderSchema = z.object({
   title: z.string().min(1, "Title is required").max(255, "Title too long").optional().or(z.literal('')),
   shortDescription: z.string().max(500, "Short description too long").optional(),
   description: z.string().min(10, "Description must be at least 10 characters").optional().or(z.literal('')),
-  category: z.enum(["sports_wellness", "retreats", "community_social", "adventure_trips", "workations", "festivals_events"]).optional(),
+  category: z.enum(ALL_EVENT_CATEGORY_VALUES as unknown as [string, ...string[]]).optional(),
   type: z.enum(["one-day", "multi-day", "virtual"]).optional(),
   greatPillars: z.preprocess(
     normalizeGreatPillars,
@@ -832,7 +833,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       itinerary: [],
       price: undefined,
       pricePerPerson: 0,
-      currency: undefined,
+      // EUR unless the organiser picks another (Tim, 66.4x): the selector stays.
+      currency: "eur",
       ticketSkus: [],
       
       // Deposit Settings
@@ -1304,8 +1306,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
       serviceConnectRequests: data.serviceConnectRequests || {},
       // Ensure roles array is properly loaded
       roles: Array.isArray(data.roles) ? data.roles : [],
-      // Ensure currency is properly set without fallback
-      currency: data.currency ?? null,
+      // A draft that never chose a currency starts on EUR; a chosen one is kept.
+      currency: data.currency || "eur",
       // Map experience-specific fields to form fields
       maxParticipants: data.maxParticipants || data.capacity,
       price: data.price || data.basePrice,
@@ -1838,13 +1840,14 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
 
     const experienceType = data.type || 'one-day';
 
+    // The end time is always required, for a day event and a trip alike (A2).
+    if (!data.startTime || data.startTime.trim() === '') {
+      errors.push(experienceType === 'multi-day' ? "Start time is required for a multi-day event" : "Start time is required for a single-day event");
+    }
+    if (!data.endTime || data.endTime.trim() === '') {
+      errors.push(experienceType === 'multi-day' ? "End time is required for a multi-day event" : "End time is required for a single-day event");
+    }
     if (experienceType === 'one-day') {
-      if (!data.startTime || data.startTime.trim() === '') {
-        errors.push("Start time is required for a single-day event");
-      }
-      if (!data.endTime || data.endTime.trim() === '') {
-        errors.push("End time is required for a single-day event");
-      }
       if (!data.standingCapacity && !data.seatedCapacity && !data.maxParticipants) {
         errors.push("Standing or seated capacity is required for a single-day event");
       }
@@ -2967,16 +2970,18 @@ function BasicInfoStep({ form }: { form: any }) {
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="sports_wellness">Sports & Wellness</SelectItem>
-                  <SelectItem value="retreats">Retreats</SelectItem>
-                  <SelectItem value="community_social">Community & Social</SelectItem>
-                  <SelectItem value="adventure_trips">Adventure Trips</SelectItem>
-                  <SelectItem value="workations">Workations</SelectItem>
-                  <SelectItem value="festivals_events">Festivals & Events</SelectItem>
+                  {/* One category list for the whole site (66.46). */}
+                  {EVENT_CATEGORIES.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                  ))}
+                  {/* An event made before keeps its old value until it is changed. */}
+                  {field.value && LEGACY_EVENT_CATEGORIES[field.value] && (
+                    <SelectItem value={field.value}>{LEGACY_EVENT_CATEGORIES[field.value].label} (old list)</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
               <FormDescription>
-                Choose the category that best describes your experience.
+                One category, shown as the label on your event.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -3013,69 +3018,7 @@ function BasicInfoStep({ form }: { form: any }) {
           )}
         />
 
-        {/* Great Pillars Multi-Select - using simple visual checkbox to avoid Radix loop issues */}
-        <FormField
-          control={form.control}
-          name="greatPillars"
-          render={({ field }) => {
-            const pillars = [
-              { value: "health", label: "Health" },
-              { value: "sports", label: "Sports" },
-              { value: "wellness", label: "Wellness" },
-              { value: "food", label: "Food" },
-            ] as const;
-            const currentValue = normalizeGreatPillars(field.value);
-            
-            return (
-              <FormItem>
-                <FormLabel>Which Great Pillars apply?</FormLabel>
-                <FormDescription className="mb-3">
-                  Select all that apply to your experience.
-                </FormDescription>
-                <div className="grid grid-cols-2 gap-3" data-testid="great-pillars-container">
-                  {pillars.map((pillar) => {
-                    const isSelected = currentValue.includes(pillar.value);
-                    return (
-                      <button
-                        key={pillar.value}
-                        type="button"
-                        className={`flex items-center space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                          isSelected
-                            ? "bg-primary/10 border-primary"
-                            : "bg-background border-border hover:border-primary/50"
-                        }`}
-                        onClick={() => {
-                          const newValue = isSelected
-                            ? currentValue.filter((v: string) => v !== pillar.value)
-                            : [...currentValue, pillar.value];
-                          form.setValue("greatPillars", newValue, {
-                            shouldDirty: true,
-                            shouldTouch: true,
-                            shouldValidate: true,
-                          });
-                        }}
-                        data-testid={`pillar-${pillar.value}`}
-                      >
-                        <div 
-                          className={`w-4 h-4 border-2 rounded flex items-center justify-center ${
-                            isSelected 
-                              ? "bg-primary border-primary" 
-                              : "border-gray-400"
-                          }`}
-                          data-testid={`checkbox-pillar-${pillar.value}`}
-                        >
-                          {isSelected && <CheckCircle className="w-3 h-3 text-white" />}
-                        </div>
-                        <span className="text-sm font-medium">{pillar.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <FormMessage />
-              </FormItem>
-            );
-          }}
-        />
+        {/* Great Pillars are no longer asked (66.46): the one category above is the event's label. */}
       </div>
 
       {/* Character count indicators removed - causing render loops with form.watch() */}
@@ -3285,15 +3228,53 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
   const eventType = form.watch('type');
   const isSingleDayEvent = eventType === 'one-day';
 
-  // Inline validation for single-day events — surface required-field issues right
-  // at the input instead of only at publish time.
-  const startTimeMissing = isSingleDayEvent && (!startTime || String(startTime).trim() === '');
-  const endTimeMissing = isSingleDayEvent && (!endTime || String(endTime).trim() === '');
+  // Inline validation — surface required-field issues right at the input
+  // instead of only at publish time. Times are required for both kinds (A2).
+  const startTimeMissing = !startTime || String(startTime).trim() === '';
+  const endTimeMissing = !endTime || String(endTime).trim() === '';
+  const nights = startDate && endDate
+    ? Math.max(0, Math.round((Date.parse(`${toDateOnly(endDate)}T00:00:00Z`) - Date.parse(`${toDateOnly(startDate)}T00:00:00Z`)) / 86_400_000) || 0)
+    : 0;
+
+  // Day event or multi-day event (point 46, board B0). Asked up front for
+  // "I'm ready to build"; from the idea flow it was a guess from the dates,
+  // so it can always be changed here. The steps after this one follow it.
+  const chooseType = (next: 'one-day' | 'multi-day') => {
+    if (next === eventType) return;
+    form.setValue('type', next, { shouldDirty: true });
+    if (next === 'one-day' && startDate) form.setValue('endDate', startDate, { shouldDirty: true });
+  };
   const capacityMissing = isSingleDayEvent && !standingCapacity && !seatedCapacity && !maxParticipants;
 
   return (
     <div className="space-y-8">
       <IdeaPeriodCard concept={form.watch('concept')} startDate={startDate} />
+
+      <div className="space-y-2" data-testid="event-kind-switch">
+        <h3 className="text-lg font-semibold">Day event or multi-day event?</h3>
+        <div className="grid grid-cols-2 gap-3" role="group" aria-label="Day event or multi-day event">
+          {([
+            { id: 'one-day', label: 'Day event', hint: 'One date, a start and an end time' },
+            { id: 'multi-day', label: 'Multi-day event', hint: 'Start and end date, nights, rooms and a day-by-day plan' },
+          ] as const).map((option) => {
+            const selected = (option.id === 'one-day') === isSingleDayEvent;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => chooseType(option.id)}
+                aria-pressed={selected}
+                className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${selected ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950' : 'border-gray-200 hover:border-indigo-300 dark:border-gray-700'}`}
+                data-testid={`button-event-kind-${option.id}`}
+              >
+                <span className="block font-semibold text-gray-900 dark:text-white">{option.label}</span>
+                <span className="block text-sm text-gray-500">{option.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Single Date Range Section */}
       <div className="space-y-6">
         <h3 className="text-lg font-semibold">{isSingleDayEvent ? "Event Date" : "Trip Dates"}</h3>
@@ -3411,7 +3392,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
         <p className="text-sm text-gray-500 dark:text-gray-400">
           {isSingleDayEvent
             ? "Set the start and end times for your event (required)"
-            : "Set the start and end times for your experience (optional for multi-day events)"}
+            : "The time the trip starts on the first day and ends on the last day (required)"}
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3421,7 +3402,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
             name="startTime"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{isSingleDayEvent ? "Start Time *" : "Start Time"}</FormLabel>
+                <FormLabel>Start Time *</FormLabel>
                 <FormControl>
                   <Input
                     type="time"
@@ -3434,7 +3415,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
                 </FormControl>
                 {startTimeMissing ? (
                   <p className="text-sm font-medium text-destructive">
-                    Please add a start time for your single-day event
+                    {isSingleDayEvent ? "Please add a start time for your single-day event" : "Please add the time your trip starts"}
                   </p>
                 ) : (
                   <FormDescription>
@@ -3452,7 +3433,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
             name="endTime"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{isSingleDayEvent ? "End Time *" : "End Time"}</FormLabel>
+                <FormLabel>End Time *</FormLabel>
                 <FormControl>
                   <Input
                     type="time"
@@ -3465,7 +3446,7 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
                 </FormControl>
                 {endTimeMissing ? (
                   <p className="text-sm font-medium text-destructive">
-                    Please add an end time for your single-day event
+                    {isSingleDayEvent ? "Please add an end time for your single-day event" : "Please add the time your trip ends"}
                   </p>
                 ) : (
                   <FormDescription>
@@ -3529,7 +3510,9 @@ function DatesStep({ form, editingExperienceId }: { form: any; editingExperience
           </h4>
           <div className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
             <p>Duration: {format(startDate, "MMM d, yyyy")} - {format(endDate, "MMM d, yyyy")}</p>
-            <p>Total days: {Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1}</p>
+            {isSingleDayEvent
+              ? <p>One day</p>
+              : <p data-testid="text-trip-nights">{nights + 1} days, {nights} {nights === 1 ? "night" : "nights"}</p>}
             {startTime && <p>Start time: {startTime}</p>}
             {endTime && <p>End time: {endTime}</p>}
           </div>
@@ -8220,7 +8203,10 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                         const isSoftHold = e.target.value === "soft_hold";
                         form.setValue('softHoldEnabled', isSoftHold, { shouldDirty: true });
                         if (isSoftHold) {
-                          form.setValue('softHoldDurationHours', 720, { shouldDirty: true }); // 30 days default when tied to MVG
+                          // The form allows 1 to 168 hours; 720 made the Pricing step invalid.
+                          // Checkout does not use this hold yet (it charges at booking and
+                          // refunds if the group fails); a saved-card charge at MVG is next.
+                          form.setValue('softHoldDurationHours', 168, { shouldDirty: true });
                         }
                       }}
                       data-testid="select-mvg-payment-timing"
@@ -8655,7 +8641,7 @@ function TermsStep({ form }: { form: any }) {
               <div>
                 <span className="font-medium text-blue-900 dark:text-blue-100">Category:</span>{" "}
                 <span className="text-blue-800 dark:text-blue-200 capitalize">
-                  {formData.category?.replace('_', ' & ') || "Not set"}
+                  {categoryLabel(formData.category) || "Not set"}
                 </span>
               </div>
               <div>

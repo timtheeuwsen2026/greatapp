@@ -242,6 +242,8 @@ export const promoterProfiles = pgTable("promoter_profiles", {
 });
 
 // Categories enum
+// The six old values first (events made before 66.46 keep them), then the
+// eight categories used from now on: @shared/eventCategories.
 export const categoryEnum = pgEnum("category", [
   "sports_wellness",
   "retreats",
@@ -249,6 +251,14 @@ export const categoryEnum = pgEnum("category", [
   "adventure_trips",
   "workations",
   "festivals_events",
+  "sport",
+  "mind_body",
+  "food_drink",
+  "music_nightlife",
+  "learning",
+  "travel",
+  "meet_people",
+  "other",
 ]);
 
 // Experience type enum

@@ -23,6 +23,7 @@
 
 import { eventEndsAt, eventPhase, eventStartsAt, type EventPhase } from "./eventTime";
 import { cityOfEvent } from "./cities";
+import { categoryLabel } from "./eventCategories";
 
 /** Small words that say nothing about what someone is looking for. */
 const STOP_WORDS = new Set(["a", "an", "and", "the", "in", "at", "of", "for", "to", "with", "on", "near", "y", "de", "la", "el"]);
@@ -76,6 +77,8 @@ export function searchableWords(item: Searchable): string[] {
   const parts = [
     item.title,
     String(item.category ?? "").replace(/_/g, " "),
+    // The name people see ("Food and drinks"), for old and new values alike.
+    categoryLabel(item.category),
     cityOfEvent(item as any) ?? item.city,
     item.hostName,
   ];

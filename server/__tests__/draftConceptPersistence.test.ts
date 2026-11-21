@@ -43,7 +43,8 @@ const goodConcept = {
     community: {
       board: true, direct: true, inviteSource: "email", inviteUserId: null, inviteName: null,
       inviteEmail: "runclub@example.com", kindOfSpace: null, dealPreferences: [], ownCommunity: false,
-      earn: "per_person", amountPerPerson: 2, need: null, giveBack: null, service: null,
+      earn: "per_person", amountPerPerson: 2, commissionPct: null, need: null, giveBack: null, service: null,
+      servicePay: null, feeAmount: null,
       inviteUrl: "https://great.test/collab-invite/abc",
     },
   },

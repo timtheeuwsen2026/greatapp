@@ -1625,7 +1625,8 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       title: draft.title || '',
       description: draft.description || '',
       shortDescription: draft.shortDescription,
-      category: (draft.category as "sports_wellness" | "retreats" | "community_social" | "adventure_trips" | "workations" | "festivals_events") || "community_social" as const,
+      // One category list (66.46); a draft that never chose one is "Something else".
+      category: ((draft.category as any) || "other") as any,
       experienceType,
       greatPillars: normalizeGreatPillarsPayload((draft as any).greatPillars),
       coverImageUrl,
@@ -1635,8 +1636,10 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       venue: draft.venue,
       startDate,
       endDate,
-      startTime: isSingleDayEvent ? (draft as any).startTime || null : null,
-      endTime: isSingleDayEvent ? (draft as any).endTime || null : null,
+      // One start and one end time for every event (66.21, A2): a trip starts
+      // and ends at a time too, and publishing used to throw a trip's away.
+      startTime: (draft as any).startTime || null,
+      endTime: (draft as any).endTime || null,
       maxParticipants: normalizedMaxParticipants,
       currentParticipants: 0,
       price: resolvedPrice.toString(),
@@ -5147,13 +5150,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     const experienceType = data.type || "one-day";
+    // The end time is always required, for a day event and a trip alike (A2).
+    if (!data.startTime || String(data.startTime).trim() === "") {
+      errors.push(experienceType === "multi-day" ? "Please add the time your trip starts" : "Please add a start time for your single-day event");
+    }
+    if (!data.endTime || String(data.endTime).trim() === "") {
+      errors.push(experienceType === "multi-day" ? "Please add the time your trip ends" : "Please add an end time for your single-day event");
+    }
     if (experienceType === "one-day") {
-      if (!data.startTime || data.startTime.trim() === "") {
-        errors.push("Please add a start time for your single-day event");
-      }
-      if (!data.endTime || data.endTime.trim() === "") {
-        errors.push("Please add an end time for your single-day event");
-      }
       if (!data.standingCapacity && !data.seatedCapacity && !data.maxParticipants) {
         errors.push("Please add capacity for your single-day event");
       }

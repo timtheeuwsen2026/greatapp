@@ -5,6 +5,7 @@ import {
   describeEventDate,
   describeIdeaFor,
   describePeopleEarn,
+  describeServicePay,
   isConceptDraft,
   type ConceptIdea,
   type IdeaNeedId,
@@ -63,7 +64,7 @@ export function IdeaSummaryCard({ concept }: { concept?: Partial<ConceptIdea> | 
           {needs.map((need) => {
             const slot = concept?.slots?.[need];
             const label = IDEA_NEEDS.find((entry) => entry.id === need)?.label ?? need;
-            const earn = need === "community" ? describePeopleEarn(slot) : null;
+            const earn = need === "community" ? describePeopleEarn(slot) : need === "service_provider" ? describeServicePay(slot) : null;
             return (
               <li key={need} className="text-sm" data-testid={`idea-summary-need-${need}`}>
                 <span className="font-semibold text-gray-900 dark:text-white">{label}</span>

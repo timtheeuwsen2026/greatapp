@@ -28,7 +28,7 @@ describe("the For line", () => {
 
   it("keeps typed words as typed, and falls back to an old draft's audience text", () => {
     expect(describeIdeaFor(buildConcept(idea({ interests: ["food_drink", "other"], interestOther: "Board games" }))))
-      .toBe("Food and drink, Board games · anyone");
+      .toBe("Food and drinks, Board games · anyone");
     expect(describeIdeaFor({ stage: "concept", audience: "Runners", groupSizeMax: 30 } as any)).toBe("Runners · Up to 30 people");
   });
 });

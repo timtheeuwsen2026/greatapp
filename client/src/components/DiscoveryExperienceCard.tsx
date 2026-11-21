@@ -2,6 +2,7 @@ import { eventPhase, formatEventStart } from "@shared/eventTime";
 import { formatPricePerPerson } from "@shared/priceLabel";
 import { Calendar, MapPin, MessageCircle } from "lucide-react";
 import { cityOfEvent } from "@shared/cities";
+import { categoryLabel } from "@shared/eventCategories";
 import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,28 +37,9 @@ function getVenueName(experience: any): string | null {
   return venue || null;
 }
 
-const PILLAR_LABELS: Record<string, string> = {
-  health: "Health",
-  sports: "Sports",
-  wellness: "Wellness",
-  food: "Food",
-};
-
-const PILLAR_COLORS: Record<string, string> = {
-  health: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  sports: "bg-orange-100 text-orange-700 border-orange-200",
-  wellness: "bg-purple-100 text-purple-700 border-purple-200",
-  food: "bg-amber-100 text-amber-700 border-amber-200",
-};
-
-function getPillars(experience: any): string[] {
-  return Array.isArray(experience.greatPillars)
-    ? experience.greatPillars.filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
-    : [];
-}
-
+/** The one category, as a small label (66.46); an old value reads as its new category. */
 function getCategoryFallbackLabel(experience: any) {
-  return formatLabel(String(experience.category || "Experience"));
+  return categoryLabel(experience.category) || formatLabel(String(experience.category || "Experience"));
 }
 
 function getPrice(experience: any) {
@@ -103,7 +85,6 @@ export function DiscoveryExperienceCard({
   const urgency = bookable ? getUrgency(experience, currentParticipants) : null;
   const price = getPrice(experience);
   const venueName = getVenueName(experience);
-  const pillars = getPillars(experience);
   const target = Number(experience.minimumParticipants || 0);
   const progress = target > 0
     ? Math.min(100, Math.round((currentParticipants / target) * 100))
@@ -167,23 +148,10 @@ export function DiscoveryExperienceCard({
             {venueName}
           </p>
         )}
-        {pillars.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-1" data-testid={`card-pillars-${experience.id}`}>
-            {pillars.map((pillar) => (
-              <span
-                key={pillar}
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PILLAR_COLORS[pillar] || "border-gray-200 bg-gray-100 text-gray-700"}`}
-                data-testid={`card-pillar-${experience.id}-${pillar}`}
-              >
-                {PILLAR_LABELS[pillar] || formatLabel(pillar)}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="mb-2 text-xs font-medium text-gray-500" data-testid={`card-category-${experience.id}`}>
-            {getCategoryFallbackLabel(experience)}
-          </p>
-        )}
+        {/* One category as a small text label, not a badge (66.46). */}
+        <p className="mb-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300" data-testid={`card-category-${experience.id}`}>
+          {getCategoryFallbackLabel(experience)}
+        </p>
         <h3 className="mb-2 min-h-[2.75rem] line-clamp-2 text-base font-semibold text-gray-800 dark:text-gray-200">
           {experience.title}
         </h3>

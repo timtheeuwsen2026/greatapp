@@ -876,8 +876,12 @@ export default function AdminDashboard() {
               <div className="space-y-4">
                 {filteredExperiences.map((experience: any) => (
                   <Card key={experience.id} data-testid={`card-experience-${experience.id}`}>
-                    <CardContent className="p-6">
-                      <div className="flex gap-4 mb-4">
+                    <CardContent className="p-4 sm:p-6">
+                      {/* On phones (and in the iOS/Android app) the card stacks:
+                          cover, details, then the action buttons wrapping onto
+                          as many rows as they need. A single row used to push
+                          the fee, cancel and archive buttons off the screen. */}
+                      <div className="flex flex-col gap-4 mb-4 lg:flex-row">
                         {/* Cover Image */}
                         <div className="w-32 h-24 flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800">
                           {experience.coverImageUrl ? (
@@ -894,18 +898,18 @@ export default function AdminDashboard() {
                           )}
                         </div>
                         
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="font-semibold text-lg">{experience.title}</h3>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
+                            <h3 className="font-semibold text-lg min-w-0 [overflow-wrap:anywhere]">{experience.title}</h3>
                             {getStatusBadge(experience.status)}
                           </div>
-                          <p className="text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">{experience.description}</p>
+                          <p className="text-gray-600 dark:text-gray-400 mb-3 line-clamp-2 [overflow-wrap:anywhere]">{experience.description}</p>
                           {experience.cancellationReason && (
                             <p className="text-sm text-red-700 dark:text-red-300 mb-3" data-testid={`cancellation-reason-${experience.id}`}>
                               {experience.cancellationReason}
                             </p>
                           )}
-                          <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-500 mb-3">
                             <span>Creator: {experience.creatorName}</span>
                             <span>Price: {(() => {
                               const skus = (experience as any).ticketSkus || [];
@@ -921,8 +925,8 @@ export default function AdminDashboard() {
                               }
                               return formatCurrency(experience.price, (experience as any).currency);
                             })()}</span>
-                            <span>Category: {experience.category}</span>
-                            <span>Location: {experience.location}</span>
+                            <span className="[overflow-wrap:anywhere]">Category: {experience.category}</span>
+                            <span className="[overflow-wrap:anywhere]">Location: {experience.location}</span>
                             <AdminEventCity experienceId={experience.id} city={(experience as any).city ?? null} />
                             <AdminHideFromPublic experienceId={experience.id} hidden={(experience as any).hiddenFromPublic === true} />
                             {experience.minimumParticipants && experience.minimumParticipants > 0 && (
@@ -957,7 +961,7 @@ export default function AdminDashboard() {
                             </div>
                           )}
                         </div>
-                        <div className="flex gap-2 ml-4">
+                        <div className="flex flex-wrap gap-2 lg:ml-4 lg:flex-nowrap lg:items-start" data-testid={`actions-experience-${experience.id}`}>
                           <Button
                             size="sm"
                             variant="outline"

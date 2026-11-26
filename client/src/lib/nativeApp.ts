@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 // The iOS and Android apps load this site in a native shell. The shell injects
 // `window.AppForge` before any of our code runs and adds "GreatApp" to the
 // user agent. Everything here is a no-op in a normal browser.
@@ -33,6 +35,8 @@ interface NativeShellApi {
   share(options: { title?: string; text?: string; url?: string }): Promise<unknown>;
   calendar?: { add(event: CalendarEventInput): Promise<unknown> };
   openExternal(url: string): Promise<unknown>;
+  /** App builds from 1.0.0 (4): true when /app-config.json says "hostTools": "app". */
+  hostToolsInApp?(): boolean;
 }
 
 declare global {
@@ -77,4 +81,28 @@ export function isSignInCancel(error: unknown): boolean {
   const message = String((error as any)?.message ?? error ?? "").toLowerCase();
   const code = String((error as any)?.code ?? "");
   return /cancel/.test(message) || code === "1001" || /12501/.test(message);
+}
+
+/**
+ * True when the app shows the hosting tools (Create experience, creator,
+ * venue, community, collab, deals, messages) inside the app. The website
+ * decides with "hostTools" in client/public/app-config.json: "app" shows them,
+ * "browser" hides them and offers "Host an experience" in the phone's browser.
+ * App builds before 1.0.0 (4) always hide them, so this is false there.
+ */
+export function hostToolsInApp(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.AppForge?.hostToolsInApp?.() === true;
+}
+
+/** hostToolsInApp() for React: follows the app when the setting changes. */
+export function useHostToolsInApp(): boolean {
+  const [inApp, setInApp] = useState(hostToolsInApp);
+  useEffect(() => {
+    const update = () => setInApp(hostToolsInApp());
+    update();
+    window.addEventListener("appforge:host-tools", update);
+    return () => window.removeEventListener("appforge:host-tools", update);
+  }, []);
+  return inApp;
 }

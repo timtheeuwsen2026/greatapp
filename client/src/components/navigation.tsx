@@ -18,7 +18,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import BrandLogo from "@/components/BrandLogo";
 import { CityMenu } from "@/components/CityMenu";
 import { NoticesBell } from "@/components/NoticesBell";
-import { isNativeApp, openInBrowser } from "@/lib/nativeApp";
+import { isNativeApp, openInBrowser, useHostToolsInApp } from "@/lib/nativeApp";
 
 // ─── Role metadata ────────────────────────────────────────────────────────────
 const ROLE_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -101,6 +101,11 @@ export default function Navigation() {
   const { user, isAuthenticated, isLoading } = useAuth();
   const [pathname, navigate] = useLocation();
   const queryClient = useQueryClient();
+  // In the app the hosting tools are either inside the app or on the website
+  // ("hostTools" in client/public/app-config.json). Only in the second case
+  // does the menu offer "Host an experience" in the phone's browser.
+  const hostToolsInApp = useHostToolsInApp();
+  const hostInBrowser = isNativeApp() && !hostToolsInApp;
   const { data: inbox } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/messages/inbox"], enabled: isAuthenticated, refetchInterval: 15000,
   });
@@ -266,9 +271,9 @@ export default function Navigation() {
                       Rewards & Referrals
                     </Link>
                   </DropdownMenuItem>
-                  {/* The iOS/Android app hides the hosting tools, so this opens
+                  {/* When the iOS/Android app hides the hosting tools, this opens
                       Create experience in the phone's browser instead. */}
-                  {isNativeApp() && (
+                  {hostInBrowser && (
                     <DropdownMenuItem
                       className="gap-2"
                       onSelect={() => openInBrowser("/create-experience")}
@@ -567,7 +572,7 @@ export default function Navigation() {
                     <TrendingUp className="h-4 w-4" />
                     Rewards & Referrals
                   </Link>
-                  {isNativeApp() && (
+                  {hostInBrowser && (
                     <button
                       type="button"
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-700 hover:text-primary transition-colors font-medium"

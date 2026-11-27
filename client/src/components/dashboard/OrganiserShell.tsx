@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -13,30 +13,49 @@ import {
 } from "lucide-react";
 import Navigation from "@/components/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { InOrganiserShell } from "./shellContext";
 
-type MenuItem = { label: string; href: string; icon: typeof CalendarDays; match?: string; badge?: "deals"; sub?: boolean };
+type MenuItem = {
+  label: string;
+  href: string;
+  icon: typeof CalendarDays;
+  /** The page this item is: a path, and for the dashboard page its ?tab= value(s). */
+  path: string;
+  tabs?: string[];
+  /** Other paths that belong to this item (an event's Orders belong to My events). */
+  alsoPaths?: string[];
+  badge?: "deals";
+  sub?: boolean;
+};
 
 /**
- * The organiser's menu in the new dashboard (Tim, point 60, boards D1 to D5):
- * one white panel on the left with who you are on top and the same words
- * everywhere. "My events" is the first part rebuilt in this layout (its Orders
- * screen, board D2). The other items open the current pages until they are
- * rebuilt here too.
+ * The organiser's menu (Tim, point 60 and 27 Nov point 5, boards D1 to D5):
+ * one white panel on the left, the same on every page of the organiser area.
+ * Overview, My events, Money, Deals, Community and Analytics are sections of
+ * one page (/creator-dashboard?tab=…); Promote and Settings open their page
+ * inside the same menu. The old row of tabs is gone.
  */
-const ORGANISER_MENU: MenuItem[] = [
-  { label: "Overview", href: "/creator-dashboard", icon: LayoutDashboard },
-  { label: "My events", href: "/dashboard/events", icon: CalendarDays, match: "/dashboard/events" },
-  { label: "Money", href: "/creator-dashboard?tab=earnings", icon: Wallet },
-  { label: "Deals", href: "/creator-dashboard?tab=partners", icon: Handshake, badge: "deals" },
+export const ORGANISER_MENU: MenuItem[] = [
+  { label: "Overview", href: "/creator-dashboard", icon: LayoutDashboard, path: "/creator-dashboard", tabs: ["overview", "setup"] },
+  {
+    label: "My events", href: "/creator-dashboard?tab=experiences", icon: CalendarDays, path: "/creator-dashboard",
+    tabs: ["experiences", "venues", "pricing", "pending"], alsoPaths: ["/dashboard/events"],
+  },
+  { label: "Money", href: "/creator-dashboard?tab=earnings", icon: Wallet, path: "/creator-dashboard", tabs: ["earnings"] },
+  {
+    label: "Deals", href: "/creator-dashboard?tab=deals", icon: Handshake, path: "/creator-dashboard", badge: "deals",
+    tabs: ["deals", "partners", "venue-offers", "active-deals", "promotion-deals", "fulfillment", "flash-deals", "my-postings", "role-applications"],
+  },
   // Between Deals and Community in every dashboard (66.23c).
-  { label: "Promote", href: "/promoter", icon: Megaphone },
-  { label: "Community", href: "/creator-dashboard?tab=community", icon: Users },
-  { label: "Analytics", href: "/creator-dashboard?tab=analytics", icon: BarChart3 },
-  { label: "Settings", href: "/profile", icon: Settings },
+  { label: "Promote", href: "/dashboard/promote", icon: Megaphone, path: "/dashboard/promote" },
+  { label: "Community", href: "/creator-dashboard?tab=community", icon: Users, path: "/creator-dashboard", tabs: ["community"] },
+  { label: "Analytics", href: "/creator-dashboard?tab=analytics", icon: BarChart3, path: "/creator-dashboard", tabs: ["analytics"] },
+  { label: "Settings", href: "/dashboard/settings", icon: Settings, path: "/dashboard/settings" },
 ];
 
 export function OrganiserShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
+  const search = useSearch();
   const { user, isAuthenticated } = useAuth();
   // Venue offers waiting on you: the count next to Deals on board D2.
   const { data: venueOffers = [] } = useQuery<any[]>({
@@ -54,10 +73,15 @@ export function OrganiserShell({ children }: { children: ReactNode }) {
   });
   const menu = (partnerOrders?.events?.length ?? 0) > 0
     ? ORGANISER_MENU.flatMap((item) => item.label === "Money"
-      ? [item, { label: "As partner", href: "/dashboard/as-partner", icon: Wallet, match: "/dashboard/as-partner", sub: true } as MenuItem]
+      ? [item, { label: "As partner", href: "/dashboard/as-partner", icon: Wallet, path: "/dashboard/as-partner", sub: true } as MenuItem]
       : [item])
     : ORGANISER_MENU;
-  const isActive = (item: MenuItem) => !!item.match && location.startsWith(item.match);
+  const tab = new URLSearchParams(search).get("tab") || "overview";
+  const isActive = (item: MenuItem) => {
+    if (item.alsoPaths?.some((path) => location.startsWith(path))) return true;
+    if (location !== item.path) return false;
+    return item.tabs ? item.tabs.includes(tab) : true;
+  };
   const name = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || "";
 
   return (
@@ -111,7 +135,9 @@ export function OrganiserShell({ children }: { children: ReactNode }) {
             })}
           </ul>
         </nav>
-        <main className="min-w-0 flex-1 px-4 py-5 lg:px-8 lg:py-8">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-5 lg:px-8 lg:py-8">
+          <InOrganiserShell.Provider value={true}>{children}</InOrganiserShell.Provider>
+        </main>
       </div>
     </div>
   );

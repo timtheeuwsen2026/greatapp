@@ -35,8 +35,20 @@ describe("buildEventOrders (58.1, 58.2)", () => {
       orders: 2,
       tickets: 2,
       amount: 3.25,
-      addons: [{ name: "Coffee", quantity: 1, handedOut: 1, venueAmount: 1, total: 1.25, margin: 0.25 }],
+      addons: [{ name: "Coffee", quantity: 1, handedOut: 1, venueAmount: 1, total: 1.25, margin: 0.25, toPrepare: 1 }],
     });
+  });
+
+  it("leaves a test booking out of the organiser's money, not out of what the venue hands out (27 Nov)", () => {
+    const withTest = buildEventOrders(
+      [...bookings, { ...bookings[0], id: "test-1", testPayment: true }],
+      people,
+      "organiser",
+    );
+    const totals = eventOrderTotals(withTest, { organiser: true });
+    const coffee = totals.addons.find((addon) => addon.name === "Coffee")!;
+    expect(coffee.toPrepare).toBe(coffee.quantity + 1);
+    expect(withTest.find((row) => row.bookingId === "test-1")?.test).toBe(true);
   });
 
   it("exports the sheet as CSV with euro amounts", () => {

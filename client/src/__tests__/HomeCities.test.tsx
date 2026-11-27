@@ -100,8 +100,10 @@ describe("homepage per city (66.24)", () => {
     Object.assign(cityState, { city: "all", chosen: true, suggested: null });
     renderHome();
     expect(await screen.findByTestId("heading-happening-now")).toHaveTextContent(/^⚡ Happening now$/);
-    expect(screen.getByText("Sunday Social 5K, Good Soles")).toBeInTheDocument();
-    expect(screen.getByText("020 Run Culture, Sunday 5K")).toBeInTheDocument();
+    // In the list (the banner may show the same event as an example card, point 47).
+    const list = within(screen.getByTestId("happening-now-swimlane"));
+    expect(list.getByText("Sunday Social 5K, Good Soles")).toBeInTheDocument();
+    expect(list.getByText("020 Run Culture, Sunday 5K")).toBeInTheDocument();
     expect(screen.queryByTestId("other-cities-section")).not.toBeInTheDocument();
   });
 });

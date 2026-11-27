@@ -4,6 +4,7 @@ import type { Express, Request, Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { storage } from "./storage";
+import { eventCategoryLabel } from "@shared/eventCategories";
 
 const SOURCE_BRAND_LOGO_PATH = path.resolve(process.cwd(), "client", "public", "assets", "email_logo.png");
 const BUILT_BRAND_LOGO_PATH = path.resolve(process.cwd(), "dist", "public", "assets", "email_logo.png");
@@ -65,24 +66,6 @@ interface MVGData {
 interface ReferralTarget {
   kind: "mvg" | "capacity" | null;
   remaining: number | null;
-}
-
-const CATEGORY_LABELS: Record<string, string> = {
-  sports_wellness: "Sports & Wellness",
-  retreats: "Retreats",
-  community_social: "Community & Social",
-  adventure_trips: "Adventure Trips",
-  workations: "Workations",
-  festivals_events: "Festivals & Events",
-};
-
-function categoryLabel(category?: string | null) {
-  if (!category) return null;
-  return CATEGORY_LABELS[category] || category
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function resolveLifecycle(experience: any, mvg: MVGData): LifecycleState {
@@ -269,7 +252,8 @@ async function generateOGImage(experience: any, mvg: MVGData): Promise<Buffer> {
   ctx.font = "400 15px sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.4)";
   ctx.textBaseline = "middle";
-  const footerCategory = categoryLabel(experience.category);
+  // The activity, like the card ("Running"), board A1.
+  const footerCategory = eventCategoryLabel(experience) || null;
   const footerText = footerCategory
     ? `${footerCategory} - greatexperiences.ai`
     : "greatexperiences.ai";

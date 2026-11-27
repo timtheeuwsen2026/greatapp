@@ -36,7 +36,8 @@ describe("the For line", () => {
 describe("slots", () => {
   it("start the way most organisers fill them", () => {
     expect(emptySlot("venue")).toMatchObject({ board: true, direct: false, inviteSource: "platform" });
-    expect(emptySlot("community")).toMatchObject({ board: false, direct: true, inviteSource: "link", earn: "per_person", amountPerPerson: 2 });
+    // Every idea goes on the Collab board by default (27 Nov), the people slot too.
+    expect(emptySlot("community")).toMatchObject({ board: true, direct: true, inviteSource: "link", earn: "per_person", amountPerPerson: 2 });
   });
 
   it("keep only their own need's fields", () => {
@@ -91,7 +92,7 @@ describe("the Collab board posting", () => {
 
   it("is nothing when nothing is looked for", () => {
     expect(buildCollabIdeaPayload(idea({ needs: [] }), "draft-1")).toBeNull();
-    expect(buildCollabIdeaPayload(idea({ needs: ["community"], slots: { community: { ...emptySlot("community"), direct: false, ownCommunity: true } } }), "d")).toBeNull();
+    expect(buildCollabIdeaPayload(idea({ needs: ["community"], slots: { community: { ...emptySlot("community"), board: false, direct: false, ownCommunity: true } } }), "d")).toBeNull();
   });
 
   it("lists what the board should find and carries the rest for the invites", () => {
@@ -99,7 +100,8 @@ describe("the Collab board posting", () => {
     expect(needsToPost(withSlots)).toEqual(["venue", "community"]);
     expect(payload).toMatchObject({
       title: "Halloween coffee rave",
-      seekingPartnerTypes: ["venue"],
+      // Every idea is on the board by default (27 Nov), the people slot too.
+      seekingPartnerTypes: ["venue", "community"],
       typeDetails: { venue: { kindOfSpace: "Beach bar" }, community: { earn: "€2.00 per person who checks in" } },
       dealPreferences: ["revenue_split"],
       audience: "Sport and movement · anyone · 10 to 60 people",
@@ -111,8 +113,13 @@ describe("the Collab board posting", () => {
     });
   });
 
+  it("is on the board by default, the people slot too (27 Nov)", () => {
+    const byDefault = idea({ needs: ["community"], slots: { community: emptySlot("community") } });
+    expect(buildCollabIdeaPayload(byDefault, "draft-1")).toMatchObject({ listed: true, seekingPartnerTypes: ["community"] });
+  });
+
   it("is kept off the board when every slot is invite-only", () => {
-    const inviteOnly = idea({ needs: ["community"], slots: { community: emptySlot("community") } });
+    const inviteOnly = idea({ needs: ["community"], slots: { community: { ...emptySlot("community"), board: false } } });
     expect(buildCollabIdeaPayload(inviteOnly, "draft-1")).toMatchObject({ listed: false, seekingPartnerTypes: ["community"] });
   });
 });

@@ -9,7 +9,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import AddressAutocomplete from "@/components/AddressAutocomplete";
+import ActivityPicker from "@/components/ActivityPicker";
+import { categoryLabel, isActivity } from "@shared/eventCategories";
+import PlaceFinder from "@/components/PlaceFinder";
 import DayPickerField from "@/components/CreateFlow/DayPickerField";
 import { CollabDirectInvite } from "@/components/PostCollabIdeaModal";
 import { SharedPhotoUpload, PhotoPreview } from "@/components/SharedPhotoUpload";
@@ -99,7 +101,7 @@ const DAY_PREFERENCES: Array<{ id: ConceptDayPreference; label: string }> = [
   { id: "any", label: "Any day" },
 ];
 
-type GreatVenue = { id: string; name: string; city?: string | null; location?: string | null };
+type GreatVenue = { id: string; name: string; city?: string | null; location?: string | null; latitude?: string | number | null; longitude?: string | number | null };
 
 function Chip({
   selected, onClick, children, testId, hint,
@@ -249,6 +251,11 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
     patch({ needs: order });
   };
 
+  // Picks from the 8 interests of 66.46 in an idea saved before (not activities, not "Something else").
+  const legacyInterests = input.interests.filter((id) => id !== "other" && !isActivity(id));
+  const legacyInterestLabel = (id: string) =>
+    IDEA_INTERESTS.find((entry) => entry.id === id)?.label ?? categoryLabel(id) ?? id;
+
   const toggleInterest = (id: IdeaInput["interests"][number]) => {
     const current = input.interests;
     if (current.includes(id)) {
@@ -273,13 +280,21 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
     retry: false,
   });
 
+  // Venues on Great in the place's city first (board BuildWhere): the place
+  // stays the creator's own pin until a venue is linked.
   const placeText = input.place.trim().toLowerCase();
+  const placeCityText = (input.placeCity ?? "").trim().toLowerCase();
   const venueMatches = useMemo(() => {
     if (input.linkedVenueId || placeText.length < 2) return [];
     return (venues ?? [])
-      .filter((venue) => `${venue.name} ${venue.city ?? ""}`.toLowerCase().includes(placeText))
+      .filter((venue) => {
+        const name = `${venue.name} ${venue.city ?? ""}`.toLowerCase();
+        return placeText.includes(String(venue.name ?? "").toLowerCase())
+          || name.includes(placeText)
+          || (!!placeCityText && String(venue.city ?? "").toLowerCase() === placeCityText);
+      })
       .slice(0, 4);
-  }, [venues, placeText, input.linkedVenueId]);
+  }, [venues, placeText, placeCityText, input.linkedVenueId]);
   const linkedVenue = input.linkedVenueId
     ? (venues ?? []).find((venue) => venue.id === input.linkedVenueId)
     : undefined;
@@ -697,15 +712,22 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
 
               <div>
                 <Label htmlFor="idea-place" className="text-base font-semibold">Where?</Label>
-                <div className="mt-2">
-                  <AddressAutocomplete
-                    id="idea-place"
-                    value={input.place}
-                    placeholder="Search a place or area"
-                    className="h-12 rounded-xl text-base"
-                    // Typing again means the place is no longer the venue that was picked.
-                    onChange={(value) => patch({ place: value, linkedVenueId: null })}
-                    data-testid="idea-place"
+                {/* Any place on the map (Tim, 27 Nov, point 1; board U5b): search
+                    OpenStreetMap or drop a pin. The city comes from the place. */}
+                <div className="mt-2" id="idea-place">
+                  <PlaceFinder
+                    value={input.place ? { label: input.place, city: input.placeCity, lat: input.placeLat, lng: input.placeLng } : null}
+                    cityHint={input.placeCity}
+                    placeholder="Search a place, a park, an address"
+                    // A new place means it is no longer the venue that was picked.
+                    onChange={(place) => patch({
+                      place: place?.label ?? "",
+                      placeCity: place?.city ?? null,
+                      placeLat: place?.lat ?? null,
+                      placeLng: place?.lng ?? null,
+                      linkedVenueId: null,
+                    })}
+                    testIdPrefix="idea-place"
                   />
                 </div>
                 <FieldError message={errors.place} testId="idea-error-place" />
@@ -741,6 +763,9 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                               onClick={() =>
                                 patch({
                                   place: [venue.name, venue.city].filter(Boolean).join(", "),
+                                  placeCity: venue.city ?? null,
+                                  placeLat: Number.isFinite(Number(venue.latitude)) && venue.latitude != null ? Number(venue.latitude) : null,
+                                  placeLng: Number.isFinite(Number(venue.longitude)) && venue.longitude != null ? Number(venue.longitude) : null,
                                   linkedVenueId: venue.id,
                                 })
                               }
@@ -774,19 +799,46 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
               </div>
 
               <div>
-                <p className="text-base font-semibold">Interests <span className="font-normal text-gray-500">(pick 1 to {IDEA_INTERESTS_MAX})</span></p>
-                <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Interests">
-                  {IDEA_INTERESTS.map((interest) => (
-                    <Chip
-                      key={interest.id}
-                      selected={input.interests.includes(interest.id)}
-                      onClick={() => toggleInterest(interest.id)}
-                      hint={interest.hint}
-                      testId={`idea-interest-${interest.id}`}
-                    >
-                      {interest.label}
-                    </Chip>
-                  ))}
+                <p className="text-base font-semibold">What kind of activity? <span className="font-normal text-gray-500">(pick 1 to {IDEA_INTERESTS_MAX})</span></p>
+                <p className="mt-1 text-sm text-gray-500">Pick a group, then the activity. The first one is the label on your event.</p>
+                {/* The same 7 groups and ~60 activities as the builder, cards,
+                    Events filter and search (Tim, 27 Nov, board A1). */}
+                {/* Picks from the old list of 8 (an idea saved before) stay
+                    visible and removable; they still count towards the 3. */}
+                {legacyInterests.length > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="idea-legacy-interests">
+                    <span className="text-xs text-gray-500">From before:</span>
+                    {legacyInterests.map((id) => (
+                      <Chip
+                        key={id}
+                        selected
+                        onClick={() => patch({ interests: input.interests.filter((entry) => entry !== id) })}
+                        testId={`idea-legacy-interest-${id}`}
+                      >
+                        {legacyInterestLabel(id)} ×
+                      </Chip>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-3">
+                  <ActivityPicker
+                    value={input.interests.filter((id) => isActivity(id))}
+                    max={IDEA_INTERESTS_MAX - (input.interests.length - input.interests.filter((id) => isActivity(id)).length)}
+                    onChange={(next) => {
+                      setErrors((existing) => ({ ...existing, interests: undefined }));
+                      patch({ interests: [...next, ...input.interests.filter((id) => !isActivity(id))] });
+                    }}
+                    testIdPrefix="idea-interest"
+                  />
+                </div>
+                <div className="mt-3">
+                  <Chip
+                    selected={input.interests.includes("other")}
+                    onClick={() => toggleInterest("other")}
+                    testId="idea-interest-other-toggle"
+                  >
+                    Something else
+                  </Chip>
                 </div>
                 <FieldError message={errors.interests} testId="idea-error-interests" />
                 {input.interests.includes("other") && (
@@ -804,7 +856,6 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                     <FieldError message={errors.interestOther} testId="idea-error-interest-other" />
                   </div>
                 )}
-                <p className="mt-2 text-sm text-gray-500">The exact activity goes in the title and description.</p>
               </div>
 
               <div>
@@ -1175,6 +1226,30 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                 </p>
               </div>
 
+              {/* The cover image, at the top of the last page (Tim, 27 Nov,
+                  point 1): it was at the very bottom, under "Anything else?". */}
+              <div data-testid="idea-review-photo">
+                <p className="text-base font-semibold">Cover photo <span className="font-normal text-gray-500">(optional)</span></p>
+                <p className="text-sm text-gray-500">It shows on the Collab board and becomes your event's cover.</p>
+                <div className="mt-2">
+                  {input.photoUrl ? (
+                    <PhotoPreview src={input.photoUrl} alt="" onRemove={() => patch({ photoUrl: "" })} className="h-48" />
+                  ) : (
+                    <SharedPhotoUpload
+                      onUploadComplete={(url) => patch({ photoUrl: absoluteUrl(url) })}
+                      maxFileSize={10 * 1024 * 1024}
+                      multiple={false}
+                      className="min-h-[140px]"
+                    >
+                      <div className="p-6 text-center text-sm text-gray-500">
+                        <ImageIcon className="mx-auto mb-2 h-8 w-8 text-gray-400" />
+                        Add a photo. A wide one works best.
+                      </div>
+                    </SharedPhotoUpload>
+                  )}
+                </div>
+              </div>
+
               <div className="divide-y rounded-2xl border bg-white" data-testid="idea-review-summary">
                 <ReviewRow label="Idea" onEdit={() => goTo("basics")} testId="idea-review-idea">
                   <span className="font-semibold">{input.title.trim()}</span>
@@ -1217,26 +1292,6 @@ export default function IdeaFlow({ draftId: initialDraftId = null }: { draftId?:
                 />
               </div>
 
-              <div>
-                <p className="text-base font-semibold">Photo <span className="font-normal text-gray-500">(optional)</span></p>
-                <div className="mt-2">
-                  {input.photoUrl ? (
-                    <PhotoPreview src={input.photoUrl} alt="" onRemove={() => patch({ photoUrl: "" })} className="h-40" />
-                  ) : (
-                    <SharedPhotoUpload
-                      onUploadComplete={(url) => patch({ photoUrl: absoluteUrl(url) })}
-                      maxFileSize={10 * 1024 * 1024}
-                      multiple={false}
-                      className="min-h-[120px]"
-                    >
-                      <div className="p-6 text-center text-sm text-gray-500">
-                        <ImageIcon className="mx-auto mb-2 h-8 w-8 text-gray-400" />
-                        Add a photo. It becomes your event's cover.
-                      </div>
-                    </SharedPhotoUpload>
-                  )}
-                </div>
-              </div>
             </section>
           )}
         </div>

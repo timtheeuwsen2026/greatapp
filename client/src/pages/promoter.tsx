@@ -18,6 +18,7 @@ import { AttendanceRewardsSection } from "@/components/AttendanceProgress";
 import { ShareKitModal } from "@/components/ShareKitModal";
 import { getParticipantReferralSummary, getPromotionOfferSummary, formatPromotionDealTerms, type PromotionDealTerms } from "@/lib/promotionDeals";
 import { formatMvgParticipantCount } from "@/lib/participantCounts";
+import { useInOrganiserShell } from "@/components/dashboard/shellContext";
 
 interface EarningsSummary {
   byCurrency: Array<{
@@ -1137,6 +1138,8 @@ function ActivePromotionDealsCard({
 }
 
 export default function PromoterDashboard() {
+  // Inside the organiser menu the shell shows the top bar (27 Nov, point 5).
+  const inShell = useInOrganiserShell();
   const { user, isLoading: authLoading } = useAuth();
   const qc = useQueryClient();
   const [showShareModal, setShowShareModal] = useState(false);
@@ -1282,7 +1285,7 @@ export default function PromoterDashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/5 to-white dark:from-gray-900 dark:to-gray-950">
-      <Navigation />
+      {!inShell && <Navigation />}
       {/* The onboarding step a promoter never had. Renders nothing once the
           profile is done, and nothing at all for a non-promoter account. */}
       <PromoterOnboardingPrompt />

@@ -2,7 +2,7 @@ import { eventPhase, formatEventStart } from "@shared/eventTime";
 import { formatPricePerPerson } from "@shared/priceLabel";
 import { Calendar, MapPin, MessageCircle } from "lucide-react";
 import { cityOfEvent } from "@shared/cities";
-import { categoryLabel } from "@shared/eventCategories";
+import { eventCategoryLabel } from "@shared/eventCategories";
 import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,9 +37,9 @@ function getVenueName(experience: any): string | null {
   return venue || null;
 }
 
-/** The one category, as a small label (66.46); an old value reads as its new category. */
+/** The one label (board A1): the activity, or its group; an old value reads as its nearest group. */
 function getCategoryFallbackLabel(experience: any) {
-  return categoryLabel(experience.category) || formatLabel(String(experience.category || "Experience"));
+  return eventCategoryLabel(experience) || "Experience";
 }
 
 function getPrice(experience: any) {

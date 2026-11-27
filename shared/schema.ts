@@ -8,6 +8,7 @@ import {
   text,
   integer,
   decimal,
+  doublePrecision,
   boolean,
   pgEnum,
   date,
@@ -243,7 +244,8 @@ export const promoterProfiles = pgTable("promoter_profiles", {
 
 // Categories enum
 // The six old values first (events made before 66.46 keep them), then the
-// eight categories used from now on: @shared/eventCategories.
+// eight interests of 66.46, then the seven groups used from now on (Tim, 27
+// Nov, board A1): @shared/eventCategories. Old values read as their nearest group.
 export const categoryEnum = pgEnum("category", [
   "sports_wellness",
   "retreats",
@@ -259,6 +261,13 @@ export const categoryEnum = pgEnum("category", [
   "travel",
   "meet_people",
   "other",
+  "move",
+  "recover",
+  "social",
+  "outdoors",
+  "culture",
+  "learn_make",
+  "business",
 ]);
 
 // Experience type enum
@@ -367,6 +376,11 @@ export const experienceDrafts = pgTable("experience_drafts", {
   // Step 2: Details
   description: text("description").default(""),
   category: varchar("category").default("sports_wellness"),
+  /** The activity inside the category group ("running"): @shared/eventCategories. */
+  activity: varchar("activity"),
+  /** The pin of the place (place finder, OpenStreetMap; 27 Nov, point 1). */
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
 
   // Step 3: Type & Format
   type: varchar("type").default("one-day"),
@@ -734,6 +748,11 @@ export const experiences = pgTable("experiences", {
   description: text("description").notNull(),
   shortDescription: varchar("short_description", { length: 500 }),
   category: categoryEnum("category").notNull(),
+  /** The activity inside the category group ("running"); the label on cards. @shared/eventCategories */
+  activity: varchar("activity"),
+  /** The pin of the place (place finder, OpenStreetMap; 27 Nov, point 1). */
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
   experienceType: experienceTypeEnum("experience_type").notNull(),
   greatPillars: jsonb("great_pillars").$type<string[]>().default([]),
   coverImageUrl: varchar("cover_image_url"),

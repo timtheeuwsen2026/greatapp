@@ -19,6 +19,7 @@
  * draft table has no such readers, so the marker costs nothing there.
  */
 
+import { ACTIVITIES, EVENT_CATEGORIES, activityLabel, currentCategory, isActivity } from "./eventCategories";
 import { toCalendarDateISO } from "./calendarDates";
 
 export type ConceptDateMode = "exact" | "period" | "open";
@@ -31,15 +32,15 @@ export const CONCEPT_DAY_PREFERENCES: readonly ConceptDayPreference[] = ["weekda
 export const AUDIENCE_SUGGESTIONS = ["Runners", "Swimmers", "Cyclists", "Everyone"] as const;
 
 /**
- * Screen 2, who is it for: broad interests instead of sports only (Tim, Create
- * flow 35, "Audience"). Specific activities belong in the event itself. These
- * stay tags, for the "For" line, matching with communities and Explore filters.
+ * Screen 2, who is it for: the same activities as everywhere else (Tim, 27
+ * Nov, board A1: 7 groups, about 60 activities). Pick 1 to 3; the first one is
+ * the event's category and label. The eight interests of 66.46 are no longer
+ * offered, but a draft that has them keeps them and reads them as a group.
  */
-export type IdeaInterestId =
-  | "sport" | "mind_body" | "food_drink" | "music_nightlife"
-  | "learning" | "travel" | "meet_people" | "other";
+export type IdeaInterestId = string;
 
-export const IDEA_INTERESTS: Array<{ id: IdeaInterestId; label: string; hint?: string }> = [
+/** The eight interests of 66.46, kept only so old drafts still read right. */
+export const IDEA_INTERESTS: Array<{ id: string; label: string; hint?: string }> = [
   { id: "sport", label: "Sport and movement", hint: "Runs, gym, Hyrox, triathlon" },
   { id: "mind_body", label: "Mind and body", hint: "Yoga, breathwork, wellness" },
   { id: "food_drink", label: "Food and drinks" },
@@ -158,7 +159,9 @@ export const SLOT_TEXT_MAX = 300;
 
 export function emptySlot(need: IdeaNeedId): IdeaSlot {
   return {
-    board: need !== "community",
+    // Every idea goes on the Collab board by default (Tim, 27 Nov, point 1),
+    // the people slot too; the organiser can still switch it off per need.
+    board: true,
     direct: need === "community",
     inviteSource: need === "community" ? "link" : "platform",
     inviteUserId: null,
@@ -205,6 +208,10 @@ export interface ConceptIdea {
   groupSizeMax: number | null;
   /** The place as the organiser typed or picked it, kept even if a venue is linked. */
   place: string | null;
+  /** From the place finder (27 Nov, point 1): the place's city and its pin. */
+  placeCity?: string | null;
+  placeLat?: number | null;
+  placeLng?: number | null;
   /** A Great venue the organiser picked in the place field, if any. */
   linkedVenueId: string | null;
   /** Screen 2 tags. Absent on drafts made before them. */
@@ -237,6 +244,10 @@ export interface IdeaInput {
   periodEnd: string;
   dayPreference: ConceptDayPreference | null;
   place: string;
+  /** The city of the place, from the place finder: never asked a second time. */
+  placeCity: string | null;
+  placeLat: number | null;
+  placeLng: number | null;
   linkedVenueId: string | null;
   audience: string;
   groupSizeMin: string | number | null;
@@ -264,6 +275,9 @@ export const EMPTY_IDEA: IdeaInput = {
   periodEnd: "",
   dayPreference: null,
   place: "",
+  placeCity: null,
+  placeLat: null,
+  placeLng: null,
   linkedVenueId: null,
   audience: "",
   groupSizeMin: "",
@@ -286,6 +300,36 @@ function isRealDay(value: unknown): value is string {
   if (typeof value !== "string" || !DAY.test(value)) return false;
   const parsed = new Date(`${value}T12:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The place finder's city and pin (27 Nov, point 1), only when there is one,
+ * so a concept saved before them reads back exactly as it was.
+ */
+function placeFields(value: { placeCity?: unknown; placeLat?: unknown; placeLng?: unknown } | null): Partial<Pick<ConceptIdea, "placeCity" | "placeLat" | "placeLng">> {
+  if (!value) return {};
+  const out: Partial<Pick<ConceptIdea, "placeCity" | "placeLat" | "placeLng">> = {};
+  const city = cleanText(value.placeCity, 80);
+  const lat = coordinate(value.placeLat, 90);
+  const lng = coordinate(value.placeLng, 180);
+  if (city) out.placeCity = city;
+  if (lat !== null && lng !== null) {
+    out.placeLat = lat;
+    out.placeLng = lng;
+  }
+  return out;
+}
+
+/** The first pick that is an activity (an idea saved before may start with an old interest). */
+function firstActivity(interests: unknown): string | null {
+  return sanitiseInterests(interests).find((id) => isActivity(id)) ?? null;
+}
+
+/** A latitude or longitude, or null. */
+function coordinate(value: unknown, limit: number): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && Math.abs(number) <= limit ? Math.round(number * 1e6) / 1e6 : null;
 }
 
 function cleanText(value: unknown, max: number): string | null {
@@ -398,7 +442,11 @@ export function hasErrors(errors: IdeaErrors): boolean {
   return Object.keys(errors).length > 0;
 }
 
-const INTEREST_IDS = new Set<string>(IDEA_INTERESTS.map((entry) => entry.id));
+const INTEREST_IDS = new Set<string>([
+  ...ACTIVITIES.map((entry) => entry.id),
+  ...EVENT_CATEGORIES.map((entry) => entry.id),
+  ...IDEA_INTERESTS.map((entry) => entry.id),
+]);
 const LEVEL_IDS = new Set<string>(IDEA_LEVELS.map((entry) => entry.id));
 const NEED_IDS = new Set<string>(IDEA_NEEDS.map((entry) => entry.id));
 const EARN_IDS = new Set<string>([...PEOPLE_EARN_OPTIONS.map((entry) => entry.id), ...Object.keys(LEGACY_EARN_LABELS)]);
@@ -486,7 +534,10 @@ export function sanitiseSlots(needs: IdeaNeedId[] | null, raw: unknown): Partial
 }
 
 const interestLabel = (id: IdeaInterestId, other?: string | null) =>
-  id === "other" ? (other?.trim() || "Something else") : (IDEA_INTERESTS.find((entry) => entry.id === id)?.label ?? id);
+  id === "other"
+    ? (other?.trim() || "Something else")
+    : (activityLabel(id) || EVENT_CATEGORIES.find((entry) => entry.id === id)?.label
+      || IDEA_INTERESTS.find((entry) => entry.id === id)?.label || id);
 
 /**
  * "Sport and movement, music and nightlife · anyone" — screen 2's interests and
@@ -564,6 +615,7 @@ export function buildConcept(input: IdeaInput): ConceptIdea {
     groupSizeMin: parseGroupSize(input.groupSizeMin),
     groupSizeMax: parseGroupSize(input.groupSizeMax),
     place: cleanText(input.place, IDEA_PLACE_MAX),
+    ...placeFields(input.place.trim() ? input : null),
     linkedVenueId: cleanText(input.linkedVenueId, 64),
     interests,
     interestOther,
@@ -677,7 +729,7 @@ export function buildCollabIdeaPayload(input: IdeaInput, draftId: string | null)
     typeDetails,
     dealPreferences: venue?.dealPreferences ?? [],
     audience: describeIdeaFor(concept),
-    city: input.place.trim() || null,
+    city: input.placeCity?.trim() || input.place.trim() || null,
     groupSizeMin: concept.groupSizeMin,
     groupSizeMax: concept.groupSizeMax,
     estimatedStart: dayInstant(start),
@@ -712,6 +764,9 @@ export function ideaInputFromDraft(draft: Record<string, any> | null | undefined
     periodEnd: concept.periodEnd ?? "",
     dayPreference: concept.dayPreference,
     place: concept.place ?? String(draft.location ?? ""),
+    placeCity: concept.placeCity ?? draft.city ?? null,
+    placeLat: coordinate(concept.placeLat ?? draft.latitude, 90),
+    placeLng: coordinate(concept.placeLng ?? draft.longitude, 180),
     linkedVenueId: concept.linkedVenueId,
     // Interests are shown as chips; the old free-text audience only comes back when there are none.
     audience: concept.interests?.length ? "" : (concept.audience ?? ""),
@@ -762,6 +817,7 @@ export function sanitiseConcept(raw: unknown): ConceptIdea | null {
     groupSizeMin: parseGroupSize(value.groupSizeMin),
     groupSizeMax: parseGroupSize(value.groupSizeMax),
     place: cleanText(value.place, IDEA_PLACE_MAX),
+    ...placeFields(value),
     linkedVenueId: cleanText(value.linkedVenueId, 64),
     interests,
     interestOther: interests.includes("other") ? cleanText(value.interestOther, IDEA_INTEREST_OTHER_MAX) : null,
@@ -807,11 +863,16 @@ export function buildIdeaDraftFields(input: IdeaInput) {
     startTime: startDate && TIME.test(input.startTime) ? input.startTime : null,
     endTime: startDate && TIME.test(input.endTime ?? "") ? input.endTime : null,
     location: input.place.trim().slice(0, IDEA_PLACE_MAX),
+    // The city comes from the place (66.32c): the builder does not ask it again.
+    ...(input.place.trim() && cleanText(input.placeCity, 80) ? { city: cleanText(input.placeCity, 80) } : {}),
+    latitude: input.place.trim() ? coordinate(input.placeLat, 90) : null,
+    longitude: input.place.trim() ? coordinate(input.placeLng, 180) : null,
     selectedVenueId: linked,
-    // The category is inferred, not asked (point 30, 66.46): the first interest
-    // picked is the event's category, and the ids are the same list. Left out,
-    // the draft would take the table's default, a category nobody chose.
-    category: sanitiseInterests(input.interests)[0] ?? "",
+    // The category is inferred, not asked (point 30): the first activity
+    // picked is the event's activity, and its group the category (board A1).
+    // Left out, the draft would take the table's default, a category nobody chose.
+    category: currentCategory(firstActivity(input.interests)) ?? currentCategory(sanitiseInterests(input.interests)[0]) ?? "",
+    activity: firstActivity(input.interests),
     venueType: "catalog" as const,
     maxParticipants: max,
     // The review screen's optional photo is the event's cover. Only a full URL:

@@ -24,27 +24,20 @@ export type TaxonomyOption = {
   hint?: string;
 };
 
+import { EVENT_CATEGORIES, categoryLabel as eventCategoryLabel, currentCategory } from "./eventCategories";
+
 /** Read the free-text companion when the stored id is `other`. */
 export const OTHER_ID = "other";
 
 /**
- * What a partner does — extended from the Explore category grid.
- *
- * The first six ids are exactly the Explore pillars, so a creator's category
- * and an experience's category are the same value and the Suggested-for-You
- * matcher can compare them directly. The rest were added for partners whose
- * work does not map onto a trip pillar.
+ * What a partner does: the field a community, creator, brand or venue works in
+ * (66.37 "Which field are you in?"). It is the same list of 7 groups as events
+ * (Tim, 66.46 and 27 Nov, board A1), so a partner and an event are matched on
+ * the same words. A partner who answered with the old list reads as the
+ * nearest group; nothing stored is rewritten.
  */
 export const PARTNER_CATEGORIES: TaxonomyOption[] = [
-  { id: "sports_wellness", label: "Sports & Wellness", hint: "Workshops, fitness, one-day events" },
-  { id: "retreats", label: "Retreats", hint: "Multi-day wellness & spiritual escapes" },
-  { id: "adventure_trips", label: "Adventure", hint: "Surf, hiking, cycling, outdoor challenges" },
-  { id: "community_social", label: "Community & Social", hint: "Networking, volunteering, creative meetups" },
-  { id: "workations", label: "Workations", hint: "Remote work, co-living, travel" },
-  { id: "festivals_events", label: "Festivals & Special Events", hint: "Seasonal or one-off, marathons, conferences" },
-  { id: "food_drink", label: "Food & Drink", hint: "Supper clubs, tastings, cookery" },
-  { id: "arts_culture", label: "Arts & Culture", hint: "Music, film, making, performance" },
-  { id: "business_professional", label: "Business & Professional", hint: "Training, conferences, team days" },
+  ...EVENT_CATEGORIES.map(({ id, label, hint }) => ({ id, label, hint })),
   { id: OTHER_ID, label: "Other", hint: "Tell us in your own words" },
 ];
 
@@ -147,6 +140,8 @@ function labelFrom(options: TaxonomyOption[], id: unknown, other?: unknown): str
 }
 
 export function categoryLabel(id: unknown, other?: unknown): string {
+  // An answer from the old list reads as its nearest group.
+  if (String(id ?? "") !== OTHER_ID && eventCategoryLabel(id)) return eventCategoryLabel(id);
   return labelFrom(PARTNER_CATEGORIES, id, other);
 }
 
@@ -169,7 +164,7 @@ function isValidIn(options: TaxonomyOption[], value: unknown): boolean {
 }
 
 export function isPartnerCategory(value: unknown): boolean {
-  return isValidIn(PARTNER_CATEGORIES, value);
+  return isValidIn(PARTNER_CATEGORIES, value) || currentCategory(value) !== null;
 }
 
 export function isPartnerNeed(value: unknown): boolean {
@@ -195,7 +190,9 @@ export function sanitiseNeeds(values: unknown): string[] {
 }
 
 export function sanitiseCategories(values: unknown): string[] {
-  return sanitiseIds(PARTNER_CATEGORIES, values);
+  // Old ids are stored as their group, so a re-saved profile moves to the new list.
+  const list = Array.isArray(values) ? values : [];
+  return sanitiseIds(PARTNER_CATEGORIES, list.map((value) => currentCategory(value) ?? value));
 }
 
 export function sanitiseVibes(values: unknown): string[] {

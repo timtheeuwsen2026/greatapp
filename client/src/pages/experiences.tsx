@@ -12,7 +12,7 @@ import { CityMenu } from "@/components/CityMenu";
 import { useCity } from "@/hooks/useCity";
 import { ALL_CITIES, cityOfEvent, inCity, liveCityByName } from "@shared/cities";
 import { searchEvents } from "@shared/eventSearch";
-import { EVENT_CATEGORIES, categoryLabel, currentCategory } from "@shared/eventCategories";
+import { EVENT_CATEGORIES, activitiesOf, activityById, currentCategory, eventCategoryLabel, eventMatchesActivity } from "@shared/eventCategories";
 
 /** A ?city= link naming a live city (or "all") switches the site's city; anything else filters the place. */
 function siteCityFromParam(value: string | null): string | null {
@@ -21,21 +21,17 @@ function siteCityFromParam(value: string | null): string | null {
   return liveCityByName(value)?.name ?? null;
 }
 
-// The one category list (66.46) replaces the four Great pillars as the filter.
-// An event made before reads its old category as the nearest new one.
+// The one category list (Tim, 27 Nov, board A1): 7 groups, each with its
+// activities. An event made before reads its old category as the nearest group.
 const pillars: Array<{ id: string; title: string }> = [
   { id: "all", title: "All" },
   ...EVENT_CATEGORIES.map((category) => ({ id: category.id, title: category.label })),
 ];
 
-const quickCategories = [
-  "Run Clubs",
-  "Yoga",
-  "Wellness",
-  "Retreats",
-  "Workshops",
-  "Matcha",
-] as const;
+// Popular activities from the same list, as quick chips under the search.
+const quickActivities = ["running", "yoga", "coffee", "hiking", "sauna", "live_music", "workshop", "networking"]
+  .map((id) => activityById(id)!)
+  .filter(Boolean);
 
 const EXPERIENCES_PER_PAGE = 9;
 
@@ -55,7 +51,13 @@ export default function Experiences() {
   });
   const [selectedPillar, setSelectedPillar] = useState(() => {
     const category = new URLSearchParams(window.location.search).get("category");
-    return category && pillars.some((pillar) => pillar.id === category) ? category : "all";
+    // An old link (?category=sports_wellness) opens its nearest group.
+    return currentCategory(category) ?? "all";
+  });
+  // One activity inside the chosen group ("Running" inside Move).
+  const [selectedActivity, setSelectedActivity] = useState(() => {
+    const activity = new URLSearchParams(window.location.search).get("activity");
+    return activity && activityById(activity) ? activity : "";
   });
   const [currentPage, setCurrentPage] = useState(() => {
     const page = Number.parseInt(new URLSearchParams(window.location.search).get("page") || "1", 10);
@@ -92,9 +94,10 @@ export default function Experiences() {
     // Set category from URL with validation
     if (categoryParam) {
       console.log("🏷️ Category parameter detected:", categoryParam);
-      if (pillars.some(pillar => pillar.id === categoryParam)) {
-        setSelectedPillar(categoryParam);
-        console.log(`✅ Category filter applied: ${categoryParam}`);
+      const group = currentCategory(categoryParam);
+      if (group) {
+        setSelectedPillar(group);
+        console.log(`✅ Category filter applied: ${group}`);
       } else {
         console.log("⚠️ Invalid category parameter, using default 'all':", categoryParam);
         setSelectedPillar("all");
@@ -128,23 +131,27 @@ export default function Experiences() {
     searchQuery ? params.set("search", searchQuery) : params.delete("search");
     selectedCity ? params.set("city", selectedCity) : params.delete("city");
     selectedPillar !== "all" ? params.set("category", selectedPillar) : params.delete("category");
+    selectedActivity ? params.set("activity", selectedActivity) : params.delete("activity");
     currentPage > 1 ? params.set("page", String(currentPage)) : params.delete("page");
     const query = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
-  }, [searchQuery, selectedCity, selectedPillar, currentPage]);
+  }, [searchQuery, selectedCity, selectedPillar, selectedActivity, currentPage]);
 
   // These discovery inputs can also feed a swipe deck in a later phase.
   // Search (Tim, bug 1): title, category, city and host only, by word stem, so
   // "Running" finds run events and not every description that mentions running.
   // A chip names a kind of event, so any of its words is enough.
-  const chipSearch = quickCategories.some((category) => category.toLowerCase() === searchQuery.trim().toLowerCase());
+  const chipSearch = false;
   const filteredExperiences = Array.isArray(experiences) ? experiences.filter((experience: any) => {
     const matchesSiteCity = inCity(cityOfEvent(experience), siteCity);
     const matchesCity = matchesSiteCity && (!selectedCity
       || String(experience.location || "").toLowerCase().includes(selectedCity.trim().toLowerCase()));
-    const matchesPillar = selectedPillar === "all" || currentCategory(experience.category) === selectedPillar;
+    const matchesPillar = selectedPillar === "all"
+      || (currentCategory(experience.activity) ?? currentCategory(experience.category)) === selectedPillar
+      || (!!selectedActivity && eventMatchesActivity(experience, selectedActivity));
+    const matchesActivity = !selectedActivity || eventMatchesActivity(experience, selectedActivity);
 
-    return matchesCity && matchesPillar;
+    return matchesCity && matchesPillar && matchesActivity;
   }) : [];
 
   // Upcoming first, soonest first. Ended events only show while searching, last
@@ -164,11 +171,12 @@ export default function Experiences() {
     if (!isLoading && currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, isLoading, totalPages]);
 
-  const hasActiveFilters = Boolean(searchQuery || selectedCity || selectedPillar !== "all");
+  const hasActiveFilters = Boolean(searchQuery || selectedCity || selectedPillar !== "all" || selectedActivity);
   const clearFilters = () => {
     setSearchQuery("");
     setSelectedCity("");
     setSelectedPillar("all");
+    setSelectedActivity("");
     setCurrentPage(1);
   };
 
@@ -184,10 +192,13 @@ export default function Experiences() {
     scrollToResults();
   };
 
-  const selectQuickCategory = (category: string) => {
-    setSearchQuery(category);
-    setSelectedCity("");
-    setSelectedPillar("all");
+  const selectQuickActivity = (activityId: string) => {
+    const activity = activityById(activityId);
+    if (!activity) return;
+    const off = selectedActivity === activity.id;
+    setSearchQuery("");
+    setSelectedPillar(off ? "all" : activity.group);
+    setSelectedActivity(off ? "" : activity.id);
     setCurrentPage(1);
     scrollToResults();
   };
@@ -265,7 +276,7 @@ export default function Experiences() {
       ? experience.greatPillars.find((pillar: unknown) => Boolean(pillar))
       : undefined;
 
-    return categoryLabel(experience.category) || formatLabel(String(corePillar || experience.category || "Experience"));
+    return eventCategoryLabel(experience) || formatLabel(String(corePillar || "Experience"));
   };
 
   const getUrgency = (experience: any): { text: string; className: string } | null => {
@@ -439,22 +450,22 @@ export default function Experiences() {
 
           <div className="mx-auto mt-5 max-w-5xl overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className="flex min-w-max justify-start gap-2 sm:justify-center" role="group" aria-label="Popular experience categories">
-              {quickCategories.map((category) => {
-                const isActive = searchQuery.trim().toLowerCase() === category.toLowerCase();
+              {quickActivities.map((activity) => {
+                const isActive = selectedActivity === activity.id;
                 return (
                   <button
-                    key={category}
+                    key={activity.id}
                     type="button"
-                    onClick={() => selectQuickCategory(category)}
+                    onClick={() => selectQuickActivity(activity.id)}
                     className={`rounded-full border px-4 py-2 text-sm font-semibold backdrop-blur-md transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
                       isActive
                         ? "border-white bg-white text-slate-950"
                         : "border-white/50 bg-white/10 backdrop-blur-sm text-white hover:border-white hover:bg-white/20"
                     }`}
                     aria-pressed={isActive}
-                    data-testid={`quick-category-${category.toLowerCase().replace(/\s+/g, "-")}`}
+                    data-testid={`quick-category-${activity.id}`}
                   >
-                    {category}
+                    {activity.label}
                   </button>
                 );
               })}
@@ -509,7 +520,7 @@ export default function Experiences() {
                     size="sm"
                     variant={selectedPillar === pillar.id ? "default" : "outline"}
                     className="shrink-0 rounded-full px-4"
-                    onClick={() => { setSelectedPillar(pillar.id); setCurrentPage(1); }}
+                    onClick={() => { setSelectedPillar(pillar.id); setSelectedActivity(""); setCurrentPage(1); }}
                     aria-pressed={selectedPillar === pillar.id}
                     data-testid={`filter-pillar-${pillar.id}`}
                   >
@@ -518,6 +529,29 @@ export default function Experiences() {
                 ))}
               </div>
             </div>
+            {/* The activities of the chosen group (board A1). */}
+            {selectedPillar !== "all" && (
+              <div className="-mx-4 mt-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:overflow-visible sm:px-0">
+                <div className="flex min-w-max gap-1.5 sm:min-w-0 sm:flex-wrap" role="group" aria-label="Filter by activity">
+                  {activitiesOf(selectedPillar).map((activity) => (
+                    <button
+                      key={activity.id}
+                      type="button"
+                      onClick={() => { setSelectedActivity(selectedActivity === activity.id ? "" : activity.id); setCurrentPage(1); }}
+                      aria-pressed={selectedActivity === activity.id}
+                      className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                        selectedActivity === activity.id
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-gray-200 text-gray-700 hover:border-primary/40"
+                      }`}
+                      data-testid={`filter-activity-${activity.id}`}
+                    >
+                      {activity.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           
           {/* Enhanced Results count with better feedback */}

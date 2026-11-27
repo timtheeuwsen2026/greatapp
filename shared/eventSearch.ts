@@ -23,7 +23,7 @@
 
 import { eventEndsAt, eventPhase, eventStartsAt, type EventPhase } from "./eventTime";
 import { cityOfEvent } from "./cities";
-import { categoryLabel } from "./eventCategories";
+import { categoryLabel, categorySearchWords } from "./eventCategories";
 
 /** Small words that say nothing about what someone is looking for. */
 const STOP_WORDS = new Set(["a", "an", "and", "the", "in", "at", "of", "for", "to", "with", "on", "near", "y", "de", "la", "el"]);
@@ -65,6 +65,8 @@ export function searchTerms(query: string): string[] {
 export interface Searchable {
   title?: string | null;
   category?: string | null;
+  /** The activity inside the category group ("running"). */
+  activity?: string | null;
   city?: string | null;
   location?: string | null;
   hostName?: string | null;
@@ -77,8 +79,10 @@ export function searchableWords(item: Searchable): string[] {
   const parts = [
     item.title,
     String(item.category ?? "").replace(/_/g, " "),
-    // The name people see ("Food and drinks"), for old and new values alike.
+    // The names people see ("Move", "Running" and its other words like "run"),
+    // for old and new values alike (board A1).
     categoryLabel(item.category),
+    ...categorySearchWords(item),
     cityOfEvent(item as any) ?? item.city,
     item.hostName,
   ];

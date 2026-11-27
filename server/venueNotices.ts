@@ -22,6 +22,7 @@ import {
   type DealRow,
 } from "@shared/venueDealCard";
 import { createHash } from "node:crypto";
+import { loadOrganiserProfile, organiserDisplayName } from "./organiserName";
 
 const VENUE_OFFERS_PATH = "/venue-dashboard?tab=offers";
 const VENUE_DEALS_PATH = "/venue-dashboard?tab=active-deals";
@@ -35,6 +36,8 @@ function shortHash(value: unknown): string {
 function personName(user: any): string {
   return [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() || "The organiser";
 }
+
+export { organiserDisplayName } from "./organiserName";
 
 function nightsOf(event: any): number {
   if (!event?.startDate) return 0;
@@ -57,7 +60,7 @@ function eventRows(event: any, venue: any, organiser: any): DealRow[] {
     { label: "Event", value: event?.title || "Event" },
     { label: "When", value: when || "Date not set yet" },
     { label: "Where", value: [venue?.name, venue?.location || event?.location].filter(Boolean).join(", ") || "Not set" },
-    { label: "Organiser", value: personName(organiser) },
+    { label: "Organiser", value: organiser?.displayName || personName(organiser) },
   ];
 }
 
@@ -84,10 +87,15 @@ async function loadDeal(experienceId: string) {
   const contract: any = await storage.getVenueContractByExperience(experienceId);
   const venueId = contract?.venueId || event.linkedVenueId;
   const venue: any = venueId ? await storage.getVenue(venueId) : undefined;
-  const [owner, organiser] = await Promise.all([
+  const [owner, organiserUser, organiserProfile] = await Promise.all([
     venue?.createdBy ? storage.getUser(venue.createdBy) : undefined,
     event.creatorId ? storage.getUser(event.creatorId) : undefined,
+    loadOrganiserProfile(storage, event.creatorId),
   ]);
+  // The name a venue reads everywhere in these mails: community name and person.
+  const organiser = organiserUser
+    ? { ...(organiserUser as any), displayName: organiserDisplayName(organiserUser, organiserProfile) }
+    : undefined;
   return { event, contract, venue, owner: owner as any, organiser: organiser as any };
 }
 
@@ -145,7 +153,46 @@ export async function notifyVenueOfNewOffer(experienceId: string): Promise<void>
     experienceId,
     subject: `New offer for ${venue.name}: ${event.title}`,
     title: `New offer: ${event.title}`,
-    intro: `${personName(organiser)} wants to hold "${event.title}" at ${venue.name} and proposes the deal below. You can accept it, send a counter offer or decline it.`,
+    intro: `${organiser?.displayName || personName(organiser)} wants to hold "${event.title}" at ${venue.name} and proposes the deal below. You can accept it, send a counter offer or decline it.`,
+    rows: [...eventRows(event, venue, organiser), ...dealRowsFor(event, contract.model, contract.terms || {}, contract.terms, event)],
+    cta: { label: "View and respond to the offer", path: VENUE_OFFERS_PATH },
+  });
+}
+
+/**
+ * The terms a venue reads in an offer, as one comparable value: exactly the
+ * lines of its mail and dashboard (when, where, the deal, what the organiser
+ * proposes, what the venue receives incl. add-ons, tickets, minimum group).
+ * When any of them changes while the offer is open, the venue is told again
+ * (Tim, 27 Nov, point 6). Comparing the lines rather than the stored fields
+ * means a save that changes nothing the venue reads sends nothing.
+ */
+export function offerTermsSnapshot(event: any, contract: any): string {
+  const when = formatEventWhen(event, { weekday: true, year: true });
+  const rows = dealRowsFor(event, contract?.model, contract?.terms || {}, contract?.terms, event);
+  return JSON.stringify([when, event?.location ?? null, rows.map((row) => `${row.label}: ${row.value}`)]);
+}
+
+/**
+ * The organiser changed the event while the venue's answer is still open: the
+ * venue gets an "Updated offer" mail and notice with the terms as they are now,
+ * the same rows as its dashboard. The mail of the first offer was a picture of
+ * that moment; this keeps the venue's inbox and dashboard the same.
+ */
+export async function notifyVenueOfChangedOffer(experienceId: string): Promise<void> {
+  const deal = await loadDeal(experienceId);
+  if (!deal?.contract || !deal.venue || !deal.owner) return;
+  const { event, contract, venue, owner, organiser } = deal;
+  if (contract.status !== "pending") return;
+  const key = `venue-offer-update:${contract.id}:${shortHash(offerTermsSnapshot(event, contract))}`;
+  await deliver({
+    user: owner,
+    key,
+    kind: "venue_offer_updated",
+    experienceId,
+    subject: `Updated offer for ${venue.name}: ${event.title}`,
+    title: `Updated offer: ${event.title}`,
+    intro: `${organiser?.displayName || personName(organiser)} changed "${event.title}" after sending you the offer. These are the terms now; they replace the ones in the earlier mail. Your answer is still open: you can accept, send a counter offer or decline.`,
     rows: [...eventRows(event, venue, organiser), ...dealRowsFor(event, contract.model, contract.terms || {}, contract.terms, event)],
     cta: { label: "View and respond to the offer", path: VENUE_OFFERS_PATH },
   });
@@ -223,16 +270,18 @@ export async function noticeVenueOfOrganiserAnswer(offer: { id: string; experien
   const venue: any = await storage.getVenue(offer.venueId);
   const ownerId = offer.venueOwnerId || venue?.createdBy;
   if (!event || !venue || !ownerId) return;
-  const organiser: any = event.creatorId ? await storage.getUser(event.creatorId) : undefined;
+  const organiserUser: any = event.creatorId ? await storage.getUser(event.creatorId) : undefined;
+  const organiserProfile: any = await loadOrganiserProfile(storage, event.creatorId);
+  const organiserName = organiserDisplayName(organiserUser, organiserProfile);
   const accepted = action === "accepted";
   await storage.addUserNotice({
     userId: ownerId,
     noticeKey: `organiser-answer:${offer.id}:${action}`,
     kind: accepted ? "organiser_accepted" : "organiser_declined",
-    title: accepted ? `Deal agreed: ${event.title}` : `${personName(organiser)} declined your offer`,
+    title: accepted ? `Deal agreed: ${event.title}` : `${organiserName} declined your offer`,
     body: `${accepted
-      ? `${personName(organiser)} accepted your terms for "${event.title}". The deal is agreed and locked.`
-      : `${personName(organiser)} declined your terms for "${event.title}".`}\n\n${rowsAsText(dealRowsFor(event, offer.model, offer.terms || {}, offer.terms))}`,
+      ? `${organiserName} accepted your terms for "${event.title}". The deal is agreed and locked.`
+      : `${organiserName} declined your terms for "${event.title}".`}\n\n${rowsAsText(dealRowsFor(event, offer.model, offer.terms || {}, offer.terms))}`,
     link: accepted ? VENUE_DEALS_PATH : VENUE_OFFERS_PATH,
     experienceId: offer.experienceId,
   }).catch((error: any) => console.error("[venue notices] organiser answer notice failed:", error?.message || error));

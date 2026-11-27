@@ -30,6 +30,9 @@ export type OrderBookingLike = {
   addonTotal?: string | number | null;
   createdAt?: string | Date | null;
   bookingDate?: string | Date | null;
+  /** A booking by a test account: shown, never paid out (@shared/organiserMoney). */
+  testPayment?: boolean | null;
+  disputedAt?: string | Date | null;
 };
 
 export type OrderPerson = { firstName?: string | null; lastName?: string | null; email?: string | null };
@@ -57,6 +60,8 @@ export type EventOrderRow = {
   checkedIn: boolean;
   handedOutAt: string | null;
   bookedAt: string | null;
+  /** A test payment: listed, but not counted in the organiser's numbers. */
+  test?: boolean;
 };
 
 export type EventOrderTotals = {
@@ -73,6 +78,11 @@ export type EventOrderTotals = {
     total: number;
     /** What the organiser keeps on top of the venue's price (paid orders). */
     margin: number;
+    /**
+     * What has to be handed out on the day, test bookings included: a test
+     * booking is left out of the money, not out of the coffee (27 Nov).
+     */
+    toPrepare: number;
   }>;
 };
 
@@ -147,6 +157,7 @@ export function buildEventOrders(
       checkedIn: booking.attendanceStatus === "attended",
       handedOutAt: iso(booking.addonRedeemedAt),
       bookedAt: iso(booking.createdAt ?? booking.bookingDate),
+      ...(booking.testPayment ? { test: true } : {}),
     });
   }
   // Going ahead first, then by booking time; cancelled and refunded at the end.
@@ -154,21 +165,36 @@ export function buildEventOrders(
   return rows.sort((a, b) => going(a) - going(b) || String(a.bookedAt).localeCompare(String(b.bookedAt)));
 }
 
-/** Totals over orders that are going ahead. Cancelled and refunded are not counted. */
-export function eventOrderTotals(rows: EventOrderRow[]): EventOrderTotals {
-  const live = rows.filter((row) => row.status === "paid" || row.status === "reserved");
+/**
+ * Totals over orders that are going ahead. Cancelled and refunded are not
+ * counted. The organiser's totals also leave out test payments and orders not
+ * paid yet (`organiser: true`), the same rule as every other organiser number
+ * (@shared/organiserMoney); the venue's sheet keeps them, so nothing ordered is missed.
+ */
+export function eventOrderTotals(rows: EventOrderRow[], options: { organiser?: boolean } = {}): EventOrderTotals {
+  const going = (row: EventOrderRow) => row.status === "paid" || row.status === "reserved";
+  const counts = (row: EventOrderRow) => options.organiser ? row.status === "paid" && !row.test : going(row);
+  const live = rows.filter(counts);
   const addons = new Map<string, EventOrderTotals["addons"][number]>();
+  const entry = (name: string) => {
+    const found = addons.get(name) || { name, quantity: 0, handedOut: 0, venueAmount: 0, total: 0, margin: 0, toPrepare: 0 };
+    addons.set(name, found);
+    return found;
+  };
+  // What is handed out: every order going ahead, test bookings included.
+  for (const row of rows.filter(going)) {
+    for (const addon of row.addons) entry(addon.name).toPrepare += addon.quantity;
+  }
   for (const row of live) {
     for (const addon of row.addons) {
-      const entry = addons.get(addon.name) || { name: addon.name, quantity: 0, handedOut: 0, venueAmount: 0, total: 0, margin: 0 };
-      entry.quantity += addon.quantity;
-      if (row.handedOutAt) entry.handedOut += addon.quantity;
+      const item = entry(addon.name);
+      item.quantity += addon.quantity;
+      if (row.handedOutAt) item.handedOut += addon.quantity;
       if (row.status === "paid") {
-        entry.venueAmount = round2(entry.venueAmount + addon.venueAmount);
-        entry.total = round2(entry.total + addon.total);
-        entry.margin = round2(entry.total - entry.venueAmount);
+        item.venueAmount = round2(item.venueAmount + addon.venueAmount);
+        item.total = round2(item.total + addon.total);
+        item.margin = round2(item.total - item.venueAmount);
       }
-      addons.set(addon.name, entry);
     }
   }
   return {

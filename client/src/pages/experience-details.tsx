@@ -1,5 +1,5 @@
 import AddonChoicePicker from "@/components/AddonChoicePicker";
-import { categoryLabel } from "@shared/eventCategories";
+import { eventCategoryLabel } from "@shared/eventCategories";
 import { getTicketAddons, type AddonSelection } from "@shared/addonChoices";
 import TicketRegistrationBreakdown from "@/components/TicketRegistrationBreakdown";
 import { bookingClosedMessage, hasExperiencePassed } from "@shared/eventLifecycle";
@@ -617,7 +617,7 @@ export default function ExperienceDetails() {
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge className="bg-primary/10 text-primary">
-                    {categoryLabel(experience.category) || String(experience.category ?? "").replace("_", " & ")}
+                    {eventCategoryLabel(experience) || "Experience"}
                   </Badge>
                   {/* Lifecycle status badge - single source of truth */}
                   {experience.lifecycleStatus === 'forming' && (

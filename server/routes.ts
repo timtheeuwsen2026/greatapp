@@ -72,8 +72,12 @@ import {
   noticeVenueOfOrganiserAnswer,
   notifyOrganiserOfVenueAnswer,
   notifyOrganiserOfVenueCounter,
+  notifyVenueOfChangedOffer,
   notifyVenueOfNewOffer,
+  offerTermsSnapshot,
+  organiserDisplayName,
 } from "./venueNotices";
+import { loadOrganiserProfile } from "./organiserName";
 import { describeVenueDealTerms, venueDealAddons } from "@shared/venueDealCard";
 import { buildEventOrders, buildPartnerOrders, eventOrderTotals } from "@shared/eventOrders";
 import { eventPhase, eventTimeZone, formatEventStart, formatEventWhen, formatInZone, payoutDueAt } from "@shared/eventTime";
@@ -186,6 +190,7 @@ import { getRoleApplicationBlockReason } from "./participantRoleRules";
 import { buildIcalFeed, startOfUtcDay } from "./ical";
 import { toCalendarDate } from "@shared/calendarDates";
 import { sanitiseConcept } from "@shared/conceptIdea";
+import { currentCategory, isActivity } from "@shared/eventCategories";
 import { redactPartnerSecrets } from "@shared/partnerPrivacy";
 import { partnerRowForViewer, summarisePartnerPeople } from "@shared/partnerPeople";
 import { venueSubmitProblems } from "@shared/venueSubmitReadiness";
@@ -218,6 +223,8 @@ import { scheduleCommunityHubUnreadJob, scheduleCreatorHubNudgeJob } from "./ema
 import { sendBookingNotificationsAfterPayment } from "./bookingEmailOrchestrator";
 import { registerBookingFinalizer } from "./bookingFinalizer";
 import { summarizeCreatorEarnings } from "./creatorEarnings";
+import { summariseOrganiserMoney } from "./organiserMoney";
+import { countsAsBooked, eventMoneyState, isCountedTestBooking } from "@shared/organiserMoney";
 import { persistInlineImageFields } from "./inlineImages";
 import { isActivePostCheckoutBooking } from "./referralBookingRules";
 import {
@@ -1625,14 +1632,19 @@ function buildExperienceFromBuilderPayload(draft: any, userId: string) {
       title: draft.title || '',
       description: draft.description || '',
       shortDescription: draft.shortDescription,
-      // One category list (66.46); a draft that never chose one is "Something else".
-      category: ((draft.category as any) || "other") as any,
+      // One category list (Tim, 27 Nov, board A1): the group, from the activity
+      // when there is one. An old value is stored as its nearest group; a
+      // draft that never chose one stays "other" (no label, no filter chip).
+      category: (currentCategory((draft as any).activity) ?? currentCategory(draft.category) ?? "other") as any,
+      activity: isActivity((draft as any).activity) ? (draft as any).activity : null,
       experienceType,
       greatPillars: normalizeGreatPillarsPayload((draft as any).greatPillars),
       coverImageUrl,
       gallery: draft.gallery || [],
       location: draft.location || '',
       city: (draft as any).city || null,
+      latitude: (draft as any).latitude ?? null,
+      longitude: (draft as any).longitude ?? null,
       venue: draft.venue,
       startDate,
       endDate,
@@ -5468,6 +5480,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         shortDescription: source.shortDescription || "",
         description: source.description || "",
         category: source.category as any,
+        activity: (source as any).activity ?? null,
         type: (source as any).experienceType || "one-day",
         greatPillars: normalizeGreatPillarsPayload((source as any).greatPillars),
         coverImageUrl: source.coverImageUrl || "",
@@ -5636,6 +5649,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ));
         notifyVenueOfNewOffer(updated.id).catch((error) =>
           console.error("Venue offer notice failed:", error?.message || error));
+      } else if (selectedVenueId && !keepsAgreedVenue) {
+        // The venue has not answered yet and the organiser changed the event
+        // (an add-on, the price, the date, the deal): the stored terms follow
+        // the event, and the venue gets an "Updated offer" with the terms as
+        // they are now, the same as its dashboard (Tim, 27 Nov, point 6).
+        const openOffer: any = await storage.getVenueContractByExperience(updated.id);
+        if (openOffer && openOffer.status === "pending" && openOffer.venueId === selectedVenueId) {
+          const fresh = buildVenueContractObject(mapped, updated.id, selectedVenueId, existing.creatorId);
+          const before = offerTermsSnapshot(existing, openOffer);
+          const after = offerTermsSnapshot(updated, { ...openOffer, model: fresh.model, terms: fresh.terms });
+          if (before !== after) {
+            await storage.upsertVenueContract({ ...fresh, status: "pending" } as any);
+            notifyVenueOfChangedOffer(updated.id).catch((error) =>
+              console.error("Updated venue offer notice failed:", error?.message || error));
+          }
+        }
       }
 
       // Same for a venue invited by email: publishing is no longer the only
@@ -15208,8 +15237,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A sign-up is a booking that still stands (66.18g): cancelled, refunded
       // and failed bookings are not counted, and a person "came back" only
       // after more than one event that has actually taken place.
-      const stands = (booking: any) => !booking.cancelledAt
-        && ["pending", "deposit_authorized", "deposit_paid", "confirmed", "fully_paid"].includes(String(booking.status));
+      // The same rule as every organiser number (@shared/organiserMoney): paid,
+      // still standing, not a test payment.
+      const stands = (booking: any) => countsAsBooked(booking);
       const attendedEvents = new Map<string, Set<string>>();
 
       const byUser = new Map<string, any>();
@@ -15256,9 +15286,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (startDate && preferLive && (!existing.lastEventDate || startDate > existing.lastEventDate || (live && !existing.lastEventLive))) {
           existing.lastEventDate = startDate;
           existing.lastEventLive = live;
-          existing.lastEventTitle = booking.experience?.title
-            ? `${booking.experience.title}${live ? "" : " (cancelled)"}`
-            : null;
+          // A test booking is not cancelled; it is only left out of the counts.
+          const why = live ? "" : isCountedTestBooking(booking) ? " (test booking)" : " (cancelled)";
+          existing.lastEventTitle = booking.experience?.title ? `${booking.experience.title}${why}` : null;
         }
 
         byUser.set(booking.userId, existing);
@@ -15289,7 +15319,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         members,
         totals: {
-          members: members.length,
+          // People with at least one booking that counts (a test account's
+          // own bookings do not make it a member of the community).
+          members: members.filter((member: any) => member.bookingCount > 0).length,
           bookings: bookings.filter(stands).length,
           repeat: Array.from(attendedEvents.values()).filter((events) => events.size > 1).length,
         },
@@ -15541,7 +15573,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const events = await Promise.all(owned.map(async (experience: any) => {
         const all = await storage.getBookingsByExperience(experience.id);
-        const active = (all || []).filter(isActiveRegistration);
+        // The same rule as every organiser number (@shared/organiserMoney): paid,
+        // still standing, not a test payment. Capacity checks keep their own
+        // stricter count (isActiveRegistration) at checkout.
+        const active = (all || []).filter((booking: any) => countsAsBooked(booking));
 
         const skus: any[] = Array.isArray(experience.ticketSkus) ? experience.ticketSkus : [];
         const skuById = new Map(skus.map((sku: any, index: number) => [ticketId(sku, index), sku]));
@@ -15557,7 +15592,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const quantity = normalizeTicketQuantity(booking.ticketQuantity);
           const sku = booking.ticketSkuId ? skuById.get(booking.ticketSkuId) : undefined;
           const paid = numberOrZero(booking.amount);
-          grossRevenue += paid;
+          // The sale, as Money counts it (totalPrice): on a deposit booking the
+          // charge so far is only the deposit (27 Nov: one source).
+          grossRevenue += numberOrZero(booking.totalPrice ?? booking.amount);
 
           // Add-on money is part of gross — it ran through the platform like
           // any other charge — but an organiser needs it broken out, because
@@ -15600,13 +15637,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           startDate: experience.startDate,
           currency: (experience.currency || "eur").toLowerCase(),
           capacity: experience.maxParticipants ?? null,
-          minimumParticipants: experience.mvgEnabled
+          // No minimum line for an event without a minimum group (66.5): the
+          // switch is requireMinimumParticipants; mvgEnabled defaults to true.
+          minimumParticipants: experience.requireMinimumParticipants === true
             ? (experience.minimumParticipants ?? experience.mvgMin ?? null)
             : null,
           rsvps,
           ticketsSold,
           attendees: rsvps + ticketsSold,
-          ticketRegistrations: ticketRegistrationCounts(experience.ticketSkus, all),
+          // "Registered" by the shared rule (paid, not a test); "left" as
+          // checkout counts it, with reserved and test seats taken too.
+          ticketRegistrations: (() => {
+            const seats = new Map(ticketRegistrationCounts(experience.ticketSkus, all || [])
+              .map((row) => [row.ticketSkuId, row.remaining]));
+            return ticketRegistrationCounts(experience.ticketSkus, active)
+              .map((row) => ({ ...row, remaining: seats.has(row.ticketSkuId) ? seats.get(row.ticketSkuId)! : row.remaining }));
+          })(),
           donations,
           grossRevenue,
           addOnRevenue,
@@ -15659,17 +15705,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const perExperience = await Promise.all(
         (experiences || []).map(async (experience: any) => {
           const experienceBookings = await storage.getBookingsByExperience(experience.id);
-          const active = (experienceBookings || []).filter((booking: any) =>
-            isActiveParticipantBooking(booking.status));
+          // The same rule as every organiser number (@shared/organiserMoney, 27 Nov, point 5).
+          const active = (experienceBookings || []).filter((booking: any) => countsAsBooked(booking));
           return {
             id: experience.id,
             title: experience.title,
             status: experience.status,
             bookings: sumBookingTicketQuantity(active),
-            confirmed: sumBookingTicketQuantity(
-              (experienceBookings || []).filter((booking: any) =>
-                booking.status === "confirmed" || booking.status === "fully_paid"),
-            ),
+            // Confirmed: paid and the group is reached.
+            confirmed: eventMoneyState(experience) === "confirmed" ? sumBookingTicketQuantity(active) : 0,
           };
         }),
       );
@@ -15709,6 +15753,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     );
     return summarizeCreatorEarnings(creatorBookings, { defaultPlatformFeePct });
   }
+
+  /**
+   * The organiser's numbers, defined once (Tim, 27 Nov, point 5): Confirmed and
+   * Held until minimum reached, the split, people coming. Overview, Money, the
+   * Orders page, the event card and Community all read this.
+   */
+  async function getOrganiserMoney(creatorId: string) {
+    const [events, creatorBookings] = await Promise.all([
+      storage.getExperiencesByCreator(creatorId),
+      storage.getBookingsByCreator(creatorId),
+    ]);
+    const [settings] = await db.select().from(platformSettings).limit(1);
+    const defaultPlatformFeePct = parseFloat(
+      settings?.platformFeePercentage?.toString() ?? String(FIXED_PLATFORM_FEE_PCT),
+    );
+    return summariseOrganiserMoney(events as any, creatorBookings as any, { defaultPlatformFeePct });
+  }
+
+  app.get("/api/creator/money", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await getOrganiserMoney(req.user.claims.sub));
+    } catch (error) {
+      console.error("Error fetching organiser money:", error);
+      res.status(500).json({ message: "Failed to fetch your numbers" });
+    }
+  });
 
   app.get("/api/creator/earnings/:period", isAuthenticated, async (req: any, res) => {
     try {
@@ -19468,7 +19538,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: event.status,
       },
       orders,
-      totals: eventOrderTotals(orders),
+      totals: eventOrderTotals(orders, { organiser: viewer === 'organiser' }),
     };
   }
 
@@ -19480,9 +19550,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
    */
   async function loadOrganiserOrders(event: any) {
     const base = await loadEventOrders(event, 'organiser');
-    const { byExperience } = await getCreatorEarningsBreakdown(event.creatorId);
-    const money: any = byExperience.find((row: any) => row.experienceId === event.id)
-      || { grossCents: 0, platformFeeCents: 0, spaceShareCents: 0, partnerCommissionCents: 0, netCents: 0 };
+    // The same numbers as Overview, Money and the event card (one source).
+    const organiserMoney = await getOrganiserMoney(event.creatorId);
+    const eventMoney: any = organiserMoney.events.find((row) => row.experienceId === event.id) || null;
     const contract: any = await storage.getVenueContractByExperience(event.id);
     const venueId = contract?.venueId || event.linkedVenueId;
     const venue: any = venueId ? await storage.getVenue(venueId) : null;
@@ -19504,11 +19574,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       startsAt: formatEventStart(event, { weekday: true }),
       addonPrices: venueDealAddons(event.ticketSkus),
       money: {
-        revenue: money.grossCents / 100,
-        platformFee: money.platformFeeCents / 100,
-        venueShare: money.spaceShareCents / 100,
-        partnerCommission: money.partnerCommissionCents / 100,
-        yourShare: money.netCents / 100,
+        revenue: eventMoney?.revenue ?? 0,
+        ticketSales: eventMoney?.ticketSales ?? 0,
+        addonSales: eventMoney?.addonSales ?? 0,
+        platformFee: eventMoney?.platformFee ?? 0,
+        venueShare: eventMoney?.venueShare ?? 0,
+        partnerCommission: eventMoney?.partnerCommission ?? 0,
+        yourShare: eventMoney?.yourShare ?? 0,
+        // Confirmed, or held until the minimum is reached (@shared/organiserMoney).
+        state: eventMoney?.state ?? 'confirmed',
+        bookings: eventMoney?.bookings ?? 0,
+        people: eventMoney?.people ?? 0,
+        testBookings: eventMoney?.testBookings ?? 0,
       },
       refunds: {
         count: refunded.length,
@@ -19722,7 +19799,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minimumGroup: card.minimumGroup,
         barterTerms: event.venueBarterTerms,
       },
-      organiser: { name: [organiser?.firstName, organiser?.lastName].filter(Boolean).join(' ') || 'The organiser' },
+      organiser: {
+        // Community or brand name first, then the person (Tim, 27 Nov, point 6).
+        name: organiserDisplayName(organiser, await loadOrganiserProfile(storage, event.creatorId)),
+      },
       venue: { name: venue?.name || 'The venue', address: venue?.location || null },
       addons: card.dealAddons,
       history: card.history,
@@ -21261,6 +21341,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Invitations the creator emailed to off-platform venues and is still
   // waiting on. They carry no accept button — only the venue can move them.
+  /**
+   * Offers the organiser sent to a venue that is already on Great, still
+   * waiting for its answer (Tim, 27 Nov, point 5). An email invite to a venue
+   * that is not on Great is a venue_invites row; an offer to a venue on Great
+   * is a venue_contracts row, and no organiser screen listed those, so Tim's
+   * barter offer was missing under "Invitations you've sent".
+   */
+  app.get('/api/creator/venue-offers/sent', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = resolveCurrentUserId(req);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+      const rows = await db
+        .select({
+          id: venueContracts.id,
+          status: venueContracts.status,
+          model: venueContracts.model,
+          terms: venueContracts.terms,
+          sentAt: venueContracts.createdAt,
+          experienceId: experiences.id,
+          experienceTitle: experiences.title,
+          experienceStatus: experiences.status,
+          venueName: venues.name,
+          venueEmail: venues.contactEmail,
+        })
+        .from(venueContracts)
+        .innerJoin(experiences, eq(venueContracts.experienceId, experiences.id))
+        .innerJoin(venues, eq(venueContracts.venueId, venues.id))
+        .where(and(
+          eq(experiences.creatorId, userId),
+          inArray(venueContracts.status, ['pending', 'countered']),
+          ne(experiences.status, 'cancelled'),
+          // Only the venue still on the event: a venue removed in the builder
+          // leaves its old contract behind, which is no longer an offer.
+          eq(experiences.linkedVenueId, venueContracts.venueId),
+        ))
+        .orderBy(desc(venueContracts.createdAt));
+      res.json(rows.map((row) => ({
+        ...row,
+        deal: describeVenueDealTerms(row.model, row.terms as any),
+        waitingOn: row.status === 'countered' ? 'you' : 'venue',
+      })));
+    } catch (err: any) {
+      console.error('Error fetching sent venue offers:', err);
+      res.status(500).json({ message: 'Failed to fetch sent venue offers' });
+    }
+  });
+
   app.get('/api/creator/venue-invites', isAuthenticated, async (req: any, res) => {
     try {
       const userId = resolveCurrentUserId(req);

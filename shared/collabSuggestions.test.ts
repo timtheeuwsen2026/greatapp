@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesStandingPreferences } from "./collabSuggestions";
+import { categoriesOverlap, matchesStandingPreferences } from "./collabSuggestions";
 
 const barcelonaCafe = {
   role: "venue_provider",
@@ -76,5 +76,12 @@ describe("matchesStandingPreferences", () => {
 
     expect(match.matched).toBe(true);
     expect(match.reasons.some((reason) => reason.includes("yoga"))).toBe(true);
+  });
+});
+
+describe("categoriesOverlap with the new list (27 Nov, board A1)", () => {
+  it("matches an old partner category to an event in the new group", () => {
+    expect(categoriesOverlap(["sports_wellness"], ["move"])).toBeTruthy();
+    expect(categoriesOverlap(["community_social"], ["recover"])).toBeNull();
   });
 });

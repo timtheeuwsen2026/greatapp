@@ -621,10 +621,14 @@ function VenueDashboardContent() {
     onError: (error: any) => toast({ title: "Error", description: readableError(error, "Failed to submit offer"), variant: "destructive" }),
   });
 
-  // Summed so the top-level tab still shows anything waiting, now that the
-  // individual counts sit one level down.
-  const partnerAttentionCount =
-    pendingOffers.length + activeVenueDeals.length + openEvents.length;
+  // What needs your answer (Tim, 27 Nov, point 6): offers sent to you that you
+  // have not answered yet. Before this the badge also added every active deal
+  // and every open event of any organiser, and counted a deal on a live event
+  // twice, so it read "4" where the organiser saw "1". The organiser's badge
+  // counts the same thing from their side: answers waiting for them.
+  // (Each row is the event with its contract; the offer's own status is on the contract.)
+  const partnerAttentionCount = pendingOffers.filter((offer: any) =>
+    String(offer?.contract?.status ?? "pending") === "pending").length;
 
   const handleSubmitOffer = () => {
     if (!offerModal.event || !offerForm.venueId || !offerForm.model) return;

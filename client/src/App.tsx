@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Switch, Route, useLocation } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -15,7 +15,7 @@ import CreatorDashboard from "@/pages/creator-dashboard";
 import CommunityHub from "@/pages/community-hub";
 import VenueDashboard from "@/pages/venue-dashboard";
 import VenueOrderSheet from "@/pages/venue-order-sheet";
-import DashboardEvents from "@/pages/dashboard-events";
+import { OrganiserShell } from "@/components/dashboard/OrganiserShell";
 import DashboardEventOrders from "@/pages/dashboard-event-orders";
 import DashboardAsPartner from "@/pages/dashboard-as-partner";
 import VenueDealAgreement from "@/pages/venue-deal-agreement";
@@ -196,8 +196,13 @@ function Router() {
       <Route path="/venue-dashboard/orders/:experienceId" component={VenueOrderSheet} />
       {/* The new organiser dashboard (Tim, point 60, boards D1 to D5): My events and Orders (D2) first. */}
       <Route path="/dashboard/events/:experienceId/orders" component={DashboardEventOrders} />
-      <Route path="/dashboard/events" component={DashboardEvents} />
+      {/* My events is the event cards of the dashboard, inside the same menu (27 Nov, point 5). */}
+      <Route path="/dashboard/events">{() => <Redirect to="/creator-dashboard?tab=experiences" replace />}</Route>
       <Route path="/dashboard/as-partner" component={DashboardAsPartner} />
+      {/* Promote and Settings open inside the organiser menu, which stays visible (27 Nov, point 5). */}
+      <Route path="/dashboard/promote">{() => <OrganiserShell><PromoterDashboard /></OrganiserShell>}</Route>
+      <Route path="/dashboard/settings">{() => <OrganiserShell><Profile /></OrganiserShell>}</Route>
+      <Route path="/dashboard">{() => <Redirect to="/creator-dashboard" replace />}</Route>
       <Route path="/venue-dashboard">
         <VenueOnboardingGate><VenueDashboard /></VenueOnboardingGate>
       </Route>

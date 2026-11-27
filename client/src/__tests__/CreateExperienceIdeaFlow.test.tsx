@@ -27,6 +27,17 @@ vi.mock('@/components/CreateFlow/DayPickerField', () => ({
   ),
 }));
 
+// The place finder searches OpenStreetMap (27 Nov, point 1); the test hands
+// back fixed places instead of going to the network.
+const PLACES = [
+  { name: 'Jardinet del Mar', detail: 'Passeig Marítim, Barcelona, Spain', label: 'Jardinet del Mar, Barcelona', city: 'Barcelona', lat: 41.39, lng: 2.2 },
+  { name: 'Barceloneta', detail: 'Ciutat Vella, Barcelona, Spain', label: 'Barceloneta, Barcelona', city: 'Barcelona', lat: 41.38, lng: 2.19 },
+];
+vi.mock('@/lib/placeSearch', () => ({
+  searchPlaces: vi.fn(async () => PLACES),
+  reversePlace: vi.fn(async () => null),
+}));
+
 const json = (body: any) => ({ json: async () => body });
 
 const VENUES = [
@@ -166,42 +177,44 @@ describe('Create experience — screen 1, idea, date, place', () => {
     });
   });
 
-  it('suggests Great venues as the place is typed, and links the one picked', async () => {
+  it('finds any place on the map, offers the Great venue there, and links the one picked', async () => {
     const user = userEvent.setup();
     renderFlow();
     await fillTitle(user);
     await user.click(screen.getByTestId('idea-mode-open'));
 
-    await user.type(screen.getByTestId('idea-place'), 'Jard');
+    await user.type(screen.getByTestId('idea-place-search'), 'Jard');
+    await user.click(await screen.findByTestId('idea-place-result-0'));
+    expect(screen.getByTestId('idea-place-chosen')).toHaveTextContent('Jardinet del Mar, Barcelona');
     await user.click(await screen.findByTestId('idea-venue-venue-1'));
     expect(screen.getByTestId('idea-linked-venue')).toHaveTextContent('Jardinet del Mar');
-    expect(screen.getByTestId('idea-place')).toHaveValue('Jardinet del Mar, Barcelona');
 
     await user.click(screen.getByTestId('idea-continue'));
     await waitFor(() => expect(lastDraftCall()).toBeDefined());
     expect(lastDraftCall()[2]).toMatchObject({
-      selectedVenueId: 'venue-1', venueType: 'catalog', location: 'Jardinet del Mar, Barcelona',
+      selectedVenueId: 'venue-1', venueType: 'catalog', location: 'Jardinet del Mar, Barcelona', city: 'Barcelona',
     });
     expect(lastDraftCall()[2].concept).toMatchObject({ linkedVenueId: 'venue-1' });
   });
 
-  it('lets the place stay open, and unlinks a venue when the text is edited', async () => {
+  it('lets the place stay open, and unlinks a venue when the place is cleared', async () => {
     const user = userEvent.setup();
     renderFlow();
     await fillTitle(user);
     await user.click(screen.getByTestId('idea-mode-open'));
-    await user.type(screen.getByTestId('idea-place'), 'Jard');
+    await user.type(screen.getByTestId('idea-place-search'), 'Jard');
+    await user.click(await screen.findByTestId('idea-place-result-0'));
     await user.click(await screen.findByTestId('idea-venue-venue-1'));
 
-    await user.type(screen.getByTestId('idea-place'), 'x');
+    await user.click(screen.getByTestId('idea-place-clear'));
     expect(screen.queryByTestId('idea-linked-venue')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('idea-continue'));
     await waitFor(() => expect(lastDraftCall()).toBeDefined());
-    expect(lastDraftCall()[2].selectedVenueId).toBeNull();
+    expect(lastDraftCall()[2]).toMatchObject({ selectedVenueId: null, location: '' });
   });
 
-  it('still works as a plain text field when the venue list cannot be loaded', async () => {
+  it('keeps the city and the pin of a place when the venue list cannot be loaded', async () => {
     apiRequest.mockImplementation(async (method: string, url: string) => {
       if (url === '/api/venues?approved=true') throw new Error('offline');
       if (method === 'POST') return json({ id: 'draft-1' });
@@ -211,11 +224,14 @@ describe('Create experience — screen 1, idea, date, place', () => {
     renderFlow();
     await fillTitle(user);
     await user.click(screen.getByTestId('idea-mode-open'));
-    await user.type(screen.getByTestId('idea-place'), 'Barceloneta');
+    await user.type(screen.getByTestId('idea-place-search'), 'Barcelo');
+    await user.click(await screen.findByTestId('idea-place-result-1'));
     await user.click(screen.getByTestId('idea-continue'));
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Who is it for?' })).toBeInTheDocument());
-    expect(lastDraftCall()[2]).toMatchObject({ location: 'Barceloneta', selectedVenueId: null });
+    expect(lastDraftCall()[2]).toMatchObject({
+      location: 'Barceloneta, Barcelona', city: 'Barcelona', latitude: 41.38, longitude: 2.19, selectedVenueId: null,
+    });
   });
 });
 
@@ -228,7 +244,7 @@ async function toScreenTwo(user: ReturnType<typeof userEvent.setup>) {
 
 async function toNeeds(user: ReturnType<typeof userEvent.setup>) {
   await toScreenTwo(user);
-  await user.click(screen.getByTestId('idea-interest-sport'));
+  await user.click(screen.getByTestId('idea-interest-running'));
   await user.click(screen.getByTestId('idea-continue'));
   await screen.findByRole('heading', { name: 'What do you still need?' });
 }
@@ -251,13 +267,16 @@ function withCollab() {
 }
 
 describe('Create experience — screen 2, who is it for', () => {
-  it('asks for interests and a level instead of a sports-only audience', async () => {
+  it('asks for activities from the one list (7 groups, board A1) and a level', async () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    for (const id of ['sport', 'mind_body', 'food_drink', 'music_nightlife', 'learning', 'travel', 'meet_people', 'other']) {
-      expect(screen.getByTestId(`idea-interest-${id}`)).toBeInTheDocument();
+    for (const id of ['move', 'recover', 'social', 'outdoors', 'culture', 'learn_make', 'business']) {
+      expect(screen.getByTestId(`idea-interest-group-${id}`)).toBeInTheDocument();
     }
+    expect(screen.getByTestId('idea-interest-running')).toBeInTheDocument();
+    expect(screen.getByTestId('idea-interest-other-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('idea-interest-sport')).not.toBeInTheDocument();
     expect(screen.queryByTestId('idea-chip-runners')).not.toBeInTheDocument();
     expect(screen.getByTestId('idea-level-anyone')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('idea-progress-segment-2')).toHaveAttribute('data-filled', 'true');
@@ -272,21 +291,20 @@ describe('Create experience — screen 2, who is it for', () => {
     expect(screen.queryByRole('heading', { name: 'What do you still need?' })).not.toBeInTheDocument();
   });
 
-  it('takes up to three interests', async () => {
+  it('takes up to three activities', async () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    for (const id of ['sport', 'mind_body', 'food_drink']) await user.click(screen.getByTestId(`idea-interest-${id}`));
-    await user.click(screen.getByTestId('idea-interest-travel'));
-    expect(screen.getByTestId('idea-interest-travel')).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByTestId('idea-error-interests')).toHaveTextContent(/up to 3/);
+    for (const id of ['running', 'yoga', 'pilates']) await user.click(screen.getByTestId(`idea-interest-${id}`));
+    expect(screen.getByTestId('idea-interest-swimming')).toBeDisabled();
+    expect(screen.getByTestId('idea-interest-running')).toHaveAttribute('aria-checked', 'true');
   });
 
   it('asks what "Something else" is', async () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    await user.click(screen.getByTestId('idea-interest-other'));
+    await user.click(screen.getByTestId('idea-interest-other-toggle'));
     await user.click(screen.getByTestId('idea-continue'));
     expect(screen.getByTestId('idea-error-interest-other')).toBeInTheDocument();
   });
@@ -295,8 +313,9 @@ describe('Create experience — screen 2, who is it for', () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    await user.click(screen.getByTestId('idea-interest-sport'));
-    await user.click(screen.getByTestId('idea-interest-music_nightlife'));
+    await user.click(screen.getByTestId('idea-interest-running'));
+    await user.click(screen.getByTestId('idea-interest-group-culture'));
+    await user.click(screen.getByTestId('idea-interest-live_music'));
     await user.click(screen.getByTestId('idea-level-beginners'));
     await user.type(screen.getByTestId('idea-group-min'), '10');
     await user.type(screen.getByTestId('idea-group-max'), '60');
@@ -308,12 +327,14 @@ describe('Create experience — screen 2, who is it for', () => {
     // The group's top becomes the event's capacity; the rest travels in the concept.
     expect(payload.maxParticipants).toBe(60);
     expect(payload.concept).toMatchObject({
-      interests: ['sport', 'music_nightlife'],
+      interests: ['running', 'live_music'],
       level: 'beginners',
-      audience: 'Sport and movement, music and nightlife · beginners',
+      audience: 'Running, live music · beginners',
       groupSizeMin: 10,
       groupSizeMax: 60,
     });
+    // The first activity is the event's label, its group the category (board A1).
+    expect(payload).toMatchObject({ category: 'move', activity: 'running' });
     expect(apiRequest.mock.calls.filter(([m, u]) => m === 'POST' && u === '/api/experience-drafts')).toHaveLength(1);
   });
 
@@ -321,7 +342,7 @@ describe('Create experience — screen 2, who is it for', () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    await user.click(screen.getByTestId('idea-interest-sport'));
+    await user.click(screen.getByTestId('idea-interest-running'));
     await user.type(screen.getByTestId('idea-group-min'), '60');
     await user.type(screen.getByTestId('idea-group-max'), '10');
     await user.click(screen.getByTestId('idea-continue'));
@@ -333,7 +354,7 @@ describe('Create experience — screen 2, who is it for', () => {
     const user = userEvent.setup();
     renderFlow();
     await toScreenTwo(user);
-    await user.click(screen.getByTestId('idea-interest-sport'));
+    await user.click(screen.getByTestId('idea-interest-running'));
     await user.type(screen.getByTestId('idea-group-max'), '500');
     await user.click(screen.getByTestId('idea-continue'));
 
@@ -449,8 +470,9 @@ describe('Create experience — one screen per need', () => {
     await user.type(screen.getByTestId('idea-amount-per-person'), '2,50');
     await user.click(screen.getByTestId('idea-continue'));
     await screen.findByRole('heading', { name: 'Check your idea' });
+    // On the Collab board by default too (27 Nov, point 1).
     expect(lastDraftCall()[2].concept.slots.community).toMatchObject({
-      direct: true, inviteSource: 'link', earn: 'per_person', amountPerPerson: 2.5,
+      board: true, direct: true, inviteSource: 'link', earn: 'per_person', amountPerPerson: 2.5,
     });
     expect(screen.getByTestId('idea-review-need-community')).toHaveTextContent('€2.50 per person who checks in');
   });
@@ -463,6 +485,7 @@ describe('Create experience — one screen per need', () => {
     await user.click(screen.getByTestId('idea-continue'));
     await screen.findByRole('heading', { name: 'Bring people' });
     await user.click(screen.getByTestId('idea-find-direct'));
+    await user.click(screen.getByTestId('idea-find-board'));
     await user.click(screen.getByTestId('idea-own-community-toggle'));
     await user.click(screen.getByTestId('idea-continue'));
     await screen.findByRole('heading', { name: 'Check your idea' });
@@ -511,10 +534,11 @@ describe('Create experience — review, send and keep building', () => {
     const [post] = collabCalls().filter(([m, u]) => m === 'POST' && u === '/api/collab/ideas');
     expect(post[2]).toMatchObject({
       title: 'Halloween coffee rave',
-      seekingPartnerTypes: ['venue'],
+      // Every idea is on the Collab board by default, the people slot too (27 Nov).
+      seekingPartnerTypes: ['venue', 'community'],
       dealPreferences: ['revenue_split'],
       typeDetails: { community: { earn: '€2.00 per person who checks in' } },
-      audience: 'Sport and movement · anyone',
+      audience: 'Running · anyone',
       listed: true,
       experienceDraftId: 'draft-1',
       description: 'We bring the speakers.',
@@ -530,7 +554,7 @@ describe('Create experience — review, send and keep building', () => {
     expect(saved.slots.community.inviteUrl).toBe('https://great.test/collab-invite/community');
   });
 
-  it('keeps an invite-only posting off the board', async () => {
+  it('keeps a posting off the board when the organiser switches the board off', async () => {
     withCollab();
     const user = userEvent.setup();
     renderFlow();
@@ -538,6 +562,7 @@ describe('Create experience — review, send and keep building', () => {
     await user.click(screen.getByTestId('idea-need-community'));
     await user.click(screen.getByTestId('idea-continue'));
     await screen.findByRole('heading', { name: 'Bring people' });
+    await user.click(screen.getByTestId('idea-find-board'));
     await user.click(screen.getByTestId('idea-continue'));
     await screen.findByRole('heading', { name: 'Check your idea' });
     await user.click(screen.getByTestId('idea-continue'));

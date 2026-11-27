@@ -85,7 +85,9 @@ import { VenueDateConflictNotice } from "@/components/VenueDateConflictNotice";
 import { IdeaPeriodCard, IdeaSummaryCard } from "@/components/CreateFlow/IdeaSummaryCard";
 import { useVenueDateConflicts } from "@/hooks/useVenueDateConflicts";
 import { toCalendarDateISO, toDateOnly } from "@shared/calendarDates";
-import { ALL_EVENT_CATEGORY_VALUES, EVENT_CATEGORIES, LEGACY_EVENT_CATEGORIES, categoryLabel } from "@shared/eventCategories";
+import { ALL_EVENT_CATEGORY_VALUES, activityById, eventCategoryLabel } from "@shared/eventCategories";
+import ActivityPicker from "@/components/ActivityPicker";
+import PlaceFinder from "@/components/PlaceFinder";
 import { GroupedMultiSelect } from "@/components/GroupedMultiSelect";
 import DiscountLinkManager from "@/components/DiscountLinkManager";
 import AddPartnerModal from "@/components/AddPartnerModal";
@@ -222,6 +224,8 @@ const eventBuilderSchema = z.object({
   shortDescription: z.string().max(500, "Short description too long").optional(),
   description: z.string().min(10, "Description must be at least 10 characters").optional().or(z.literal('')),
   category: z.enum(ALL_EVENT_CATEGORY_VALUES as unknown as [string, ...string[]]).optional(),
+  /** The activity inside the group ("running"), the label on the card (board A1). */
+  activity: z.string().max(40).optional().nullable(),
   type: z.enum(["one-day", "multi-day", "virtual"]).optional(),
   greatPillars: z.preprocess(
     normalizeGreatPillars,
@@ -243,6 +247,9 @@ const eventBuilderSchema = z.object({
   location: z.string().min(1, "Location is required").optional().or(z.literal('')),
   // The city the event is in (66.24). Picked from the place, can be changed.
   city: z.string().max(100).optional().nullable(),
+  /** The pin of the place (place finder, 27 Nov, point 1). */
+  latitude: z.number().min(-90).max(90).optional().nullable(),
+  longitude: z.number().min(-180).max(180).optional().nullable(),
   venueType: z.enum(["catalog", "outdoor", "manual", "virtual", "open"]).default("catalog"),
 
   // Open-to-Venue-Offers fields (reverse bidding)
@@ -1587,6 +1594,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         shortDescription: formData.shortDescription || '',
         description: formData.description || '',
         category: formData.category || '',
+        activity: formData.activity || null,
         type: formData.type || 'one-day',
         greatPillars: normalizeGreatPillars(formData.greatPillars),
         
@@ -1607,6 +1615,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         city: formData.city || '',
+        latitude: formData.latitude ?? null,
+        longitude: formData.longitude ?? null,
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
@@ -1706,7 +1716,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         itinerary: formData.itinerary || [],
         
         // Soft hold and other settings
-        softHoldEnabled: formData.softHoldEnabled || false,
+        softHoldEnabled: false, // No soft-holds (27 Nov, point 3): every ticket is charged at booking.
         softHoldDurationHours: formData.softHoldDurationHours || 48,
         balanceDueDays: formData.balanceDueDays || 14,
         termsAccepted: formData.termsAccepted === true, // Explicit boolean check to prevent false coercion
@@ -2171,6 +2181,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         shortDescription: formData.shortDescription || '',
         description: formData.description || '',
         category: formData.category || '',
+        activity: formData.activity || null,
         type: formData.type || 'one-day',
         greatPillars: normalizeGreatPillars(formData.greatPillars),
         
@@ -2191,6 +2202,8 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         // Venue/location fields
         location: formData.location || '',
         city: formData.city || '',
+        latitude: formData.latitude ?? null,
+        longitude: formData.longitude ?? null,
         venueType: formData.venueType || 'catalog',
         venueOpenSpaceType: formData.venueOpenSpaceType || undefined,
         venueTargetDeal: formData.venueTargetDeal || undefined,
@@ -2290,7 +2303,7 @@ export default function EventBuilder({ draftId, initialExperienceType, onComplet
         itinerary: formData.itinerary || [],
         
         // Soft hold and other settings
-        softHoldEnabled: formData.softHoldEnabled || false,
+        softHoldEnabled: false, // No soft-holds (27 Nov, point 3): every ticket is charged at booking.
         softHoldDurationHours: formData.softHoldDurationHours || 48,
         balanceDueDays: formData.balanceDueDays || 14,
         termsAccepted: formData.termsAccepted === true, // Explicit boolean check to prevent false coercion
@@ -2956,36 +2969,36 @@ function BasicInfoStep({ form }: { form: any }) {
           )}
         />
 
-        {/* Category Field */}
+        {/* What kind of activity? (Tim, 27 Nov, board A1 and build page 3):
+            pick a group, then the activity. The group is the event's category,
+            the activity is the label on its card. Same list as everywhere. */}
         <FormField
           control={form.control}
           name="category"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Category *</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value || ""}>
-                <FormControl>
-                  <SelectTrigger data-testid="select-category">
-                    <SelectValue placeholder="Select a category" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {/* One category list for the whole site (66.46). */}
-                  {EVENT_CATEGORIES.map((category) => (
-                    <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
-                  ))}
-                  {/* An event made before keeps its old value until it is changed. */}
-                  {field.value && LEGACY_EVENT_CATEGORIES[field.value] && (
-                    <SelectItem value={field.value}>{LEGACY_EVENT_CATEGORIES[field.value].label} (old list)</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                One category, shown as the label on your event.
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
+          render={({ field }) => {
+            const activity = form.watch("activity");
+            return (
+              <FormItem>
+                <FormLabel>What kind of activity? *</FormLabel>
+                <ActivityPicker
+                  value={activity ? [activity] : []}
+                  initialGroup={field.value}
+                  onChange={(next) => {
+                    const picked = activityById(next[0]);
+                    form.setValue("activity", picked?.id ?? null, { shouldDirty: true });
+                    if (picked) field.onChange(picked.group);
+                  }}
+                  testIdPrefix="builder-activity"
+                />
+                <FormDescription>
+                  {activity
+                    ? `Shown on your event as "${eventCategoryLabel({ category: field.value, activity })}".`
+                    : "Pick one. It is the label on your event, and how people find it in search and the Events filter."}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            );
+          }}
         />
 
         {/* Experience Type Field */}
@@ -3638,6 +3651,8 @@ function MvgDeadlineField({ form }: { form: any }) {
 }
 
 function VenueStep({ form, editingExperienceId }: { form: any; editingExperienceId?: string }) {
+  // The city list opens on "Change", or by itself when the place has no city.
+  const [cityOpen, setCityOpen] = useState(false);
   const [venues, setVenues] = useState<any[]>([]);
   const [isLoadingVenues, setIsLoadingVenues] = useState(false);
   const [venuesError, setVenuesError] = useState<string | null>(null);
@@ -3720,43 +3735,62 @@ function VenueStep({ form, editingExperienceId }: { form: any; editingExperience
         excludeExperienceId={editingExperienceId}
       />
 
-      {/* Location Input.
-          Point 52: suggestions rather than free text. "Barceloneta",
-          "barceloneta beach" and "the beach by the W" are one place written
-          four ways, and the map embed, the collab matcher and the participant
-          reading the line all treat them as four. Typing still wins — a pop-up
-          on a beach has no street address and has to stay enterable. */}
+      {/* Where? (Tim, 27 Nov, point 1; 66.32c): one place finder on
+          OpenStreetMap, search or drop a pin. The city comes from the place,
+          so it is no longer picked a second time; it can still be changed
+          when the map has no city (a beach, a pin in a park). */}
       <FormField
         control={form.control}
         name="location"
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel>Location/City *</FormLabel>
-            <FormControl>
-              <AddressAutocomplete
-                placeholder="e.g., Bali, Indonesia or Online"
-                value={field.value ?? ''}
-                onChange={field.onChange}
-                data-testid="input-location"
+        render={({ field }) => {
+          const lat = form.watch('latitude');
+          const lng = form.watch('longitude');
+          const city = form.watch('city');
+          return (
+            <FormItem>
+              <FormLabel>Where? *</FormLabel>
+              <PlaceFinder
+                value={field.value ? { label: field.value, city: city ?? null, lat: lat ?? null, lng: lng ?? null } : null}
+                cityHint={city || venues.find((venue) => venue.id === selectedVenueId)?.city}
+                onChange={(place) => {
+                  field.onChange(place?.label ?? '');
+                  form.setValue('latitude', place?.lat ?? null, { shouldDirty: true });
+                  form.setValue('longitude', place?.lng ?? null, { shouldDirty: true });
+                  // The city follows the place; a place without one (a pin on a
+                  // beach, typed text) leaves the city to be picked below.
+                  form.setValue('city', place?.city ?? null, { shouldDirty: true });
+                  setCityOpen(!place?.city);
+                }}
+                testIdPrefix="builder-place"
               />
-            </FormControl>
-            <FormDescription>
-              The general location where your experience takes place.
-            </FormDescription>
-            <FormMessage />
-          </FormItem>
-        )}
+              <FormDescription>
+                Any place works: a venue, a park, a beach or an address. Online? Type "Online" and use it as written.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          );
+        }}
       />
 
-      {/* City (66.24): every event belongs to one city, which decides where it
-          is shown. Filled in from the place or venue; the organiser can change it. */}
-      <CityField
-        value={form.watch('city') ?? ''}
-        onChange={(city) => form.setValue('city', city, { shouldDirty: true })}
-        suggestFrom={[venues.find((venue) => venue.id === selectedVenueId)?.city, form.watch('location'), form.watch('manualVenueAddress')]}
-        required
-        testId="select-event-city"
-      />
+      {/* The city comes from the place (66.24: every event has one). It is
+          shown, not asked again; "Change" opens the city list when the map got
+          it wrong (a suburb) or the place has none. */}
+      {form.watch('location') && form.watch('city') && !cityOpen ? (
+        <p className="text-sm text-gray-600 dark:text-gray-400" data-testid="text-event-city">
+          City: <strong>{form.watch('city')}</strong>{" "}
+          <button type="button" className="text-primary hover:underline" onClick={() => setCityOpen(true)} data-testid="button-change-event-city">
+            Change
+          </button>
+        </p>
+      ) : form.watch('location') ? (
+        <CityField
+          value={form.watch('city') ?? ''}
+          onChange={(city) => form.setValue('city', city, { shouldDirty: true })}
+          suggestFrom={[venues.find((venue) => venue.id === selectedVenueId)?.city, form.watch('location'), form.watch('manualVenueAddress')]}
+          required
+          testId="select-event-city"
+        />
+      ) : null}
 
       {/* Venue Type Selection */}
       <FormField
@@ -8192,32 +8226,15 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
                     <MvgDeadlineField form={form} />
                   </div>
 
-                  {/* Payment Timing Model — only shown when MVG is active */}
-                  <div>
-                    <Label htmlFor="mvg-payment-timing">Payment Timing Model</Label>
-                    <select
-                      id="mvg-payment-timing"
-                      className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={softHoldEnabled ? "soft_hold" : "immediate"}
-                      onChange={(e) => {
-                        const isSoftHold = e.target.value === "soft_hold";
-                        form.setValue('softHoldEnabled', isSoftHold, { shouldDirty: true });
-                        if (isSoftHold) {
-                          // The form allows 1 to 168 hours; 720 made the Pricing step invalid.
-                          // Checkout does not use this hold yet (it charges at booking and
-                          // refunds if the group fails); a saved-card charge at MVG is next.
-                          form.setValue('softHoldDurationHours', 168, { shouldDirty: true });
-                        }
-                      }}
-                      data-testid="select-mvg-payment-timing"
-                    >
-                      <option value="immediate">Charge immediately on booking (refund if MVG fails)</option>
-                      <option value="soft_hold">Soft-hold — charge only when MVG is confirmed</option>
-                    </select>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {softHoldEnabled
-                        ? "Participants reserve their spot for free. Payment is collected once the minimum group size is confirmed."
-                        : "Participants pay in full at booking. If the minimum group is not reached by the deadline, everyone is automatically refunded."}
+                  {/* How payment works with a minimum group (Tim, 27 Nov, point 3, as
+                      decided before): every ticket is charged at booking, and if the
+                      minimum is not reached by the deadline everyone is refunded
+                      automatically. No card holds and no saved cards, so there is
+                      nothing to choose here; the old "soft-hold" option is gone. */}
+                  <div className="rounded-md border bg-gray-50 p-3 text-sm dark:bg-gray-900" data-testid="text-mvg-payment-rule">
+                    <p className="font-medium">How payment works</p>
+                    <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                      People pay in full when they book. If the minimum group is not reached by the deadline, everyone is refunded automatically.
                     </p>
                   </div>
 
@@ -8236,41 +8253,7 @@ export function PricingStep({ form, manualDealUnlocked = false, experienceId, go
               )}
             </div>
 
-            {/* Soft-Hold Settings — shown only when MVG is OFF (standalone soft-hold without a group threshold) */}
-            {!requireMinimumParticipants && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="soft-hold-enabled">Soft-Hold Reservations</Label>
-                  <p className="text-xs text-gray-500">Allow temporary reservations before payment</p>
-                </div>
-                <Switch
-                  id="soft-hold-enabled"
-                  checked={softHoldEnabled}
-                  onCheckedChange={(checked) => form.setValue('softHoldEnabled', checked, { shouldDirty: true })}
-                  data-testid="switch-soft-hold-enabled"
-                />
-              </div>
-
-              {softHoldEnabled && (
-                <div className="ml-4 border-l-2 border-gray-200 pl-4">
-                  <Label htmlFor="soft-hold-duration">Hold Duration (Hours)</Label>
-                  <Input
-                    id="soft-hold-duration"
-                    type="number"
-                    min="1"
-                    max="168"
-                    value={softHoldDurationHours}
-                    onChange={(e) => form.setValue('softHoldDurationHours', parseInt(e.target.value) || 48, { shouldDirty: true })}
-                    data-testid="input-soft-hold-duration"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    How long reservations are held before expiring (1-168 hours)
-                  </p>
-                </div>
-              )}
-            </div>
-            )}
+            {/* Soft-hold reservations are gone (27 Nov, point 3): checkout charges every ticket at booking. */}
           </div>
         </CardContent>
       </Card>
@@ -8641,7 +8624,7 @@ function TermsStep({ form }: { form: any }) {
               <div>
                 <span className="font-medium text-blue-900 dark:text-blue-100">Category:</span>{" "}
                 <span className="text-blue-800 dark:text-blue-200 capitalize">
-                  {categoryLabel(formData.category) || "Not set"}
+                  {eventCategoryLabel(formData) || "Not set"}
                 </span>
               </div>
               <div>

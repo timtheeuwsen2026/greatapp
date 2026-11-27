@@ -28,6 +28,7 @@ import {
   Download,
   ArrowDown,
 } from "lucide-react";
+import { eventCategoryLabel } from "@shared/eventCategories";
 
 type Experience = {
   id: string;
@@ -47,15 +48,6 @@ type Experience = {
   participantReferralCommissionPct?: string | number | null;
   participantReferralMilestoneAttendeeTarget?: string | number | null;
   participantReferralMilestoneRewardDescription?: string | null;
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  sports_wellness: "Sports & Wellness",
-  retreats: "Retreats",
-  community_social: "Community & Social",
-  adventure_trips: "Adventure Trips",
-  workations: "Workations",
-  festivals_events: "Festivals & Events",
 };
 
 function loadCanvasImage(src: string): Promise<HTMLImageElement | null> {
@@ -92,15 +84,6 @@ function drawRoundedImage(
   ctx.clip();
   ctx.drawImage(image, x, y, width, height);
   ctx.restore();
-}
-
-function categoryLabel(category?: string | null) {
-  if (!category) return null;
-  return CATEGORY_LABELS[category] || category
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function positiveNumber(value: unknown) {
@@ -233,7 +216,8 @@ export default function RecruitSquad() {
       const accentLine = remainingSpots && remainingSpots > 0
         ? `Only ${remainingSpots} spot${remainingSpots === 1 ? "" : "s"} left to confirm.`
         : "Join my squad!";
-      const footerCategory = categoryLabel(experience?.category);
+      // The activity, like the card ("Running"), board A1.
+      const footerCategory = eventCategoryLabel(experience) || null;
 
       const canvas = document.createElement("canvas");
       canvas.width = W;

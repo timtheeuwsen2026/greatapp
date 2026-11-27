@@ -21,6 +21,7 @@
  * a person cannot explain to themselves is a match they ignore.
  */
 
+import { currentCategory } from "./eventCategories";
 export type StandingPreferences = {
   role: string;
   /** Where they work. Either side containing the other counts as a hit. */
@@ -69,8 +70,13 @@ export function categoriesOverlap(
   wanted: string[] | null | undefined,
   offered: string[] | null | undefined,
 ): string | null {
-  const a = (wanted || []).map(normalise).filter(Boolean);
-  const b = (offered || []).map(normalise).filter(Boolean);
+  // An old value (sports_wellness, an 8-interest id) and a new group id
+  // (move) mean the same thing: compare them as the group (27 Nov, board A1).
+  // Each value counts as itself and as its group, so "yoga" still matches a
+  // "yoga_studio" and an old "sports_wellness" matches a new "move".
+  const withGroup = (value: string) => [value, currentCategory(value)].filter(Boolean) as string[];
+  const a = Array.from(new Set((wanted || []).flatMap(withGroup).map(normalise).filter(Boolean)));
+  const b = Array.from(new Set((offered || []).flatMap(withGroup).map(normalise).filter(Boolean)));
   if (!a.length || !b.length) return null;
   for (const want of a) {
     for (const offer of b) {

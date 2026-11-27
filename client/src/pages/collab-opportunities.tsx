@@ -11,6 +11,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { apiRequest } from "@/lib/queryClient";
 import PostCollabIdeaModal from "@/components/PostCollabIdeaModal";
 import CollabIdeaDetailDialog from "@/components/CollabIdeaDetailDialog";
+import { IDEA_FLOW_HREF } from "@/pages/create-experience";
 import CollabListingCard, { type CollabListing } from "@/components/CollabListingCard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { useAuth } from "@/hooks/useAuth";
@@ -129,12 +130,32 @@ export default function CollabOpportunities() {
     },
   });
 
+  /**
+   * One builder for ideas (Tim, 27 Nov, point 1): a posting made in the idea
+   * flow opens there again. Only a posting made before it (no event draft
+   * behind it) still opens the old form, so it can be edited at all.
+   */
+  const editIdea = async (idea: any) => {
+    if (idea?.experienceDraftId) {
+      // Publishing the event removes its draft; the posting is then edited
+      // on its own, like one made before the idea flow.
+      const draftStillThere = await apiRequest("GET", `/api/experience-drafts/${idea.experienceDraftId}`)
+        .then(() => true)
+        .catch(() => false);
+      if (draftStillThere) {
+        navigate(`${IDEA_FLOW_HREF}&draft=${encodeURIComponent(idea.experienceDraftId)}`);
+        return;
+      }
+    }
+    setEditingIdea(idea);
+    setPostOpen(true);
+  };
+
   /** Load the full posting before opening the edit form, so nothing is lost. */
   const openEditor = async (ideaId: string) => {
     try {
       const res = await apiRequest("GET", `/api/collab/ideas/${ideaId}`);
-      setEditingIdea(await res.json());
-      setPostOpen(true);
+      await editIdea(await res.json());
     } catch (error: any) {
       toast({
         title: "Could not open that posting",
@@ -160,12 +181,13 @@ export default function CollabOpportunities() {
               still taking shape.
             </p>
           </div>
+          {/* The idea flow replaces the old Collab builder (27 Nov, point 1). */}
           <Button
-            onClick={() => { setEditingIdea(null); setPostOpen(true); }}
+            onClick={() => navigate(IDEA_FLOW_HREF)}
             data-testid="button-post-collab-idea"
           >
             <Plus className="h-4 w-4 mr-2" />
-            Post a Collab Idea
+            Post an idea
           </Button>
         </div>
 
@@ -413,10 +435,7 @@ export default function CollabOpportunities() {
         ideaId={openIdeaId}
         open={!!openIdeaId}
         onOpenChange={(next) => { if (!next) setOpenIdeaId(null); }}
-        onEdit={(idea) => {
-          setEditingIdea(idea);
-          setPostOpen(true);
-        }}
+        onEdit={(idea) => { void editIdea(idea); }}
       />
     </div>
   );

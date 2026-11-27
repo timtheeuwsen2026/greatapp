@@ -11,6 +11,7 @@ import { apiRequest, readableError } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { eventOrdersCsv, type EventOrderRow, type EventOrderTotals } from "@shared/eventOrders";
 import { euro, type VenueDealAddon } from "@shared/venueDealCard";
+import { MONEY_STATE_HINT, MONEY_STATE_LABEL, type MoneyState } from "@shared/organiserMoney";
 
 type OrganiserOrders = {
   event: { id: string; slug: string | null; title: string; when: string; venue: string | null; location: string | null; capacity: number | null; status: string };
@@ -18,7 +19,12 @@ type OrganiserOrders = {
   totals: EventOrderTotals;
   startsAt: string;
   addonPrices: VenueDealAddon[];
-  money: { revenue: number; platformFee: number; venueShare: number; partnerCommission: number; yourShare: number };
+  money: {
+    revenue: number; ticketSales?: number; addonSales?: number; platformFee: number; venueShare: number;
+    partnerCommission: number; yourShare: number;
+    /** @shared/organiserMoney: the same numbers as Overview, Money and the event card. */
+    state?: MoneyState; bookings?: number; people?: number; testBookings?: number;
+  };
   refunds: { count: number; amount: number };
   venue: { name: string | null; city: string | null; agreed: boolean; address: string | null; status: string | null; deal: string | null } | null;
   payout: { stage: string; date: string | null; label: string } | null;
@@ -91,8 +97,12 @@ export default function DashboardEventOrders() {
   }
 
   const live = data.orders.filter((row) => row.status === "paid" || row.status === "reserved");
-  const paidOrders = live.filter((row) => row.status === "paid");
-  const spotsLeft = data.event.capacity ? Math.max(0, data.event.capacity - data.totals.tickets) : null;
+  // Counted the same way as every other organiser number: paid, not a test payment.
+  const paidOrders = live.filter((row) => row.status === "paid" && !row.test);
+  const state: MoneyState = data.money.state ?? "confirmed";
+  // Spots left as checkout counts them: every seat taken, reserved and test bookings too.
+  const seatsTaken = live.reduce((sum, row) => sum + row.tickets, 0);
+  const spotsLeft = data.event.capacity ? Math.max(0, data.event.capacity - seatsTaken) : null;
   // Tim's 66.35 also asks for RSVPs (reserved, not paid yet) and check-ins.
   const reservedTickets = live.filter((row) => row.status === "reserved").reduce((sum, row) => sum + row.tickets, 0);
   const checkedInTickets = live.filter((row) => row.checkedIn).reduce((sum, row) => sum + row.tickets, 0);
@@ -101,7 +111,10 @@ export default function DashboardEventOrders() {
     reservedTickets > 0 ? `${reservedTickets} reserved` : null,
     checkedInTickets > 0 ? `${checkedInTickets} checked in` : null,
   ].filter(Boolean).join(" · ");
-  const addonsText = data.totals.addons.map((addon) => `${addon.name} × ${addon.quantity}`).join(", ");
+  // What the venue hands out on the day, test bookings included (the venue's list says the same).
+  const addonsText = data.totals.addons
+    .map((addon) => `${addon.name} × ${addon.toPrepare ?? addon.quantity}`)
+    .join(", ");
   const price = (name: string) => data.addonPrices.find((addon) => addon.name.toLowerCase() === name.toLowerCase());
   const shareBreakdown = `Revenue ${euro(data.money.revenue)} − platform fee ${euro(data.money.platformFee)} − venue ${euro(data.money.venueShare)} − partner commission ${euro(data.money.partnerCommission)}`;
 
@@ -110,7 +123,7 @@ export default function DashboardEventOrders() {
       <div className="space-y-5" data-testid="organiser-orders">
         <div>
           <p className="text-sm">
-            <Link href="/dashboard/events" className="font-medium text-primary hover:underline">My events</Link>
+            <Link href="/creator-dashboard?tab=experiences" className="font-medium text-primary hover:underline">My events</Link>
             <span className="mx-1 text-gray-400">›</span>
             <span className="font-medium text-primary">{data.event.title}</span>
           </p>
@@ -139,11 +152,30 @@ export default function DashboardEventOrders() {
           <Tile label="Add-ons to prepare" testId="orders-addons"
             value={addonsText || "None"}
             sub={data.venue?.name ? `At ${data.venue.name}` : undefined} />
-          <Tile label="Revenue" testId="orders-revenue" value={euro(data.money.revenue)}
+          <Tile label={state === "held" ? "Revenue, held" : state === "cancelled" ? "Revenue (cancelled, refunded)" : "Revenue, confirmed"} testId="orders-revenue" value={euro(data.money.revenue)}
             sub={`${paidOrders.length} ${paidOrders.length === 1 ? "booking" : "bookings"}`} />
           <Tile label="Your share" testId="orders-your-share" value={euro(data.money.yourShare)} highlight
             sub={data.payout?.label ? `Tickets, fee and margin · ${data.payout.label}` : "Tickets, fee and margin"} title={shareBreakdown} />
         </div>
+
+        {/* The same split as Money, for this event (Tim, 27 Nov, point 5). */}
+        <Card data-testid="orders-money-split">
+          <CardContent className="flex flex-col gap-3 p-4 text-sm lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <Badge className={state === "held" ? "bg-amber-100 text-amber-900" : state === "cancelled" ? "bg-gray-100 text-gray-600" : "bg-emerald-100 text-emerald-800"} data-testid="orders-money-state">
+                {MONEY_STATE_LABEL[state]}
+              </Badge>
+              {state !== "cancelled" && <p className="mt-1 text-xs text-gray-500">{MONEY_STATE_HINT[state]}</p>}
+            </div>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-5">
+              <div><dt className="text-xs text-gray-500">Revenue</dt><dd className="font-semibold">{euro(data.money.revenue)}</dd></div>
+              <div><dt className="text-xs text-gray-500">Platform fee</dt><dd className="font-semibold">−{euro(data.money.platformFee)}</dd></div>
+              <div><dt className="text-xs text-gray-500">Venue share</dt><dd className="font-semibold">−{euro(data.money.venueShare)}</dd></div>
+              <div><dt className="text-xs text-gray-500">Partner commission</dt><dd className="font-semibold">−{euro(data.money.partnerCommission)}</dd></div>
+              <div><dt className="text-xs text-gray-500">Your share</dt><dd className="font-bold text-primary" data-testid="orders-split-your-share">{euro(data.money.yourShare)}</dd></div>
+            </dl>
+          </CardContent>
+        </Card>
 
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
           <Card className="overflow-hidden">
@@ -175,6 +207,7 @@ export default function DashboardEventOrders() {
                             <td className="px-4 py-3">{euro(row.amount)}</td>
                             <td className="px-4 py-3">
                               <Badge className={STATUS[row.status].className}>{STATUS[row.status].label}</Badge>
+                              {row.test && <Badge className="ml-2 bg-gray-100 text-gray-600" title="A booking by a test account. It is never paid out, so it is not counted.">Test, not counted</Badge>}
                               {row.checkedIn && <span className="ml-2 text-xs text-emerald-700">checked in</span>}
                             </td>
                           </tr>
@@ -191,6 +224,11 @@ export default function DashboardEventOrders() {
                     </tfoot>
                   </table>
                 </div>
+              )}
+              {(data.money.testBookings ?? 0) > 0 && (
+                <p className="border-t px-4 py-2 text-xs text-gray-500" data-testid="orders-test-note">
+                  {data.money.testBookings} test {data.money.testBookings === 1 ? "booking is" : "bookings are"} listed but not counted: bookings by test accounts are never paid out.
+                </p>
               )}
               {data.refunds.count > 0 && (
                 <p className="border-t px-4 py-2 text-xs text-gray-500">
@@ -212,7 +250,12 @@ export default function DashboardEventOrders() {
                     return (
                       <div key={addon.name} className="border-b pb-3">
                         <div className="flex justify-between gap-2">
-                          <span><strong>{addon.name}</strong>, {addon.quantity} sold</span>
+                          <span>
+                            <strong>{addon.name}</strong>, {addon.quantity} sold
+                            {(addon.toPrepare ?? addon.quantity) > addon.quantity && (
+                              <span className="text-gray-500"> (+{(addon.toPrepare ?? addon.quantity) - addon.quantity} more to hand out: test bookings or orders not paid yet)</span>
+                            )}
+                          </span>
                           {unit && <strong>{euro(unit.unitPrice)} each</strong>}
                         </div>
                         <p className="mt-1 text-gray-600 dark:text-gray-400">

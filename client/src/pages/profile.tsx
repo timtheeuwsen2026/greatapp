@@ -34,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useRoleSwitch } from "@/hooks/useRoleSwitch";
+import { useInOrganiserShell } from "@/components/dashboard/shellContext";
 
 type ParticipantProfileStatus = {
   hasProfile: boolean;
@@ -165,6 +166,8 @@ const ALL_ROLES = [
 ] as const;
 
 export default function Profile() {
+  // Inside the organiser menu the shell shows the top bar (27 Nov, point 5).
+  const inShell = useInOrganiserShell();
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/user"] });
   const { data: participantProfileStatus } = useQuery<ParticipantProfileStatus>({ queryKey: ["/api/participant-profile/status"], retry: false });
   const { data: creatorProfile } = useQuery<any>({ queryKey: ["/api/creator-profile"], retry: false });
@@ -234,7 +237,7 @@ export default function Profile() {
   if (!user) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Navigation />
+        {!inShell && <Navigation />}
         <div className="container mx-auto px-4 py-8">
           <Card className="mx-auto max-w-md">
             <CardContent className="pt-6 text-center">
@@ -254,7 +257,7 @@ export default function Profile() {
   return (
     <>
     <div className="min-h-screen bg-gray-50">
-      <Navigation />
+      {!inShell && <Navigation />}
       <div className="container mx-auto px-4 py-8">
         <div className="mx-auto max-w-5xl">
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

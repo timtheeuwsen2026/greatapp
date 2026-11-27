@@ -5,6 +5,7 @@ import { groupPaymentPromise } from "@shared/groupCount";
 import sgMail from '@sendgrid/mail';
 import { createHash } from 'node:crypto';
 import { storage } from './storage';
+import { loadOrganiserProfile, organiserDisplayName } from './organiserName';
 import { db } from './db';
 import { bookingEmailEvents } from '@shared/schema';
 import { eq, and } from 'drizzle-orm';
@@ -1637,8 +1638,10 @@ The Great. Team
     if (!event.manualVenueEmail) return;
 
     const creator = event.creatorId ? await storage.getUser(event.creatorId) : undefined;
+    const creatorProfile = await loadOrganiserProfile(storage, event.creatorId);
     const partnerName = event.manualVenueContactName?.trim() || event.manualVenueName?.trim() || 'there';
-    const creatorName = [creator?.firstName, creator?.lastName].filter(Boolean).join(' ') || 'the creator';
+    // Community or brand name first, then the person (Tim, 27 Nov, point 6).
+    const creatorName = organiserDisplayName(creator, creatorProfile).replace(/^The organiser$/, 'the creator');
 
     // The shared vocabulary spells the deal out — the local label map this
     // replaced knew nothing about per-head or per-room-per-night deals and

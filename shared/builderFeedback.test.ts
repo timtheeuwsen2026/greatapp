@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALL_EVENT_CATEGORY_VALUES, EVENT_CATEGORIES, categoryLabel, currentCategory } from "./eventCategories";
+import { ACTIVITIES, ALL_EVENT_CATEGORY_VALUES, EVENT_CATEGORIES, categoryLabel, currentCategory, eventCategoryLabel, eventMatchesActivity } from "./eventCategories";
 import {
   EMPTY_IDEA,
   buildCollabIdeaPayload,
@@ -20,34 +20,50 @@ import { categoryEnum } from "./schema";
 
 const idea = (changes: Partial<IdeaInput> = {}): IdeaInput => ({ ...EMPTY_IDEA, title: "Sunset run", ...changes });
 
-describe("one category list (66.46)", () => {
-  it("is the idea builder's eight interests, with Tim's names", () => {
+describe("one category list (27 Nov, board A1)", () => {
+  it("is the 7 groups of board A1, about 60 activities", () => {
     expect(EVENT_CATEGORIES.map((category) => category.label)).toEqual([
-      "Sport and movement", "Mind and body", "Food and drinks", "Music and nightlife",
-      "Learning and creativity", "Travel and adventure", "Meeting new people", "Something else",
+      "Move", "Recover", "Social", "Outdoors", "Culture", "Learn and make", "Business and work",
     ]);
+    expect(ACTIVITIES.length).toBe(59);
+    expect(new Set(ACTIVITIES.map((activity) => activity.id)).size).toBe(ACTIVITIES.length);
   });
 
-  it("is accepted by the database list, next to the six old values", () => {
+  it("is accepted by the database list, next to every value used before", () => {
     for (const value of ALL_EVENT_CATEGORY_VALUES) expect(categoryEnum.enumValues).toContain(value);
   });
 
-  it("reads an old event's category as its nearest new one", () => {
-    expect(categoryLabel("sports_wellness")).toBe("Sport and movement");
-    expect(categoryLabel("community_social")).toBe("Meeting new people");
-    expect(currentCategory("retreats")).toBe("travel");
-    expect(categoryLabel("food_drink")).toBe("Food and drinks");
+  it("reads an old event's category, and an 8-interest one, as its nearest group", () => {
+    expect(categoryLabel("sports_wellness")).toBe("Move");
+    expect(categoryLabel("community_social")).toBe("Social");
+    expect(currentCategory("retreats")).toBe("recover");
+    expect(currentCategory("mind_body")).toBe("recover");
+    expect(categoryLabel("food_drink")).toBe("Social");
+    expect(currentCategory("running")).toBe("move");
     expect(categoryLabel(null)).toBe("");
   });
 
-  it("takes the idea's first interest as the event's category, without asking", () => {
-    expect(buildIdeaDraftFields(idea({ interests: ["mind_body", "sport"] })).category).toBe("mind_body");
+  it("shows the activity on the card, or the group when there is none", () => {
+    expect(eventCategoryLabel({ category: "move", activity: "running" })).toBe("Running");
+    expect(eventCategoryLabel({ category: "sports_wellness" })).toBe("Move");
+  });
+
+  it("takes the idea's first activity as the event's activity and its group as the category", () => {
+    const fields = buildIdeaDraftFields(idea({ interests: ["sauna", "running"] }));
+    expect(fields).toMatchObject({ category: "recover", activity: "sauna" });
     expect(buildIdeaDraftFields(idea()).category).toBe("");
   });
 
-  it("lets search find an event by the category name people see", () => {
-    expect(searchRank({ title: "Sunday 5k", category: "sports_wellness" }, "sport movement")).toBe(2);
-    expect(searchRank({ title: "Tapas night", category: "food_drink" }, "drinks")).toBe(2);
+  it("lets search find an event by its group, its activity and the activity's other words", () => {
+    expect(searchRank({ title: "Sunday 5k", category: "sports_wellness" }, "move")).toBe(2);
+    expect(searchRank({ title: "Sunday 5k", category: "move", activity: "running" }, "run")).toBe(2);
+    expect(searchRank({ title: "Ice morning", category: "recover", activity: "cold_plunge" }, "ice bath")).toBe(2);
+  });
+
+  it("matches an old event to an activity by its title", () => {
+    expect(eventMatchesActivity({ title: "Sunday 5k run" }, "running")).toBe(true);
+    expect(eventMatchesActivity({ title: "Sunday brunch" }, "running")).toBe(false);
+    expect(eventMatchesActivity({ title: "Sunday 5k run", activity: "hiking" }, "running")).toBe(false);
   });
 });
 

@@ -39,6 +39,7 @@ const migrationUrls = [
   new URL("../migrations/20261120_money_fixes.sql", import.meta.url),
   new URL("../migrations/20261120_idea_needs.sql", import.meta.url),
   new URL("../migrations/20261122_event_categories.sql", import.meta.url),
+  new URL("../migrations/20261127_category_groups.sql", import.meta.url),
 ];
 
 if (!process.env.DATABASE_URL) {

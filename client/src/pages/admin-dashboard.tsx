@@ -61,6 +61,7 @@ import { useAdminCity } from "@/hooks/useAdminCity";
 import { LIVE_CITIES } from "@shared/cities";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary, normalizeVenueDealModel } from "@shared/venueDealModels";
+import { eventCategoryLabel } from "@shared/eventCategories";
 
 interface VenueWithOwner extends Venue {
   ownerName: string | null;
@@ -921,7 +922,7 @@ export default function AdminDashboard() {
                               }
                               return formatCurrency(experience.price, (experience as any).currency);
                             })()}</span>
-                            <span>Category: {experience.category}</span>
+                            <span>Category: {eventCategoryLabel(experience as any) || experience.category}</span>
                             <span>Location: {experience.location}</span>
                             <AdminEventCity experienceId={experience.id} city={(experience as any).city ?? null} />
                             <AdminHideFromPublic experienceId={experience.id} hidden={(experience as any).hiddenFromPublic === true} />

@@ -5,7 +5,6 @@ import type { TicketRegistrationCount } from "@shared/ticketAvailability";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, readableError } from "@/lib/queryClient";
 import { useCreatorAuth } from "@/hooks/useRoleAuth";
-import Navigation from "@/components/navigation";
 import { CreatorFlashDealFeed } from "@/components/CreatorFlashDealFeed";
 import { getVenueDealLabel,
   dealCurrencySymbol as dealSymbol, formatVenueDealSummary } from "@shared/venueDealModels";
@@ -13,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import MyOpenPostings from "@/components/MyOpenPostings";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { getCoverImage, getVenueImage, normalizeImageUrl } from "@/lib/utils";
 import {
@@ -43,13 +42,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
+import { OrganiserShell } from "@/components/dashboard/OrganiserShell";
+import { EventCardAddons, OrganiserMoneyBreakdown, OrganiserOverviewNumbers, useOrganiserMoney } from "@/components/dashboard/OrganiserNumbers";
+import { eventCategoryLabel } from "@shared/eventCategories";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { formatPromotionDealTerms } from "@/lib/promotionDeals";
 import EmbeddedPricingCalculator from "@/components/embedded-pricing-calculator";
 import ProtectedRoute from "@/components/ProtectedRoute";
-import Breadcrumb from "@/components/Breadcrumb";
-import { useBreadcrumbs } from "@/hooks/useBreadcrumbs";
 import DashboardGuard from "@/components/DashboardGuard";
 import PartnerToolingGate from "@/components/PartnerToolingGate";
 import { DigitalHandshakeContract } from "@/components/DigitalHandshakeContract";
@@ -400,7 +400,6 @@ function CreatorDashboardContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
-  const breadcrumbs = useBreadcrumbs();
   // Every "start something new" button on this dashboard opens Create
   // experience rather than the builder. Opening an existing draft or editing a
   // live event still goes straight in — those are not creation entry points.
@@ -578,6 +577,12 @@ function CreatorDashboardContent() {
     refetchInterval: 30_000,
   });
 
+  // The organiser's numbers from one source (27 Nov, point 5): the event card's
+  // "booked" count and minimum-group line read the same count as Orders and Money.
+  const { data: organiserMoney } = useOrganiserMoney();
+  const bookedOn = (experienceId: string): number | undefined =>
+    organiserMoney?.events.find((event) => event.experienceId === experienceId)?.people;
+
   // Everyone who has booked one of this creator's events. Built from bookings,
   // so it is true without anyone maintaining it.
   const { data: community } = useQuery<{
@@ -683,6 +688,11 @@ function CreatorDashboardContent() {
   // the bids, without accept buttons that would do nothing.
   const { data: sentVenueInvites = [] } = useQuery<any[]>({
     queryKey: ["/api/creator/venue-invites"],
+  });
+  // Offers to a venue that is already on Great (a barter offer, for example):
+  // listed next to the email invites, so every offer you sent shows (27 Nov, point 5).
+  const { data: sentVenueOffers = [] } = useQuery<any[]>({
+    queryKey: ["/api/creator/venue-offers/sent"],
   });
 
   const { data: venueOffers = [], isLoading: venueOffersLoading } = useQuery({
@@ -956,13 +966,16 @@ function CreatorDashboardContent() {
   };
 
   const PARTNER_TABS = [
-    "my-postings", "venue-offers", "active-deals", "promotion-deals", "fulfillment", "flash-deals",
+    "my-postings", "venue-offers", "active-deals", "promotion-deals", "role-applications", "fulfillment", "flash-deals",
   ];
+  // Filters inside one Deals page (point 60): the old Partners tab group and
+  // Role Applications, which had a tab of its own.
   const PARTNER_SUBTABS = [
     { value: "my-postings", label: "My Open Postings" },
     { value: "venue-offers", label: "Offers" },
     { value: "active-deals", label: "Active Deals" },
     { value: "promotion-deals", label: "Promotion Deals" },
+    { value: "role-applications", label: "Role Applications" },
     { value: "fulfillment", label: "Rewards to hand out" },
     { value: "flash-deals", label: "Flash Deals" },
   ];
@@ -990,15 +1003,20 @@ function CreatorDashboardContent() {
   // Determine states
   const isFirstTimeCreator = onboardingData && (onboardingData as any)?.progress?.percentage < 100;
 
-  const [activeTab, setActiveTab] = useState<string>(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    // ?tab=partners has no content of its own; open the group on its first
-    // subtab so a link from elsewhere lands somewhere real.
-    if (requested === "partners") {
-      return new URLSearchParams(window.location.search).get("sub") || "venue-offers";
-    }
-    return requested || (isFirstTimeCreator ? "setup" : "experiences");
-  });
+  // The section comes from the address (?tab=…), so the menu on the left
+  // (OrganiserShell) opens it and stays visible (Tim, 27 Nov, point 5).
+  const search = useSearch();
+  const activeTab = (() => {
+    const params = new URLSearchParams(search);
+    const requested = params.get("tab");
+    // Deals (and the old ?tab=partners) open on their first filter.
+    if (requested === "deals" || requested === "partners") return params.get("sub") || "venue-offers";
+    if (!requested || requested === "setup") return "overview";
+    // Older links: events waiting for approval are in My events.
+    if (requested === "pending") return "experiences";
+    return requested;
+  })();
+  const setActiveTab = (tab: string) => setLocation(`/creator-dashboard?tab=${tab}`);
 
   const isReturningCreator = onboardingData && (onboardingData as any)?.progress?.percentage === 100;
 
@@ -1065,173 +1083,28 @@ function CreatorDashboardContent() {
     );
   }
 
+  const SECTION_TITLE: Record<string, string> = {
+    overview: "Overview",
+    experiences: "My events",
+    earnings: "Money",
+    community: "Community",
+    analytics: "Analytics",
+  };
+  const sectionTitle = SECTION_TITLE[activeTab] ?? (PARTNER_TABS.includes(activeTab) ? "Deals" : "Dashboard");
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <Navigation />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Breadcrumb items={breadcrumbs} className="mb-6" />
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Creator Dashboard</h1>
-          <p className="text-gray-600 dark:text-gray-400">Manage your experiences and track your earnings</p>
-        </div>
+    <OrganiserShell>
+      <div>
+        <h1 className="mb-5 text-2xl font-bold text-gray-900 dark:text-white" data-testid="organiser-section-title">{sectionTitle}</h1>
 
-        {/* Task 4 — Ledger: Total Sales vs My Share */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 p-4 rounded-xl bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950 border border-green-200 dark:border-green-800">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Sales</p>
-            <p className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="ledger-total-sales">
-              {formatCurrency(ledger.totalSales || 0, ledger.currency)}
-            </p>
-            <p className="text-xs text-gray-500">{ledger.bookingsCount} booking{ledger.bookingsCount !== 1 ? 's' : ''}</p>
+        {/* Overview: only the main numbers (Tim, 27 Nov, point 5). Platform fee,
+            venue share and partner commission are on Money. One source:
+            /api/creator/money. */}
+        {activeTab === "overview" && (
+          <div className="mb-6">
+            <OrganiserOverviewNumbers />
           </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Your share</p>
-            <p className="text-2xl font-bold text-green-600" data-testid="ledger-my-share">
-              {formatCurrency(ledger.myShare || 0, ledger.currency)}
-            </p>
-            <p className="text-xs text-gray-500">
-              After platform fee, venue{(ledger.partnerCommission || 0) > 0 ? ` and partner commission (${formatCurrency(ledger.partnerCommission, ledger.currency)})` : ''}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Platform Fees</p>
-            <p className="text-2xl font-bold text-gray-600" data-testid="ledger-platform-fees">
-              {formatCurrency(ledger.platformFees || 0, ledger.currency)}
-            </p>
-            <p className="text-xs text-gray-500">
-              {ledger.platformFeePct ?? 0}% of tickets{ledger.ticketSales ? ` (${formatCurrency(ledger.ticketSales, ledger.currency)})` : ''}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Venue share</p>
-            <p className="text-2xl font-bold text-blue-600" data-testid="ledger-space-share">
-              {formatCurrency(ledger.spaceShare || 0, ledger.currency)}
-            </p>
-            <p className="text-xs text-gray-500">Paid to venue partners</p>
-          </div>
-        </div>
-
-        {/* Revenue Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Your share</p>
-                  <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
-                  </p>
-                  <p className="text-xs text-gray-500">After the platform fee, venue and partner commission</p>
-                </div>
-                <DollarSign className="w-8 h-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Gross Revenue</p>
-                  <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalGross || 0, earningsCurrency)}
-                  </p>
-                  <p className="text-xs text-gray-500">{typedEarnings.summary?.bookingsCount || 0} {(typedEarnings.summary?.bookingsCount || 0) === 1 ? "booking" : "bookings"}</p>
-                </div>
-                <Users className="w-8 h-8 text-blue-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Platform Fees</p>
-                  <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalPlatformFees || 0, earningsCurrency)}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {typedEarnings.summary?.effectivePlatformFeePct ?? ledger.platformFeePct ?? 0}% platform fee
-                  </p>
-                </div>
-                <Calendar className="w-8 h-8 text-purple-500" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Avg. Booking</p>
-                  <p className="text-2xl font-bold">
-                    {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.averageBookingValue || 0, earningsCurrency)}
-                  </p>
-                  <p className="text-xs text-gray-500">Per booking value</p>
-                </div>
-                <TrendingUp className="w-8 h-8 text-orange-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Attendance — the numbers a creator was previously only able to get by
-            opening their own public event page. */}
-        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-4">
-          <Card>
-            <CardContent className="flex items-center justify-between p-6">
-              <div>
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">People coming</p>
-                <p className="text-2xl font-bold" data-testid="headcount-attendees">
-                  {headcount?.totals?.attendees ?? 0}
-                </p>
-                <p className="text-xs text-gray-500">Across every live event</p>
-              </div>
-              <Users className="h-8 w-8 text-primary" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="flex items-center justify-between p-6">
-              <div>
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Free RSVPs</p>
-                <p className="text-2xl font-bold" data-testid="headcount-rsvps">
-                  {headcount?.totals?.rsvps ?? 0}
-                </p>
-                <p className="text-xs text-gray-500">Reserved a free spot</p>
-              </div>
-              <CheckCircle className="h-8 w-8 text-blue-500" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="flex items-center justify-between p-6">
-              <div>
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Tickets sold</p>
-                <p className="text-2xl font-bold" data-testid="headcount-tickets">
-                  {headcount?.totals?.ticketsSold ?? 0}
-                </p>
-                <p className="text-xs text-gray-500">Paid tickets</p>
-              </div>
-              <Gift className="h-8 w-8 text-purple-500" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="flex items-center justify-between p-6">
-              <div>
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Donations</p>
-                <p className="text-2xl font-bold" data-testid="headcount-donations">
-                  {formatCurrency(headcount?.totals?.donations ?? 0, headcount?.totals?.currency)}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {headcount?.mixedCurrencies
-                    ? "Events use more than one currency — see the breakdown"
-                    : "Pay-what-you-want and free-ticket gifts"}
-                </p>
-              </div>
-              <DollarSign className="h-8 w-8 text-amber-500" />
-            </CardContent>
-          </Card>
-        </div>
+        )}
 
         {/* The matching details an existing profile has never been asked for.
 
@@ -1241,7 +1114,7 @@ function CreatorDashboardContent() {
             blank, so their organic feed is empty for a reason no page explains
             and no amount of waiting fixes. This is the only route back into the
             form once a profile counts as complete. */}
-        {needsMatchingDetails && (
+        {needsMatchingDetails && activeTab === "overview" && (
           <div
             className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950"
             data-testid="prompt-creator-matching-details"
@@ -1267,44 +1140,6 @@ function CreatorDashboardContent() {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="h-auto flex-wrap justify-start">
-            {isFirstTimeCreator ? <TabsTrigger value="setup">Complete Setup</TabsTrigger> : null}
-            <TabsTrigger value="experiences">My Experiences</TabsTrigger>
-            <TabsTrigger value="role-applications" className="relative">
-              Role Applications
-              {roleApplications.length > 0 && (
-                <span className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs text-white">
-                  {roleApplications.length}
-                </span>
-              )}
-            </TabsTrigger>
-            {/* Partners: offers, deals, fulfilment and postings are not separate
-                concerns — they are one relationship with a counterparty at
-                different stages. The badge sums the group so nothing needing
-                attention is hidden a level down. */}
-            <TabsTrigger
-              value={PARTNER_TABS.includes(activeTab) ? activeTab : "venue-offers"}
-              className="relative"
-              data-testid="tab-partners"
-            >
-              Partners
-              {partnerAttentionCount > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-600 text-white text-xs w-5 h-5">
-                  {partnerAttentionCount}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="community" className="relative">
-              Community
-              {(community?.totals?.members ?? 0) > 0 && (
-                <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-xs text-white">
-                  {community?.totals?.members}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="earnings">Earnings</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          </TabsList>
 
           {/* Second row, shown only inside Partners. */}
           {PARTNER_TABS.includes(activeTab) && (
@@ -1337,8 +1172,8 @@ function CreatorDashboardContent() {
           </PartnerToolingGate>
           </TabsContent>
 
-          <TabsContent value="setup" className="space-y-6">
-            {onboardingData ? (
+          <TabsContent value="overview" className="space-y-6">
+            {!isFirstTimeCreator ? null : onboardingData ? (
               <OnboardingChecklist 
                 checklist={(onboardingData as any)?.checklist || {}}
                 progress={(onboardingData as any)?.progress || {}}
@@ -1438,8 +1273,8 @@ function CreatorDashboardContent() {
                               {draft.description || 'No description yet'}
                             </p>
                             <div className="flex justify-between items-center text-xs text-gray-500 mb-3">
-                              <span>{draft.category || 'No category'}</span>
-                              <span>Updated {new Date(draft.updatedAt).toLocaleDateString()}</span>
+                              <span>{eventCategoryLabel(draft) || 'No category'}</span>
+                              <span>Updated {new Date(draft.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                             </div>
                             <div className="flex gap-2">
                               <Button
@@ -1513,7 +1348,7 @@ function CreatorDashboardContent() {
                             <div className="flex flex-wrap gap-1 mb-2">
                               {experience.category && (
                                 <Badge variant="secondary" className="text-xs">
-                                  {experience.category.replace(/_/g, ' ')}
+                                  {eventCategoryLabel(experience) || 'Experience'}
                                 </Badge>
                               )}
                             </div>
@@ -1666,7 +1501,7 @@ function CreatorDashboardContent() {
                         <div className="flex flex-wrap gap-2 mb-3">
                           {experience.category && (
                             <Badge variant="secondary" className="text-xs">
-                              {experience.category.replace(/_/g, ' ')}
+                              {eventCategoryLabel(experience) || 'Experience'}
                             </Badge>
                           )}
                           {experience.type && (
@@ -1682,7 +1517,7 @@ function CreatorDashboardContent() {
                           </span>
                           <span>
                             <Users className="w-3 h-3 inline mr-1" />
-                            {experience.finalParticipantCount ?? experience.participantCount ?? 0}/{experience.maxParticipants || experience.capacity || '∞'}
+                            {experience.finalParticipantCount ?? bookedOn(experience.id) ?? experience.participantCount ?? 0}/{experience.maxParticipants || experience.capacity || '∞'}
                           </span>
                         </div>
                         
@@ -1710,6 +1545,8 @@ function CreatorDashboardContent() {
                         
                         {/* MVG progress and deadline */}
                         <TicketRegistrationBreakdown rows={headcount?.events.find((event) => event.id === experience.id)?.ticketRegistrations} />
+                        {/* The add-ons sold, next to the tickets (Tim, 27 Nov, point 5). */}
+                        <EventCardAddons experienceId={experience.id} />
                         {/* Only when the minimum group is switched on (66.5, 66.25c):
                             a minimum stored on an event that has it off is no minimum. */}
                         {experience.requireMinimumParticipants === true && (experience.minimumParticipants || experience.mvgMin) && (
@@ -1717,7 +1554,7 @@ function CreatorDashboardContent() {
                             <span className="flex items-center gap-1">
                               {experience.finalParticipantCount != null
                                 ? `${experience.finalParticipantCount} of ${experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin} joined when it was cancelled`
-                                : `MVG: ${experience.participantCount || experience.currentParticipants || 0}/${experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin}`}
+                                : `MVG: ${bookedOn(experience.id) ?? (experience.participantCount || experience.currentParticipants || 0)}/${experience.mvgMinimumSize || experience.minimumParticipants || experience.mvgMin}`}
                               {(experience as any).lifecycleStatus === 'confirmed' ? (
                                 <span data-testid={`mvg-status-indicator-${experience.id}`}>
                                   <CheckCircle className="w-3 h-3 text-green-500" />
@@ -1923,7 +1760,7 @@ function CreatorDashboardContent() {
                           {role.description && <p className="text-sm text-gray-500">{role.description}</p>}
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
                             {applicant.email && <span>{applicant.email}</span>}
-                            {assignment.appliedAt && <span>Applied {new Date(assignment.appliedAt).toLocaleDateString()}</span>}
+                            {assignment.appliedAt && <span>Applied {new Date(assignment.appliedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>}
                             <span>{role.currentCount || 0}/{role.maxCount || 1} roles filled</span>
                           </div>
                         </div>
@@ -1991,7 +1828,7 @@ function CreatorDashboardContent() {
                           {role.description && <p className="text-sm text-gray-500">{role.description}</p>}
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
                             {applicant.email && <span>{applicant.email}</span>}
-                            {assignment.confirmedAt && <span>Approved {new Date(assignment.confirmedAt).toLocaleDateString()}</span>}
+                            {assignment.confirmedAt && <span>Approved {new Date(assignment.confirmedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>}
                           </div>
                         </div>
                       </CardContent>
@@ -2004,14 +1841,43 @@ function CreatorDashboardContent() {
 
           <TabsContent value="venue-offers" className="space-y-4">
             <PartnerToolingGate inline>
-            {sentVenueInvites.length > 0 && (
+            {(sentVenueInvites.length > 0 || sentVenueOffers.length > 0) && (
               <div className="space-y-3" data-testid="sent-venue-invites">
                 <div>
                   <h2 className="text-xl font-semibold">Invitations you've sent</h2>
                   <p className="text-sm text-gray-500">
-                    Emailed and waiting on the venue. There is nothing to accept here — the venue replies first.
+                    Waiting on the venue. There is nothing to accept here — the venue replies first.
                   </p>
                 </div>
+                {sentVenueOffers.map((offer: any) => (
+                  <Card key={offer.id} data-testid={`sent-venue-offer-${offer.id}`}>
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <CardTitle className="text-base">{offer.venueName}</CardTitle>
+                          <CardDescription className="mt-1">
+                            {offer.experienceTitle}{offer.venueEmail ? ` · ${offer.venueEmail}` : ""} · venue on Great
+                          </CardDescription>
+                        </div>
+                        <Badge variant="secondary">
+                          {offer.waitingOn === "you" ? "Counter offer: your answer" : "Awaiting venue"}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="text-sm text-gray-600 dark:text-gray-400">
+                      {offer.deal && <p>Proposed: {offer.deal}</p>}
+                      {offer.terms?.barterTerms && (
+                        <p className="mt-1 italic text-gray-700 dark:text-gray-300">“{offer.terms.barterTerms}”</p>
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs">Sent {offer.sentAt ? new Date(offer.sentAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "recently"}</p>
+                        <Button size="sm" variant="outline" onClick={() => setLocation(`/deals/venue/${offer.experienceId}`)} data-testid={`button-open-sent-offer-${offer.id}`}>
+                          View the deal
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
                 {sentVenueInvites.map((invite: any) => (
                   <Card key={invite.id} data-testid={`sent-venue-invite-${invite.id}`}>
                     <CardHeader className="pb-3">
@@ -2034,10 +1900,10 @@ function CreatorDashboardContent() {
                       )}
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                         <p className="text-xs">
-                          Sent {invite.sentAt ? new Date(invite.sentAt).toLocaleDateString() : "recently"}
+                          Sent {invite.sentAt ? new Date(invite.sentAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "recently"}
                           {invite.lastSentAt && invite.sentAt
                             && new Date(invite.lastSentAt).getTime() - new Date(invite.sentAt).getTime() > 60000
-                            && ` · last sent ${new Date(invite.lastSentAt).toLocaleDateString()}`}
+                            && ` · last sent ${new Date(invite.lastSentAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
                         </p>
                         <Button
                           size="sm"
@@ -2508,7 +2374,7 @@ function CreatorDashboardContent() {
                               </td>
                               <td className="max-w-[240px] px-4 py-4">{item.rewardDescription}</td>
                               <td className="px-4 py-4 text-gray-500">
-                                {item.unlockedAt ? new Date(item.unlockedAt).toLocaleDateString() : "-"}
+                                {item.unlockedAt ? new Date(item.unlockedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "-"}
                               </td>
                               <td className="px-4 py-4 text-right">
                                 {item.status === "fulfilled" ? (
@@ -2581,54 +2447,10 @@ function CreatorDashboardContent() {
 
             {/* Earnings Summary */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card className="md:col-span-2">
-                <CardHeader>
-                  <CardTitle>Revenue Breakdown (Last 30 Days)</CardTitle>
-                  <CardDescription>Detailed breakdown of your earnings and fees</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                      <span className="font-medium">Gross Revenue</span>
-                      <span className="text-xl font-bold text-blue-600">
-                        {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalGross || 0, earningsCurrency)}
-                      </span>
-                    </div>
-                    
-                    <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Platform Fee</span>
-                      <span className="font-semibold text-red-600">
-                        -{earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalPlatformFees || 0, earningsCurrency)}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-                      <span>Venue share</span>
-                      <span className="font-semibold text-red-600">
-                        -{earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalSpaceShare || 0, earningsCurrency)}
-                      </span>
-                    </div>
-
-                    {(typedEarnings.summary?.totalPartnerCommission || 0) > 0 && (
-                      <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-950 rounded-lg" data-testid="breakdown-partner-commission">
-                        <span>Partner commission</span>
-                        <span className="font-semibold text-red-600">
-                          -{formatCurrency(typedEarnings.summary?.totalPartnerCommission || 0, earningsCurrency)}
-                        </span>
-                      </div>
-                    )}
-
-                    <hr className="my-4" />
-                    
-                    <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
-                      <span className="font-semibold text-lg">Your share</span>
-                      <span className="text-2xl font-bold text-green-600">
-                        {earningsLoading ? '...' : formatCurrency(typedEarnings.summary?.totalEarnings || 0, earningsCurrency)}
-                      </span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+              {/* One source with Overview, the event cards and Orders (Tim, 27 Nov, point 5). */}
+              <div className="md:col-span-2">
+                <OrganiserMoneyBreakdown />
+              </div>
 
               <Card>
                 <CardHeader>
@@ -2736,64 +2558,9 @@ function CreatorDashboardContent() {
             )}
 
             {/* Individual Earnings Table */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Earnings</CardTitle>
-                <CardDescription>Individual booking earnings and breakdown</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {earningsLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
-                  </div>
-                ) : typedEarnings.earnings && typedEarnings.earnings.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="text-left p-2">Booking ID</th>
-                          <th className="text-left p-2">Gross Amount</th>
-                          <th className="text-left p-2">Platform Fee</th>
-                          <th className="text-left p-2">Stripe Fee</th>
-                          <th className="text-left p-2">Your share</th>
-                          <th className="text-left p-2">Status</th>
-                          <th className="text-left p-2">Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {typedEarnings.earnings.map((earning: any) => (
-                          <tr key={earning.id} className="border-b">
-                            <td className="p-2 font-mono text-sm">{earning.bookingId.slice(-8)}</td>
-                            <td className="p-2 font-semibold">{formatCurrency(earning.grossAmount / 100, 'EUR')}</td>
-                            <td className="p-2 text-red-600">-{formatCurrency(earning.platformFeeAmount / 100, 'EUR')}</td>
-                            <td className="p-2 text-red-600">-{formatCurrency(earning.stripeFeeAmount / 100, 'EUR')}</td>
-                            <td className="p-2 font-semibold text-green-600">{formatCurrency(earning.netAmount / 100, 'EUR')}</td>
-                            <td className="p-2">
-                              <Badge 
-                                className={
-                                  earning.payoutStatus === 'completed' ? 'bg-green-100 text-green-800' :
-                                  earning.payoutStatus === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                  'bg-gray-100 text-gray-800'
-                                }
-                              >
-                                {earning.payoutStatus}
-                              </Badge>
-                            </td>
-                            <td className="p-2 text-sm text-gray-600">
-                              {new Date(earning.createdAt).toLocaleDateString()}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    No earnings yet. Create an experience to start earning!
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            {/* "Recent Earnings" read a field the server never sends, so it always
+                said "No earnings yet" under real money (27 Nov). The per-event
+                table in "Your money" above replaces it. */}
           </TabsContent>
 
           <TabsContent value="pricing" className="space-y-6">
@@ -2922,7 +2689,7 @@ function CreatorDashboardContent() {
                   member.bookingCount,
                   member.totalSpend.toFixed(2), member.currency.toUpperCase(),
                   member.referredCount, member.lastEventTitle,
-                  member.lastEventDate ? new Date(member.lastEventDate).toLocaleDateString() : "",
+                  member.lastEventDate ? new Date(member.lastEventDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "",
                 ].map(escape).join(","));
                 const csv = [header.map(escape).join(","), ...rows].join("\n");
                 // A blob URL rather than a data: URI — a community of any size
@@ -3215,7 +2982,7 @@ function CreatorDashboardContent() {
                                   <p>{member.lastEventTitle || "—"}</p>
                                   {member.lastEventDate && (
                                     <p className="text-xs text-muted-foreground">
-                                      {new Date(member.lastEventDate).toLocaleDateString()}
+                                      {new Date(member.lastEventDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
                                     </p>
                                   )}
                                 </TableCell>
@@ -3262,7 +3029,7 @@ function CreatorDashboardContent() {
                           <TableCell className="min-w-56">
                             <p className="font-medium">{event.title}</p>
                             <p className="text-xs text-muted-foreground">
-                              {event.startDate ? new Date(event.startDate).toLocaleDateString() : "Date TBC"}
+                              {event.startDate ? new Date(event.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "Date TBC"}
                             </p>
                             <TicketRegistrationBreakdown rows={event.ticketRegistrations} />
                           </TableCell>
@@ -3336,7 +3103,7 @@ function CreatorDashboardContent() {
           </TabsContent>
         </Tabs>
       </div>
-    </div>
+    </OrganiserShell>
   );
 }
 

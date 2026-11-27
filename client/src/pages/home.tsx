@@ -31,6 +31,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { hasDisplayableDiscoveryPrice, resolveDiscoveryPricing } from "@/lib/discoveryPricing";
 import { FeaturedCommunities } from "@/components/FeaturedCommunities";
 import CollabIdeasStrip from "@/components/CollabIdeasStrip";
+import { HomeHero } from "@/components/HomeHero";
 
 // Diverse community avatar images — served from Unsplash (no local files needed)
 const avatar1 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&h=80&fit=crop&crop=face";
@@ -52,15 +53,6 @@ const CATEGORY_EMOJIS: { [key: string]: string } = {
   'default': '🌍'
 };
 
-const HOMEPAGE_QUICK_CATEGORIES = [
-  "Run Clubs",
-  "Fitness & Yoga",
-  "Community & Social",
-  "Sports & Wellness",
-  "Festivals & Events",
-  "Retreats",
-  "Adventure Trips",
-] as const;
 
 export default function Home() {
   const [currentPath, setLocation] = useLocation();
@@ -79,7 +71,6 @@ export default function Home() {
   const { isAuthenticated, user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<string>("all");
   const [boostExperience, setBoostExperience] = useState<any | null>(null);
-  const [heroSearchQuery, setHeroSearchQuery] = useState("");
   const { toast } = useToast();
   const { isConnected } = useRealtimeMVGUpdates('all');
   const happeningScrollRef = useRef<HTMLDivElement>(null);
@@ -89,10 +80,6 @@ export default function Home() {
     ref.current?.scrollBy({ left: direction * 640, behavior: 'smooth' });
   };
 
-  const openExperienceSearch = (query = heroSearchQuery) => {
-    const trimmedQuery = query.trim();
-    setLocation(`/experiences${trimmedQuery ? `?search=${encodeURIComponent(trimmedQuery)}` : ""}`);
-  };
 
   useCoreWebVitals();
 
@@ -186,6 +173,8 @@ export default function Home() {
             : null,
           fundingDeadline: trip.mvgDeadline || trip.startDate,
           category: trip.category,
+          // The activity is the label on the card ("Yoga"), board A1.
+          activity: trip.activity ?? null,
           greatPillars: trip.greatPillars || [],
           creatorName: trip.creator?.displayName || trip.creatorName || 'Creator',
           participants: trip.participantsPreview,
@@ -309,65 +298,15 @@ export default function Home() {
           TOP 70% — FOR PARTICIPANTS (B2C)
           ══════════════════════════════════════════════════════════════════════ */}
 
-      {/* 1. Hero Section with Search Bar + Category Pills — solid brand gradient, compact
-          height so the search bar, pills, and first row of cards sit above the fold */}
-      {/* Compact on purpose (66.31g): the search, the chips and the first event
-          cards must all be visible without scrolling, on a phone too. */}
-      <section id="main-content" tabIndex={-1} className="relative overflow-visible bg-gradient-to-br from-primary via-primary/80 to-secondary flex items-center justify-center px-2 py-5 sm:px-4 sm:py-8">
-        <div className="max-w-7xl mx-auto w-full relative z-10">
-          <div className="text-center text-white px-2 sm:px-6 lg:px-8">
-            <h1 className="font-bold mb-4 leading-[1.1] px-2 sm:mb-6" style={{ fontSize: 'clamp(1.5rem, 4vw, 2.75rem)' }}>
-              Experiences backed by real communities.
-            </h1>
-            <form
-              className="mx-auto flex max-w-4xl flex-row gap-2 rounded-full bg-white p-1.5 shadow-2xl shadow-black/25 sm:p-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                openExperienceSearch();
-              }}
-              role="search"
-              aria-label="Search community experiences"
-            >
-              <div className="relative min-w-0 flex-1">
-                <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500" aria-hidden="true" />
-                <Input
-                  type="search"
-                  placeholder="Search destination, activity, or category..."
-                  value={heroSearchQuery}
-                  onChange={(event) => setHeroSearchQuery(event.target.value)}
-                  className="h-11 border-0 bg-transparent pl-12 pr-2 text-base text-slate-950 shadow-none placeholder:text-slate-500 focus-visible:ring-0 sm:h-14 sm:pr-4"
-                  aria-label="Search destination, activity, or category"
-                  data-testid="input-homepage-experience-search"
-                />
-              </div>
-              <Button
-                type="submit"
-                size="lg"
-                className="h-11 rounded-full bg-primary px-5 text-base font-bold text-white hover:bg-primary/90 sm:h-14 sm:px-8"
-                data-testid="button-homepage-search"
-              >
-                Search
-              </Button>
-            </form>
-
-            <div className="mx-auto mt-3 max-w-5xl overflow-x-auto pb-1 [scrollbar-width:none] sm:mt-5 [&::-webkit-scrollbar]:hidden">
-              <div className="flex min-w-max justify-start gap-2 sm:justify-center" role="group" aria-label="Popular experience categories">
-                {HOMEPAGE_QUICK_CATEGORIES.map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    onClick={() => openExperienceSearch(category)}
-                    className="rounded-full border border-white/60 bg-slate-950/25 px-3 py-1.5 text-sm font-semibold text-white backdrop-blur-md sm:px-4 sm:py-2 transition hover:border-white hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                    data-testid={`homepage-quick-category-${category.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* 1. The banner (point 47, board U2a desktop and mobile): headline, Join
+          and Start something, real example cards, then search and the 7
+          category groups. Compact so Happening now stays above the fold (66.31g). */}
+      <HomeHero
+        isAuthenticated={isAuthenticated}
+        cityName={cityName}
+        events={happeningNowExps}
+        onJoin={() => document.getElementById("happening-now-section")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+      />
 
       {/* 2 & 3. Event feeds — horizontal "swimlanes" that overlap the hero */}
       {fundingLoading ? (

@@ -8,6 +8,7 @@ import { Heart, MapPin, Calendar, Users, Shield, CheckCircle, AlertCircle, Zap }
 import { useQuery } from "@tanstack/react-query";
 import { getCoverImage } from "@/lib/utils";
 import { formatCapacityParticipantCount, formatMvgParticipantCount } from "@/lib/participantCounts";
+import { eventCategoryLabel } from "@shared/eventCategories";
 
 interface TicketSku {
   id: string;
@@ -93,14 +94,6 @@ const pillarLabels: Record<string, { label: string; color: string }> = {
   food: { label: "Food", color: "bg-amber-100 text-amber-700" },
 };
 
-const categoryLabels: Record<string, { label: string; color: string }> = {
-  sports_wellness: { label: "Sports & Wellness", color: "bg-primary/10 text-primary" },
-  retreats: { label: "Retreat", color: "bg-secondary/10 text-secondary" },
-  community_social: { label: "Community", color: "bg-accent/10 text-accent" },
-  adventure_trips: { label: "Adventure", color: "bg-primary/10 text-primary" },
-  workations: { label: "Workation", color: "bg-blue-100 text-blue-600" },
-  festivals_events: { label: "Festival", color: "bg-pink-100 text-pink-600" },
-};
 
 // Lifecycle badge config - single source of truth for FORMING/CONFIRMED/CANCELLED display
 function getLifecycleBadge(lifecycleStatus?: string) {
@@ -117,7 +110,8 @@ function getLifecycleBadge(lifecycleStatus?: string) {
 }
 
 export default function ExperienceCard({ experience }: ExperienceCardProps) {
-  const categoryInfo = categoryLabels[experience.category] || { label: "Experience", color: "bg-gray-100 text-gray-600" };
+  // One label (board A1): the activity, or its group.
+  const categoryInfo = { label: eventCategoryLabel(experience as any) || "Experience", color: "bg-primary/10 text-primary" };
   const pillars = Array.isArray(experience.greatPillars) ? experience.greatPillars.filter(Boolean) : [];
   const spotsLeft = experience.maxParticipants - experience.currentParticipants;
 

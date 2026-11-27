@@ -10,7 +10,9 @@ import CreatorDashboard from '../pages/creator-dashboard';
 const toast = vi.fn();
 
 vi.mock('wouter', () => ({
-  useLocation: () => ['/creator-dashboard?tab=venue-offers', vi.fn()],
+  useLocation: () => ['/creator-dashboard', vi.fn()],
+  // The section comes from the address (27 Nov, point 5).
+  useSearch: () => 'tab=venue-offers',
   Link: ({ children, href }: any) => <a href={href}>{children}</a>,
 }));
 
@@ -112,7 +114,8 @@ async function openVenueOffers() {
   const user = userEvent.setup();
   renderDashboard();
   // Offers moved under the Partners group in the dashboard nav cleanup.
-  await user.click(await screen.findByTestId('tab-partners'));
+  // Deals opens from the menu on the left (27 Nov, point 5): ?tab=venue-offers is already the section.
+  await screen.findByTestId('organiser-menu');
   await user.click(await screen.findByTestId('partners-subtab-venue-offers'));
   return user;
 }

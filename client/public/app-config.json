@@ -1,6 +1,7 @@
 {
-  "_about": "Read by the Great iOS and Android apps each time they start, from https://www.greatexperiences.ai/app-config.json. Edit tabBar.items to change the tab bar (label, icon, link, order) without a new app release. Use 2 to 5 tabs. 'url' is a path on this site. 'icon' is a name from the app's built-in set: house, calendar-days, ticket, gift, trophy, star, heart, search, compass, map-pin, users, circle-user, user, message-circle, bell, bookmark, sparkles, calendar-plus, circle-plus, lightbulb. An unknown icon name shows a plain dot. If this file is missing or invalid, the app keeps the last tabs it loaded.",
+  "_about": "Read by the Great iOS and Android apps each time they start, from https://www.greatexperiences.ai/app-config.json. hostTools: \"app\" shows the hosting tools inside the app (Create experience, creator, venue, community, collab, deals, messages); \"browser\" hides them in the app and offers \"Host an experience\" in the phone's browser instead. It applies the next time a page opens in the app (app 1.0.0 build 4 and later; older builds always hide them). Edit tabBar.items to change the tab bar (label, icon, link, order) without a new app release. Use 2 to 5 tabs. 'url' is a path on this site. 'icon' is a name from the app's built-in set: house, calendar-days, ticket, gift, trophy, star, heart, search, compass, map-pin, users, circle-user, user, message-circle, bell, bookmark, sparkles, calendar-plus, circle-plus, lightbulb. An unknown icon name shows a plain dot. If this file is missing or invalid, the app keeps the last tabs it loaded.",
   "version": 1,
+  "hostTools": "app",
   "tabBar": {
     "items": [
       { "id": "home", "label": "Home", "icon": "house", "url": "/" },
